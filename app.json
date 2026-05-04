@@ -1,29 +1,80 @@
 {
   "expo": {
-    "name": "checkoff",
+    "name": "CheckOff",
     "slug": "checkoff",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
-    "newArchEnabled": true,
+    "userInterfaceStyle": "dark",
+    "scheme": "checkoff",
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#0F0F1E"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": false,
+      "bundleIdentifier": "com.checkoff.app",
+      "usesAppleSignIn": true,
+      "buildNumber": "17",
+      "associatedDomains": [
+        "applinks:getcheckoff.com",
+        "webcredentials:getcheckoff.com"
+      ],
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": ["remote-notification"],
+        "NSLocationWhenInUseUsageDescription": "CheckOff uses your location to show items near you and verify GPS check-ins.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "CheckOff uses your location to show items near you and verify GPS check-ins.",
+        "NSPhotoLibraryUsageDescription": "CheckOff lets you add photos to your check-ins.",
+        "NSCameraUsageDescription": "CheckOff lets you take photos for check-ins."
+      }
     },
     "android": {
+      "package": "com.checkoff.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#0F0F1E"
       },
-      "edgeToEdgeEnabled": true
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "CAMERA"
+      ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-location",
+      "expo-apple-authentication",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "CheckOff lets you take photos for check-ins."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "CheckOff lets you add photos to your check-ins.",
+          "cameraPermission": "CheckOff lets you take photos for check-ins."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#F5A623"
+        }
+      ],
+      "@react-native-community/datetimepicker"
+    ],
+    "extra": {
+      "supabaseUrl": "https://uggusbbswybyplypkbxz.supabase.co",
+      "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVnZ3VzYmJzd3lieXBseXBrYnh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU3ODUwNDEsImV4cCI6MjA5MTM2MTA0MX0.EVk1t_u93uAMk9T9_uIs5Hy7kDwK3d5oYzBAl7cGpfc",
+      "eas": {
+        "projectId": "ee4a752d-9be6-4e3b-93c8-7d6be626d568"
+      }
     }
   }
 }

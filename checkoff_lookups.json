@@ -1,0 +1,132 @@
+{
+  "metros": [
+    {
+      "id": "93a9daa3-7412-474d-9f0f-097f953f3275",
+      "name": "Milwaukee Metro",
+      "state": "WI"
+    },
+    {
+      "id": "43e9fba2-4a26-4941-817f-db860265ea51",
+      "name": "Phoenix Metro",
+      "state": "AZ"
+    }
+  ],
+  "neighborhoods": [
+    {
+      "id": "403e8581-1624-4a05-98bf-280476b9ea1c",
+      "name": "Anthem",
+      "state": "AZ",
+      "metro_id": "43e9fba2-4a26-4941-817f-db860265ea51"
+    },
+    {
+      "id": "3de262d9-a76f-450d-a4db-a2768022d453",
+      "name": "Brookfield",
+      "state": "WI",
+      "metro_id": "93a9daa3-7412-474d-9f0f-097f953f3275"
+    },
+    {
+      "id": "c0b0be83-a14c-40f8-996c-8375c46c2585",
+      "name": "Chandler",
+      "state": "AZ",
+      "metro_id": "43e9fba2-4a26-4941-817f-db860265ea51"
+    },
+    {
+      "id": "cb006354-032d-44a0-9e79-34d6d249a460",
+      "name": "Gilbert",
+      "state": "AZ",
+      "metro_id": "43e9fba2-4a26-4941-817f-db860265ea51"
+    },
+    {
+      "id": "b5bd9cf1-09c9-4e1c-b932-8832e67790e4",
+      "name": "Glendale",
+      "state": "AZ",
+      "metro_id": "43e9fba2-4a26-4941-817f-db860265ea51"
+    },
+    {
+      "id": "5d1f3010-b285-4718-80c2-f23f2aafe354",
+      "name": "Mesa",
+      "state": "AZ",
+      "metro_id": "43e9fba2-4a26-4941-817f-db860265ea51"
+    },
+    {
+      "id": "a83a6822-2d44-4636-849d-29df98ebcb8f",
+      "name": "Milwaukee",
+      "state": "WI",
+      "metro_id": "93a9daa3-7412-474d-9f0f-097f953f3275"
+    },
+    {
+      "id": "a96b7ef3-fec1-4779-a7d7-8ca75fd867e4",
+      "name": "Peoria",
+      "state": "AZ",
+      "metro_id": "43e9fba2-4a26-4941-817f-db860265ea51"
+    },
+    {
+      "id": "fcd70538-5fb1-4b6c-975c-52aab4b29b75",
+      "name": "Phoenix",
+      "state": "AZ",
+      "metro_id": "43e9fba2-4a26-4941-817f-db860265ea51"
+    },
+    {
+      "id": "dbf3935c-6f20-4c51-8241-ed6d437f5d72",
+      "name": "Scottsdale",
+      "state": "AZ",
+      "metro_id": "43e9fba2-4a26-4941-817f-db860265ea51"
+    },
+    {
+      "id": "fe8210b8-ae4a-4501-be6b-d98bbd557883",
+      "name": "Surprise",
+      "state": "AZ",
+      "metro_id": "43e9fba2-4a26-4941-817f-db860265ea51"
+    },
+    {
+      "id": "11052605-e11e-4c08-8b98-79f0cdc0149a",
+      "name": "Tempe",
+      "state": "AZ",
+      "metro_id": "43e9fba2-4a26-4941-817f-db860265ea51"
+    },
+    {
+      "id": "4def067a-6ff7-4212-b3d7-bd843d88fcf7",
+      "name": "Waukesha",
+      "state": "WI",
+      "metro_id": "93a9daa3-7412-474d-9f0f-097f953f3275"
+    }
+  ],
+  "categories": [
+    {
+      "id": "d1019850-5513-4d85-825c-7357ffc36ebc",
+      "name": "Adventure"
+    },
+    {
+      "id": "b6ffb902-d9b3-4585-af19-1df9d405ec33",
+      "name": "Bar & drinks"
+    },
+    {
+      "id": "ab2b96ab-9a6b-4c6c-ad7a-b73ce2578d85",
+      "name": "Food & drink"
+    },
+    {
+      "id": "d76e2626-7782-4af1-a4ee-7783ed7f9070",
+      "name": "Misc"
+    },
+    {
+      "id": "b5257fd4-f723-46fb-b86e-365a88deb0f3",
+      "name": "Play"
+    },
+    {
+      "id": "8050555f-4a79-4d0b-b078-6ddc0cc0814f",
+      "name": "Shopping"
+    },
+    {
+      "id": "bf25c484-9eea-4766-8136-0789e2876ce8",
+      "name": "Social"
+    },
+    {
+      "id": "022a217a-9399-4cb9-a468-341869e1994d",
+      "name": "Sports"
+    },
+    {
+      "id": "5f82bf4f-6edc-46f7-a9d8-d9a9e6ce1143",
+      "name": "Travel"
+    }
+  ]
+}

@@ -39,3 +39,48 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+.claude/
+
+# Local Claude worktrees
+.claude/
+
+# Local secrets and environment files
+.env
+.env.*
+*.pem
+*.p8
+
+# Local admin / secret-bearing tools
+checkoff_admin.html
+generate-apple-jwt.js
+
+# Apple/private keys
+*.p8
+AuthKey_*.p8
+
+# Local admin/import/update scripts that may contain private credentials
+checkoff_seasonal_update.js
+checkoff_gapfill_import.js
+checkoff_precision_import.js
+
+# CocoaPods generated dependencies
+ios/Pods/
+
+# Private Apple keys
+*.p8
+AuthKey_*.p8
+
+# Local one-time admin/import/export/geocoding scripts with private Supabase keys
+checkoff_seasonal_update.js
+checkoff_gapfill_import.js
+checkoff_export_csv.js
+checkoff_import_csv.js
+checkoff_precision_import.js
+geocode-items.mjs
+checkoff_partner_signup.html
+
+# Local Claude worktrees
+.claude/
+
+# CocoaPods generated dependencies
+ios/Pods/

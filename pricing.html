@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Partner Pricing — CheckOff</title>
+  <meta name="description" content="Get your business on CheckOff. 3 partnership tiers starting at $29/mo. Intent-driven foot traffic from locals on a mission." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --amber:  #F5A623;
+      --navy:   #1A1A2E;
+      --bg:     #0F0F1E;
+      --card:   #161628;
+      --border: rgba(255,255,255,0.09);
+      --muted:  rgba(255,255,255,0.45);
+      --green:  #1D9E75;
+      --blue:   #378ADD;
+      --orange: #BA7517;
+      --purple: #8B5CF6;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: #fff;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--amber); text-decoration: none; }
+
+    /* ── Nav ── */
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      border-bottom: 1px solid var(--border);
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    .logo { font-size: 22px; font-weight: 800; color: var(--amber); letter-spacing: -0.5px; }
+    .logo span { color: #fff; }
+    .nav-link { font-size: 13px; color: var(--muted); }
+    .nav-link:hover { color: #fff; }
+
+    /* ── Hero ── */
+    .hero {
+      text-align: center;
+      padding: 52px 24px 40px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .eyebrow {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--amber);
+      border: 1px solid rgba(245,166,35,0.3);
+      border-radius: 999px;
+      padding: 5px 14px;
+      margin-bottom: 18px;
+    }
+    .hero h1 {
+      font-size: clamp(26px, 5vw, 38px);
+      font-weight: 800;
+      line-height: 1.18;
+      letter-spacing: -0.5px;
+      margin-bottom: 14px;
+    }
+    .hero p {
+      font-size: 16px;
+      color: var(--muted);
+      max-width: 460px;
+      margin: 0 auto 28px;
+      line-height: 1.6;
+    }
+
+    /* ── Toggle ── */
+    .toggle-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      margin-bottom: 36px;
+    }
+    .toggle-label { font-size: 14px; color: var(--muted); font-weight: 500; }
+    .toggle-label.active { color: #fff; font-weight: 700; }
+    .toggle {
+      position: relative;
+      width: 48px;
+      height: 26px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 999px;
+      cursor: pointer;
+      border: 1px solid rgba(255,255,255,0.15);
+      transition: background 0.2s;
+    }
+    .toggle.annual { background: var(--amber); border-color: var(--amber); }
+    .toggle-knob {
+      position: absolute;
+      top: 3px; left: 3px;
+      width: 18px; height: 18px;
+      border-radius: 50%;
+      background: #fff;
+      transition: transform 0.2s;
+    }
+    .toggle.annual .toggle-knob { transform: translateX(22px); }
+    .save-badge {
+      background: rgba(29,158,117,0.15);
+      color: var(--green);
+      border: 1px solid rgba(29,158,117,0.3);
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 800;
+      padding: 3px 10px;
+    }
+
+    /* ── Cards ── */
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 16px;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 0 24px 60px;
+    }
+
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 28px 24px;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      transition: border-color 0.2s, transform 0.15s;
+    }
+    .card:hover { transform: translateY(-2px); }
+    .card.popular {
+      border-color: rgba(245,166,35,0.4);
+      background: linear-gradient(160deg, rgba(245,166,35,0.06) 0%, var(--card) 60%);
+    }
+
+    .popular-badge {
+      position: absolute;
+      top: -12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: var(--amber);
+      color: var(--navy);
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.8px;
+      text-transform: uppercase;
+      padding: 4px 14px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+
+    .tier-name {
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .tier-desc {
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 20px;
+      line-height: 1.5;
+    }
+    .price-row {
+      display: flex;
+      align-items: baseline;
+      gap: 4px;
+      margin-bottom: 4px;
+    }
+    .price-amount {
+      font-size: 40px;
+      font-weight: 800;
+      line-height: 1;
+      letter-spacing: -1px;
+    }
+    .price-per { font-size: 14px; color: var(--muted); }
+    .price-annual {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 24px;
+      min-height: 18px;
+    }
+    .price-annual.highlight { color: var(--green); }
+
+    .features {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 28px;
+      flex: 1;
+    }
+    .features li {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 13.5px;
+      color: rgba(255,255,255,0.75);
+      line-height: 1.45;
+    }
+    .check {
+      font-size: 13px;
+      font-weight: 900;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .cta-btn {
+      display: block;
+      width: 100%;
+      padding: 14px;
+      border-radius: 12px;
+      border: none;
+      font-size: 15px;
+      font-weight: 800;
+      cursor: pointer;
+      text-align: center;
+      transition: opacity 0.15s, transform 0.1s;
+      text-decoration: none;
+      font-family: inherit;
+    }
+    .cta-btn:hover { opacity: 0.88; transform: scale(0.99); }
+    .cta-btn.ghost {
+      background: transparent;
+      border: 1px solid rgba(255,255,255,0.18);
+      color: #fff;
+    }
+
+    /* ── Footer strip ── */
+    .trust {
+      text-align: center;
+      padding: 0 24px 20px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .trust p {
+      font-size: 12px;
+      color: rgba(255,255,255,0.3);
+      line-height: 1.7;
+    }
+    .trust a { color: rgba(255,255,255,0.5); }
+
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 20px 24px;
+      text-align: center;
+      font-size: 12px;
+      color: rgba(255,255,255,0.25);
+    }
+    footer a { color: rgba(255,255,255,0.4); }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a href="https://getcheckoff.com" class="logo">Check<span>Off</span></a>
+  <a href="https://getcheckoff.com/partner" class="nav-link">Full partner info →</a>
+</nav>
+
+<section class="hero">
+  <div class="eyebrow">Partner pricing</div>
+  <h1>Get your business<br>on the list</h1>
+  <p>People use CheckOff to find the best local spots and check them off. Your business shows up exactly when they're looking to go.</p>
+</section>
+
+<!-- Billing toggle -->
+<div class="toggle-wrap">
+  <span class="toggle-label active" id="lbl-monthly">Monthly</span>
+  <div class="toggle" id="toggle" onclick="flipToggle()">
+    <div class="toggle-knob"></div>
+  </div>
+  <span class="toggle-label" id="lbl-annual">Annual</span>
+  <span class="save-badge">2 months free</span>
+</div>
+
+<!-- Pricing cards -->
+<div class="cards">
+
+  <!-- Partner -->
+  <div class="card">
+    <div class="tier-name" style="color:var(--blue)">Partner</div>
+    <div class="tier-desc">Neighborhood placement, consistent visibility, intent-driven foot traffic.</div>
+    <div class="price-row">
+      <span class="price-amount" id="price-partner">$29</span>
+      <span class="price-per" id="per-partner">/mo</span>
+    </div>
+    <div class="price-annual" id="annual-partner">&nbsp;</div>
+    <ul class="features">
+      <li><span class="check" style="color:var(--blue)">✓</span>Your item on local CheckOff lists</li>
+      <li><span class="check" style="color:var(--blue)">✓</span>Neighborhood-level placement</li>
+      <li><span class="check" style="color:var(--blue)">✓</span>5-point check-in per customer</li>
+      <li><span class="check" style="color:var(--blue)">✓</span>Monthly visit report</li>
+      <li><span class="check" style="color:var(--blue)">✓</span>Cancel anytime</li>
+    </ul>
+    <a href="REPLACE_PARTNER_MONTHLY" id="btn-partner" class="cta-btn ghost">Get started — Partner</a>
+  </div>
+
+  <!-- Rare (popular) -->
+  <div class="card popular">
+    <div class="popular-badge">Most popular</div>
+    <div class="tier-name" style="color:var(--amber)">Rare</div>
+    <div class="tier-desc">Priority feed placement with the option to add a secret experience that drives repeat visits.</div>
+    <div class="price-row">
+      <span class="price-amount" id="price-rare">$49</span>
+      <span class="price-per" id="per-rare">/mo</span>
+    </div>
+    <div class="price-annual" id="annual-rare">&nbsp;</div>
+    <ul class="features">
+      <li><span class="check" style="color:var(--amber)">✓</span>Everything in Partner</li>
+      <li><span class="check" style="color:var(--amber)">✓</span>10-point check-in — higher in the feed</li>
+      <li><span class="check" style="color:var(--amber)">✓</span>Priority placement in Nearby</li>
+      <li><span class="check" style="color:var(--amber)">✓</span>Optional secret reveal experience</li>
+      <li><span class="check" style="color:var(--amber)">✓</span>White-glove item copywriting</li>
+    </ul>
+    <a href="REPLACE_RARE_MONTHLY" id="btn-rare" class="cta-btn" style="background:var(--amber);color:var(--navy)">Get started — Rare</a>
+  </div>
+
+  <!-- Legend -->
+  <div class="card">
+    <div class="tier-name" style="color:var(--purple)">Legend</div>
+    <div class="tier-desc">Top of the list, GPS-locked secrets, and year-round featured presence. For businesses that want to be a destination.</div>
+    <div class="price-row">
+      <span class="price-amount" id="price-legend">$99</span>
+      <span class="price-per" id="per-legend">/mo</span>
+    </div>
+    <div class="price-annual" id="annual-legend">&nbsp;</div>
+    <ul class="features">
+      <li><span class="check" style="color:var(--purple)">✓</span>Everything in Rare</li>
+      <li><span class="check" style="color:var(--purple)">✓</span>25-point check-in — top of every list</li>
+      <li><span class="check" style="color:var(--purple)">✓</span>GPS-locked secret reveal</li>
+      <li><span class="check" style="color:var(--purple)">✓</span>Year-round featured placement</li>
+      <li><span class="check" style="color:var(--purple)">✓</span>Priority onboarding & support</li>
+    </ul>
+    <a href="REPLACE_LEGEND_MONTHLY" id="btn-legend" class="cta-btn ghost">Get started — Legend</a>
+  </div>
+
+</div>
+
+<div class="trust">
+  <p>Secure payment via Stripe &nbsp;·&nbsp; 30-day money-back guarantee &nbsp;·&nbsp; No setup fees &nbsp;·&nbsp; Cancel anytime<br>
+  Questions? <a href="mailto:hello@getcheckoff.com">hello@getcheckoff.com</a></p>
+</div>
+
+<footer>
+  &copy; 2025 CheckOff &nbsp;·&nbsp; <a href="https://getcheckoff.com">getcheckoff.com</a> &nbsp;·&nbsp; <a href="https://getcheckoff.com/partner">Full partner info</a>
+</footer>
+
+<script>
+  const PRICES = {
+    partner: { monthly: 29,  annual: 290, perMonth: 24 },
+    rare:    { monthly: 49,  annual: 490, perMonth: 41 },
+    legend:  { monthly: 99,  annual: 990, perMonth: 83 },
+  }
+
+  const LINKS = {
+    partner: { monthly: 'REPLACE_PARTNER_MONTHLY', annual: 'REPLACE_PARTNER_ANNUAL' },
+    rare:    { monthly: 'REPLACE_RARE_MONTHLY',    annual: 'REPLACE_RARE_ANNUAL'    },
+    legend:  { monthly: 'REPLACE_LEGEND_MONTHLY',  annual: 'REPLACE_LEGEND_ANNUAL'  },
+  }
+
+  let isAnnual = false
+
+  // Auto-switch if URL has ?billing=annual
+  if (new URLSearchParams(location.search).get('billing') === 'annual') {
+    isAnnual = true
+    document.getElementById('toggle').classList.add('annual')
+  }
+
+  function render() {
+    for (const [tier, p] of Object.entries(PRICES)) {
+      document.getElementById(`price-${tier}`).textContent =
+        isAnnual ? `$${p.perMonth}` : `$${p.monthly}`
+      document.getElementById(`per-${tier}`).textContent = '/mo'
+
+      const annualEl = document.getElementById(`annual-${tier}`)
+      if (isAnnual) {
+        annualEl.textContent = `$${p.annual} billed annually — 2 months free`
+        annualEl.className = 'price-annual highlight'
+      } else {
+        annualEl.innerHTML = '&nbsp;'
+        annualEl.className = 'price-annual'
+      }
+
+      document.getElementById(`btn-${tier}`).href =
+        LINKS[tier][isAnnual ? 'annual' : 'monthly']
+    }
+
+    document.getElementById('lbl-monthly').classList.toggle('active', !isAnnual)
+    document.getElementById('lbl-annual').classList.toggle('active', isAnnual)
+  }
+
+  function flipToggle() {
+    isAnnual = !isAnnual
+    document.getElementById('toggle').classList.toggle('annual', isAnnual)
+    render()
+  }
+
+  render()
+</script>
+</body>
+</html>

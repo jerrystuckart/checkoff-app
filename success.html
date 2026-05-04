@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>You're on the list — CheckOff</title>
+  <meta name="description" content="Welcome to CheckOff. Your partnership is confirmed — we'll be in touch within 24 hours to get your item live." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --amber:  #F5A623;
+      --navy:   #1A1A2E;
+      --bg:     #0F0F1E;
+      --card:   #161628;
+      --border: rgba(255,255,255,0.09);
+      --muted:  rgba(255,255,255,0.45);
+      --green:  #1D9E75;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: #fff;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    a { color: var(--amber); text-decoration: none; }
+
+    /* ── Nav ── */
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+    .logo { font-size: 22px; font-weight: 800; color: var(--amber); letter-spacing: -0.5px; }
+    .logo span { color: #fff; }
+
+    /* ── Main ── */
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 48px 24px 60px;
+      max-width: 580px;
+      margin: 0 auto;
+      width: 100%;
+      text-align: center;
+    }
+
+    /* ── Checkmark animation ── */
+    .check-circle {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: rgba(29,158,117,0.12);
+      border: 2px solid rgba(29,158,117,0.4);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 28px;
+      font-size: 36px;
+      animation: pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+    }
+
+    @keyframes pop {
+      from { transform: scale(0.5); opacity: 0; }
+      to   { transform: scale(1);   opacity: 1; }
+    }
+
+    /* ── Tier badge (filled by JS) ── */
+    .tier-badge {
+      display: inline-block;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 1.2px;
+      text-transform: uppercase;
+      border-radius: 999px;
+      padding: 5px 14px;
+      margin-bottom: 18px;
+      border: 1px solid rgba(245,166,35,0.3);
+      color: var(--amber);
+      background: rgba(245,166,35,0.08);
+    }
+
+    h1 {
+      font-size: clamp(26px, 5vw, 36px);
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      line-height: 1.15;
+      margin-bottom: 14px;
+    }
+
+    .subtitle {
+      font-size: 16px;
+      color: var(--muted);
+      max-width: 420px;
+      margin: 0 auto 36px;
+      line-height: 1.65;
+    }
+
+    /* ── Next steps ── */
+    .steps {
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 36px;
+    }
+
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 16px 18px;
+      text-align: left;
+    }
+
+    .step-num {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: rgba(245,166,35,0.12);
+      border: 1px solid rgba(245,166,35,0.3);
+      color: var(--amber);
+      font-size: 13px;
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .step-body strong {
+      display: block;
+      font-size: 14px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 3px;
+    }
+
+    .step-body p {
+      font-size: 13px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+
+    /* ── Receipt note ── */
+    .receipt-note {
+      font-size: 13px;
+      color: rgba(255,255,255,0.3);
+      margin-bottom: 32px;
+      line-height: 1.6;
+    }
+    .receipt-note a { color: rgba(255,255,255,0.5); }
+
+    /* ── CTA ── */
+    .app-cta {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+      padding: 24px;
+      background: rgba(245,166,35,0.06);
+      border: 1px solid rgba(245,166,35,0.2);
+      border-radius: 16px;
+      width: 100%;
+      margin-bottom: 28px;
+    }
+
+    .app-cta p {
+      font-size: 14px;
+      color: var(--muted);
+    }
+
+    .app-cta strong {
+      font-size: 15px;
+      color: #fff;
+    }
+
+    .app-btn {
+      display: inline-block;
+      background: var(--amber);
+      color: var(--navy);
+      font-size: 14px;
+      font-weight: 800;
+      padding: 12px 28px;
+      border-radius: 10px;
+      text-decoration: none;
+      transition: opacity 0.15s;
+    }
+    .app-btn:hover { opacity: 0.88; color: var(--navy); }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      padding: 20px 24px;
+      text-align: center;
+      font-size: 12px;
+      color: rgba(255,255,255,0.25);
+    }
+    footer a { color: rgba(255,255,255,0.4); }
+
+    @media (max-width: 480px) {
+      .step { padding: 14px; }
+    }
+  </style>
+</head>
+<body>
+
+<nav>
+  <a href="https://getcheckoff.com" class="logo">Check<span>Off</span></a>
+</nav>
+
+<main>
+  <div class="check-circle">✓</div>
+
+  <div class="tier-badge" id="tier-badge">CheckOff Partner</div>
+
+  <h1>You're on the list.</h1>
+
+  <p class="subtitle">
+    Your partnership is confirmed. We'll reach out within <strong style="color:#fff">24 hours</strong> to get your item live and walk you through everything.
+  </p>
+
+  <div class="steps">
+    <div class="step">
+      <div class="step-num">1</div>
+      <div class="step-body">
+        <strong>We'll reach out today</strong>
+        <p>Expect an email from us within 24 hours to get your business details and craft your item. We handle the copy — you just approve it.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div class="step-body">
+        <strong>Your item goes live</strong>
+        <p>Once you approve the wording, we publish it to CheckOff. Users in your neighborhood will start seeing it in their list within the same day.</p>
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div class="step-body">
+        <strong>Customers start checking in</strong>
+        <p>People come in, ask for your item by name, and check it off. You can track visits in your monthly report. That's it — no work on your end.</p>
+      </div>
+    </div>
+  </div>
+
+  <p class="receipt-note">
+    A payment receipt from Stripe has been sent to your email.<br>
+    Questions? <a href="mailto:hello@getcheckoff.com">hello@getcheckoff.com</a>
+  </p>
+
+  <div class="app-cta">
+    <strong>Want to see CheckOff from a customer's view?</strong>
+    <p>Download the app — it's free — and see exactly what your item looks like on a list.</p>
+    <a href="https://getcheckoff.com/download" class="app-btn">Download CheckOff free</a>
+  </div>
+</main>
+
+<footer>
+  &copy; 2025 CheckOff &nbsp;·&nbsp;
+  <a href="https://getcheckoff.com">getcheckoff.com</a> &nbsp;·&nbsp;
+  <a href="https://getcheckoff.com/partner">Partner info</a> &nbsp;·&nbsp;
+  <a href="mailto:hello@getcheckoff.com">hello@getcheckoff.com</a>
+</footer>
+
+<script>
+  // Stripe appends ?session_id=cs_... to the success URL automatically.
+  // Payment Links also support passing metadata via URL — if you add
+  // ?plan=partner (etc.) to the success URL in each Payment Link config,
+  // this picks it up and shows the right tier label.
+  const params = new URLSearchParams(location.search)
+  const plan   = params.get('plan') ?? ''
+
+  const TIERS = {
+    partner: { label: 'CheckOff Partner',      color: '#378ADD', bg: 'rgba(55,138,221,0.1)',  border: 'rgba(55,138,221,0.3)'  },
+    rare:    { label: 'CheckOff Rare Partner',  color: '#F5A623', bg: 'rgba(245,166,35,0.1)', border: 'rgba(245,166,35,0.3)'  },
+    legend:  { label: 'CheckOff Legend',        color: '#8B5CF6', bg: 'rgba(139,92,246,0.1)', border: 'rgba(139,92,246,0.3)'  },
+  }
+
+  const tier = TIERS[plan.toLowerCase()] ?? TIERS.partner
+  const badge = document.getElementById('tier-badge')
+  badge.textContent = tier.label
+  badge.style.color       = tier.color
+  badge.style.background  = tier.bg
+  badge.style.borderColor = tier.border
+</script>
+</body>
+</html>

@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Partner with CheckOff — Get Your Business on the List</title>
+  <meta name="description" content="CheckOff partners get intent-driven foot traffic from locals on a mission to check things off. 3 tiers starting at $29/mo." />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --amber:  #F5A623;
+      --navy:   #1A1A2E;
+      --bg:     #0F0F1E;
+      --card:   #161628;
+      --border: rgba(255,255,255,0.09);
+      --muted:  rgba(255,255,255,0.45);
+      --green:  #1D9E75;
+      --blue:   #378ADD;
+      --orange: #BA7517;
+      --purple: #8B5CF6;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: #fff;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: var(--amber); text-decoration: none; }
+
+    /* ── Hero ── */
+    .hero {
+      padding: 48px 24px 36px;
+      text-align: center;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    .logo { font-size: 32px; font-weight: 800; color: var(--amber); letter-spacing: -1px; }
+    .logo span { color: #fff; }
+    .hero-eyebrow {
+      display: inline-block;
+      margin-top: 28px;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--amber);
+      border: 1px solid rgba(245,166,35,0.3);
+      border-radius: 999px;
+      padding: 6px 14px;
+    }
+    .hero h1 {
+      margin-top: 16px;
+      font-size: clamp(28px, 6vw, 42px);
+      font-weight: 800;
+      line-height: 1.15;
+      letter-spacing: -0.5px;
+    }
+    .hero p {
+      margin-top: 14px;
+      font-size: 16px;
+      color: var(--muted);
+      line-height: 1.65;
+    }
+
+    /* ── How it works ── */
+    .how {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 0 24px 40px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .how-item {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 16px;
+    }
+    .how-num {
+      min-width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(245,166,35,0.15);
+      border: 1px solid rgba(245,166,35,0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--amber);
+      flex-shrink: 0;
+    }
+    .how-text strong { display: block; font-size: 14px; font-weight: 700; color: #fff; margin-bottom: 3px; }
+    .how-text span   { font-size: 13px; color: var(--muted); line-height: 1.5; }
+
+    /* ── Billing toggle ── */
+    .toggle-wrap {
+      display: flex;
+      justify-content: center;
+      gap: 0;
+      max-width: 280px;
+      margin: 0 auto 32px;
+      background: rgba(255,255,255,0.06);
+      border-radius: 12px;
+      padding: 3px;
+      border: 1px solid var(--border);
+    }
+    .toggle-btn {
+      flex: 1;
+      padding: 10px 16px;
+      border-radius: 9px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 2px;
+    }
+    .toggle-btn.active {
+      background: var(--amber);
+      color: var(--navy);
+      font-weight: 800;
+    }
+    .toggle-btn .save-badge {
+      font-size: 9px;
+      font-weight: 800;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      color: var(--green);
+      background: rgba(29,158,117,0.15);
+      border: 1px solid rgba(29,158,117,0.3);
+      border-radius: 999px;
+      padding: 1px 6px;
+    }
+    .toggle-btn.active .save-badge { color: var(--navy); background: rgba(26,26,46,0.2); border-color: rgba(26,26,46,0.2); }
+
+    /* ── Pricing section label ── */
+    .section-label {
+      text-align: center;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 20px;
+      padding: 0 24px;
+    }
+
+    /* ── Tier cards ── */
+    .tiers {
+      max-width: 600px;
+      margin: 0 auto;
+      padding: 0 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .tier-card {
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      background: var(--card);
+      overflow: hidden;
+      transition: transform 0.15s, border-color 0.15s;
+    }
+    .tier-card:active { transform: scale(0.99); }
+    .tier-card.popular { border-color: rgba(245,166,35,0.5); }
+
+    .tier-top {
+      padding: 20px 20px 0;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .tier-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      padding: 5px 12px;
+      font-size: 12px;
+      font-weight: 800;
+      border: 1px solid;
+      margin-bottom: 10px;
+    }
+    .tier-dot { width: 7px; height: 7px; border-radius: 50%; }
+    .popular-label {
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--amber);
+      background: rgba(245,166,35,0.12);
+      border: 1px solid rgba(245,166,35,0.3);
+      border-radius: 999px;
+      padding: 4px 10px;
+    }
+
+    .tier-price {
+      padding: 8px 20px 16px;
+    }
+    .tier-price .amount {
+      font-size: 40px;
+      font-weight: 800;
+      letter-spacing: -1px;
+      line-height: 1;
+    }
+    .tier-price .per {
+      font-size: 14px;
+      color: var(--muted);
+      font-weight: 500;
+      margin-left: 4px;
+    }
+    .tier-price .annual-note {
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--green);
+      font-weight: 600;
+    }
+
+    .tier-divider { height: 1px; background: var(--border); margin: 0 20px; }
+
+    .tier-features {
+      padding: 16px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .feature-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      font-size: 14px;
+    }
+    .feature-check {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .feature-text { color: rgba(255,255,255,0.75); line-height: 1.4; }
+    .feature-text strong { color: #fff; font-weight: 700; }
+
+    .tier-cta {
+      padding: 0 20px 20px;
+    }
+    .cta-btn {
+      display: block;
+      width: 100%;
+      padding: 16px;
+      border-radius: 14px;
+      border: none;
+      font-size: 16px;
+      font-weight: 800;
+      cursor: pointer;
+      text-align: center;
+      text-decoration: none;
+      transition: opacity 0.15s, transform 0.1s;
+    }
+    .cta-btn:active { opacity: 0.85; transform: scale(0.98); }
+    .cta-btn.primary { background: var(--amber); color: var(--navy); }
+    .cta-btn.secondary { background: rgba(255,255,255,0.07); color: #fff; border: 1px solid var(--border); }
+
+    /* ── Guarantee ── */
+    .guarantee {
+      max-width: 600px;
+      margin: 32px auto 0;
+      padding: 0 24px;
+    }
+    .guarantee-card {
+      background: rgba(29,158,117,0.08);
+      border: 1px solid rgba(29,158,117,0.25);
+      border-radius: 16px;
+      padding: 18px;
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+    }
+    .guarantee-icon { font-size: 24px; flex-shrink: 0; }
+    .guarantee-text strong { display: block; font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 4px; }
+    .guarantee-text span { font-size: 13px; color: var(--muted); line-height: 1.5; }
+
+    /* ── FAQ ── */
+    .faq {
+      max-width: 600px;
+      margin: 40px auto 0;
+      padding: 0 24px;
+    }
+    .faq h2 { font-size: 20px; font-weight: 800; margin-bottom: 20px; }
+    .faq-item { border-bottom: 1px solid var(--border); padding: 16px 0; }
+    .faq-item:last-child { border-bottom: none; }
+    .faq-q { font-size: 15px; font-weight: 700; color: #fff; margin-bottom: 8px; }
+    .faq-a { font-size: 14px; color: var(--muted); line-height: 1.6; }
+
+    /* ── Footer ── */
+    .footer {
+      max-width: 600px;
+      margin: 48px auto 0;
+      padding: 24px 24px 48px;
+      text-align: center;
+      border-top: 1px solid var(--border);
+    }
+    .footer p { font-size: 13px; color: rgba(255,255,255,0.25); line-height: 1.7; }
+    .footer a { color: rgba(255,255,255,0.4); }
+
+    /* ── Pricing data (hidden, used by JS) ── */
+    [data-monthly], [data-annual] { display: none; }
+  </style>
+</head>
+<body>
+
+<!-- ── Hero ── -->
+<div class="hero">
+  <div class="logo">Check<span>Off</span></div>
+  <div class="hero-eyebrow">Partner Program</div>
+  <h1>Your business on every local's list</h1>
+  <p>CheckOff users are on a mission to check things off — restaurants, experiences, hidden gems. Get your spot on their list and watch intent-driven foot traffic walk through your door.</p>
+</div>
+
+<!-- ── How it works ── -->
+<div class="how">
+  <div class="how-item">
+    <div class="how-num">1</div>
+    <div class="how-text">
+      <strong>Your item goes on the list</strong>
+      <span>We write a compelling item for your business — something your customers will want to experience specifically. It shows up for everyone in your neighborhood.</span>
+    </div>
+  </div>
+  <div class="how-item">
+    <div class="how-num">2</div>
+    <div class="how-text">
+      <strong>People come in with intent</strong>
+      <span>CheckOff users aren't browsing Yelp — they're on a mission. They arrive at your door specifically to check your item off their list.</span>
+    </div>
+  </div>
+  <div class="how-item">
+    <div class="how-num">3</div>
+    <div class="how-text">
+      <strong>GPS-verified, tracked visits</strong>
+      <span>Every check-in is GPS-verified. You get real data on how many people visited specifically because of CheckOff. Points mean they come back.</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── Billing toggle ── -->
+<p class="section-label">Choose your plan</p>
+<div class="toggle-wrap">
+  <button class="toggle-btn active" id="btn-monthly" onclick="setBilling('monthly')">Monthly</button>
+  <button class="toggle-btn" id="btn-annual" onclick="setBilling('annual')">
+    Annual
+    <span class="save-badge">2 months free</span>
+  </button>
+</div>
+
+<!-- ── Tier cards ── -->
+<div class="tiers">
+
+  <!-- PARTNER $29 -->
+  <div class="tier-card" id="card-partner">
+    <div class="tier-top">
+      <div>
+        <div class="tier-badge" style="color:#378ADD;background:rgba(55,138,221,0.1);border-color:rgba(55,138,221,0.3)">
+          <div class="tier-dot" style="background:#378ADD"></div>Partner
+        </div>
+      </div>
+    </div>
+    <div class="tier-price">
+      <div>
+        <span class="amount" id="price-partner">$29</span><span class="per" id="per-partner">/mo</span>
+      </div>
+      <div class="annual-note" id="note-partner" style="display:none">Billed $290/yr — 2 months free</div>
+    </div>
+    <div class="tier-divider"></div>
+    <div class="tier-features">
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(55,138,221,0.15)">✓</div>
+        <div class="feature-text"><strong>1 featured item</strong> on the CheckOff list</div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(55,138,221,0.15)">✓</div>
+        <div class="feature-text"><strong>Core or Near ring</strong> — locals &amp; easy-drive traffic first</div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(55,138,221,0.15)">✓</div>
+        <div class="feature-text"><strong>5 points per check-in</strong> — drives repeat visits and word-of-mouth</div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(55,138,221,0.15)">✓</div>
+        <div class="feature-text">GPS-verified check-ins with visit tracking</div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(55,138,221,0.15)">✓</div>
+        <div class="feature-text">Official Partner badge on your listing</div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(55,138,221,0.15)">✓</div>
+        <div class="feature-text">Direct link to your website or Google Maps</div>
+      </div>
+    </div>
+    <div class="tier-cta">
+      <a class="cta-btn secondary"
+         id="link-partner"
+         href="https://buy.stripe.com/aFa4gy6ofgip2bB6Gr2ZO00"
+         target="_blank">
+        Get started — Partner
+      </a>
+    </div>
+  </div>
+
+  <!-- RARE $49 — POPULAR -->
+  <div class="tier-card popular" id="card-rare">
+    <div class="tier-top">
+      <div>
+        <div class="tier-badge" style="color:#BA7517;background:rgba(186,117,23,0.1);border-color:rgba(186,117,23,0.3)">
+          <div class="tier-dot" style="background:#BA7517"></div>Rare
+        </div>
+      </div>
+      <div class="popular-label">Most popular</div>
+    </div>
+    <div class="tier-price">
+      <div>
+        <span class="amount" id="price-rare">$49</span><span class="per" id="per-rare">/mo</span>
+      </div>
+      <div class="annual-note" id="note-rare" style="display:none">Billed $490/yr — 2 months free</div>
+    </div>
+    <div class="tier-divider"></div>
+    <div class="tier-features">
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(186,117,23,0.15)">✓</div>
+        <div class="feature-text"><strong>Everything in Partner</strong></div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(186,117,23,0.15)">✓</div>
+        <div class="feature-text"><strong>Metro ring placement</strong> — visible to the entire metro area</div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(186,117,23,0.15)">✓</div>
+        <div class="feature-text"><strong>10 points per check-in</strong> — double the loyalty pull</div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(186,117,23,0.15)">✓</div>
+        <div class="feature-text"><strong>Optional photo check-in</strong> — customers post a pic, free social proof</div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(186,117,23,0.15)">✓</div>
+        <div class="feature-text"><strong>Secret reveal eligible</strong> — hide a special experience until customers arrive</div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(186,117,23,0.15)">✓</div>
+        <div class="feature-text">Priority placement over Partner tier</div>
+      </div>
+    </div>
+    <div class="tier-cta">
+      <a class="cta-btn primary"
+         id="link-rare"
+         href="https://buy.stripe.com/bJe4gyeUL6HP6rRc0L2ZO03"
+         target="_blank">
+        Get started — Rare
+      </a>
+    </div>
+  </div>
+
+  <!-- LEGEND $99 -->
+  <div class="tier-card" id="card-legend">
+    <div class="tier-top">
+      <div>
+        <div class="tier-badge" style="color:#8B5CF6;background:rgba(139,92,246,0.1);border-color:rgba(139,92,246,0.3)">
+          <div class="tier-dot" style="background:#8B5CF6"></div>Legend
+        </div>
+      </div>
+    </div>
+    <div class="tier-price">
+      <div>
+        <span class="amount" id="price-legend">$99</span><span class="per" id="per-legend">/mo</span>
+      </div>
+      <div class="annual-note" id="note-legend" style="display:none">Billed $990/yr — 2 months free</div>
+    </div>
+    <div class="tier-divider"></div>
+    <div class="tier-features">
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(139,92,246,0.15)">✓</div>
+        <div class="feature-text"><strong>Everything in Rare</strong></div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(139,92,246,0.15)">✓</div>
+        <div class="feature-text"><strong>Core ring placement</strong> — top of every local's list</div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(139,92,246,0.15)">✓</div>
+        <div class="feature-text"><strong>25 points per check-in</strong> — the highest loyalty multiplier in the app</div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(139,92,246,0.15)">✓</div>
+        <div class="feature-text"><strong>Secret experience item</strong> — a hidden item unlocked only at your location</div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(139,92,246,0.15)">✓</div>
+        <div class="feature-text"><strong>Year-round guaranteed placement</strong> — your item never rotates out</div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(139,92,246,0.15)">✓</div>
+        <div class="feature-text"><strong>Featured in curated city lists</strong> — additional discovery surface</div>
+      </div>
+      <div class="feature-row">
+        <div class="feature-check" style="background:rgba(139,92,246,0.15)">✓</div>
+        <div class="feature-text">Early access as CheckOff expands to new cities</div>
+      </div>
+    </div>
+    <div class="tier-cta">
+      <a class="cta-btn secondary"
+         id="link-legend"
+         href="https://buy.stripe.com/00waEW27Z6HP7vV1m72ZO04"
+         target="_blank">
+        Get started — Legend
+      </a>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Guarantee ── -->
+<div class="guarantee">
+  <div class="guarantee-card">
+    <div class="guarantee-icon">🤝</div>
+    <div class="guarantee-text">
+      <strong>30-day no-questions refund</strong>
+      <span>If you don't see value in your first 30 days, email us and we'll refund your first payment. No hoops, no hassle. We're betting on this working for you.</span>
+    </div>
+  </div>
+</div>
+
+<!-- ── FAQ ── -->
+<div class="faq">
+  <h2>Questions</h2>
+
+  <div class="faq-item">
+    <div class="faq-q">What exactly is "an item on the list"?</div>
+    <div class="faq-a">We write a short, compelling experience description tied to your business — something like "Try the off-menu secret burger at Joe's" or "Order the house old fashioned at the bar with no sign." It appears in the CheckOff app for every user in your neighborhood and shows up in their Nearby feed and curated lists.</div>
+  </div>
+
+  <div class="faq-item">
+    <div class="faq-q">What's a "secret reveal"?</div>
+    <div class="faq-a">A secret item shows as "🔒 Secret item" in the app until the user's GPS confirms they're physically at your location. Then it unlocks and reveals a special experience — like a hidden menu item, a discount, or an insider tip. It's a powerful reason to make the trip.</div>
+  </div>
+
+  <div class="faq-item">
+    <div class="faq-q">How does ring placement work?</div>
+    <div class="faq-a">CheckOff sorts nearby items into rings: Core (your neighborhood), Near (easy drive), Metro (worth the trip), and Destination. Higher tiers get placed in outer rings so more people across the metro area see your item, not just your immediate neighbors.</div>
+  </div>
+
+  <div class="faq-item">
+    <div class="faq-q">Can I cancel anytime?</div>
+    <div class="faq-a">Yes. Monthly plans cancel with no penalty. Annual plans are non-refundable after 30 days, but we'll honor the term through your paid period.</div>
+  </div>
+
+  <div class="faq-item">
+    <div class="faq-q">How long until my item is live?</div>
+    <div class="faq-a">We'll reach out within 1 business day to confirm your item details and get your GPS location. Most items go live within 48 hours.</div>
+  </div>
+</div>
+
+<!-- ── Footer ── -->
+<div class="footer">
+  <p>
+    CheckOff · <a href="https://getcheckoff.com">getcheckoff.com</a><br>
+    Questions? <a href="mailto:hello@getcheckoff.com">hello@getcheckoff.com</a><br><br>
+    <a href="https://getcheckoff.com/terms">Terms</a> · <a href="https://getcheckoff.com/privacy">Privacy</a>
+  </p>
+</div>
+
+<script>
+  // Pricing data
+  const PRICES = {
+    monthly: {
+      partner: { display: '$29', per: '/mo', note: '', link: 'https://buy.stripe.com/aFa4gy6ofgip2bB6Gr2ZO00' },
+      rare:    { display: '$49', per: '/mo', note: '', link: 'https://buy.stripe.com/bJe4gyeUL6HP6rRc0L2ZO03' },
+      legend:  { display: '$99', per: '/mo', note: '', link: 'https://buy.stripe.com/00waEW27Z6HP7vV1m72ZO04' },
+    },
+    annual: {
+      partner: { display: '$24', per: '/mo', note: 'Billed $290/yr — 2 months free', link: 'https://buy.stripe.com/3cI3cu7sj8PX2bB6Gr2ZO01' },
+      rare:    { display: '$41', per: '/mo', note: 'Billed $490/yr — 2 months free', link: 'https://buy.stripe.com/4gM5kCaEv3vDbMbe8T2ZO02'    },
+      legend:  { display: '$83', per: '/mo', note: 'Billed $990/yr — 2 months free', link: 'https://buy.stripe.com/00weVc3c3gipg2raWH2ZO05'  },
+    },
+  }
+
+  function setBilling(interval) {
+    const data = PRICES[interval]
+    document.getElementById('btn-monthly').classList.toggle('active', interval === 'monthly')
+    document.getElementById('btn-annual').classList.toggle('active',  interval === 'annual')
+
+    for (const tier of ['partner', 'rare', 'legend']) {
+      const t = data[tier]
+      document.getElementById('price-' + tier).textContent = t.display
+      document.getElementById('per-' + tier).textContent   = t.per
+      const noteEl = document.getElementById('note-' + tier)
+      noteEl.textContent    = t.note
+      noteEl.style.display  = t.note ? 'block' : 'none'
+      const linkEl = document.getElementById('link-' + tier)
+      linkEl.href = t.link
+    }
+  }
+
+  // Read billing from URL param — lets Stripe Payment Links return here
+  const params = new URLSearchParams(window.location.search)
+  if (params.get('billing') === 'annual') setBilling('annual')
+</script>
+</body>
+</html>

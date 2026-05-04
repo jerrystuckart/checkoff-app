@@ -1,0 +1,1332 @@
+import React, { useState, useEffect, useCallback } from 'react'
+import {
+  View, Text, ScrollView, TouchableOpacity,
+  StyleSheet, StatusBar, ActivityIndicator, Alert,
+  RefreshControl, Modal,
+} from 'react-native'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import * as Location from 'expo-location'
+import { supabase } from '../lib/supabase'
+import { fetchCuratedLists } from '../lib/useItems'
+import { useCrewInvite } from '../lib/useCrewInvite'
+
+const AMBER = '#F5A623'
+const NAVY  = '#1A1A2E'
+const GREEN = '#1D9E75'
+const PURPLE = '#7A4DB3'
+
+const BG = '#FFF9F2'
+const CARD = '#FFFFFF'
+const TEXT = '#243045'
+const MUTED = '#6F7785'
+const BORDER = '#E6D8C7'
+const SOFT = '#FFF1DB'
+const SOFT_2 = '#F8F3EC'
+const SUCCESS_BG = '#EAF8F2'
+const SUCCESS_BORDER = '#BFE7D7'
+const ENDED_BG = '#F4EEF9'
+const ENDED_BORDER = '#DCCCED'
+const ENDED_TEXT = '#7A4DB3'
+
+export default function HomeScreen({ navigation }) {
+  const insets = useSafeAreaInsets()
+  const [metros, setMetros] = useState([])
+  const [selectedMetro, setSelectedMetro] = useState(null)
+  const [season, setSeason] = useState(null)
+
+  const [lists, setLists] = useState([])
+  const [officialLists, setOfficialLists] = useState([])
+
+  const [joinedIds, setJoinedIds] = useState(new Set())
+  const [user, setUser] = useState(null)
+  const [curatedGroups, setCuratedGroups] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [listMemberMap, setListMemberMap] = useState({})
+  const [userStreak, setUserStreak] = useState(0)
+  const [showSignInPrompt, setShowSignInPrompt] = useState(false)
+
+  const { savedCrew } = useCrewInvite()
+
+  useEffect(() => {
+    init()
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      const authUser = session?.user ?? null
+      setUser(authUser)
+      if (selectedMetro) {
+        loadForMetro(selectedMetro.id, authUser?.id, selectedMetro.slug)
+      }
+    })
+    return () => subscription.unsubscribe()
+  }, []) // eslint-disable-line
+
+  useEffect(() => {
+  const unsubscribe = navigation.addListener('focus', () => {
+    if (selectedMetro) {
+      loadForMetro(selectedMetro.id, user?.id, selectedMetro.slug)
+    }
+  })
+  return unsubscribe
+}, [navigation, selectedMetro, user])
+
+  async function init() {
+    const { data: { user: authUser } } = await supabase.auth.getUser()
+    setUser(authUser)
+
+    const { data: metroData } = await supabase
+      .from('metro_areas')
+      .select('id, name, state, slug')
+      .eq('is_active', true)
+      .order('name')
+
+    setMetros(metroData ?? [])
+
+    let defaultMetro = null
+try {
+  // Race the location request against a 3-second timeout
+  // so a GPS hang never blocks the home screen from loading
+  const locationResult = await Promise.race([
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync()
+      if (status !== 'granted') return null
+      const pos = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Low,
+      })
+      return pos.coords.latitude
+    })(),
+    new Promise(resolve => setTimeout(() => resolve(null), 3000)),
+  ])
+
+  if (locationResult !== null) {
+    defaultMetro = locationResult < 37
+      ? (metroData ?? []).find(m => m.name.includes('Phoenix'))
+      : (metroData ?? []).find(m => m.name.includes('Milwaukee'))
+  }
+} catch (e) {
+  /* GPS optional */
+}
+
+    if (!defaultMetro) {
+      defaultMetro = (metroData ?? []).find(m => m.name.includes('Phoenix')) ?? metroData?.[0]
+    }
+
+    if (defaultMetro) {
+      setSelectedMetro(defaultMetro)
+      await loadForMetro(defaultMetro.id, authUser?.id, defaultMetro.slug)
+    }
+    setLoading(false)
+  }
+
+  async function loadForMetro(metroId, userId, citySlug) {
+  // Derive slug from the currently selected metro if not passed explicitly
+  // so Milwaukee (or any future city) always gets the correct slug
+  const slug = citySlug
+    ?? selectedMetro?.slug
+    ?? selectedMetro?.name?.toLowerCase().replace(/\s+metro/i, '').trim()
+    ?? 'phoenix'
+  try {
+    const today = new Date().toISOString().split('T')[0]
+
+    // .maybeSingle() never throws — returns null if no season matches
+    const { data: seasonData } = await supabase
+      .from('seasons')
+      .select('*')
+      .lte('starts_at', today)
+      .gte('ends_at', today)
+      .maybeSingle()                          // ← was .single()
+
+    setSeason(seasonData)
+
+    const { data: offLists } = await supabase
+      .from('lists')
+      .select('id, title, starts_at, ends_at, cover_emoji, metro_id')
+      .eq('is_official', true)
+      .eq('is_public', true)
+      .eq('metro_id', metroId)
+      .order('created_at', { ascending: false })
+
+    setOfficialLists(offLists ?? [])
+
+    const { data: curatedData } = await fetchCuratedLists(slug)
+    setCuratedGroups((curatedData ?? []).slice(0, 6))
+
+    if (userId) {
+      const { data: memberLists } = await supabase
+        .from('list_members')
+        .select('lists(id, title, starts_at, ends_at, is_public, is_official, creator_id)')
+        .eq('user_id', userId)
+
+      const all = (memberLists ?? []).map(m => m.lists).filter(Boolean)
+      const joinedSet = new Set(all.filter(l => l.is_official).map(l => l.id))
+      setJoinedIds(joinedSet)
+      const userLists = all.filter(l => !l.is_official)
+
+      // Fetch streak in parallel with member map
+      const [memberships, streakRes] = await Promise.all([
+        userLists.length > 0
+          ? supabase
+              .from('list_members')
+              .select('list_id, user_id, users(id, display_name)')
+              .in('list_id', userLists.map(l => l.id))
+              .neq('user_id', userId)
+          : Promise.resolve({ data: [] }),
+        supabase
+          .from('users')
+          .select('current_streak')
+          .eq('id', userId)
+          .single(),
+      ])
+
+      setUserStreak(streakRes.data?.current_streak ?? 0)
+
+      // Load crew members for each list (up to 4 avatars per list)
+      if (userLists.length > 0) {
+        const memberMap = {}
+        const memberCountMap = {}
+        ;(memberships.data ?? []).forEach(m => {
+          memberCountMap[m.list_id] = (memberCountMap[m.list_id] ?? 0) + 1
+          if (!memberMap[m.list_id]) memberMap[m.list_id] = []
+          if (memberMap[m.list_id].length < 4) {
+            memberMap[m.list_id].push({
+              id:      m.user_id,
+              initial: (m.users?.display_name ?? '?')[0].toUpperCase(),
+            })
+          }
+        })
+        setListMemberMap(memberMap)
+        setLists(userLists.map(l => ({ ...l, memberCount: (memberCountMap[l.id] ?? 0) + 1 })))
+      } else {
+        setLists([])
+      }
+    } else {
+      setJoinedIds(new Set())
+      setLists([])
+      setListMemberMap({})
+      setUserStreak(0)
+    }
+  } catch (e) {
+    // ← Silent fail
+  }
+}
+
+  async function joinOfficialList(list) {
+  if (!user) {
+    Alert.alert('Sign in first', 'You need an account to join a list.', [
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Sign in', onPress: () => navigation.navigate('SignIn') },
+    ])
+    return
+  }
+
+  // Check if already a member before inserting
+  const { data: existing } = await supabase
+    .from('list_members')
+    .select('id')
+    .eq('list_id', list.id)
+    .eq('user_id', user.id)
+    .maybeSingle()
+
+  if (existing) {
+    // Already a member — just navigate to the list
+    navigation.navigate('List', { listId: list.id, title: list.title })
+    return
+  }
+
+  const { error } = await supabase
+    .from('list_members')
+    .insert({
+      list_id:      list.id,
+      user_id:      user.id,
+      invite_source: 'direct',
+    })
+
+  if (error) {
+    Alert.alert('Could not join', error.message)
+    return
+  }
+
+  navigation.navigate('List', { listId: list.id, title: list.title })
+}
+
+  async function deleteList(list) {
+    const { count } = await supabase
+      .from('list_members')
+      .select('*', { count: 'exact', head: true })
+      .eq('list_id', list.id)
+
+    const memberCount = count ?? 1
+    const message = memberCount > 1
+      ? `Delete this list? This will remove it for all ${memberCount} members and cannot be undone.`
+      : 'Delete this list? This cannot be undone.'
+
+    Alert.alert(
+      'Delete list?',
+      message,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const { error } = await supabase
+              .from('lists')
+              .delete()
+              .eq('id', list.id)
+              .eq('creator_id', user?.id)
+
+            if (error) {
+              Alert.alert('Could not delete', error.message)
+            } else {
+              setLists(prev => prev.filter(l => l.id !== list.id))
+            }
+          },
+        },
+      ]
+    )
+  }
+
+  async function leaveList(list) {
+    Alert.alert(
+      'Leave list?',
+      'You can rejoin using the original invite link.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Leave',
+          style: 'destructive',
+          onPress: async () => {
+            const { error } = await supabase
+              .from('list_members')
+              .delete()
+              .eq('list_id', list.id)
+              .eq('user_id', user.id)
+
+            if (error) {
+              Alert.alert('Could not leave', error.message)
+            } else {
+              setLists(prev => prev.filter(l => l.id !== list.id))
+            }
+          },
+        },
+      ]
+    )
+  }
+
+  async function switchMetro(metro) {
+    setSelectedMetro(metro)
+    await loadForMetro(metro.id, user?.id, metro.slug)
+  }
+
+  function daysLeft(endsAt) {
+    if (!endsAt) return null
+    const diff = Math.ceil((new Date(endsAt) - new Date()) / (1000 * 60 * 60 * 24))
+    return diff > 0 ? diff : 0
+  }
+
+  function isEnded(endsAt) {
+    if (!endsAt) return false
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+
+    const end = new Date(`${endsAt}T12:00:00`)
+    end.setHours(0, 0, 0, 0)
+
+    return end < today
+  }
+
+  function formatEndedDate(endsAt) {
+    if (!endsAt) return 'Ended'
+    const d = new Date(`${endsAt}T12:00:00`)
+    return `Ended ${d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
+  }
+
+  // Derived metro values — always computed from selectedMetro, never hardcoded
+  const metroSlug = selectedMetro?.slug
+    ?? selectedMetro?.name?.toLowerCase().replace(/\s+metro/i, '').trim()
+    ?? 'phoenix'
+  const metroDisplayName = selectedMetro?.name?.replace(' Metro', '') ?? 'Phoenix'
+
+  const officialActiveLists = officialLists.filter(l => !isEnded(l.ends_at))
+  const officialEndedLists  = officialLists.filter(l => isEnded(l.ends_at))
+
+  const activeLists = lists.filter(l => !isEnded(l.ends_at))
+  const endedLists  = lists.filter(l => isEnded(l.ends_at))
+
+  if (loading) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator color={AMBER} size="large" />
+      </View>
+    )
+  }
+
+  return (
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={{ ...styles.content, paddingTop: insets.top + 12 }}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => {
+            if (selectedMetro) {
+              setRefreshing(true)
+              loadForMetro(selectedMetro.id, user?.id, selectedMetro.slug)
+                .finally(() => setRefreshing(false))
+            }
+          }}
+          tintColor={AMBER}
+        />
+      }
+      showsVerticalScrollIndicator={false}
+    >
+      <StatusBar barStyle="dark-content" />
+
+      <View style={styles.headerCard}>
+        <View style={styles.headerTopRow}>
+          <View style={styles.headerBadge}>
+            <Text style={styles.headerBadgeText}>
+              {selectedMetro ? `${selectedMetro.name.replace(' Metro', '')}` : 'Your city'}
+            </Text>
+          </View>
+
+          {user && (
+            <View style={[styles.streakPill, userStreak >= 4 && styles.streakPillActive]}>
+              <Text style={[styles.streakPillText, userStreak >= 4 && styles.streakPillTextActive]}>
+                {userStreak >= 1 ? (userStreak + 'w 🔥') : 'No streak'}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        <Text style={styles.logo}>
+          Check<Text style={styles.logoOff}>Off</Text>
+        </Text>
+
+        <Text style={styles.tagline}>
+          Stop saying "What do you want to do?... I don't know, what do you want to do?"
+        </Text>
+
+        {season?.name ? (
+          <View style={styles.seasonPill}>
+            <Text style={styles.seasonPillText}>{season.name}</Text>
+          </View>
+        ) : null}
+      </View>
+
+      <Text style={styles.sectionLabel}>City</Text>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pillRow}>
+        {metros.map(m => (
+          <TouchableOpacity
+            key={m.id}
+            style={[styles.pill, selectedMetro?.id === m.id && styles.pillActive]}
+            onPress={() => switchMetro(m)}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.pillText, selectedMetro?.id === m.id && styles.pillTextActive]}>
+              {m.name.replace(' Metro', '')}
+            </Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+
+      {officialActiveLists.length > 0 && (
+        <>
+          <View style={styles.sectionHeaderBlock}>
+            <Text style={styles.sectionLabel}>Seasonal lists</Text>
+            <Text style={styles.sectionSub}>Join free and start checking things off</Text>
+          </View>
+
+          {officialActiveLists.map(list => {
+            const joined = joinedIds.has(list.id)
+            return (
+              <TouchableOpacity
+                key={list.id}
+                style={styles.officialCard}
+                onPress={() =>
+                  joined
+                    ? navigation.navigate('List', { listId: list.id, title: list.title })
+                    : joinOfficialList(list)
+                }
+                activeOpacity={0.88}
+              >
+                <View style={styles.officialCardLeft}>
+                  <Text style={styles.officialEmoji}>{list.cover_emoji ?? '📋'}</Text>
+                </View>
+
+                <View style={styles.officialCardBody}>
+                  <Text style={styles.officialTitle}>{list.title}</Text>
+                  {list.ends_at ? (
+                    <Text style={styles.officialMeta}>{daysLeft(list.ends_at)} days left</Text>
+                  ) : (
+                    <Text style={styles.officialMeta}>Open now</Text>
+                  )}
+                </View>
+
+                <View style={[styles.joinBadge, joined && styles.joinBadgeJoined]}>
+                  <Text style={[styles.joinBadgeText, joined && styles.joinBadgeTextJoined]}>
+                    {joined ? 'Open →' : 'Join'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )
+          })}
+        </>
+      )}
+
+      {officialEndedLists.length > 0 && (
+        <>
+          <View style={styles.sectionHeaderBlock}>
+            <Text style={styles.sectionLabel}>Ended seasonal lists</Text>
+            <Text style={styles.sectionSub}>View final standings and winners</Text>
+          </View>
+
+          {officialEndedLists.map(list => (
+            <TouchableOpacity
+              key={list.id}
+              style={styles.endedOfficialCard}
+              onPress={() => navigation.navigate('List', { listId: list.id, title: list.title })}
+              activeOpacity={0.88}
+            >
+              <View style={styles.endedOfficialLeft}>
+                <Text style={styles.officialEmoji}>{list.cover_emoji ?? '🏁'}</Text>
+              </View>
+
+              <View style={styles.officialCardBody}>
+                <Text style={styles.officialTitle}>{list.title}</Text>
+                <Text style={styles.endedMeta}>{formatEndedDate(list.ends_at)}</Text>
+              </View>
+
+              <View style={styles.endedBadge}>
+                <Text style={styles.endedBadgeText}>Results →</Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+        </>
+      )}
+
+      {curatedGroups.length > 0 && (
+  <>
+    <View style={styles.sectionRow}>
+      <View>
+        <Text style={styles.sectionLabel}>Start from a template</Text>
+        <Text style={styles.sectionSubSmall}>Lists built for your kind of crew</Text>
+      </View>
+      <TouchableOpacity
+        onPress={() =>
+          navigation.navigate('BrowseLists', {
+            citySlug:  metroSlug,
+            metroName: metroDisplayName,
+          })
+        }
+        activeOpacity={0.8}
+      >
+        <Text style={styles.seeAllText}>See all →</Text>
+      </TouchableOpacity>
+    </View>
+
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={styles.groupScrollRow}
+      contentContainerStyle={{ paddingRight: 20 }}
+    >
+      {curatedGroups.map(item => {
+        const g = item.audience_groups
+        if (!g) return null
+        return (
+          <TouchableOpacity
+            key={item.id}
+            style={styles.groupChip}
+            activeOpacity={0.88}
+            onPress={() =>
+              navigation.navigate('CuratedListPreview', {
+                curatedListId: item.id,
+                groupName:     g.name,
+                groupEmoji:    g.emoji,
+                groupTagline:  g.tagline,
+                citySlug:      metroSlug,
+                metroName:     metroDisplayName,
+              })
+            }
+          >
+            <Text style={styles.groupChipEmoji}>{g.emoji ?? '📋'}</Text>
+            <Text style={styles.groupChipName}>{g.name}</Text>
+            <Text style={styles.groupChipTagline} numberOfLines={2}>
+              "{g.tagline}"
+            </Text>
+          </TouchableOpacity>
+        )
+      })}
+
+      {/* "See all" card at end of scroll */}
+      <TouchableOpacity
+        style={styles.groupChipSeeAll}
+        activeOpacity={0.88}
+        onPress={() =>
+          navigation.navigate('BrowseLists', {
+            citySlug:  metroSlug,
+            metroName: metroDisplayName,
+          })
+        }
+      >
+        <Text style={styles.groupChipSeeAllText}>See all →</Text>
+      </TouchableOpacity>
+    </ScrollView>
+  </>
+)}
+
+      <View style={styles.sectionRow}>
+        <View>
+          <Text style={styles.sectionLabel}>Your lists</Text>
+          <Text style={styles.sectionSubSmall}>Custom lists for your crew, dates, and plans</Text>
+        </View>
+
+        {user && (
+          <TouchableOpacity
+            style={styles.createNewBtn}
+            onPress={() => navigation.navigate('CreateTab')}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.createNewBtnText}>+ New list</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {activeLists.length === 0 ? (
+        <TouchableOpacity
+          style={styles.emptyListCard}
+          onPress={() => {
+            if (!user) {
+              setShowSignInPrompt(true)
+            } else {
+              navigation.navigate('CreateList')
+            }
+          }}
+          activeOpacity={0.88}
+        >
+          <Text style={styles.emptyListEmoji}>📋</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.emptyListTitle}>Start your first list</Text>
+            <Text style={styles.emptyListSub}>
+              Pick items, invite your crew, and see who checks off the most.
+            </Text>
+          </View>
+          <Text style={styles.emptyListArrow}>→</Text>
+        </TouchableOpacity>
+      ) : (
+        activeLists.map(list => {
+          const crewMembers = listMemberMap[list.id] ?? []
+          return (
+          <TouchableOpacity
+            key={list.id}
+            style={styles.listCard}
+            onPress={() => navigation.navigate('List', { listId: list.id, title: list.title })}
+            onLongPress={() => {
+              if (list.creator_id === user?.id) {
+                deleteList(list)
+              } else {
+                leaveList(list)
+              }
+            }}
+            activeOpacity={0.85}
+          >
+            <View style={styles.listAccent} />
+
+            <View style={{ flex: 1 }}>
+              <Text style={styles.listTitle}>{list.title}</Text>
+              <View style={styles.listMetaRow}>
+                {list.ends_at ? (
+                  <Text style={styles.listMeta}>{daysLeft(list.ends_at)} days remaining</Text>
+                ) : (
+                  <Text style={styles.listMeta}>Open-ended</Text>
+                )}
+                {crewMembers.length > 0 && (
+                  <View style={styles.crewAvatarStack}>
+                    {crewMembers.map(m => (
+                      <View key={m.id} style={styles.crewAvatarMini}>
+                        <Text style={styles.crewAvatarMiniText}>{m.initial}</Text>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </View>
+            </View>
+
+            <View style={styles.listCardRight}>
+              {list.memberCount > 1 && (
+                <TouchableOpacity
+                  style={styles.addCrewBtn}
+                  onPress={() => navigation.navigate('SavedCrew', { list })}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Text style={styles.addCrewBtnText}>+ Crew</Text>
+                </TouchableOpacity>
+              )}
+              <Text style={styles.listChevron}>→</Text>
+            </View>
+          </TouchableOpacity>
+          )
+        })
+      )}
+
+      {activeLists.length > 0 && (
+        <Text style={styles.deleteHint}>Long-press a list to delete or leave it</Text>
+      )}
+
+      {endedLists.length > 0 && (
+        <>
+          <View style={styles.sectionHeaderBlock}>
+            <Text style={styles.sectionLabel}>Past lists</Text>
+            <Text style={styles.sectionSub}>Ended lists with final results</Text>
+          </View>
+
+          {endedLists.map(list => (
+            <TouchableOpacity
+              key={list.id}
+              style={styles.pastListCard}
+              onPress={() => navigation.navigate('List', { listId: list.id, title: list.title })}
+              activeOpacity={0.85}
+            >
+              <View style={styles.pastListAccent} />
+
+              <View style={{ flex: 1 }}>
+                <Text style={styles.listTitle}>{list.title}</Text>
+                <Text style={styles.endedMeta}>{formatEndedDate(list.ends_at)}</Text>
+              </View>
+
+              <View style={styles.pastListBadge}>
+                <Text style={styles.pastListBadgeText}>Ended</Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+        </>
+      )}
+
+      {!user && (
+        <TouchableOpacity
+          style={styles.signInBanner}
+          onPress={() => navigation.navigate('SignIn')}
+          activeOpacity={0.88}
+        >
+          <Text style={styles.signInTitle}>Track progress and challenge friends</Text>
+          <Text style={styles.signInText}>Sign in to save your lists, join seasonal lists, and compete with your crew →</Text>
+        </TouchableOpacity>
+      )}
+
+      {/* Sign-in prompt modal — shown when unauthenticated user taps "Start your first list" */}
+      <Modal
+        visible={showSignInPrompt}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowSignInPrompt(false)}
+      >
+        <TouchableOpacity
+          style={styles.signInModalOverlay}
+          activeOpacity={1}
+          onPress={() => setShowSignInPrompt(false)}
+        >
+          <View style={styles.signInModalCard}>
+            <Text style={styles.signInModalEmoji}>📋</Text>
+            <Text style={styles.signInModalTitle}>Sign in to create a list</Text>
+            <Text style={styles.signInModalSub}>
+              Creating a list saves your progress, lets you invite your crew, and tracks who checks off the most. It only takes a second.
+            </Text>
+
+            <TouchableOpacity
+              style={styles.signInModalBtn}
+              onPress={() => {
+                setShowSignInPrompt(false)
+                navigation.navigate('SignIn')
+              }}
+              activeOpacity={0.88}
+            >
+              <Text style={styles.signInModalBtnText}>Sign in or create account</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.signInModalDismiss}
+              onPress={() => setShowSignInPrompt(false)}
+            >
+              <Text style={styles.signInModalDismissText}>Maybe later</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+    </ScrollView>
+  )
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: BG,
+  },
+
+  content: {
+    padding: 20,
+    paddingBottom: 40,
+  },
+
+  center: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: BG,
+  },
+
+  headerCard: {
+    backgroundColor: CARD,
+    borderRadius: 28,
+    padding: 20,
+    marginBottom: 24,
+    borderWidth: 1.2,
+    borderColor: BORDER,
+  },
+
+  headerTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+
+  streakPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: '#F2EBE0',
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+
+  streakPillActive: {
+    backgroundColor: '#FFF0D6',
+    borderColor: '#F0C070',
+  },
+
+  streakPillText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: MUTED,
+  },
+
+  streakPillTextActive: {
+    color: '#A16A00',
+  },
+
+  headerBadge: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: SOFT_2,
+    borderWidth: 1,
+    borderColor: '#DED3C5',
+  },
+
+  headerBadgeText: {
+    fontSize: 12,
+    color: MUTED,
+    fontWeight: '800',
+  },
+
+  logo: {
+    fontSize: 38,
+    fontWeight: '900',
+    color: AMBER,
+    letterSpacing: -1,
+  },
+
+  logoOff: {
+    color: TEXT,
+  },
+
+  tagline: {
+    fontSize: 15,
+    color: MUTED,
+    marginTop: 6,
+    lineHeight: 22,
+  },
+
+  seasonPill: {
+    alignSelf: 'flex-start',
+    marginTop: 14,
+    backgroundColor: SOFT,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#E8C98E',
+  },
+
+  seasonPillText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#A16A00',
+  },
+
+  sectionHeaderBlock: {
+    marginBottom: 10,
+  },
+
+  sectionLabel: {
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 1.4,
+    color: MUTED,
+    textTransform: 'uppercase',
+    marginTop: 2,
+    marginBottom: 6,
+  },
+
+  sectionSub: {
+    fontSize: 14,
+    color: MUTED,
+  },
+
+  sectionSubSmall: {
+    fontSize: 13,
+    color: MUTED,
+    marginTop: -2,
+  },
+
+  sectionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 10,
+    marginBottom: 12,
+    gap: 12,
+  },
+
+  pillRow: {
+    marginBottom: 22,
+    marginHorizontal: -4,
+  },
+
+  pill: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: BORDER,
+    marginHorizontal: 4,
+    backgroundColor: CARD,
+  },
+
+  pillActive: {
+    backgroundColor: AMBER,
+    borderColor: AMBER,
+  },
+
+  pillText: {
+    fontSize: 13,
+    color: TEXT,
+    fontWeight: '700',
+  },
+
+  pillTextActive: {
+    color: NAVY,
+    fontWeight: '800',
+  },
+
+  officialCard: {
+    backgroundColor: CARD,
+    borderRadius: 20,
+    padding: 14,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1.2,
+    borderColor: '#F0D29D',
+  },
+
+  officialCardLeft: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: SOFT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#F0D29D',
+  },
+
+  endedOfficialCard: {
+    backgroundColor: CARD,
+    borderRadius: 20,
+    padding: 14,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1,
+    borderColor: ENDED_BORDER,
+  },
+
+  endedOfficialLeft: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: ENDED_BG,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: ENDED_BORDER,
+  },
+
+  officialEmoji: {
+    fontSize: 24,
+  },
+
+  officialCardBody: {
+    flex: 1,
+  },
+
+  officialTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: TEXT,
+  },
+
+  officialMeta: {
+    fontSize: 12,
+    color: MUTED,
+    marginTop: 4,
+    fontWeight: '600',
+  },
+
+  endedMeta: {
+    fontSize: 12,
+    color: ENDED_TEXT,
+    marginTop: 4,
+    fontWeight: '700',
+  },
+
+  joinBadge: {
+    backgroundColor: AMBER,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+
+  joinBadgeText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: NAVY,
+  },
+
+  joinBadgeJoined: {
+    backgroundColor: SUCCESS_BG,
+    borderWidth: 1,
+    borderColor: SUCCESS_BORDER,
+  },
+
+  joinBadgeTextJoined: {
+    color: GREEN,
+  },
+
+  endedBadge: {
+    backgroundColor: ENDED_BG,
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderWidth: 1,
+    borderColor: ENDED_BORDER,
+  },
+
+  endedBadgeText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: ENDED_TEXT,
+  },
+
+  listCard: {
+    backgroundColor: CARD,
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: BORDER,
+    gap: 12,
+  },
+
+  listMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 4,
+    flexWrap: 'wrap',
+  },
+
+  crewAvatarStack: {
+    flexDirection: 'row',
+    gap: -6,
+  },
+
+  crewAvatarMini: {
+    width: 20, height: 20, borderRadius: 10,
+    backgroundColor: SOFT,
+    alignItems: 'center', justifyContent: 'center',
+    borderWidth: 1, borderColor: '#F0D29D',
+    marginRight: -6,
+  },
+
+  crewAvatarMiniText: {
+    fontSize: 9, fontWeight: '800', color: '#A16A00',
+  },
+
+  listCardRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
+  },
+
+  addCrewBtn: {
+    backgroundColor: SOFT,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderWidth: 1,
+    borderColor: '#E8C98E',
+  },
+
+  addCrewBtnText: {
+    fontSize: 11, fontWeight: '800', color: '#A16A00',
+  },
+
+  listAccent: {
+    width: 8,
+    alignSelf: 'stretch',
+    borderRadius: 999,
+    backgroundColor: SOFT,
+    borderWidth: 1,
+    borderColor: '#F0D29D',
+  },
+
+  pastListCard: {
+    backgroundColor: CARD,
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: ENDED_BORDER,
+    gap: 12,
+  },
+
+  pastListAccent: {
+    width: 8,
+    alignSelf: 'stretch',
+    borderRadius: 999,
+    backgroundColor: ENDED_BG,
+    borderWidth: 1,
+    borderColor: ENDED_BORDER,
+  },
+
+  pastListBadge: {
+    backgroundColor: ENDED_BG,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: ENDED_BORDER,
+  },
+
+  pastListBadgeText: {
+    fontSize: 11,
+    color: ENDED_TEXT,
+    fontWeight: '800',
+  },
+
+  listTitle: {
+    fontSize: 15,
+    color: TEXT,
+    fontWeight: '800',
+    flex: 1,
+  },
+
+  listMeta: {
+    fontSize: 12,
+    color: MUTED,
+    marginTop: 4,
+    fontWeight: '600',
+  },
+
+  listChevron: {
+    fontSize: 17,
+    color: MUTED,
+    fontWeight: '700',
+  },
+
+  deleteHint: {
+    fontSize: 12,
+    color: MUTED,
+    textAlign: 'center',
+    marginTop: 6,
+    marginBottom: 8,
+    fontWeight: '600',
+  },
+
+  emptyCard: {
+    backgroundColor: CARD,
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+
+  emptyListCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: CARD,
+    borderRadius: 20,
+    padding: 18,
+    marginBottom: 20,
+    borderWidth: 1.5,
+    borderColor: AMBER,
+    backgroundColor: SOFT,
+  },
+  emptyListEmoji:  { fontSize: 28 },
+  emptyListTitle:  { fontSize: 15, fontWeight: '800', color: TEXT, marginBottom: 3 },
+  emptyListSub:    { fontSize: 12, color: MUTED, lineHeight: 17, fontWeight: '500' },
+  emptyListArrow:  { fontSize: 18, color: AMBER, fontWeight: '800' },
+
+  emptyTitle: {
+    fontSize: 16,
+    color: TEXT,
+    fontWeight: '800',
+    marginBottom: 8,
+  },
+
+  emptySub: {
+    fontSize: 14,
+    color: MUTED,
+    lineHeight: 20,
+  },
+
+  createNewBtn: {
+    backgroundColor: SOFT,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#E8C98E',
+  },
+
+  createNewBtnText: {
+    fontSize: 14,
+    color: '#A16A00',
+    fontWeight: '800',
+  },
+
+  signInBanner: {
+    backgroundColor: SUCCESS_BG,
+    borderRadius: 18,
+    padding: 16,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: SUCCESS_BORDER,
+  },
+
+  signInTitle: {
+    fontSize: 15,
+    color: GREEN,
+    fontWeight: '800',
+    marginBottom: 6,
+  },
+
+  signInText: {
+    fontSize: 13,
+    color: '#287A5F',
+    lineHeight: 19,
+    fontWeight: '600',
+  },
+
+  signInModalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  signInModalCard: {
+    backgroundColor: CARD,
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 28,
+    paddingBottom: 40,
+    alignItems: 'center',
+  },
+  signInModalEmoji:       { fontSize: 40, marginBottom: 16 },
+  signInModalTitle:       { fontSize: 22, fontWeight: '800', color: TEXT, marginBottom: 10, textAlign: 'center' },
+  signInModalSub:         { fontSize: 14, color: MUTED, lineHeight: 21, textAlign: 'center', marginBottom: 28, paddingHorizontal: 8 },
+  signInModalBtn:         { backgroundColor: AMBER, borderRadius: 16, paddingVertical: 17, paddingHorizontal: 32, alignItems: 'center', width: '100%', marginBottom: 12 },
+  signInModalBtnText:     { fontSize: 15, fontWeight: '800', color: NAVY },
+  signInModalDismiss:     { paddingVertical: 10 },
+  signInModalDismissText: { fontSize: 14, color: MUTED, fontWeight: '600' },
+
+  seeAllText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: AMBER,
+  },
+
+  groupScrollRow: {
+    marginHorizontal: -20,
+    paddingLeft: 20,
+    marginBottom: 24,
+  },
+
+  groupChip: {
+    backgroundColor: CARD,
+    borderRadius: 18,
+    padding: 14,
+    width: 160,
+    marginRight: 10,
+    borderWidth: 1.2,
+    borderColor: BORDER,
+    gap: 6,
+  },
+
+  groupChipEmoji: {
+    fontSize: 28,
+    marginBottom: 4,
+  },
+
+  groupChipName: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: TEXT,
+    lineHeight: 18,
+  },
+
+  groupChipTagline: {
+    fontSize: 11,
+    color: MUTED,
+    fontStyle: 'italic',
+    lineHeight: 15,
+  },
+
+  groupChipSeeAll: {
+    backgroundColor: SOFT,
+    borderRadius: 18,
+    padding: 14,
+    width: 100,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#E8C98E',
+  },
+
+  groupChipSeeAllText: {
+    fontSize: 14,
+    fontWeight: '900',
+    color: '#A16A00',
+  },
+})
