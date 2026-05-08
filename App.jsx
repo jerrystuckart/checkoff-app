@@ -1,3 +1,20 @@
+import * as Sentry from '@sentry/react-native'
+
+Sentry.init({
+  dsn: 'https://8422d119eeac15280a1e0221eff3c797@o4511347335430144.ingest.us.sentry.io/4511349900509184',
+})
+
+Sentry.captureMessage('CheckOff launched')
+
+// Ensure unhandled promise rejections are captured by Sentry in addition to
+// whatever React Native does with them (fatal crash in RN 0.73+).
+// This wraps the existing handler rather than replacing Sentry's own setup.
+const _rnDefaultHandler = global.ErrorUtils?.getGlobalHandler?.()
+global.ErrorUtils?.setGlobalHandler?.((error, isFatal) => {
+  try { Sentry.captureException(error) } catch (_) {}
+  if (_rnDefaultHandler) _rnDefaultHandler(error, isFatal)
+})
+
 import React, { useEffect, useState } from 'react'
 import { NavigationContainer } from '@react-navigation/native'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
@@ -31,6 +48,7 @@ import BrowseListsScreen       from './screens/BrowseListsScreen'
 import CuratedListPreviewScreen from './screens/CuratedListPreviewScreen'
 import SavedCrewScreen          from './screens/SavedCrewScreen'
 import SecretRevealScreen       from './screens/SecretRevealScreen'
+import PastListsScreen          from './screens/PastListsScreen'
 
 const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
@@ -205,6 +223,11 @@ function HomeStack() {
         component={ResetPasswordScreen}
         options={{ title: 'Reset password' }}
       />
+      <Stack.Screen
+        name="PastLists"
+        component={PastListsScreen}
+        options={{ headerShown: false }}
+      />
     </Stack.Navigator>
   )
 }
@@ -346,17 +369,17 @@ function MainTabs({ isSignedIn, isAdmin }) {
           ),
         }}
       />
-      {isSignedIn && (
-        <Tab.Screen
-          name="CreateTab"
-          component={CreateStack}
-          options={{
-            tabBarIcon: ({ focused }) => (
-              <TabIcon label="Create" focused={focused} />
-            ),
-          }}
-        />
-      )}
+      <Tab.Screen
+        name="CreateTab"
+        component={CreateStack}
+        options={{
+          tabBarButton: isSignedIn ? undefined : () => null,
+          tabBarItemStyle: isSignedIn ? undefined : { display: 'none' },
+          tabBarIcon: ({ focused }) => (
+            <TabIcon label="Create" focused={focused} />
+          ),
+        }}
+      />
       <Tab.Screen
         name="ProfileTab"
         component={ProfileStack}
@@ -375,7 +398,7 @@ function MainTabs({ isSignedIn, isAdmin }) {
           // Hide the tab button entirely for non-admins instead of conditionally
           // mounting the Tab.Screen, which causes the navigator to silently lose it.
           tabBarButton: isAdmin ? undefined : () => null,
-          tabBarItemStyle: isAdmin ? {} : { display: 'none', width: 0 },
+          tabBarItemStyle: isAdmin ? undefined : { display: 'none' },
           tabBarIcon: ({ focused }) => (
             <TabIcon label="Admin" focused={focused} />
           ),
@@ -385,10 +408,11 @@ function MainTabs({ isSignedIn, isAdmin }) {
   )
 }
 
-export default function App() {
+function App() {
   const { loading, isSignedIn, isAdmin, userId } = useAuth()
   const { needsOnboarding, completeOnboarding, checkingOnboarding } = useOnboarding()
   useNotifications(userId)
+
 
   // Show splash for a minimum of 2 seconds AND until auth resolves —
   // whichever takes longer. Reduced from 3s for snappier first-launch feel.
@@ -453,3 +477,5 @@ export default function App() {
     </ErrorBoundary>
   )
 }
+
+export default Sentry.wrap(App)

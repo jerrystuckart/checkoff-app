@@ -6,6 +6,8 @@ import {
 import { useFocusEffect } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../lib/useAuth'
+import * as Sentry from '@sentry/react-native'
 
 const AMBER  = '#F5A623'
 const NAVY   = '#1A1A2E'
@@ -22,6 +24,7 @@ const SOFT_2         = '#F8F3EC'
 
 export default function ProfileScreen({ navigation }) {
   const insets = useSafeAreaInsets()
+  const { signOut: authSignOut } = useAuth()
   const [user, setUser]                     = useState(null)
   const [profile, setProfile]               = useState(null)
   const [stats, setStats]                   = useState(null)
@@ -46,30 +49,41 @@ export default function ProfileScreen({ navigation }) {
     if (isRefresh) setRefreshing(true)
     else setLoading(true)
 
-    const { data: { user: authUser } } = await supabase.auth.getUser()
+    let authUser = null
+    try {
+      const { data } = await supabase.auth.getUser()
+      authUser = data?.user ?? null
+    } catch (e) {
+      console.warn('ProfileScreen getUser error:', e.message)
+    }
     setUser(authUser)
 
     if (!authUser) { setLoading(false); setRefreshing(false); return }
 
     const uid = authUser.id
 
-    const [profileRes, badgesRes, checkinsRes, totalRes] = await Promise.all([
-      supabase.from('users').select('id, display_name, email, current_streak, longest_streak, created_at, is_admin, pref_show_alcohol, notif_check_ins, notif_invites, notif_nudges').eq('id', uid).single(),
-      supabase.from('user_badges').select('badge_id, earned_at, badge_definitions(id, name, icon, description)').eq('user_id', uid).order('earned_at', { ascending: false }).limit(6),
-      supabase.from('check_ins').select('id, checked_at, checkin_method, list_items(items(body, categories(name, color_hex)))').eq('user_id', uid).order('checked_at', { ascending: false }).limit(5),
-      supabase.from('check_ins').select('id', { count: 'exact', head: true }).eq('user_id', uid),
-    ])
+    try {
+      const [profileRes, badgesRes, checkinsRes, totalRes] = await Promise.all([
+        supabase.from('users').select('id, display_name, email, current_streak, longest_streak, created_at, is_admin, pref_show_alcohol, notif_check_ins, notif_invites, notif_nudges').eq('id', uid).single(),
+        supabase.from('user_badges').select('badge_id, earned_at, badge_definitions(id, name, icon, description)').eq('user_id', uid).order('earned_at', { ascending: false }).limit(6),
+        supabase.from('check_ins').select('id, checked_at, checkin_method, list_items(items(body, categories(name, color_hex)))').eq('user_id', uid).order('checked_at', { ascending: false }).limit(5),
+        supabase.from('check_ins').select('id', { count: 'exact', head: true }).eq('user_id', uid),
+      ])
 
-    setProfile(profileRes.data)
-    setShowAlcohol(profileRes.data?.pref_show_alcohol !== false)
-    setNotifCheckIns(profileRes.data?.notif_check_ins !== false)
-    setNotifInvites(profileRes.data?.notif_invites !== false)
-    setNotifNudges(profileRes.data?.notif_nudges !== false)
-    setBadges((badgesRes.data ?? []).map(b => ({ ...b.badge_definitions, earned_at: b.earned_at })).filter(Boolean))
-    setRecentCheckins(checkinsRes.data ?? [])
-    setStats({ total: totalRes.count ?? 0, streak: profileRes.data?.current_streak ?? 0, longest: profileRes.data?.longest_streak ?? 0 })
-    setLoading(false)
-    setRefreshing(false)
+      setProfile(profileRes.data)
+      setShowAlcohol(profileRes.data?.pref_show_alcohol !== false)
+      setNotifCheckIns(profileRes.data?.notif_check_ins !== false)
+      setNotifInvites(profileRes.data?.notif_invites !== false)
+      setNotifNudges(profileRes.data?.notif_nudges !== false)
+      setBadges((badgesRes.data ?? []).map(b => ({ ...b.badge_definitions, earned_at: b.earned_at })).filter(Boolean))
+      setRecentCheckins(checkinsRes.data ?? [])
+      setStats({ total: totalRes.count ?? 0, streak: profileRes.data?.current_streak ?? 0, longest: profileRes.data?.longest_streak ?? 0 })
+    } catch (e) {
+      Sentry.captureException(e)
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+    }
   }, [])
 
   async function toggleAlcohol(value) {
@@ -90,19 +104,26 @@ export default function ProfileScreen({ navigation }) {
   }
 
   async function signOut() {
-    Alert.alert('Sign out', 'Are you sure?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign out', style: 'destructive', onPress: async () => {
-          await supabase.auth.signOut()
-          // Small delay to let auth state propagate before navigating
-          setTimeout(() => {
-            const parent = navigation.getParent()
-            if (parent) parent.navigate('HomeTab', { screen: 'Home' })
-            else navigation.navigate('Home')
-          }, 100)
-        },
+  Alert.alert('Sign out', 'Are you sure?', [
+    { text: 'Cancel', style: 'cancel' },
+    {
+      text: 'Sign out',
+      style: 'destructive',
+      onPress: async () => {
+        Sentry.addBreadcrumb({ category: 'auth', message: 'signOut initiated', level: 'info' })
+        try {
+          await authSignOut()
+          Sentry.addBreadcrumb({ category: 'auth', message: 'signOut completed', level: 'info' })
+        } catch (e) {
+          Alert.alert(
+            'Could not sign out',
+            e?.message ?? 'Please try again.',
+            [{ text: 'OK' }]
+          )
+        }
       },
-    ])
+    },
+  ])
 }
   async function deleteAccount() {
     // Step 1 — first confirmation
@@ -128,12 +149,8 @@ export default function ProfileScreen({ navigation }) {
                     try {
                       const { error } = await supabase.rpc('delete_my_account')
                       if (error) throw error
-                      await supabase.auth.signOut()
-                      setTimeout(() => {
-                        const parent = navigation.getParent()
-                        if (parent) parent.navigate('HomeTab', { screen: 'Home' })
-                        else navigation.navigate('Home')
-                      }, 100)
+
+                      await authSignOut()
                     } catch (e) {
                       Alert.alert(
                         'Could not delete account',

@@ -9,6 +9,7 @@ import * as Location from 'expo-location'
 import { supabase } from '../lib/supabase'
 import { fetchCuratedLists } from '../lib/useItems'
 import { useCrewInvite } from '../lib/useCrewInvite'
+import * as Sentry from '@sentry/react-native'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
@@ -51,10 +52,14 @@ export default function HomeScreen({ navigation }) {
   useEffect(() => {
     init()
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      const authUser = session?.user ?? null
-      setUser(authUser)
-      if (selectedMetro) {
-        loadForMetro(selectedMetro.id, authUser?.id, selectedMetro.slug)
+      try {
+        const authUser = session?.user ?? null
+        setUser(authUser)
+        if (selectedMetro) {
+          loadForMetro(selectedMetro.id, authUser?.id, selectedMetro.slug)
+        }
+      } catch (e) {
+        Sentry.captureException(e)
       }
     })
     return () => subscription.unsubscribe()
@@ -70,51 +75,60 @@ export default function HomeScreen({ navigation }) {
 }, [navigation, selectedMetro, user])
 
   async function init() {
-    const { data: { user: authUser } } = await supabase.auth.getUser()
+    let authUser = null
+    try {
+      const { data } = await supabase.auth.getUser()
+      authUser = data?.user ?? null
+    } catch (e) {
+      console.warn('HomeScreen getUser error:', e.message)
+    }
     setUser(authUser)
 
-    const { data: metroData } = await supabase
-      .from('metro_areas')
-      .select('id, name, state, slug')
-      .eq('is_active', true)
-      .order('name')
+    try {
+      const { data: metroData } = await supabase
+        .from('metro_areas')
+        .select('id, name, state, slug')
+        .eq('is_active', true)
+        .order('name')
 
-    setMetros(metroData ?? [])
+      setMetros(metroData ?? [])
 
-    let defaultMetro = null
-try {
-  // Race the location request against a 3-second timeout
-  // so a GPS hang never blocks the home screen from loading
-  const locationResult = await Promise.race([
-    (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync()
-      if (status !== 'granted') return null
-      const pos = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Low,
-      })
-      return pos.coords.latitude
-    })(),
-    new Promise(resolve => setTimeout(() => resolve(null), 3000)),
-  ])
+      let defaultMetro = null
+      try {
+        const locationResult = await Promise.race([
+          (async () => {
+            const { status } = await Location.requestForegroundPermissionsAsync()
+            if (status !== 'granted') return null
+            const pos = await Location.getCurrentPositionAsync({
+              accuracy: Location.Accuracy.Low,
+            })
+            return pos.coords.latitude
+          })(),
+          new Promise(resolve => setTimeout(() => resolve(null), 3000)),
+        ])
 
-  if (locationResult !== null) {
-    defaultMetro = locationResult < 37
-      ? (metroData ?? []).find(m => m.name.includes('Phoenix'))
-      : (metroData ?? []).find(m => m.name.includes('Milwaukee'))
-  }
-} catch (e) {
-  /* GPS optional */
-}
+        if (locationResult !== null) {
+          defaultMetro = locationResult < 37
+            ? (metroData ?? []).find(m => m.name.includes('Phoenix'))
+            : (metroData ?? []).find(m => m.name.includes('Milwaukee'))
+        }
+      } catch (e) {
+        /* GPS optional */
+      }
 
-    if (!defaultMetro) {
-      defaultMetro = (metroData ?? []).find(m => m.name.includes('Phoenix')) ?? metroData?.[0]
+      if (!defaultMetro) {
+        defaultMetro = (metroData ?? []).find(m => m.name.includes('Phoenix')) ?? metroData?.[0]
+      }
+
+      if (defaultMetro) {
+        setSelectedMetro(defaultMetro)
+        await loadForMetro(defaultMetro.id, authUser?.id, defaultMetro.slug)
+      }
+    } catch (e) {
+      console.warn('HomeScreen init error:', e.message)
+    } finally {
+      setLoading(false)
     }
-
-    if (defaultMetro) {
-      setSelectedMetro(defaultMetro)
-      await loadForMetro(defaultMetro.id, authUser?.id, defaultMetro.slug)
-    }
-    setLoading(false)
   }
 
   async function loadForMetro(metroId, userId, citySlug) {
@@ -286,6 +300,7 @@ try {
   }
 
   async function leaveList(list) {
+    if (!user?.id) return
     Alert.alert(
       'Leave list?',
       'You can rejoin using the original invite link.',
@@ -346,11 +361,33 @@ try {
     ?? 'phoenix'
   const metroDisplayName = selectedMetro?.name?.replace(' Metro', '') ?? 'Phoenix'
 
-  const officialActiveLists = officialLists.filter(l => !isEnded(l.ends_at))
-  const officialEndedLists  = officialLists.filter(l => isEnded(l.ends_at))
+  const now = new Date()
 
-  const activeLists = lists.filter(l => !isEnded(l.ends_at))
-  const endedLists  = lists.filter(l => isEnded(l.ends_at))
+  // Official lists bucketed into three states
+  const activeOfficial = officialLists
+    .filter(l => !isEnded(l.ends_at) && (!l.starts_at || new Date(`${l.starts_at}T12:00:00`) <= now))
+    .sort((a, b) => new Date(a.ends_at || '9999-12-31') - new Date(b.ends_at || '9999-12-31'))
+
+  const upcomingOfficial = officialLists
+    .filter(l => l.starts_at && new Date(`${l.starts_at}T12:00:00`) > now)
+    .sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at))
+
+  const endedOfficial = officialLists
+    .filter(l => isEnded(l.ends_at))
+    .sort((a, b) => new Date(b.ends_at) - new Date(a.ends_at))
+
+  // Home shows at most 2 official lists: current (or most recently ended) + next upcoming
+  const currentOnHome  = activeOfficial[0] ?? endedOfficial[0] ?? null
+  const upcomingOnHome = upcomingOfficial[0] ?? null
+  const homeOfficialLists = [currentOnHome, upcomingOnHome].filter(Boolean)
+  const homeOfficialIds   = new Set(homeOfficialLists.map(l => l.id))
+
+  // Past official = all ended ones not shown on home
+  const pastOfficialLists = endedOfficial.filter(l => !homeOfficialIds.has(l.id))
+
+  const activeLists     = lists.filter(l => !isEnded(l.ends_at))
+  const endedLists      = lists.filter(l => isEnded(l.ends_at))
+  const totalPastCount  = endedLists.length + pastOfficialLists.length
 
   if (loading) {
     return (
@@ -429,39 +466,87 @@ try {
         ))}
       </ScrollView>
 
-      {officialActiveLists.length > 0 && (
+      {homeOfficialLists.length > 0 && (
         <>
           <View style={styles.sectionHeaderBlock}>
             <Text style={styles.sectionLabel}>Seasonal lists</Text>
             <Text style={styles.sectionSub}>Join free and start checking things off</Text>
           </View>
 
-          {officialActiveLists.map(list => {
-            const joined = joinedIds.has(list.id)
+          {homeOfficialLists.map(list => {
+            const joined   = joinedIds.has(list.id)
+            const ended    = isEnded(list.ends_at)
+            const upcoming = !ended && list.starts_at && new Date(`${list.starts_at}T12:00:00`) > now
+
+            if (ended) {
+              return (
+                <TouchableOpacity
+                  key={list.id}
+                  style={styles.endedOfficialCard}
+                  onPress={() => navigation.navigate('List', { listId: list.id, title: list.title })}
+                  activeOpacity={0.88}
+                >
+                  <View style={styles.endedOfficialLeft}>
+                    <Text style={styles.officialEmoji}>{list.cover_emoji ?? '🏁'}</Text>
+                  </View>
+                  <View style={styles.officialCardBody}>
+                    <Text style={styles.officialTitle}>{list.title}</Text>
+                    <Text style={styles.endedMeta}>{formatEndedDate(list.ends_at)}</Text>
+                  </View>
+                  <View style={styles.endedBadge}>
+                    <Text style={styles.endedBadgeText}>Results →</Text>
+                  </View>
+                </TouchableOpacity>
+              )
+            }
+
+            if (upcoming) {
+              return (
+                <TouchableOpacity
+                  key={list.id}
+                  style={styles.upcomingOfficialCard}
+                  onPress={() => joined
+                    ? navigation.navigate('List', { listId: list.id, title: list.title })
+                    : joinOfficialList(list)
+                  }
+                  activeOpacity={0.88}
+                >
+                  <View style={styles.upcomingOfficialLeft}>
+                    <Text style={styles.officialEmoji}>{list.cover_emoji ?? '📋'}</Text>
+                  </View>
+                  <View style={styles.officialCardBody}>
+                    <Text style={styles.officialTitle}>{list.title}</Text>
+                    <Text style={styles.upcomingMeta}>
+                      Starts {new Date(`${list.starts_at}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                    </Text>
+                  </View>
+                  <View style={styles.upcomingBadge}>
+                    <Text style={styles.upcomingBadgeText}>Coming soon</Text>
+                  </View>
+                </TouchableOpacity>
+              )
+            }
+
             return (
               <TouchableOpacity
                 key={list.id}
                 style={styles.officialCard}
-                onPress={() =>
-                  joined
-                    ? navigation.navigate('List', { listId: list.id, title: list.title })
-                    : joinOfficialList(list)
+                onPress={() => joined
+                  ? navigation.navigate('List', { listId: list.id, title: list.title })
+                  : joinOfficialList(list)
                 }
                 activeOpacity={0.88}
               >
                 <View style={styles.officialCardLeft}>
                   <Text style={styles.officialEmoji}>{list.cover_emoji ?? '📋'}</Text>
                 </View>
-
                 <View style={styles.officialCardBody}>
                   <Text style={styles.officialTitle}>{list.title}</Text>
-                  {list.ends_at ? (
-                    <Text style={styles.officialMeta}>{daysLeft(list.ends_at)} days left</Text>
-                  ) : (
-                    <Text style={styles.officialMeta}>Open now</Text>
-                  )}
+                  {list.ends_at
+                    ? <Text style={styles.officialMeta}>{daysLeft(list.ends_at)} days left</Text>
+                    : <Text style={styles.officialMeta}>Open now</Text>
+                  }
                 </View>
-
                 <View style={[styles.joinBadge, joined && styles.joinBadgeJoined]}>
                   <Text style={[styles.joinBadgeText, joined && styles.joinBadgeTextJoined]}>
                     {joined ? 'Open →' : 'Join'}
@@ -470,37 +555,6 @@ try {
               </TouchableOpacity>
             )
           })}
-        </>
-      )}
-
-      {officialEndedLists.length > 0 && (
-        <>
-          <View style={styles.sectionHeaderBlock}>
-            <Text style={styles.sectionLabel}>Ended seasonal lists</Text>
-            <Text style={styles.sectionSub}>View final standings and winners</Text>
-          </View>
-
-          {officialEndedLists.map(list => (
-            <TouchableOpacity
-              key={list.id}
-              style={styles.endedOfficialCard}
-              onPress={() => navigation.navigate('List', { listId: list.id, title: list.title })}
-              activeOpacity={0.88}
-            >
-              <View style={styles.endedOfficialLeft}>
-                <Text style={styles.officialEmoji}>{list.cover_emoji ?? '🏁'}</Text>
-              </View>
-
-              <View style={styles.officialCardBody}>
-                <Text style={styles.officialTitle}>{list.title}</Text>
-                <Text style={styles.endedMeta}>{formatEndedDate(list.ends_at)}</Text>
-              </View>
-
-              <View style={styles.endedBadge}>
-                <Text style={styles.endedBadgeText}>Results →</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
         </>
       )}
 
@@ -673,33 +727,22 @@ try {
         <Text style={styles.deleteHint}>Long-press a list to delete or leave it</Text>
       )}
 
-      {endedLists.length > 0 && (
-        <>
-          <View style={styles.sectionHeaderBlock}>
-            <Text style={styles.sectionLabel}>Past lists</Text>
-            <Text style={styles.sectionSub}>Ended lists with final results</Text>
+      {totalPastCount > 0 && (
+        <TouchableOpacity
+          style={styles.pastListsBtn}
+          onPress={() => navigation.navigate('PastLists', {
+            userId:          user?.id ?? null,
+            metroId:         selectedMetro?.id ?? null,
+          })}
+          activeOpacity={0.85}
+        >
+          <View style={styles.pastListAccent} />
+          <Text style={styles.pastListsBtnText}>Past lists</Text>
+          <View style={styles.pastListsBtnRight}>
+            <Text style={styles.pastListsBtnCount}>{totalPastCount}</Text>
+            <Text style={styles.pastListsBtnArrow}>→</Text>
           </View>
-
-          {endedLists.map(list => (
-            <TouchableOpacity
-              key={list.id}
-              style={styles.pastListCard}
-              onPress={() => navigation.navigate('List', { listId: list.id, title: list.title })}
-              activeOpacity={0.85}
-            >
-              <View style={styles.pastListAccent} />
-
-              <View style={{ flex: 1 }}>
-                <Text style={styles.listTitle}>{list.title}</Text>
-                <Text style={styles.endedMeta}>{formatEndedDate(list.ends_at)}</Text>
-              </View>
-
-              <View style={styles.pastListBadge}>
-                <Text style={styles.pastListBadgeText}>Ended</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-        </>
+        </TouchableOpacity>
       )}
 
       {!user && (
@@ -1106,6 +1149,95 @@ const styles = StyleSheet.create({
     backgroundColor: SOFT,
     borderWidth: 1,
     borderColor: '#F0D29D',
+  },
+
+  pastListsBtn: {
+    backgroundColor: CARD,
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: ENDED_BORDER,
+    gap: 12,
+  },
+
+  pastListsBtnText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '800',
+    color: TEXT,
+  },
+
+  pastListsBtnRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+
+  pastListsBtnCount: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: ENDED_TEXT,
+    backgroundColor: ENDED_BG,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderWidth: 1,
+    borderColor: ENDED_BORDER,
+    overflow: 'hidden',
+  },
+
+  pastListsBtnArrow: {
+    fontSize: 17,
+    color: MUTED,
+    fontWeight: '700',
+  },
+
+  upcomingOfficialCard: {
+    backgroundColor: '#F0F7FF',
+    borderRadius: 20,
+    padding: 14,
+    marginBottom: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1,
+    borderColor: '#C8DDF5',
+  },
+
+  upcomingOfficialLeft: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#DFF0FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#C8DDF5',
+  },
+
+  upcomingMeta: {
+    fontSize: 12,
+    color: '#378ADD',
+    fontWeight: '700',
+    marginTop: 2,
+  },
+
+  upcomingBadge: {
+    backgroundColor: '#DFF0FF',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderWidth: 1,
+    borderColor: '#C8DDF5',
+  },
+
+  upcomingBadgeText: {
+    fontSize: 11,
+    color: '#378ADD',
+    fontWeight: '800',
   },
 
   pastListCard: {
