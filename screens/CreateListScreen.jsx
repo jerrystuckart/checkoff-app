@@ -580,7 +580,7 @@ export default function CreateListScreen({ navigation, route }) {
     const encoded = encodeURIComponent(inviteMessage())
     const url = `sms:?body=${encoded}`
     const ok = await Linking.canOpenURL(url)
-    Linking.openURL(ok ? url : `sms:`)
+    Linking.openURL(ok ? url : `sms:`).catch(() => {})
   }
 
   async function openNativeShare() {
@@ -592,36 +592,46 @@ export default function CreateListScreen({ navigation, route }) {
   }
 
   async function shareViaSnapchat() {
-    Clipboard.setString(inviteMessage())
-    const ok = await Linking.canOpenURL('snapchat://')
-    if (ok) {
-      Alert.alert(
-        'Copied to clipboard',
-        'Message copied — open a Snap chat and paste it',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Open Snapchat', onPress: () => Linking.openURL('snapchat://') },
-        ]
-      )
-    } else {
-      Alert.alert('Snapchat not installed', 'Install Snapchat to share this way.')
+    try {
+      Clipboard.setString(inviteMessage())
+      const ok = await Linking.canOpenURL('snapchat://')
+      if (ok) {
+        Alert.alert(
+          'Copied to clipboard',
+          'Message copied — open a Snap chat and paste it',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Snapchat', onPress: () => Linking.openURL('snapchat://').catch(() => {}) },
+          ]
+        )
+      } else {
+        Alert.alert('Snapchat not installed', 'Install Snapchat to share this way.')
+      }
+    } catch (e) {
+      console.warn('shareViaSnapchat error:', e?.message)
+      Alert.alert('Could not share', 'Something went wrong. Try the text option instead.')
     }
   }
 
   async function shareViaInstagram() {
-    Clipboard.setString(inviteMessage())
-    const ok = await Linking.canOpenURL('instagram://direct-inbox')
-    if (ok) {
-      Alert.alert(
-        'Copied to clipboard',
-        'Message copied — paste it into your Instagram DM',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Open Instagram', onPress: () => Linking.openURL('instagram://direct-inbox') },
-        ]
-      )
-    } else {
-      Linking.openURL('https://www.instagram.com/direct/inbox/')
+    try {
+      Clipboard.setString(inviteMessage())
+      const ok = await Linking.canOpenURL('instagram://direct-inbox')
+      if (ok) {
+        Alert.alert(
+          'Copied to clipboard',
+          'Message copied — paste it into your Instagram DM',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Instagram', onPress: () => Linking.openURL('instagram://direct-inbox').catch(() => {}) },
+          ]
+        )
+      } else {
+        Linking.openURL('https://www.instagram.com/direct/inbox/').catch(() => {})
+      }
+    } catch (e) {
+      console.warn('shareViaInstagram error:', e?.message)
+      Alert.alert('Could not share', 'Something went wrong. Try the text option instead.')
     }
   }
 

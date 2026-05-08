@@ -11,6 +11,7 @@ import {
   ScrollView,
   ActivityIndicator,
 } from 'react-native'
+import Clipboard from '@react-native-clipboard/clipboard'
 import * as Haptics from 'expo-haptics'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
@@ -42,7 +43,7 @@ const CHANNELS = {
       const encoded = encodeURIComponent(msg)
       const url = `sms:?body=${encoded}`
       const ok = await Linking.canOpenURL(url)
-      Linking.openURL(ok ? url : 'sms:')
+      Linking.openURL(ok ? url : 'sms:').catch(() => {})
     },
   },
   imessage: {
@@ -50,14 +51,14 @@ const CHANNELS = {
     color: '#1D9E75',
     open: async (msg) => {
       const encoded = encodeURIComponent(msg)
-      Linking.openURL(`sms:?body=${encoded}`)
+      Linking.openURL(`sms:?body=${encoded}`).catch(() => {})
     },
   },
   instagram: {
     label: 'Instagram',
     color: '#C13584',
     open: async (msg) => {
-      const Clipboard = require('@react-native-clipboard/clipboard').default
+      // const Clipboard = require('@react-native-clipboard/clipboard').default
       Clipboard.setString(msg)
       const ok = await Linking.canOpenURL('instagram://direct-inbox')
       if (ok) {
@@ -66,11 +67,11 @@ const CHANNELS = {
           'Message copied — paste it into your Instagram DM',
           [
             { text: 'Cancel', style: 'cancel' },
-            { text: 'Open Instagram', onPress: () => Linking.openURL('instagram://direct-inbox') },
+            { text: 'Open Instagram', onPress: () => Linking.openURL('instagram://direct-inbox').catch(() => {}) },
           ]
         )
       } else {
-        Linking.openURL('https://www.instagram.com/direct/inbox/')
+        Linking.openURL('https://www.instagram.com/direct/inbox/').catch(() => {})
       }
     },
   },
@@ -79,7 +80,7 @@ const CHANNELS = {
     color: '#FFFC00',
     textColor: '#000',
     open: async (msg) => {
-      const Clipboard = require('@react-native-clipboard/clipboard').default
+      // const Clipboard = require('@react-native-clipboard/clipboard').default
       Clipboard.setString(msg)
       const ok = await Linking.canOpenURL('snapchat://')
       if (ok) {
@@ -88,11 +89,11 @@ const CHANNELS = {
           'Message copied — open a Snap chat and paste it',
           [
             { text: 'Cancel', style: 'cancel' },
-            { text: 'Open Snapchat', onPress: () => Linking.openURL('snapchat://') },
+            { text: 'Open Snapchat', onPress: () => Linking.openURL('snapchat://').catch(() => {}) },
           ]
         )
       } else {
-        Linking.openURL('https://www.snapchat.com')
+        Linking.openURL('https://www.snapchat.com').catch(() => {})
       }
     },
   },
@@ -103,7 +104,7 @@ const CHANNELS = {
       const encoded = encodeURIComponent(msg)
       const url = `whatsapp://send?text=${encoded}`
       const ok = await Linking.canOpenURL(url)
-      Linking.openURL(ok ? url : `https://wa.me/?text=${encoded}`)
+      Linking.openURL(ok ? url : `https://wa.me/?text=${encoded}`).catch(() => {})
     },
   },
   tiktok: {
@@ -111,7 +112,7 @@ const CHANNELS = {
     color: '#010101',
     textColor: '#fff',
     open: async (msg) => {
-      const Clipboard = require('@react-native-clipboard/clipboard').default
+      // const Clipboard = require('@react-native-clipboard/clipboard').default
       Clipboard.setString(msg)
       const ok = await Linking.canOpenURL('tiktok://')
       if (ok) {
@@ -120,7 +121,7 @@ const CHANNELS = {
           'Message copied — open a TikTok DM and paste it',
           [
             { text: 'Cancel', style: 'cancel' },
-            { text: 'Open TikTok', onPress: () => Linking.openURL('tiktok://') },
+            { text: 'Open TikTok', onPress: () => Linking.openURL('tiktok://').catch(() => {}) },
           ]
         )
       } else {
@@ -132,7 +133,7 @@ const CHANNELS = {
     label: 'Facebook',
     color: '#1877F2',
     open: async (msg) => {
-      const Clipboard = require('@react-native-clipboard/clipboard').default
+      // const Clipboard = require('@react-native-clipboard/clipboard').default
       Clipboard.setString(msg)
       const ok = await Linking.canOpenURL('fb-messenger://')
       if (ok) {
@@ -141,17 +142,17 @@ const CHANNELS = {
           'Message copied — open a Messenger conversation and paste it',
           [
             { text: 'Cancel', style: 'cancel' },
-            { text: 'Open Messenger', onPress: () => Linking.openURL('fb-messenger://') },
+            { text: 'Open Messenger', onPress: () => Linking.openURL('fb-messenger://').catch(() => {}) },
           ]
         )
       } else {
-        Linking.openURL('https://www.messenger.com')
+        Linking.openURL('https://www.messenger.com').catch(() => {})
       }
     },
   },
 }
 
-const DEFAULT_CHANNELS = ['sms', 'instagram', 'snapchat']
+const DEFAULT_CHANNELS = ['sms', 'instagram', 'snapchat', 'tiktok']
 
 export default function ItemDetailScreen({ route, navigation }) {
   const { item, listId, listTitle } = route.params ?? {}
@@ -553,26 +554,31 @@ export default function ItemDetailScreen({ route, navigation }) {
     if (lat && lng) {
       const url = `maps://?daddr=${lat},${lng}&dirflg=d`
       Linking.canOpenURL(url).then(ok =>
-        Linking.openURL(ok ? url : `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`)
+        Linking.openURL(ok ? url : `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`).catch(() => {})
       )
     } else if (item.maps_query) {
       const encoded = encodeURIComponent(item.maps_query)
       const url = `maps://?q=${encoded}`
       Linking.canOpenURL(url).then(ok =>
-        Linking.openURL(ok ? url : `https://maps.google.com/?q=${encoded}`)
+        Linking.openURL(ok ? url : `https://maps.google.com/?q=${encoded}`).catch(() => {})
       )
     }
   }
 
   function openWebsite() {
-    if (item?.website_url) Linking.openURL(item.website_url)
+    if (item?.website_url) Linking.openURL(item.website_url).catch(() => {})
   }
 
   async function shareVia(channelKey) {
     const ch = CHANNELS[channelKey]
     if (!ch) return
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
-    ch.open(inviteMessage())
+    try {
+      await ch.open(inviteMessage())
+    } catch (e) {
+      console.warn('shareVia error:', channelKey, e?.message)
+      Alert.alert('Could not share', 'Something went wrong. Try the text option instead.')
+    }
   }
 
   async function openNativeShare() {

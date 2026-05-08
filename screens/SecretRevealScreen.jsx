@@ -150,12 +150,12 @@ export default function SecretRevealScreen({ route, navigation }) {
     if (itemLat && itemLng) {
       const url = `maps://?daddr=${itemLat},${itemLng}&dirflg=d`
       Linking.canOpenURL(url).then(ok =>
-        Linking.openURL(ok ? url : `https://www.google.com/maps/dir/?api=1&destination=${itemLat},${itemLng}`)
+        Linking.openURL(ok ? url : `https://www.google.com/maps/dir/?api=1&destination=${itemLat},${itemLng}`).catch(() => {})
       )
     } else if (item?.maps_query) {
       const encoded = encodeURIComponent(item.maps_query)
       Linking.canOpenURL(`maps://?q=${encoded}`).then(ok =>
-        Linking.openURL(ok ? `maps://?q=${encoded}` : `https://maps.google.com/?q=${encoded}`)
+        Linking.openURL(ok ? `maps://?q=${encoded}` : `https://maps.google.com/?q=${encoded}`).catch(() => {})
       )
     }
   }

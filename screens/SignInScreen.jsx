@@ -36,6 +36,7 @@ export default function SignInScreen({ navigation, route }) {
   const [displayName, setDisplayName] = useState('')
 
   function navigateAfterAuth() {
+    Keyboard.dismiss()
     if (returnToInvite) {
       const parent = navigation.getParent()
       if (parent) parent.navigate('HomeTab', { screen: 'JoinList', params: { invite_code: returnToInvite } })
@@ -349,11 +350,11 @@ export default function SignInScreen({ navigation, route }) {
 
         <Text style={styles.legal}>
           By continuing you agree to CheckOff's{' '}
-          <Text style={styles.legalLink} onPress={() => Linking.openURL('https://getcheckoff.com/terms')}>
+          <Text style={styles.legalLink} onPress={() => Linking.openURL('https://getcheckoff.com/terms').catch(() => {})}>
             Terms of Service
           </Text>
           {' '}and{' '}
-          <Text style={styles.legalLink} onPress={() => Linking.openURL('https://getcheckoff.com/privacy')}>
+          <Text style={styles.legalLink} onPress={() => Linking.openURL('https://getcheckoff.com/privacy').catch(() => {})}>
             Privacy Policy
           </Text>
         </Text>

@@ -142,7 +142,7 @@ export default function PartnerPreviewScreen({ route, navigation }) {
     const encoded = encodeURIComponent(item.maps_query)
     const url = `maps://?q=${encoded}`
     Linking.canOpenURL(url).then(ok =>
-      Linking.openURL(ok ? url : `https://maps.google.com/?q=${encoded}`)
+      Linking.openURL(ok ? url : `https://maps.google.com/?q=${encoded}`).catch(() => {})
     )
   }
 
@@ -276,7 +276,7 @@ export default function PartnerPreviewScreen({ route, navigation }) {
               </View>
               <TouchableOpacity
                 style={[styles.tierBtn, { backgroundColor: tier.color }]}
-                onPress={() => Linking.openURL('https://getcheckoff.com/partner')}
+                onPress={() => Linking.openURL('https://getcheckoff.com/partner').catch(() => {})}
               >
                 <Text style={styles.tierBtnText}>Get started — {tier.label}</Text>
               </TouchableOpacity>
