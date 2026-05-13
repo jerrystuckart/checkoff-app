@@ -139,7 +139,7 @@ export default function NearbyScreen({ navigation }) {
         </View>
         <Text style={styles.errorTitle}>Location needed</Text>
         <Text style={styles.errorSub}>{locError}</Text>
-        <TouchableOpacity style={styles.settingsBtn} onPress={() => Linking.openURL('app-settings:')} activeOpacity={0.88}>
+        <TouchableOpacity style={styles.settingsBtn} onPress={() => Linking.openURL('app-settings:').catch(() => {})} activeOpacity={0.88}>
           <Text style={styles.settingsBtnText}>Open Settings</Text>
         </TouchableOpacity>
       </View>

@@ -2,7 +2,7 @@
   "expo": {
     "name": "CheckOff",
     "slug": "checkoff",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -16,18 +16,27 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.checkoff.app",
       "usesAppleSignIn": true,
-      "buildNumber": "17",
+      "buildNumber": "45",
       "associatedDomains": [
         "applinks:getcheckoff.com",
         "webcredentials:getcheckoff.com"
       ],
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "UIBackgroundModes": ["remote-notification"],
+        "UIBackgroundModes": [
+          "remote-notification"
+        ],
         "NSLocationWhenInUseUsageDescription": "CheckOff uses your location to show items near you and verify GPS check-ins.",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "CheckOff uses your location to show items near you and verify GPS check-ins.",
         "NSPhotoLibraryUsageDescription": "CheckOff lets you add photos to your check-ins.",
-        "NSCameraUsageDescription": "CheckOff lets you take photos for check-ins."
+        "NSCameraUsageDescription": "CheckOff lets you take photos for check-ins.",
+        "LSApplicationQueriesSchemes": [
+          "snapchat",
+          "instagram",
+          "tiktok",
+          "whatsapp",
+          "fb-messenger"
+        ]
       }
     },
     "android": {
@@ -48,6 +57,15 @@
     "plugins": [
       "expo-location",
       "expo-apple-authentication",
+      [
+        "@sentry/react-native/expo",
+        {
+          "url": "https://sentry.io/",
+          "project": "react-native-rp",
+          "organization": "checkoff",
+          "uploadSourceMaps": true
+        }
+      ],
       [
         "expo-camera",
         {

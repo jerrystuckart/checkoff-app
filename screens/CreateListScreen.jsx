@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
-  StyleSheet, Alert, ActivityIndicator, FlatList, Share, Linking, Platform,
+  StyleSheet, Alert, ActivityIndicator, FlatList, Share, Linking, Platform, Keyboard,
 } from 'react-native'
 import Clipboard from '@react-native-clipboard/clipboard'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import * as Location from 'expo-location'
 import { supabase } from '../lib/supabase'
 import { fetchCuratedListItems } from '../lib/useItems'
 
@@ -209,6 +208,11 @@ export default function CreateListScreen({ navigation, route }) {
       return
     }
 
+    if (!metroId) {
+      Alert.alert('Pick a city', 'Choose which city this list is for before adding items.')
+      return
+    }
+
     const validation = validateEndDate(endsAt)
     if (!validation.ok) {
       Alert.alert('Invalid end date', validation.message)
@@ -224,51 +228,15 @@ export default function CreateListScreen({ navigation, route }) {
       supabase.from('categories').select('id, name, color_hex').order('name'),
     ])
 
-    setMetros(metroData ?? [])
+    const metroList = metroData ?? []
+    setMetros(metroList)
     setCategories(catData ?? [])
 
-    // Detect the user's metro from GPS so Milwaukee users see Milwaukee items
-    // and Phoenix users see Phoenix items by default. Falls back to first metro
-    // if location permission is denied or unavailable.
-    let detectedMetro = null
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync()
-      if (status === 'granted') {
-        const pos = await Location.getCurrentPositionAsync({
-          accuracy: Location.Accuracy.Balanced,
-        })
-        const { latitude, longitude } = pos.coords
-
-        // Approximate center coordinates for each metro
-        const METRO_CENTERS = {
-          'Phoenix':   [33.4484, -112.0740],
-          'Milwaukee': [43.0389, -87.9065],
-        }
-
-        let closestMetro = null
-        let closestDist  = Infinity
-
-        for (const metro of (metroData ?? [])) {
-          const key = Object.keys(METRO_CENTERS).find(k => metro.name.includes(k))
-          if (!key) continue
-          const [mlat, mlng] = METRO_CENTERS[key]
-          const dist = Math.sqrt((latitude - mlat) ** 2 + (longitude - mlng) ** 2)
-          if (dist < closestDist) {
-            closestDist  = dist
-            closestMetro = metro
-          }
-        }
-        detectedMetro = closestMetro
-      }
-    } catch (e) {
-      // Location unavailable — fall through to first metro
-    }
-
-    // Use detected metro, or fall back to first available
-    const defaultMetro = detectedMetro ?? (metroData ?? [])[0]
-    if (defaultMetro) {
-      setMetroId(defaultMetro.id)
-      await loadItems(defaultMetro.id)
+    // Auto-select only when there's exactly one metro — edge case for single-city
+    // deployments. With multiple metros the user must pick explicitly.
+    if (metroList.length === 1) {
+      setMetroId(metroList[0].id)
+      await loadItems(metroList[0].id)
     }
   }
 
@@ -665,16 +633,17 @@ export default function CreateListScreen({ navigation, route }) {
         <View style={styles.sectionCard}>
           <Text style={styles.fieldLabel}>Title</Text>
           <TextInput
-            style={styles.input}
+            style={[styles.input, !title.trim() && styles.inputRequired]}
             value={title}
             onChangeText={setTitle}
             placeholder="e.g. Peoria Summer Challenge"
             placeholderTextColor="#98A2B3"
-            autoFocus
             returnKeyType="next"
           />
 
-          <Text style={styles.fieldLabel}>Metro area</Text>
+          <Text style={styles.fieldLabel}>
+            Which city?{!metroId && <Text style={{ color: RED }}> (required)</Text>}
+          </Text>
           <View style={styles.pillRow}>
             {metros.map(m => (
               <TouchableOpacity
@@ -692,6 +661,9 @@ export default function CreateListScreen({ navigation, route }) {
               </TouchableOpacity>
             ))}
           </View>
+          {!metroId && (
+            <Text style={styles.metroHint}>Pick a city to see items — you can plan a trip from anywhere</Text>
+          )}
 
           <Text style={styles.fieldLabel}>
             End date <Text style={styles.optional}>(optional)</Text>
@@ -702,7 +674,7 @@ export default function CreateListScreen({ navigation, route }) {
               styles.dateTrigger,
               !dateValidation.ok && endsAt.trim() ? styles.inputError : null,
             ]}
-            onPress={() => setShowDatePicker(v => !v)}
+            onPress={() => { Keyboard.dismiss(); setShowDatePicker(v => !v) }}
             activeOpacity={0.85}
           >
             <View>
@@ -1050,6 +1022,22 @@ const styles = StyleSheet.create({
     color: '#98A2B3',
   },
 
+  input: {
+    backgroundColor: '#FFFDF9',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    color: TEXT,
+    fontSize: 15,
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+
+  inputRequired: {
+    borderColor: AMBER,
+    borderWidth: 1.5,
+  },
+
   inputError: {
     borderColor: RED,
     backgroundColor: '#FFF3F0',
@@ -1068,6 +1056,13 @@ const styles = StyleSheet.create({
     marginTop: 7,
     lineHeight: 17,
     fontWeight: '600',
+  },
+
+  metroHint: {
+    fontSize: 12,
+    color: '#98A2B3',
+    marginTop: 6,
+    fontStyle: 'italic',
   },
 
   dateTrigger: {

@@ -242,7 +242,7 @@ export default function SecretRevealScreen({ route, navigation }) {
             : 'We couldn\'t get your location. Make sure location services are on.'}
         </Text>
         {permDenied && (
-          <TouchableOpacity style={styles.directionsBtn} onPress={() => Linking.openURL('app-settings:')} activeOpacity={0.88}>
+          <TouchableOpacity style={styles.directionsBtn} onPress={() => Linking.openURL('app-settings:').catch(() => {})} activeOpacity={0.88}>
             <Text style={styles.directionsBtnText}>Open Settings</Text>
           </TouchableOpacity>
         )}

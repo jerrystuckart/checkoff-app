@@ -13,6 +13,10 @@
     },
     "production": {
       "autoIncrement": true
+    },
+    "v2-preview": {
+      "channel": "v2",
+      "distribution": "internal"
     }
   },
   "submit": {

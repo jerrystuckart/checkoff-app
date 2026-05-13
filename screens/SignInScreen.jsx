@@ -141,14 +141,21 @@ export default function SignInScreen({ navigation, route }) {
 
   async function signInWithApple() {
   try {
-    const nonce = Crypto.randomUUID()
+    // Apple embeds the SHA-256 hash of the nonce into the JWT it returns.
+    // Supabase verifies by hashing the raw nonce and comparing to the JWT.
+    // So: Apple gets the hash, Supabase gets the raw value.
+    const rawNonce = Crypto.randomUUID()
+    const hashedNonce = await Crypto.digestStringAsync(
+      Crypto.CryptoDigestAlgorithm.SHA256,
+      rawNonce
+    )
 
     const credential = await AppleAuthentication.signInAsync({
       requestedScopes: [
         AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
         AppleAuthentication.AppleAuthenticationScope.EMAIL,
       ],
-      nonce,
+      nonce: hashedNonce,
     })
 
     if (!credential.identityToken) {
@@ -158,7 +165,7 @@ export default function SignInScreen({ navigation, route }) {
     const { data, error } = await supabase.auth.signInWithIdToken({
       provider: 'apple',
       token: credential.identityToken,
-      nonce,
+      nonce: rawNonce,
     })
 
     if (error) throw error

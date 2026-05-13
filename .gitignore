@@ -84,3 +84,5 @@ checkoff_partner_signup.html
 
 # CocoaPods generated dependencies
 ios/Pods/
+
+.env.local

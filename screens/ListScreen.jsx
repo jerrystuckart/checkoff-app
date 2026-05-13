@@ -18,6 +18,7 @@ import { supabase } from '../lib/supabase'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
 import { consumePendingCheckIn } from '../lib/checkInResult'
+import SuggestPlaceSheet from './SuggestPlaceSheet'
 
 const ACCENT = '#FFB84D'
 const ACCENT_DARK = '#7A4B00'
@@ -39,17 +40,6 @@ const DIFFICULTY_COLORS = {
   25: { bg: '#F3EEFF', border: '#DDD0FC', text: '#5B21B6' },  // purple — legend
 }
 
-const ALL_CATS = [
-  'All',
-  'Food & drink',
-  'Bar & drinks',
-  'Sports',
-  'Social',
-  'Play',
-  'Travel',
-  'Shopping',
-  'Misc',
-]
 
 export default function ListScreen({ route, navigation }) {
   const { listId, cityId, title } = route.params ?? {}
@@ -81,6 +71,10 @@ export default function ListScreen({ route, navigation }) {
 
   const [cityItems, setCityItems] = useState([])
   const [cityLoading, setCityLoading] = useState(false)
+
+  // User suggestions for this list
+  const [suggestions, setSuggestions] = useState([])
+  const [showSuggestSheet, setShowSuggestSheet] = useState(false)
 
   // Celebration flash — tracks which listItemId is currently celebrating
   const [celebratingId, setCelebratingId] = useState(null)
@@ -146,6 +140,32 @@ export default function ListScreen({ route, navigation }) {
       loadListMeta()
     }
   }, [listId])
+
+  const loadSuggestions = useCallback(async () => {
+    if (!listId) return
+    const { data } = await supabase
+      .from('user_suggestion_list_items')
+      .select('id, user_id, checked, checked_at, user_suggestions(place_name, experience_body, website_url)')
+      .eq('list_id', listId)
+      .order('created_at', { ascending: true })
+    setSuggestions(data ?? [])
+  }, [listId])
+
+  const handleSuggestionCheckOff = useCallback(async (suggestionItemId, currentChecked, ownerId) => {
+    // Only the user who submitted the suggestion can check it off
+    if (ownerId !== currentUserId) return
+    const now = new Date().toISOString()
+    // Optimistic update
+    setSuggestions(prev => prev.map(s =>
+      s.id === suggestionItemId
+        ? { ...s, checked: !currentChecked, checked_at: !currentChecked ? now : null }
+        : s
+    ))
+    await supabase
+      .from('user_suggestion_list_items')
+      .update({ checked: !currentChecked, checked_at: !currentChecked ? now : null })
+      .eq('id', suggestionItemId)
+  }, [currentUserId])
 
   const loadListMeta = useCallback(async () => {
     if (!listId) return
@@ -270,6 +290,7 @@ export default function ListScreen({ route, navigation }) {
     useCallback(() => {
       if (listId) {
         refreshCheckedState()
+        loadSuggestions()
 
         // If returning from PhotoCheckInScreen with a completed check-in,
         // trigger the celebration for that item
@@ -280,7 +301,7 @@ export default function ListScreen({ route, navigation }) {
       } else if (cityId) {
         loadCityItems()
       }
-    }, [listId, cityId, refreshCheckedState, loadCityItems, triggerCelebration])
+    }, [listId, cityId, refreshCheckedState, loadSuggestions, loadCityItems, triggerCelebration])
   )
 
   function isEnded() {
@@ -659,7 +680,7 @@ export default function ListScreen({ route, navigation }) {
           contentContainerStyle={styles.filterContent}
           keyboardShouldPersistTaps="handled"
         >
-          {ALL_CATS.map(cat => (
+          {(['All', ...Array.from(new Set(localItems.map(i => i.categoryName).filter(Boolean))).sort()]).map(cat => (
             <TouchableOpacity
               key={cat}
               style={[styles.filterPill, filter === cat && styles.filterPillActive]}
@@ -703,6 +724,62 @@ export default function ListScreen({ route, navigation }) {
     navigation,
   ])
 
+  const suggestionsFooter = listId ? (
+    <View style={styles.suggestionsSection}>
+      {suggestions.length > 0 && (
+        <>
+          <Text style={styles.suggestionsSectionTitle}>📍 Suggested by crew</Text>
+          {suggestions.map(s => {
+            const isOwner = s.user_id === currentUserId
+            return (
+              <View key={s.id} style={[styles.suggRow, s.checked && styles.suggRowChecked]}>
+                <TouchableOpacity
+                  style={[
+                    styles.suggCheckbox,
+                    s.checked && styles.suggCheckboxDone,
+                    !isOwner && styles.suggCheckboxLocked,
+                  ]}
+                  onPress={() => handleSuggestionCheckOff(s.id, s.checked, s.user_id)}
+                  disabled={!isOwner || ended}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  {s.checked && <Text style={styles.suggCheckmark}>✓</Text>}
+                </TouchableOpacity>
+
+                <View style={styles.suggBody}>
+                  <Text style={[styles.suggName, s.checked && styles.suggNameDone]}>
+                    {s.user_suggestions?.place_name}
+                  </Text>
+                  <Text style={styles.suggExp} numberOfLines={2}>
+                    {s.user_suggestions?.experience_body}
+                  </Text>
+                  <View style={styles.suggTagRow}>
+                    <View style={styles.suggTag}>
+                      <Text style={styles.suggTagText}>📍 suggested · 1pt</Text>
+                    </View>
+                    {!isOwner && (
+                      <Text style={styles.suggOwnerNote}>Added by crew</Text>
+                    )}
+                  </View>
+                </View>
+              </View>
+            )
+          })}
+        </>
+      )}
+
+      {!ended && (
+        <TouchableOpacity
+          style={styles.suggestBtn}
+          onPress={() => setShowSuggestSheet(true)}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.suggestBtnText}>+ Suggest a place</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  ) : null
+
   return (
     <SafeAreaView style={styles.container}>
       {isLoading ? (
@@ -715,6 +792,7 @@ export default function ListScreen({ route, navigation }) {
           keyExtractor={item => String(item.listItemId)}
           renderItem={renderItem}
           ListHeaderComponent={headerEl}
+          ListFooterComponent={suggestionsFooter}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={styles.listContent}
           ItemSeparatorComponent={() => <View style={styles.sep} />}
@@ -729,6 +807,14 @@ export default function ListScreen({ route, navigation }) {
           showsVerticalScrollIndicator={false}
         />
       )}
+
+      <SuggestPlaceSheet
+        visible={showSuggestSheet}
+        onClose={() => setShowSuggestSheet(false)}
+        onSuccess={loadSuggestions}
+        listId={listId}
+        listTitle={route.params?.title ?? ''}
+      />
     </SafeAreaView>
   )
 }
@@ -1177,5 +1263,134 @@ const styles = StyleSheet.create({
     color: MUTED,
     fontSize: 14,
     textAlign: 'center',
+  },
+
+  // ── Suggestions footer ──────────────────────────────────────
+  suggestionsSection: {
+    marginHorizontal: 16,
+    marginTop: 20,
+    marginBottom: 8,
+  },
+
+  suggestionsSectionTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: MUTED,
+    marginBottom: 10,
+    letterSpacing: 0.2,
+  },
+
+  suggRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: CARD,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: BORDER,
+    padding: 12,
+    marginBottom: 8,
+  },
+
+  suggRowChecked: {
+    opacity: 0.65,
+  },
+
+  suggCheckbox: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
+    borderColor: '#C3B8A8',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    marginTop: 2,
+    backgroundColor: '#FFF',
+  },
+
+  suggCheckboxDone: {
+    backgroundColor: ACCENT,
+    borderColor: ACCENT,
+  },
+
+  suggCheckboxLocked: {
+    borderColor: '#E5E7EB',
+    backgroundColor: '#F9FAFB',
+  },
+
+  suggCheckmark: {
+    fontSize: 11,
+    color: ACCENT_DARK,
+    fontWeight: '900',
+  },
+
+  suggBody: {
+    flex: 1,
+    marginLeft: 10,
+  },
+
+  suggName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: TEXT,
+    lineHeight: 21,
+  },
+
+  suggNameDone: {
+    textDecorationLine: 'line-through',
+    color: '#9CA3AF',
+  },
+
+  suggExp: {
+    fontSize: 12,
+    color: MUTED,
+    lineHeight: 17,
+    marginTop: 3,
+  },
+
+  suggTagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 6,
+    flexWrap: 'wrap',
+  },
+
+  suggTag: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: '#FFF3E0',
+    borderWidth: 1,
+    borderColor: '#FFD9A0',
+  },
+
+  suggTagText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#A16A00',
+  },
+
+  suggOwnerNote: {
+    fontSize: 10,
+    color: MUTED,
+    fontWeight: '600',
+  },
+
+  suggestBtn: {
+    marginTop: 8,
+    paddingVertical: 14,
+    borderRadius: 16,
+    borderWidth: 1.5,
+    borderColor: BORDER,
+    borderStyle: 'dashed',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+  },
+
+  suggestBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: MUTED,
   },
 })

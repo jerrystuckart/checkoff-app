@@ -4,8 +4,6 @@ Sentry.init({
   dsn: 'https://8422d119eeac15280a1e0221eff3c797@o4511347335430144.ingest.us.sentry.io/4511349900509184',
 })
 
-Sentry.captureMessage('CheckOff launched')
-
 // Ensure unhandled promise rejections are captured by Sentry in addition to
 // whatever React Native does with them (fatal crash in RN 0.73+).
 // This wraps the existing handler rather than replacing Sentry's own setup.

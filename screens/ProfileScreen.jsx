@@ -113,6 +113,9 @@ export default function ProfileScreen({ navigation }) {
         Sentry.addBreadcrumb({ category: 'auth', message: 'signOut initiated', level: 'info' })
         try {
           await authSignOut()
+          setUser(null)
+          setProfile(null)
+          navigation.getParent()?.navigate('HomeTab')
           Sentry.addBreadcrumb({ category: 'auth', message: 'signOut completed', level: 'info' })
         } catch (e) {
           Alert.alert(
@@ -151,6 +154,9 @@ export default function ProfileScreen({ navigation }) {
                       if (error) throw error
 
                       await authSignOut()
+                      setUser(null)
+                      setProfile(null)
+                      navigation.getParent()?.navigate('HomeTab')
                     } catch (e) {
                       Alert.alert(
                         'Could not delete account',

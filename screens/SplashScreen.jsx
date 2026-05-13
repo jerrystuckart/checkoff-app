@@ -10,15 +10,15 @@ const NAVY  = '#070714'
 const WHITE = '#F7F7FB'
 
 const TAGLINES = [
-  'Stop saying "I don\'t know what to do."',
-  'Hundreds of things to check off in Phoenix.',
+  `Stop saying "I don't know what to do."`,
+  'Hundreds of things to check off in Your City.',
   'Challenge your crew. Beat their score.',
   'Discover places locals actually go.',
   'Every weekend is a new adventure.',
 ]
 
 const ITEMS = [
-  'Order a Dirty Bastard at Rosie\'s Bar 🍺',
+  "Order a Dirty Martini at Rosie's Bar 🍺",
   'Hike to the top of Camelback Mountain 🏔',
   'Watch a spring training game ⚾',
   'Find the best green chile in the valley 🌶',

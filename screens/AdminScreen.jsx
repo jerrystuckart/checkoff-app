@@ -547,7 +547,7 @@ export default function AdminScreen() {
   const insets = useSafeAreaInsets()
 
   // ── Tab ──
-  const [adminTab, setAdminTab] = useState('items') // 'items' | 'lists' | 'partners'
+  const [adminTab, setAdminTab] = useState('items') // 'items' | 'lists' | 'partners' | 'suggestions'
 
   // ── Items tab state ──
   const [items, setItems] = useState([])
@@ -570,6 +570,10 @@ export default function AdminScreen() {
   const [showAddPartner, setShowAddPartner] = useState(false)
   const [savingPartner, setSavingPartner]   = useState(false)
   const [geocoding, setGeocoding]           = useState(false)
+
+  // ── Suggestions tab state ──
+  const [suggestions, setSuggestions]               = useState([])
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false)
 
   // ── Curated Lists tab state ──
   const [curatedLists, setCuratedLists]     = useState([])
@@ -809,6 +813,55 @@ export default function AdminScreen() {
     setItems(prev => [...prev, data].sort((a, b) => a.body.localeCompare(b.body)))
     setNewItem(emptyItem)
     setShowAdd(false)
+  }
+
+  async function loadSuggestions() {
+    setLoadingSuggestions(true)
+    const { data, error } = await supabase
+      .from('user_suggestions')
+      .select('id, place_name, experience_body, website_url, status, created_at, metro_id, metro_areas(name)')
+      .order('created_at', { ascending: false })
+    if (error) {
+      Alert.alert('Error loading suggestions', error.message)
+    } else {
+      setSuggestions(data ?? [])
+    }
+    setLoadingSuggestions(false)
+  }
+
+  function promptStatusChange(suggestion) {
+    const STATUS_OPTIONS = [
+      { label: 'New',              value: 'new' },
+      { label: 'Reviewed',         value: 'reviewed' },
+      { label: 'Add to pipeline',  value: 'added_to_pipeline' },
+      { label: 'Add as item',      value: 'added_as_item' },
+      { label: 'Reject',           value: 'rejected' },
+    ]
+    Alert.alert(
+      suggestion.place_name,
+      'Update status',
+      [
+        ...STATUS_OPTIONS
+          .filter(o => o.value !== suggestion.status)
+          .map(o => ({
+            text: o.label,
+            onPress: () => updateSuggestionStatus(suggestion.id, o.value),
+          })),
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    )
+  }
+
+  async function updateSuggestionStatus(id, status) {
+    const { error } = await supabase
+      .from('user_suggestions')
+      .update({ status })
+      .eq('id', id)
+    if (error) {
+      Alert.alert('Error', error.message)
+      return
+    }
+    setSuggestions(prev => prev.map(s => s.id === id ? { ...s, status } : s))
   }
 
   const geocodeAddress = useCallback(async (query, onResult) => {
@@ -1062,7 +1115,9 @@ export default function AdminScreen() {
               ? `${filtered.length} of ${items.length} items`
               : adminTab === 'partners'
                 ? `${partners.length} partners`
-                : `${curatedLists.length} curated lists`}
+                : adminTab === 'suggestions'
+                  ? `${suggestions.length} suggestions`
+                  : `${curatedLists.length} curated lists`}
           </Text>
         </View>
         {adminTab === 'items' && (
@@ -1082,13 +1137,14 @@ export default function AdminScreen() {
 
       {/* TAB ROW */}
       <View style={styles.tabRow}>
-        {[['items', 'Items'], ['lists', 'Curated Lists'], ['partners', 'Partners']].map(([k, l]) => (
+        {[['items', 'Items'], ['lists', 'Curated Lists'], ['partners', 'Partners'], ['suggestions', 'Suggestions']].map(([k, l]) => (
           <TouchableOpacity
             key={k}
             style={[styles.tabPill, adminTab === k && styles.tabPillOn]}
             onPress={() => {
               setAdminTab(k)
               if (k === 'lists' && curatedLists.length === 0) loadCuratedLists()
+              if (k === 'suggestions') loadSuggestions()
             }}
           >
             <Text style={[styles.tabPillText, adminTab === k && styles.tabPillTextOn]}>{l}</Text>
@@ -1536,6 +1592,90 @@ export default function AdminScreen() {
         </>
       )}
 
+      {/* ════════════════════════════════ */}
+      {/* SUGGESTIONS TAB                  */}
+      {/* ════════════════════════════════ */}
+      {adminTab === 'suggestions' && (
+        loadingSuggestions ? (
+          <View style={styles.center}><ActivityIndicator color={AMBER} /></View>
+        ) : (
+          <FlatList
+            data={suggestions}
+            keyExtractor={s => s.id}
+            contentContainerStyle={{ padding: 16, paddingBottom: 60 }}
+            ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
+            ListEmptyComponent={
+              <View style={styles.center}>
+                <Text style={{ fontSize: 28, marginBottom: 8 }}>📭</Text>
+                <Text style={styles.emptyText}>No suggestions yet</Text>
+                <Text style={[styles.emptyText, { marginTop: 4, fontSize: 12 }]}>
+                  They'll appear here when users submit places from any list.
+                </Text>
+              </View>
+            }
+            ListHeaderComponent={
+              suggestions.length > 0 ? (
+                <Text style={[styles.hint, { marginBottom: 12 }]}>
+                  Tap a card to update status · every submission is a warm partner lead
+                </Text>
+              ) : null
+            }
+            renderItem={({ item: s }) => {
+              const STATUS_COLOR = {
+                new:                AMBER,
+                reviewed:           BLUE,
+                added_to_pipeline:  GREEN,
+                added_as_item:      PURPLE,
+                rejected:           'rgba(255,255,255,0.25)',
+              }
+              const STATUS_LABEL = {
+                new:                'New',
+                reviewed:           'Reviewed',
+                added_to_pipeline:  'In pipeline',
+                added_as_item:      'Added as item',
+                rejected:           'Rejected',
+              }
+              const color = STATUS_COLOR[s.status] ?? AMBER
+              const date  = new Date(s.created_at).toLocaleDateString('en-US', {
+                month: 'short', day: 'numeric', year: 'numeric',
+              })
+              return (
+                <TouchableOpacity
+                  style={styles.suggCard}
+                  onPress={() => promptStatusChange(s)}
+                  activeOpacity={0.85}
+                >
+                  <View style={styles.suggCardTop}>
+                    <Text style={styles.suggCardName}>{s.place_name}</Text>
+                    <View style={[styles.suggStatusPill, { borderColor: color + '60', backgroundColor: color + '18' }]}>
+                      <Text style={[styles.suggStatusText, { color }]}>
+                        {STATUS_LABEL[s.status] ?? s.status}
+                      </Text>
+                    </View>
+                  </View>
+
+                  <Text style={styles.suggCardExp} numberOfLines={3}>
+                    {s.experience_body}
+                  </Text>
+
+                  <View style={styles.suggCardMeta}>
+                    {s.metro_areas?.name && (
+                      <Text style={styles.suggMetaText}>📍 {s.metro_areas.name}</Text>
+                    )}
+                    {s.website_url ? (
+                      <Text style={styles.suggMetaLink} numberOfLines={1}>
+                        🔗 {s.website_url.replace(/^https?:\/\//, '')}
+                      </Text>
+                    ) : null}
+                    <Text style={styles.suggMetaText}>{date}</Text>
+                  </View>
+                </TouchableOpacity>
+              )
+            }}
+          />
+        )
+      )}
+
     </View>
   )
 }
@@ -1713,4 +1853,62 @@ const styles = StyleSheet.create({
   },
   sharePartnerBtnText: { fontSize: 13, fontWeight: '700', color: '#1A1A2E' },
   qrImage: { width: 100, height: 100, borderRadius: 8, flexShrink: 0 },
+
+  // ── Suggestions tab ──
+  suggCard: {
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 14,
+    borderWidth: 0.5,
+    borderColor: 'rgba(255,255,255,0.1)',
+    padding: 14,
+  },
+  suggCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 8,
+  },
+  suggCardName: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#fff',
+  },
+  suggStatusPill: {
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 999,
+    borderWidth: 1,
+    flexShrink: 0,
+  },
+  suggStatusText: {
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  suggCardExp: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.55)',
+    lineHeight: 19,
+    marginBottom: 10,
+  },
+  suggCardMeta: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    borderTopWidth: 0.5,
+    borderTopColor: 'rgba(255,255,255,0.07)',
+    paddingTop: 10,
+  },
+  suggMetaText: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.3)',
+    fontWeight: '500',
+  },
+  suggMetaLink: {
+    fontSize: 11,
+    color: AMBER,
+    fontWeight: '600',
+    flex: 1,
+  },
 })
