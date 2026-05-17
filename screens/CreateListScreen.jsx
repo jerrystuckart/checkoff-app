@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   StyleSheet, Alert, ActivityIndicator, FlatList, Share, Linking, Platform, Keyboard,
@@ -6,6 +6,7 @@ import {
 import Clipboard from '@react-native-clipboard/clipboard'
 import DateTimePicker from '@react-native-community/datetimepicker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { fetchCuratedListItems } from '../lib/useItems'
 
@@ -57,13 +58,35 @@ export default function CreateListScreen({ navigation, route }) {
   const [selected, setSelected] = useState(
     adoptedItemIds.length > 0 ? new Set(adoptedItemIds) : new Set()
   )
-  const [filterCat, setFilterCat] = useState('All')
+  const [filterCat,  setFilterCat]  = useState('All')
+  const [filterHood, setFilterHood] = useState('All')
   const [categories, setCategories] = useState([])
   const [saving, setSaving] = useState(false)
   const [createdList, setCreatedList] = useState(null)
   const [searchText, setSearchText] = useState('')
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
+
+  // If this screen was cached with an adoptedListId that no longer exists
+  // (e.g. creator deleted the list then tapped the Create tab), silently
+  // reset to a fresh Step 1 rather than showing a broken edit flow.
+  useFocusEffect(useCallback(() => {
+    if (!adoptedListId) return
+    supabase
+      .from('lists')
+      .select('id')
+      .eq('id', adoptedListId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!data) {
+          navigation.setParams({
+            adoptedListId: undefined,
+            adoptedTitle: '',
+            adoptedItemIds: [],
+          })
+        }
+      })
+  }, [adoptedListId]))
 
   // Auth gate: check immediately on mount before user does any work.
   // If not signed in, prompt and redirect to SignIn rather than letting
@@ -132,6 +155,7 @@ export default function CreateListScreen({ navigation, route }) {
     setEndsAt('')
     setSelected(adoptedItemIds.length > 0 ? new Set(adoptedItemIds) : new Set())
     setFilterCat('All')
+    setFilterHood('All')
     setSaving(false)
     setCreatedList(null)
     setSearchText('')
@@ -258,7 +282,7 @@ export default function CreateListScreen({ navigation, route }) {
 
     const { data: universalItems, error: univErr } = await supabase
       .from('items')
-      .select('id, body, is_universal, ring_weight, neighborhood_id, category_id, categories(name, color_hex), neighborhoods!items_neighborhood_id_fkey(name)')
+      .select('id, body, is_universal, ring_weight, neighborhood_id, category_id, season_tag, categories(name, color_hex), neighborhoods!items_neighborhood_id_fkey(name)')
       .eq('is_active', true)
       .eq('is_approved', true)
       .eq('is_universal', true)
@@ -273,7 +297,7 @@ export default function CreateListScreen({ navigation, route }) {
     if (hoodIds.length > 0) {
       const { data: hd, error: hdErr } = await supabase
         .from('items')
-        .select('id, body, is_universal, ring_weight, neighborhood_id, category_id, categories(name, color_hex), neighborhoods!items_neighborhood_id_fkey(name)')
+        .select('id, body, is_universal, ring_weight, neighborhood_id, category_id, season_tag, categories(name, color_hex), neighborhoods!items_neighborhood_id_fkey(name)')
         .eq('is_active', true)
         .eq('is_approved', true)
         .eq('is_universal', false)
@@ -329,10 +353,34 @@ export default function CreateListScreen({ navigation, route }) {
     setSelected(new Set())
   }
 
+  // Returns the set of seasons covered between today and the list's end date.
+  // Months → season: spring=3-5, summer=6-8, fall=9-11, winter=12/1/2
+  function coveredSeasons(endDateStr) {
+    if (!endDateStr) return null // null = no filter, show everything
+    const MONTH_SEASON = {
+      1:'winter', 2:'winter', 3:'spring', 4:'spring', 5:'spring',
+      6:'summer', 7:'summer', 8:'summer', 9:'fall', 10:'fall', 11:'fall', 12:'winter',
+    }
+    const start  = new Date()
+    const end    = new Date(endDateStr)
+    const seasons = new Set()
+    const cursor = new Date(start.getFullYear(), start.getMonth(), 1)
+    const limit  = new Date(end.getFullYear(), end.getMonth(), 1)
+    while (cursor <= limit) {
+      seasons.add(MONTH_SEASON[cursor.getMonth() + 1])
+      cursor.setMonth(cursor.getMonth() + 1)
+    }
+    return seasons
+  }
+
   function filteredItems() {
+    const seasons = coveredSeasons(endsAt)
     return items.filter(i => {
       if (filterCat !== 'All' && i.categories?.name !== filterCat) return false
       if (searchText && !i.body.toLowerCase().includes(searchText.toLowerCase())) return false
+      if (seasons && i.season_tag && !seasons.has(i.season_tag)) return false
+      // Neighborhood filter: universal items always pass through
+      if (filterHood !== 'All' && !i.is_universal && i.neighborhood_id !== filterHood) return false
       return true
     })
   }
@@ -651,6 +699,7 @@ export default function CreateListScreen({ navigation, route }) {
                 style={[styles.pill, metroId === m.id && styles.pillOn]}
                 onPress={async () => {
                   setMetroId(m.id)
+                  setFilterHood('All')
                   await loadItems(m.id)
                 }}
                 activeOpacity={0.85}
@@ -723,6 +772,17 @@ export default function CreateListScreen({ navigation, route }) {
 
   if (step === 2) {
     const cats = ['All', ...categories.map(c => c.name)]
+
+    // Derive unique neighborhoods from loaded items (excludes universal items)
+    const hoodMap = new Map()
+    items.forEach(i => {
+      if (i.neighborhood_id && i.neighborhoods?.name && !hoodMap.has(i.neighborhood_id)) {
+        hoodMap.set(i.neighborhood_id, i.neighborhoods.name)
+      }
+    })
+    const hoods = [...hoodMap.entries()] // [[id, name], ...]
+    const showHoodFilter = hoods.length > 1
+
     const filtered = filteredItems()
 
     return (
@@ -795,8 +855,31 @@ export default function CreateListScreen({ navigation, route }) {
           )}
         />
 
+        {showHoodFilter && (
+          <FlatList
+            horizontal
+            data={[['All', 'All areas'], ...hoods]}
+            keyExtractor={([id]) => id}
+            showsHorizontalScrollIndicator={false}
+            style={styles.filterRow}
+            contentContainerStyle={styles.filterContent}
+            renderItem={({ item: [id, name] }) => (
+              <TouchableOpacity
+                style={[styles.filterPill, styles.filterPillHood, filterHood === id && styles.filterPillHoodOn]}
+                onPress={() => setFilterHood(id)}
+                activeOpacity={0.85}
+              >
+                <Text style={[styles.filterPillText, filterHood === id && styles.filterPillHoodTextOn]}>
+                  📍 {name}
+                </Text>
+              </TouchableOpacity>
+            )}
+          />
+        )}
+
         <Text style={styles.itemCount}>
-          {filtered.length} items · {items.length} total in this metro
+          {filtered.length} item{filtered.length !== 1 ? 's' : ''}
+          {filterHood !== 'All' || filterCat !== 'All' ? ' matching filters' : ` · ${items.length} total in this metro`}
         </Text>
 
         <FlatList
@@ -1249,6 +1332,21 @@ filterPillText: {
 
 filterPillTextOn: {
   color: NAVY,
+  fontWeight: '800',
+},
+
+filterPillHood: {
+  borderColor: '#D4C5B0',
+  backgroundColor: '#FAF5EE',
+},
+
+filterPillHoodOn: {
+  backgroundColor: '#243045',
+  borderColor: '#243045',
+},
+
+filterPillHoodTextOn: {
+  color: '#FFFFFF',
   fontWeight: '800',
 },
 

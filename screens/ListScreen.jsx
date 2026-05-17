@@ -49,6 +49,7 @@ export default function ListScreen({ route, navigation }) {
   const [showChecked, setShowChecked] = useState(true)
   const [listMeta, setListMeta] = useState(null)
   const [metaLoading, setMetaLoading] = useState(false)
+  const [listDeleted, setListDeleted] = useState(false)
 
   const {
     items,
@@ -171,13 +172,18 @@ export default function ListScreen({ route, navigation }) {
     if (!listId) return
     setMetaLoading(true)
 
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('lists')
       .select('id, title, starts_at, ends_at, is_official')
       .eq('id', listId)
-      .single()
+      .maybeSingle()
 
-    setListMeta(data ?? null)
+    if (!data && !error) {
+      // List exists in navigation but not in DB — creator deleted it
+      setListDeleted(true)
+    } else {
+      setListMeta(data ?? null)
+    }
     setMetaLoading(false)
   }, [listId])
 
@@ -779,6 +785,29 @@ export default function ListScreen({ route, navigation }) {
       )}
     </View>
   ) : null
+
+  if (listDeleted) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <View style={styles.center}>
+          <Text style={{ fontSize: 36, marginBottom: 16 }}>🗑️</Text>
+          <Text style={{ fontSize: 18, fontWeight: '800', color: '#1F2937', marginBottom: 8, textAlign: 'center' }}>
+            List no longer available
+          </Text>
+          <Text style={{ fontSize: 14, color: '#6B7280', textAlign: 'center', lineHeight: 20, paddingHorizontal: 32, marginBottom: 28 }}>
+            The creator has deleted this list. Your check-ins on it are saved, but the list itself is gone.
+          </Text>
+          <TouchableOpacity
+            onPress={() => navigation.navigate('Home')}
+            style={{ backgroundColor: '#FFB84D', borderRadius: 14, paddingVertical: 14, paddingHorizontal: 32 }}
+            activeOpacity={0.85}
+          >
+            <Text style={{ fontWeight: '800', color: '#7A4B00', fontSize: 15 }}>Go home</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    )
+  }
 
   return (
     <SafeAreaView style={styles.container}>
