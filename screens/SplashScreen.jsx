@@ -243,8 +243,8 @@ export default function SplashScreen() {
             alignItems: 'center',
           }}
         >
-          <Text style={styles.logo}>
-            Check<Text style={styles.logoOff}>Off</Text>
+          <Text style={styles.logo} allowFontScaling={false}>
+            Check<Text style={styles.logoOff} allowFontScaling={false}>Off</Text>
           </Text>
 
           <View style={styles.logoDividerWrap}>
@@ -258,7 +258,7 @@ export default function SplashScreen() {
           </View>
         </Animated.View>
 
-        <Animated.Text style={[styles.tagline, { opacity: taglineOpacity }]}>
+        <Animated.Text style={[styles.tagline, { opacity: taglineOpacity }]} allowFontScaling={false}>
           {tagline}
         </Animated.Text>
 
@@ -272,7 +272,7 @@ export default function SplashScreen() {
               },
             ]}
           >
-            <Text style={styles.itemChipText} numberOfLines={1}>
+            <Text style={styles.itemChipText} numberOfLines={1} allowFontScaling={false}>
               {ITEMS[itemIndex]}
             </Text>
           </Animated.View>
@@ -281,7 +281,7 @@ export default function SplashScreen() {
 
       <View style={[styles.bottom, { paddingBottom: insets.bottom + 24 }]}>
         <PulseLoader />
-        <Text style={styles.loadingText}>{LOADING_LINES[loadingIndex]}</Text>
+        <Text style={styles.loadingText} allowFontScaling={false}>{LOADING_LINES[loadingIndex]}</Text>
       </View>
     </View>
   )

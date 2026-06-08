@@ -1,25 +1,19 @@
-import React, { useState, useEffect, useRef } from 'react'
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   View, Text, ScrollView, StyleSheet, ActivityIndicator,
   TouchableOpacity, Modal, Share, Animated, Dimensions,
   FlatList,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { useFocusEffect } from '@react-navigation/native'
 import * as Haptics from 'expo-haptics'
 import { supabase } from '../lib/supabase'
+import { useTheme } from '../lib/ThemeContext'
 
 const AMBER  = '#F5A623'
 const GREEN  = '#1D9E75'
 const RED    = '#D85A30'
 const NAVY   = '#1A1A2E'
-
-const BG     = '#FFF9F2'
-const CARD   = '#FFFFFF'
-const TEXT   = '#243045'
-const MUTED  = '#6F7785'
-const BORDER = '#E6D8C7'
-const SOFT   = '#FFF1DB'
-const SOFT_2 = '#F8F3EC'
 
 const { height: SCREEN_H } = Dimensions.get('window')
 
@@ -260,6 +254,10 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
 export default function BadgesScreen({ route }) {
   const { userId: paramUserId } = route?.params ?? {}
   const insets = useSafeAreaInsets()
+  const { colors } = useTheme()
+  const { BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2 } = colors
+  const styles = useMemo(() => createBadgeStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2 }),
+    [BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2])
 
   const [userId, setUserId]             = useState(paramUserId ?? null)
   const [badges, setBadges]             = useState([])
@@ -276,7 +274,7 @@ export default function BadgesScreen({ route }) {
   const [modalVisible, setModalVisible]   = useState(false)
   const slideAnim = useRef(new Animated.Value(SCREEN_H)).current
 
-  useEffect(() => { load() }, [])
+  useFocusEffect(useCallback(() => { load() }, []))
 
   async function load() {
     setLoading(true)
@@ -579,7 +577,8 @@ export default function BadgesScreen({ route }) {
   )
 }
 
-const styles = StyleSheet.create({
+function createBadgeStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2 }) {
+ return StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
   content:   { padding: 20, paddingBottom: 60 },
   center:    { alignItems: 'center', justifyContent: 'center', flex: 1, backgroundColor: BG },
@@ -672,4 +671,5 @@ const styles = StyleSheet.create({
   shareBtnText: { fontSize: 15, fontWeight: '800', color: NAVY },
   closeBtn:     { alignItems: 'center', paddingVertical: 12 },
   closeBtnText: { fontSize: 14, color: MUTED, fontWeight: '700' },
-})
+ })
+}

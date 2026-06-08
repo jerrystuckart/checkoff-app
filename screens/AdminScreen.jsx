@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, memo } from 'react'
+import { useState, useEffect, useCallback, memo, useRef } from 'react'
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import {
   Share,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 
 const AMBER = '#F5A623'
@@ -287,7 +288,7 @@ const NeighborhoodRingPicker = memo(function NeighborhoodRingPicker({ item, onCh
   )
 })
 
-const ItemForm = memo(function ItemForm({ item, onChange, categories, neighborhoods, metros, geocoding, onGeocode }) {
+const ItemForm = memo(function ItemForm({ item, onChange, categories, neighborhoods, metros, geocoding, onGeocode, partners = [] }) {
   return (
     <>
       <Text style={styles.fieldLabel}>Item text</Text>
@@ -474,14 +475,39 @@ const ItemForm = memo(function ItemForm({ item, onChange, categories, neighborho
         ? <Text style={[styles.fieldHint, { color: GREEN }]}>✓ GPS set: {Number(item.maps_lat).toFixed(5)}, {Number(item.maps_lng).toFixed(5)} · radius {item.geo_radius_m ?? 100}m</Text>
         : <Text style={styles.fieldHint}>Auto-fill from Maps search above, or enter lat/lng manually. For new businesses, right-click in Google Maps to copy coordinates.</Text>
       }
+
+      {partners.length > 0 && (
+        <>
+          <Text style={styles.fieldLabel}>Partner (optional)</Text>
+          <View style={styles.optionList}>
+            <TouchableOpacity
+              style={[styles.option, !item.partner_id && styles.optionOn]}
+              onPress={() => onChange({ ...item, partner_id: null })}
+            >
+              <Text style={[styles.optionText, !item.partner_id && styles.optionTextOn]}>None</Text>
+            </TouchableOpacity>
+            {partners.filter(p => p.is_active).map(p => (
+              <TouchableOpacity
+                key={p.id}
+                style={[styles.option, item.partner_id === p.id && styles.optionOn]}
+                onPress={() => onChange({ ...item, partner_id: p.id })}
+              >
+                <Text style={[styles.optionText, item.partner_id === p.id && styles.optionTextOn]}>{p.business_name}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </>
+      )}
     </>
   )
 })
 
 const PartnerForm = memo(function PartnerForm({ partner, onChange, neighborhoods }) {
   // Stateless -- AdminScreen owns partner state via editPartner / emptyPartner
-  // onChange updates the parent state directly on every field change
-  function upd(patch) { onChange({ ...partner, ...patch }) }
+  // Use functional updater so we always merge into the LATEST state, not the
+  // potentially-stale `partner` prop captured at last render (avoids losing
+  // typed email/phone when a tier or neighborhood button is tapped immediately after).
+  function upd(patch) { onChange(prev => ({ ...prev, ...patch })) }
 
   return (
     <>
@@ -545,6 +571,7 @@ const PartnerForm = memo(function PartnerForm({ partner, onChange, neighborhoods
 
 export default function AdminScreen() {
   const insets = useSafeAreaInsets()
+  const navigation = useNavigation()
 
   // ── Tab ──
   const [adminTab, setAdminTab] = useState('items') // 'items' | 'lists' | 'partners' | 'suggestions'
@@ -569,6 +596,10 @@ export default function AdminScreen() {
   const [editPartner, setEditPartner]   = useState(null)
   const [showAddPartner, setShowAddPartner] = useState(false)
   const [savingPartner, setSavingPartner]   = useState(false)
+  // Ref always tracks the latest editPartner value so savePartnerRecord
+  // never reads a stale closure (React may batch state updates and not
+  // re-render ModalShell's onSave before the user taps Save).
+  const editPartnerRef = useRef(null)
   const [geocoding, setGeocoding]           = useState(false)
 
   // ── Suggestions tab state ──
@@ -588,6 +619,13 @@ export default function AdminScreen() {
   const [addingItems, setAddingItems]       = useState(false)
 
   const [newItem, setNewItem] = useState(emptyItem)
+
+  // Keep ref in sync — this runs synchronously after every render where
+  // editPartner changed, so editPartnerRef.current is always fresh by the
+  // time any user tap (Save) is processed by the JS thread.
+  useEffect(() => {
+    editPartnerRef.current = editPartner
+  }, [editPartner])
 
   useEffect(() => {
     init()
@@ -689,6 +727,7 @@ export default function AdminScreen() {
       website_url:        editItem.website_url || null,
       maps_query:         editItem.maps_query || null,
       neighborhood_id:    editItem.is_universal ? null : (editItem.neighborhood_id || null),
+      partner_id:         editItem.partner_id || null,
     }
 
     if (updates.is_secret) {
@@ -782,6 +821,7 @@ export default function AdminScreen() {
         checkin_type:       newItem.checkin_type || 'tap',
         is_active:          true,
         is_approved:        true,
+        partner_id:         newItem.partner_id || null,
       })
       .select(`
         id,
@@ -892,22 +932,52 @@ export default function AdminScreen() {
     if (!partner.business_name?.trim()) { Alert.alert('Business name required'); return }
     if (!partner.contact_email?.trim()) { Alert.alert('Contact email required'); return }
     setSavingPartner(true)
+
+    const newEmail = partner.contact_email.trim().toLowerCase()
     const payload = {
       business_name:   partner.business_name.trim(),
-      contact_email:   partner.contact_email.trim(),
-      phone:           partner.phone || null,
+      contact_email:   newEmail,
+      phone:           partner.phone?.trim() || null,
       plan_tier:       partner.plan_tier ?? 'partner',
       neighborhood_id: partner.neighborhood_id || null,
       is_active:       partner.is_active !== false,
       billing_start:   partner.billing_start || null,
     }
+
     try {
       if (partner.id) {
-        const { error } = await supabase.from('partners').update(payload).eq('id', partner.id)
-        if (error) throw error
+        // Check if email changed — if so, use the edge function so both
+        // partners.contact_email AND auth.users.email are updated together.
+        // Without updating auth.users the partner can't log in with the new email.
+        const existingPartner = partners.find(p => p.id === partner.id)
+        const oldEmail = existingPartner?.contact_email?.trim().toLowerCase()
+        const emailChanged = oldEmail && newEmail !== oldEmail
+
+        if (emailChanged) {
+          // Edge function handles BOTH tables atomically
+          const { data: fnData, error: fnErr } = await supabase.functions.invoke('update-partner-email', {
+            body: { partner_id: partner.id, new_email: newEmail },
+          })
+          if (fnErr) throw new Error(fnErr.message)
+          if (fnData?.warning) {
+            console.warn('update-partner-email warning:', fnData.warning)
+          }
+          // Update the remaining fields (everything except email) directly
+          const { business_name, phone, plan_tier, neighborhood_id, is_active, billing_start } = payload
+          const { error: restErr } = await supabase.from('partners')
+            .update({ business_name, phone, plan_tier, neighborhood_id, is_active, billing_start })
+            .eq('id', partner.id)
+          if (restErr) throw restErr
+        } else {
+          // Email unchanged — simple direct update
+          const { error } = await supabase.from('partners').update(payload).eq('id', partner.id)
+          if (error) throw error
+        }
+
         setPartners(prev => prev.map(p => p.id === partner.id ? { ...p, ...payload } : p))
         Alert.alert('Partner updated')
       } else {
+        // New partner — just insert, no auth account exists yet
         const { data, error } = await supabase.from('partners')
           .insert(payload)
           .select('id,business_name,plan_tier,is_active,neighborhood_id,contact_email,phone,billing_start')
@@ -1231,7 +1301,7 @@ export default function AdminScreen() {
           <ModalShell visible={!!editItem} title="Edit item" onCancel={() => setEditItem(null)} onSave={saveEdit} saving={saving} insetsTop={insets.top}>
             {editItem && (
               <>
-                <ItemForm item={editItem} onChange={setEditItem} categories={categories} neighborhoods={neighborhoods} metros={metros} geocoding={geocoding} onGeocode={geocodeAddress} />
+                <ItemForm item={editItem} onChange={setEditItem} categories={categories} neighborhoods={neighborhoods} metros={metros} geocoding={geocoding} onGeocode={geocodeAddress} partners={partners} />
                 <TouchableOpacity style={styles.dangerBtn} onPress={() => { setEditItem(null); deleteItem(editItem) }}>
                   <Text style={styles.dangerBtnText}>Delete this item permanently</Text>
                 </TouchableOpacity>
@@ -1240,7 +1310,7 @@ export default function AdminScreen() {
           </ModalShell>
 
           <ModalShell visible={showAdd} title="New item" onCancel={() => setShowAdd(false)} onSave={addItem} saving={saving} insetsTop={insets.top}>
-            <ItemForm item={newItem} onChange={setNewItem} categories={categories} neighborhoods={neighborhoods} metros={metros} geocoding={geocoding} onGeocode={geocodeAddress} />
+            <ItemForm item={newItem} onChange={setNewItem} categories={categories} neighborhoods={neighborhoods} metros={metros} geocoding={geocoding} onGeocode={geocodeAddress} partners={partners} />
           </ModalShell>
         </>
       )}
@@ -1546,7 +1616,15 @@ export default function AdminScreen() {
                       </Text>
                       <Text style={styles.partnerMeta}>{p.contact_email}</Text>
                     </View>
-                    <Text style={{ fontSize: 16, color: 'rgba(255,255,255,0.2)' }}>›</Text>
+                    <View style={{ gap: 6, alignItems: 'flex-end' }}>
+                      <TouchableOpacity
+                        style={styles.pitchBtn}
+                        onPress={() => navigation.navigate('PartnerPreview', { partner_id: p.id })}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      >
+                        <Text style={styles.pitchBtnText}>Pitch ›</Text>
+                      </TouchableOpacity>
+                    </View>
                   </TouchableOpacity>
                 )
               })
@@ -1558,7 +1636,7 @@ export default function AdminScreen() {
             visible={showAddPartner}
             title="Add partner"
             onCancel={() => { setShowAddPartner(false); setEditPartner(null) }}
-            onSave={() => editPartner && savePartnerRecord(editPartner)}
+            onSave={() => editPartnerRef.current && savePartnerRecord(editPartnerRef.current)}
             saving={savingPartner}
             insetsTop={insets.top}
           >
@@ -1576,7 +1654,7 @@ export default function AdminScreen() {
             visible={!!editPartner && !showAddPartner}
             title="Edit partner"
             onCancel={() => setEditPartner(null)}
-            onSave={() => editPartner && savePartnerRecord(editPartner)}
+            onSave={() => editPartnerRef.current && savePartnerRecord(editPartnerRef.current)}
             saving={savingPartner}
             insetsTop={insets.top}
           >
@@ -1800,6 +1878,8 @@ const styles = StyleSheet.create({
   partnerTierBar: { width: 4, height: 48, borderRadius: 2, flexShrink: 0 },
   partnerName:    { fontSize: 14, fontWeight: '700', color: '#fff' },
   partnerMeta:    { fontSize: 11, color: 'rgba(255,255,255,0.4)', marginTop: 2 },
+  pitchBtn:       { backgroundColor: AMBER, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8 },
+  pitchBtnText:   { fontSize: 11, fontWeight: '800', color: NAVY },
 
   // ── Curated Lists ──
   clLeftPane: { width: 200, borderRightWidth: 0.5, borderRightColor: 'rgba(255,255,255,0.08)', backgroundColor: 'rgba(255,255,255,0.01)' },

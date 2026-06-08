@@ -170,9 +170,12 @@ export default function SignInScreen({ navigation, route }) {
 
     if (error) throw error
 
-    // Apple only sends full name on first sign-in
+    // Apple only sends full name on the very first sign-in.
+    // Save it to both auth metadata AND public.users.display_name.
+    // Without the public.users write, the DB trigger sets display_name
+    // to the private relay email local part (e.g. "2rj2v78vyn").
     if (credential.fullName?.givenName || credential.fullName?.familyName) {
-      const displayName = [
+      const appleDisplayName = [
         credential.fullName?.givenName,
         credential.fullName?.familyName,
       ]
@@ -180,16 +183,25 @@ export default function SignInScreen({ navigation, route }) {
         .join(' ')
         .trim()
 
-      const { error: updateError } = await supabase.auth.updateUser({
-        data: {
-          full_name: displayName || null,
-          given_name: credential.fullName?.givenName || null,
-          family_name: credential.fullName?.familyName || null,
-        },
-      })
+      if (appleDisplayName) {
+        // Update auth metadata
+        supabase.auth.updateUser({
+          data: {
+            full_name: appleDisplayName,
+            given_name: credential.fullName?.givenName || null,
+            family_name: credential.fullName?.familyName || null,
+          },
+        }).catch(e => console.warn('Apple auth metadata update failed:', e.message))
 
-      if (updateError) {
-        console.warn('Failed to save Apple name metadata:', updateError.message)
+        // Update public.users so leaderboards and profile show the real name
+        if (data?.user?.id) {
+          supabase.from('users')
+            .update({ display_name: appleDisplayName })
+            .eq('id', data.user.id)
+            .then(({ error }) => {
+              if (error) console.warn('Apple display_name update failed:', error.message)
+            })
+        }
       }
     }
 

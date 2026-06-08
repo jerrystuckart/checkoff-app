@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useMemo, useEffect, useCallback } from 'react'
 import {
   View,
   Text,
@@ -17,19 +17,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { completeDare } from '../lib/completeDare'
+import { useTheme } from '../lib/ThemeContext'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
 const GREEN = '#1D9E75'
 const BLUE = '#378ADD'
 
-const BG = '#FFF9F2'
-const CARD = '#FFFFFF'
-const TEXT = '#243045'
-const MUTED = '#6F7785'
-const BORDER = '#E6D8C7'
-const SOFT = '#FFF1DB'
-const SOFT_2 = '#F8F3EC'
 const RED = '#D85A30'
 
 const RING_COLORS = ['#1D9E75', '#378ADD', '#BA7517', '#D85A30']
@@ -157,6 +151,10 @@ const DEFAULT_CHANNELS = ['sms', 'instagram', 'snapchat', 'tiktok']
 export default function ItemDetailScreen({ route, navigation }) {
   const { item, listId, listTitle } = route.params ?? {}
   const insets = useSafeAreaInsets()
+  const { colors } = useTheme()
+  const { BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, RED } = colors
+  const styles = useMemo(() => createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, RED }),
+    [BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, RED])
 
   const [checked, setChecked] = useState(item?.checked ?? false)
   const [saving, setSaving] = useState(false)
@@ -986,7 +984,7 @@ export default function ItemDetailScreen({ route, navigation }) {
                     key={key}
                     style={[
                       styles.pickerOption,
-                      on && { borderColor: ch.color, borderWidth: 1.5, backgroundColor: '#FFFDF9' },
+                      on && { borderColor: ch.color, borderWidth: 1.5, backgroundColor: SOFT_2 },
                     ]}
                     onPress={() => togglePendingChannel(key)}
                     activeOpacity={0.8}
@@ -1078,7 +1076,8 @@ export default function ItemDetailScreen({ route, navigation }) {
   )
 }
 
-const styles = StyleSheet.create({
+function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, RED }) {
+ return StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: BG,
@@ -1254,13 +1253,13 @@ const styles = StyleSheet.create({
 
   actionBtn: {
     flex: 1,
-    backgroundColor: '#F3E5CF',
+    backgroundColor: SOFT,
     borderRadius: 22,
     paddingVertical: 20,
     alignItems: 'center',
     gap: 8,
     borderWidth: 1.2,
-    borderColor: '#E8C98E',
+    borderColor: BORDER,
   },
 
   actionBtnIcon: {
@@ -1306,7 +1305,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 999,
-    backgroundColor: '#FFF6E7',
+    backgroundColor: SOFT,
     borderWidth: 1.2,
     borderColor: '#E8C98E',
   },
@@ -1386,7 +1385,7 @@ const styles = StyleSheet.create({
   },
 
   partnerCard: {
-    backgroundColor: '#FFF4DF',
+    backgroundColor: SOFT,
     borderRadius: 18,
     padding: 16,
     borderWidth: 1,
@@ -1408,7 +1407,7 @@ const styles = StyleSheet.create({
 
   pickerOverlay: {
     marginTop: 16,
-    backgroundColor: '#EFE6DA',
+    backgroundColor: CARD,
     borderRadius: 24,
     overflow: 'hidden',
     borderWidth: 1,
@@ -1451,7 +1450,7 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     borderColor: BORDER,
-    backgroundColor: '#FAF7F1',
+    backgroundColor: SOFT_2,
   },
 
   pickerDot: {
@@ -1489,7 +1488,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: BORDER,
     alignItems: 'center',
-    backgroundColor: '#FAF7F1',
+    backgroundColor: SOFT_2,
   },
 
   pickerCancelText: {
@@ -1568,7 +1567,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     borderWidth: 1,
     borderColor: BORDER,
-    backgroundColor: '#FAF7F1',
+    backgroundColor: SOFT_2,
   },
 
   flagOptionOn: {
@@ -1592,7 +1591,7 @@ const styles = StyleSheet.create({
   },
 
   flagNoteInput: {
-    backgroundColor: '#FAF7F1',
+    backgroundColor: SOFT_2,
     borderRadius: 12,
     padding: 12,
     color: TEXT,
@@ -1616,7 +1615,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: BORDER,
     alignItems: 'center',
-    backgroundColor: '#FAF7F1',
+    backgroundColor: SOFT_2,
   },
 
   flagCancelText: {
@@ -1638,4 +1637,5 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#fff',
   },
-})
+ })
+}

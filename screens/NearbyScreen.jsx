@@ -1,20 +1,14 @@
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   ActivityIndicator, RefreshControl, Linking,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNearby } from '../lib/useNearby'
+import { useTheme } from '../lib/ThemeContext'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
-
-const BG     = '#FFF9F2'
-const CARD   = '#FFFFFF'
-const TEXT   = '#243045'
-const MUTED  = '#6F7785'
-const BORDER = '#E6D8C7'
-const SOFT_2 = '#F8F3EC'
 
 // Only location-based rings — universals excluded from Nearby entirely
 const RINGS = [
@@ -26,6 +20,10 @@ const RINGS = [
 
 export default function NearbyScreen({ navigation }) {
   const insets = useSafeAreaInsets()
+  const { colors } = useTheme()
+  const { BG, CARD, TEXT, MUTED, BORDER, SOFT_2 } = colors
+  const styles = useMemo(() => createNearbyStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT_2 }),
+    [BG, CARD, TEXT, MUTED, BORDER, SOFT_2])
   const { items, loading, locError, location, refreshing, refresh } = useNearby()
   const [filter, setFilter] = useState('all')
 
@@ -139,7 +137,7 @@ export default function NearbyScreen({ navigation }) {
         </View>
         <Text style={styles.errorTitle}>Location needed</Text>
         <Text style={styles.errorSub}>{locError}</Text>
-        <TouchableOpacity style={styles.settingsBtn} onPress={() => Linking.openURL('app-settings:').catch(() => {})} activeOpacity={0.88}>
+        <TouchableOpacity style={styles.settingsBtn} onPress={() => Linking.openSettings()} activeOpacity={0.88}>
           <Text style={styles.settingsBtnText}>Open Settings</Text>
         </TouchableOpacity>
       </View>
@@ -216,7 +214,8 @@ export default function NearbyScreen({ navigation }) {
   )
 }
 
-const styles = StyleSheet.create({
+function createNearbyStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT_2 }) {
+ return StyleSheet.create({
   container: { flex: 1, backgroundColor: BG },
   center:    { alignItems: 'center', justifyContent: 'center', flex: 1, padding: 32, backgroundColor: BG },
 
@@ -271,4 +270,5 @@ const styles = StyleSheet.create({
   empty:      { alignItems: 'center', justifyContent: 'center', padding: 32, marginTop: 10 },
   emptyTitle: { fontSize: 18, fontWeight: '800', color: TEXT, marginBottom: 8, textAlign: 'center' },
   emptySub:   { fontSize: 13, color: MUTED, textAlign: 'center', lineHeight: 19, fontWeight: '600', maxWidth: 300 },
-})
+ })
+}

@@ -108,7 +108,7 @@ export default function OnboardingScreen({ onComplete }) {
         onPress={onComplete}
         hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
       >
-        <Text style={styles.skipText}>Skip</Text>
+        <Text style={styles.skipText} allowFontScaling={false}>Skip</Text>
       </TouchableOpacity>
 
       {/* Slides */}
@@ -130,9 +130,9 @@ export default function OnboardingScreen({ onComplete }) {
             </View>
 
             {/* Text */}
-            <Text style={styles.emoji}>{page.emoji}</Text>
-            <Text style={[styles.title, { color: page.accent }]}>{page.title}</Text>
-            <Text style={styles.subtitle}>{page.subtitle}</Text>
+            <Text style={styles.emoji} allowFontScaling={false}>{page.emoji}</Text>
+            <Text style={[styles.title, { color: page.accent }]} allowFontScaling={false}>{page.title}</Text>
+            <Text style={styles.subtitle} allowFontScaling={false}>{page.subtitle}</Text>
 
           </View>
         ))}
@@ -164,7 +164,7 @@ export default function OnboardingScreen({ onComplete }) {
         onPress={handleNext}
         activeOpacity={0.88}
       >
-        <Text style={styles.ctaBtnText}>
+        <Text style={styles.ctaBtnText} allowFontScaling={false}>
           {currentPage < PAGES.length - 1 ? 'Next →' : 'Get started'}
         </Text>
       </TouchableOpacity>
@@ -191,18 +191,18 @@ function WhatPreview() {
       {ITEMS.map((item, i) => (
         <View key={i} style={pw.row}>
           <View style={[pw.check, i === 0 && pw.checkDone]}>
-            {i === 0 && <Text style={{ fontSize: 10, color: NAVY, fontWeight: '800' }}>✓</Text>}
-            {i === 2 && <Text style={{ fontSize: 10 }}>🔒</Text>}
+            {i === 0 && <Text style={{ fontSize: 10, color: NAVY, fontWeight: '800' }} allowFontScaling={false}>✓</Text>}
+            {i === 2 && <Text style={{ fontSize: 10 }} allowFontScaling={false}>🔒</Text>}
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={pw.body} numberOfLines={1}>{item.body}</Text>
+            <Text style={pw.body} numberOfLines={1} allowFontScaling={false}>{item.body}</Text>
             <View style={{ flexDirection: 'row', gap: 5, marginTop: 3 }}>
               <View style={[pw.tag, { backgroundColor: item.catColor + '20' }]}>
-                <Text style={[pw.tagText, { color: item.catColor }]}>{item.cat}</Text>
+                <Text style={[pw.tagText, { color: item.catColor }]} allowFontScaling={false}>{item.cat}</Text>
               </View>
               {item.label && (
                 <View style={[pw.tag, { backgroundColor: DIFF_COLORS[item.label]?.bg }]}>
-                  <Text style={[pw.tagText, { color: DIFF_COLORS[item.label]?.text, fontWeight: '800' }]}>
+                  <Text style={[pw.tagText, { color: DIFF_COLORS[item.label]?.text, fontWeight: '800' }]} allowFontScaling={false}>
                     {item.label} · {item.pts}pts
                   </Text>
                 </View>
@@ -228,15 +228,15 @@ function HowPreview() {
     <View style={{ gap: 8 }}>
       {CREW.map((m, i) => (
         <View key={i} style={[pw.lbRow, i === 0 && { backgroundColor: AMBER + '12', borderColor: AMBER + '40' }]}>
-          <Text style={[pw.lbMedal, { color: i < 3 ? m.color : '#6B7280' }]}>{m.medal}</Text>
+          <Text style={[pw.lbMedal, { color: i < 3 ? m.color : '#6B7280' }]} allowFontScaling={false}>{m.medal}</Text>
           <View style={[pw.lbAvatar, { backgroundColor: m.color + '30' }]}>
-            <Text style={[pw.lbAvatarText, { color: m.color }]}>{m.name[0]}</Text>
+            <Text style={[pw.lbAvatarText, { color: m.color }]} allowFontScaling={false}>{m.name[0]}</Text>
           </View>
-          <Text style={[pw.lbName, i === 0 && { color: AMBER, fontWeight: '800' }]}>{m.name}</Text>
-          {m.streak >= 4 && <Text style={pw.lbFlame}>🔥{m.streak}w</Text>}
+          <Text style={[pw.lbName, i === 0 && { color: AMBER, fontWeight: '800' }]} allowFontScaling={false}>{m.name}</Text>
+          {m.streak >= 4 && <Text style={pw.lbFlame} allowFontScaling={false}>🔥{m.streak}w</Text>}
           <View style={pw.lbScoreWrap}>
-            <Text style={[pw.lbScore, i === 0 && { color: AMBER }]}>{m.score}</Text>
-            <Text style={pw.lbPts}>pts</Text>
+            <Text style={[pw.lbScore, i === 0 && { color: AMBER }]} allowFontScaling={false}>{m.score}</Text>
+            <Text style={pw.lbPts} allowFontScaling={false}>pts</Text>
           </View>
         </View>
       ))}
@@ -256,31 +256,31 @@ function StartPreview() {
     <View style={{ gap: 10 }}>
       {/* Curated list card */}
       <View style={[pw.listCard, { borderColor: AMBER + '40' }]}>
-        <Text style={{ fontSize: 22, marginBottom: 6 }}>☀️</Text>
-        <Text style={pw.listCardTitle}>Phoenix Summer 2026</Text>
-        <Text style={pw.listCardSub}>48 items · curated for your city</Text>
+        <Text style={{ fontSize: 22, marginBottom: 6 }} allowFontScaling={false}>☀️</Text>
+        <Text style={pw.listCardTitle} allowFontScaling={false}>Phoenix Summer 2026</Text>
+        <Text style={pw.listCardSub} allowFontScaling={false}>48 items · curated for your city</Text>
         <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
           <View style={[pw.tag, { backgroundColor: AMBER + '20' }]}>
-            <Text style={[pw.tagText, { color: AMBER }]}>Summer</Text>
+            <Text style={[pw.tagText, { color: AMBER }]} allowFontScaling={false}>Summer</Text>
           </View>
           <View style={[pw.tag, { backgroundColor: GREEN + '20' }]}>
-            <Text style={[pw.tagText, { color: GREEN }]}>Phoenix</Text>
+            <Text style={[pw.tagText, { color: GREEN }]} allowFontScaling={false}>Phoenix</Text>
           </View>
         </View>
       </View>
 
       {/* Crew invite preview */}
       <View style={[pw.crewCard, { borderColor: PURPLE + '30' }]}>
-        <Text style={pw.crewLabel}>Invite your crew</Text>
+        <Text style={pw.crewLabel} allowFontScaling={false}>Invite your crew</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 }}>
           <View style={{ flexDirection: 'row', gap: -6 }}>
             {CREW.map((c, i) => (
               <View key={i} style={[pw.crewAvatar, { backgroundColor: c.color, marginRight: -6 }]}>
-                <Text style={pw.crewAvatarText}>{c.initial}</Text>
+                <Text style={pw.crewAvatarText} allowFontScaling={false}>{c.initial}</Text>
               </View>
             ))}
           </View>
-          <Text style={pw.crewText}>See who checks off the most</Text>
+          <Text style={pw.crewText} allowFontScaling={false}>See who checks off the most</Text>
         </View>
       </View>
     </View>
@@ -295,7 +295,7 @@ const pw = StyleSheet.create({
   checkDone:      { backgroundColor: AMBER, borderColor: AMBER },
   body:           { fontSize: 12, color: '#fff', fontWeight: '600', lineHeight: 16 },
   tag:            { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 999 },
-  tagText:        { fontSize: 9, fontWeight: '700' },
+  tagText:        { fontSize: 9, fontWeight: '700', includeFontPadding: false },
 
   lbRow:          { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 8, borderRadius: 10, borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', backgroundColor: 'rgba(255,255,255,0.03)' },
   lbMedal:        { fontSize: 14, fontWeight: '800', width: 20, textAlign: 'center' },

@@ -100,8 +100,11 @@ Deno.serve(async (req) => {
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE)
 
   // ── checkout.session.completed ───────────────────────────────────────────
-  // Fires when a business owner completes payment on a Payment Link.
-  // We create the partner record here.
+  // Fires when payment completes — either a new signup via Payment Link,
+  // or an existing founding partner converting via send-partner-renewal.
+  //
+  // If metadata.partner_id is present → UPDATE the existing partner record.
+  // Otherwise → INSERT a new partner record (original Payment Link flow).
   if (event.type === 'checkout.session.completed') {
     const session = event.data.object as {
       id: string
@@ -112,44 +115,57 @@ Deno.serve(async (req) => {
       custom_fields: Array<{ key: string; text?: { value: string } }>
     }
 
-    // Custom fields you configured on the Payment Link in Stripe Dashboard.
-    // We use: business_name (required), phone (optional)
-    const fields: Record<string, string> = {}
-    for (const f of session.custom_fields ?? []) {
-      if (f.text?.value) fields[f.key] = f.text.value
-    }
-
-    // Plan tier comes from metadata on the Payment Link.
-    // Set this in Stripe Dashboard when creating each Payment Link:
-    //   Metadata key: plan_tier   Value: partner | rare | legend
-    //   Metadata key: billing_interval  Value: monthly | annual
     const planTier        = session.metadata?.plan_tier ?? 'partner'
     const billingInterval = session.metadata?.billing_interval ?? 'monthly'
+    const existingId      = session.metadata?.partner_id ?? null
 
-    const partnerPayload = {
-      business_name:          fields['business_name'] || session.customer_details?.name || 'New Partner',
-      contact_email:          session.customer_details?.email ?? '',
-      phone:                  fields['phone'] || session.customer_details?.phone || null,
-      plan_tier:              planTier,
-      is_active:              true,
-      billing_start:          new Date().toISOString().split('T')[0],
-      stripe_customer_id:     session.customer ?? null,
-      stripe_subscription_id: session.subscription ?? null,
-      billing_interval:       billingInterval,
+    if (existingId) {
+      // ── Founding partner converting to paid ──────────────────────────────
+      // Update their existing record with Stripe IDs + set billing active
+      const { error } = await supabase
+        .from('partners')
+        .update({
+          stripe_customer_id:     session.customer ?? null,
+          stripe_subscription_id: session.subscription ?? null,
+          billing_start:          new Date().toISOString().split('T')[0],
+          plan_tier:              planTier,
+          billing_interval:       billingInterval,
+          is_active:              true,
+        })
+        .eq('id', existingId)
+
+      if (error) console.error('Failed to convert founding partner:', error.message)
+      else console.log(`Founding partner converted: ${existingId} → ${planTier}`)
+
+    } else {
+      // ── New partner signing up via Payment Link ──────────────────────────
+      const fields: Record<string, string> = {}
+      for (const f of session.custom_fields ?? []) {
+        if (f.text?.value) fields[f.key] = f.text.value
+      }
+
+      const partnerPayload = {
+        business_name:          fields['business_name'] || session.customer_details?.name || 'New Partner',
+        contact_email:          session.customer_details?.email ?? '',
+        phone:                  fields['phone'] || session.customer_details?.phone || null,
+        plan_tier:              planTier,
+        is_active:              true,
+        billing_start:          new Date().toISOString().split('T')[0],
+        stripe_customer_id:     session.customer ?? null,
+        stripe_subscription_id: session.subscription ?? null,
+        billing_interval:       billingInterval,
+      }
+
+      const { error } = await supabase.from('partners').insert(partnerPayload)
+      if (error) {
+        console.error('Failed to create partner:', error.message)
+        return new Response(JSON.stringify({ received: true, dbError: error.message }), {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200,
+        })
+      }
+      console.log(`Partner created: ${partnerPayload.business_name} (${planTier})`)
     }
-
-    const { error } = await supabase.from('partners').insert(partnerPayload)
-
-    if (error) {
-      console.error('Failed to create partner:', error.message)
-      // Return 200 anyway so Stripe doesn't keep retrying for a DB issue we need to fix manually
-      return new Response(JSON.stringify({ received: true, dbError: error.message }), {
-        headers: { 'Content-Type': 'application/json' },
-        status: 200,
-      })
-    }
-
-    console.log(`Partner created: ${partnerPayload.business_name} (${planTier})`)
   }
 
   // ── customer.subscription.deleted ───────────────────────────────────────

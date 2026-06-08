@@ -86,3 +86,4 @@ checkoff_partner_signup.html
 ios/Pods/
 
 .env.local
+*.ipa

@@ -103,11 +103,15 @@ export default function PhotoCheckInScreen({ route, navigation }) {
         const contentExt = rawExt === 'jpg' ? 'jpeg' : rawExt
         const filename = `${user.id}/${Date.now()}.${rawExt}`
         const response = await fetch(photo.uri)
-        const blob = await response.blob()
+        // NOTE: fetch(...).blob() produces blobs that serialize as empty (0 bytes)
+        // when passed through React Native's bridge to Supabase Storage — the
+        // upload "succeeds" but stores a zero-byte file. Using arrayBuffer()
+        // avoids the Blob entirely and uploads the real bytes.
+        const arrayBuffer = await response.arrayBuffer()
 
         const { data: uploadData, error: uploadErr } = await supabase.storage
           .from('checkin-photos')
-          .upload(filename, blob, {
+          .upload(filename, arrayBuffer, {
             contentType: `image/${contentExt}`,
             upsert: false,
           })

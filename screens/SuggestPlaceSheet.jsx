@@ -1,21 +1,21 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import {
   Modal, View, Text, TextInput, TouchableOpacity,
   StyleSheet, ScrollView, Alert, ActivityIndicator,
   KeyboardAvoidingView, Platform,
 } from 'react-native'
 import { supabase } from '../lib/supabase'
+import { useTheme } from '../lib/ThemeContext'
 
 const AMBER      = '#FFB84D'
 const AMBER_DARK = '#7A4B00'
-const BG         = '#FFF9F2'
-const CARD       = '#FFFFFF'
-const TEXT       = '#1F2937'
-const MUTED      = '#6B7280'
-const BORDER     = '#E9DCCB'
 const RED        = '#D85A30'
 
 export default function SuggestPlaceSheet({ visible, onClose, onSuccess, listId, listTitle }) {
+  const { colors } = useTheme()
+  const { BG, CARD, TEXT, MUTED, BORDER, SOFT_2 } = colors
+  const styles = useMemo(() => createSuggestStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT_2 }),
+    [BG, CARD, TEXT, MUTED, BORDER, SOFT_2])
   const [placeName,   setPlaceName]   = useState('')
   const [experience,  setExperience]  = useState('')
   const [website,     setWebsite]     = useState('')
@@ -267,7 +267,8 @@ export default function SuggestPlaceSheet({ visible, onClose, onSuccess, listId,
   )
 }
 
-const styles = StyleSheet.create({
+function createSuggestStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT_2 }) {
+ return StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: BG,
@@ -407,4 +408,5 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: AMBER_DARK,
   },
-})
+ })
+}

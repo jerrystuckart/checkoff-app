@@ -22,6 +22,7 @@ import { View, Text, StyleSheet } from 'react-native'
 
 import { useAuth }             from './lib/useAuth'
 import { useOnboarding }      from './lib/useOnboarding'
+import { ThemeProvider }      from './lib/ThemeContext'
 import { useNotifications }   from './lib/useNotifications'
 import ErrorBoundary          from './components/ErrorBoundary'
 import OnboardingScreen       from './screens/OnboardingScreen'
@@ -44,6 +45,8 @@ import DareScreen              from './screens/DareScreen'
 import PhotoCheckInScreen      from './screens/PhotoCheckInScreen'
 import BrowseListsScreen       from './screens/BrowseListsScreen'
 import CuratedListPreviewScreen from './screens/CuratedListPreviewScreen'
+import DeepLinkListResolverScreen from './screens/DeepLinkListResolverScreen'
+import DeepLinkExperienceResolverScreen from './screens/DeepLinkExperienceResolverScreen'
 import SavedCrewScreen          from './screens/SavedCrewScreen'
 import SecretRevealScreen       from './screens/SecretRevealScreen'
 import PastListsScreen          from './screens/PastListsScreen'
@@ -58,8 +61,8 @@ function TabIcon({ label, focused }) {
 
   return (
     <View style={tab.wrap}>
-      <Text style={[tab.icon, focused && tab.on]}>{glyphs[label] ?? '·'}</Text>
-      <Text style={[tab.label, focused && tab.on]}>{label}</Text>
+      <Text style={[tab.icon, focused && tab.on]} allowFontScaling={false}>{glyphs[label] ?? '·'}</Text>
+      <Text style={[tab.label, focused && tab.on]} allowFontScaling={false}>{label}</Text>
     </View>
   )
 }
@@ -153,6 +156,16 @@ function HomeStack() {
         name="CuratedListPreview"
         component={CuratedListPreviewScreen}
         options={({ route }) => ({ title: route.params?.groupName ?? 'Preview' })}
+      />
+      <Stack.Screen
+        name="DeepLinkListResolver"
+        component={DeepLinkListResolverScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="DeepLinkExperienceResolver"
+        component={DeepLinkExperienceResolverScreen}
+        options={{ headerShown: false }}
       />
       <Stack.Screen
         name="CreateList"
@@ -425,8 +438,18 @@ function App() {
   // Show splash until BOTH auth is done AND min time has elapsed AND onboarding check is done
   const showSplash = loading || !minTimeElapsed || checkingOnboarding
 
-  // Show onboarding after splash, before main app, on first launch only
-  if (!showSplash && needsOnboarding) {
+  // If the user signed in (e.g. via Apple Sign In) without explicitly tapping through
+  // the onboarding flow, completeOnboarding() was never called so needsOnboarding stays
+  // true. Auto-complete it so they don't hit the onboarding screen on this or any future launch.
+  React.useEffect(() => {
+    if (!loading && !checkingOnboarding && isSignedIn && needsOnboarding) {
+      completeOnboarding()
+    }
+  }, [loading, checkingOnboarding, isSignedIn, needsOnboarding])
+
+  // Show onboarding after splash, before main app, on first launch only.
+  // Never show it to a signed-in user — they've already been through account creation.
+  if (!showSplash && needsOnboarding && !isSignedIn) {
     return (
       <SafeAreaProvider>
         <OnboardingScreen onComplete={completeOnboarding} />
@@ -452,6 +475,19 @@ function App() {
                   HomeTab: {
                     screens: {
                       JoinList: 'join/:invite_code',
+                      CuratedListPreview: 'next10',
+                DeepLinkListResolver: {
+                  path: 'list',
+                  parse: {
+                    id: (id) => id,
+                  },
+                },
+                DeepLinkExperienceResolver: {
+                  path: 'experience',
+                  parse: {
+                    tag: (tag) => tag,
+                  },
+                },
                       ResetPassword: {
                         path: 'reset-password',
                         parse: {
@@ -476,4 +512,12 @@ function App() {
   )
 }
 
-export default Sentry.wrap(App)
+function AppWithTheme() {
+  return (
+    <ThemeProvider>
+      <App />
+    </ThemeProvider>
+  )
+}
+
+export default Sentry.wrap(AppWithTheme)

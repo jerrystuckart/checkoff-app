@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import {
   View, Text, FlatList, StyleSheet, ActivityIndicator,
   TouchableOpacity, Modal, ScrollView, Share,
@@ -6,23 +6,14 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useLeaderboard } from '../lib/useLeaderboard'
 import { supabase } from '../lib/supabase'
+import { useTheme } from '../lib/ThemeContext'
 
 const AMBER  = '#F5A623'
 const GREEN  = '#1D9E75'
 const BLUE   = '#378ADD'
 const RED    = '#D85A30'
 
-const BG     = '#FFF9F2'
-const CARD   = '#FFFFFF'
-const TEXT   = '#243045'
-const MUTED  = '#6F7785'
-const BORDER = '#E6D8C7'
-const SOFT   = '#FFF1DB'
-const SOFT_2 = '#F8F3EC'
 
-const ENDED_BG     = '#F4EEF9'
-const ENDED_BORDER = '#DCCCED'
-const ENDED_TEXT   = '#7A4DB3'
 
 const MEDALS         = ['🥇', '🥈', '🥉']
 const AVATAR_COLORS  = ['#534AB7', '#1D9E75', '#D85A30', '#378ADD', '#D4537E', '#BA7517']
@@ -54,6 +45,10 @@ function formatDate(value) {
 export default function LeaderboardScreen({ route }) {
   const { listId } = route.params ?? {}
   const insets = useSafeAreaInsets()
+  const { colors } = useTheme()
+  const { BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, GREEN, ENDED_BG, ENDED_BORDER, ENDED_TEXT } = colors
+  const styles = useMemo(() => createLeaderboardStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, GREEN, ENDED_BG, ENDED_BORDER, ENDED_TEXT }),
+    [BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, GREEN, ENDED_BG, ENDED_BORDER, ENDED_TEXT])
   const { entries, loading } = useLeaderboard(listId)
 
   const [userId, setUserId] = useState(null)
@@ -547,7 +542,8 @@ export default function LeaderboardScreen({ route }) {
   )
 }
 
-const styles = StyleSheet.create({
+function createLeaderboardStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, GREEN, ENDED_BG, ENDED_BORDER, ENDED_TEXT }) {
+ return StyleSheet.create({
   container:   { flex: 1, backgroundColor: BG },
   center:      { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, backgroundColor: BG },
 
@@ -718,4 +714,5 @@ const styles = StyleSheet.create({
   modalPtsWrap:    { alignItems: 'center', justifyContent: 'center', minWidth: 36, flexShrink: 0 },
   modalPts:        { fontSize: 18, fontWeight: '800', color: TEXT },
   modalPtsLabel:   { fontSize: 9, color: MUTED, fontWeight: '700', textTransform: 'uppercase' },
-})
+ })
+}

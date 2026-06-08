@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react'
+
 import { useFocusEffect } from '@react-navigation/native'
 import {
   View,
@@ -10,6 +11,7 @@ import {
   ActivityIndicator,
   ScrollView,
   Animated,
+  Alert,
 } from 'react-native'
 import * as Haptics from 'expo-haptics'
 import { useItems } from '../lib/useItems'
@@ -18,16 +20,14 @@ import { supabase } from '../lib/supabase'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
 import { consumePendingCheckIn } from '../lib/checkInResult'
+import { pollForNewBadges } from '../lib/badges'
 import SuggestPlaceSheet from './SuggestPlaceSheet'
+import BadgeCelebrationModal from '../components/BadgeCelebrationModal'
+import { useTheme } from '../lib/ThemeContext'
 
 const ACCENT = '#FFB84D'
 const ACCENT_DARK = '#7A4B00'
-const BG = '#FFF9F2'
-const CARD = '#FFFFFF'
-const TEXT = '#1F2937'
-const MUTED = '#6B7280'
-const BORDER = '#E9DCCB'
-const SOFT = '#FFF1DB'
+// Colors now come from ThemeContext — see useTheme() inside the component
 const ENDED_BG = '#F4EEF9'
 const ENDED_BORDER = '#DCCCED'
 const ENDED_TEXT = '#7A4DB3'
@@ -43,6 +43,10 @@ const DIFFICULTY_COLORS = {
 
 export default function ListScreen({ route, navigation }) {
   const { listId, cityId, title } = route.params ?? {}
+  const { colors } = useTheme()
+  const { BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY } = colors
+  const styles = useMemo(() => createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY }),
+    [BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY])
 
   const [filter, setFilter] = useState('All')
   const [search, setSearch] = useState('')
@@ -80,6 +84,16 @@ export default function ListScreen({ route, navigation }) {
   // Celebration flash — tracks which listItemId is currently celebrating
   const [celebratingId, setCelebratingId] = useState(null)
   const flashAnim = useRef(new Animated.Value(0)).current
+
+  // Badge celebration modal
+  const [celebrationBadges, setCelebrationBadges] = useState([])
+
+  // Tick every minute so hour/minute countdown updates in real time
+  const [tick, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 60000)
+    return () => clearInterval(id)
+  }, [])
 
   // Track whether we've already navigated to the summary this session
   // so it fires exactly once per list open, not on every re-render
@@ -370,6 +384,37 @@ export default function ListScreen({ route, navigation }) {
     })
   }
 
+  function calDaysLeftList(endsAt) {
+    if (!endsAt) return null
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const end   = new Date(`${endsAt}T00:00:00`); end.setHours(0, 0, 0, 0)
+    return Math.round((end - today) / (1000 * 60 * 60 * 24))
+  }
+
+  function timeLeftList(endsAt) {
+    if (!endsAt) return null
+    const days = calDaysLeftList(endsAt)
+    if (days === null || days < 0) return null
+    if (days === 0) {
+      const endOfDay = new Date(`${endsAt}T23:59:59`)
+      const msLeft   = endOfDay - new Date()
+      if (msLeft <= 0) return 'Ends tonight'
+      const h = Math.floor(msLeft / 3600000)
+      const m = Math.floor((msLeft % 3600000) / 60000)
+      return h > 0 ? `${h}h ${m}m left` : `${m}m left`
+    }
+    if (days === 1) return '1 day left'
+    return `${days} days left`
+  }
+
+  function formatEndLabel(endsAt) {
+    if (!endsAt) return null
+    const d = new Date(`${endsAt}T12:00:00`)
+    const dateStr = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+    const tl = timeLeftList(endsAt)
+    return tl ? `Ends ${dateStr} · ${tl}` : `Ends ${dateStr}`
+  }
+
   const ended = isEnded()
   const displayItems = listId ? localItems : cityItems
   // refreshingChecks intentionally excluded — it runs silently in background
@@ -426,6 +471,11 @@ export default function ListScreen({ route, navigation }) {
     }
   }, [flashAnim])
 
+  // Called by badge-polling logic after a check-in awards one or more badges
+  function showBadgeCelebration(badges) {
+    setCelebrationBadges(badges)
+  }
+
   const handleCheckOff = useCallback(async (listItemId) => {
     if (ended || metaLoading) return  // also block while meta is loading
 
@@ -453,13 +503,47 @@ export default function ListScreen({ route, navigation }) {
 
       // Set in-flight flag so refreshCheckedState won't overwrite our optimistic update
       checkOffInFlight.current = true
-      checkOff(listItemId).then(() => {
+      checkOff(listItemId).then((result) => {
         // Clear flag after write completes, then allow refresh after brief delay
         setTimeout(() => {
           checkOffInFlight.current = false
         }, 1500)
+
+        if (result?.error) {
+          // Revert the optimistic update immediately — don't wait for next focus refresh
+          setLocalItems(prev => prev.map(i =>
+            i.listItemId === listItemId
+              ? { ...i, checked: wasChecked, checkedAt: wasChecked ? i.checkedAt : null }
+              : i
+          ))
+          checkOffInFlight.current = false
+          // Alert on unexpected errors (P0001 is already alerted inside checkOff)
+          const code = result.error?.code
+          if (code && code !== 'P0001' && result.error !== 'Not signed in') {
+            Alert.alert(
+              'Check-in failed',
+              `Something went wrong (${code}). Please try again.`,
+            )
+          } else if (result.error === 'Not signed in') {
+            Alert.alert('Not signed in', 'Please sign in to check off items.')
+          }
+          return
+        }
+
+        // Poll for newly awarded badges only when the insert confirmed (not on error or un-check)
+        if (!wasChecked && currentUserId) {
+          pollForNewBadges(currentUserId, supabase).then(earned => {
+            if (earned.length > 0) setCelebrationBadges(earned)
+          })
+        }
       }).catch(() => {
         checkOffInFlight.current = false
+        // Revert on unexpected exception
+        setLocalItems(prev => prev.map(i =>
+          i.listItemId === listItemId
+            ? { ...i, checked: wasChecked, checkedAt: wasChecked ? i.checkedAt : null }
+            : i
+        ))
       })
 
       // Celebrate and notify immediately on a fresh check (not un-check)
@@ -477,7 +561,7 @@ export default function ListScreen({ route, navigation }) {
         }
       }
     }
-  }, [ended, listId, checkOff, localItems, cityItems, navigation, triggerCelebration])
+  }, [ended, listId, checkOff, localItems, cityItems, navigation, triggerCelebration, currentUserId])
 
   const renderItem = useCallback(({ item }) => {
     const isCelebrating = celebratingId === item.listItemId
@@ -638,6 +722,12 @@ export default function ListScreen({ route, navigation }) {
         </View>
       )}
 
+      {listId && !ended && listMeta?.ends_at && (
+        <View style={styles.endsAtRow}>
+          <Text style={styles.endsAtText}>{formatEndLabel(listMeta.ends_at)}</Text>
+        </View>
+      )}
+
       {listId && (
         <View style={styles.progressCard}>
           <View style={styles.progressTopRow}>
@@ -728,6 +818,7 @@ export default function ListScreen({ route, navigation }) {
     showChecked,
     filtered.length,
     navigation,
+    tick,
   ])
 
   const suggestionsFooter = listId ? (
@@ -844,11 +935,17 @@ export default function ListScreen({ route, navigation }) {
         listId={listId}
         listTitle={route.params?.title ?? ''}
       />
+
+      <BadgeCelebrationModal
+        badges={celebrationBadges}
+        onDismiss={() => setCelebrationBadges([])}
+      />
     </SafeAreaView>
   )
 }
 
-const styles = StyleSheet.create({
+function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY }) {
+ return StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: BG,
@@ -922,6 +1019,21 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     color: ENDED_TEXT,
+  },
+
+  endsAtRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginBottom: 10,
+    marginTop: -2,
+  },
+
+  endsAtText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#F5A623',
+    textAlign: 'center',
+    letterSpacing: 0.2,
   },
 
   progressCard: {
@@ -1422,4 +1534,5 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: MUTED,
   },
-})
+ }) // end StyleSheet.create
+} // end createListStyles

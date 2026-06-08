@@ -1,19 +1,14 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useMemo, useEffect } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity,
   StyleSheet, StatusBar, ActivityIndicator,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { fetchCuratedLists } from '../lib/useItems'
+import { useTheme } from '../lib/ThemeContext'
 
 const AMBER  = '#F5A623'
 const NAVY   = '#1A1A2E'
-const BG     = '#FFF9F2'
-const CARD   = '#FFFFFF'
-const TEXT   = '#243045'
-const MUTED  = '#6F7785'
-const BORDER = '#E6D8C7'
-const SOFT   = '#FFF1DB'
 
 // Maps season tag → display label and color
 const SEASON_META = {
@@ -26,6 +21,10 @@ const SEASON_META = {
 
 export default function BrowseListsScreen({ navigation, route }) {
   const insets = useSafeAreaInsets()
+  const { colors } = useTheme()
+  const { BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY } = colors
+  const styles = useMemo(() => createBrowseStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY }),
+    [BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY])
   const citySlug  = route.params?.citySlug  ?? 'phoenix'
   const metroName = route.params?.metroName ?? 'Phoenix'
 
@@ -178,7 +177,8 @@ export default function BrowseListsScreen({ navigation, route }) {
   )
 }
 
-const styles = StyleSheet.create({
+function createBrowseStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY }) {
+ return StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: BG,
@@ -330,4 +330,5 @@ const styles = StyleSheet.create({
     color: MUTED,
     lineHeight: 20,
   },
-})
+ })
+}

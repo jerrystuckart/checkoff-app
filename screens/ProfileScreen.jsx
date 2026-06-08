@@ -1,30 +1,24 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Alert, RefreshControl, Switch,
+  ActivityIndicator, Alert, RefreshControl, Switch, StatusBar,
 } from 'react-native'
 import { useFocusEffect } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/useAuth'
+import { useTheme } from '../lib/ThemeContext'
 import * as Sentry from '@sentry/react-native'
-
-const AMBER  = '#F5A623'
-const NAVY   = '#1A1A2E'
-const GREEN  = '#1D9E75'
-const RED    = '#D85A30'
-
-const BG             = '#FFF9F2'
-const CARD           = '#FFFFFF'
-const TEXT           = '#243045'
-const MUTED          = '#6F7785'
-const BORDER         = '#E6D8C7'
-const SOFT           = '#FFF1DB'
-const SOFT_2         = '#F8F3EC'
 
 export default function ProfileScreen({ navigation }) {
   const insets = useSafeAreaInsets()
   const { signOut: authSignOut } = useAuth()
+  const { colors, isDark, toggleTheme } = useTheme()
+  const { BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, RED, STATUS_BAR } = colors
+
+  const styles = useMemo(() => createStyles({
+    BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, RED,
+  }), [BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, RED])
   const [user, setUser]                     = useState(null)
   const [profile, setProfile]               = useState(null)
   const [stats, setStats]                   = useState(null)
@@ -64,7 +58,7 @@ export default function ProfileScreen({ navigation }) {
 
     try {
       const [profileRes, badgesRes, checkinsRes, totalRes] = await Promise.all([
-        supabase.from('users').select('id, display_name, email, current_streak, longest_streak, created_at, is_admin, pref_show_alcohol, notif_check_ins, notif_invites, notif_nudges').eq('id', uid).single(),
+        supabase.from('users').select('id, display_name, email, current_streak, longest_streak, created_at, is_admin, pref_show_alcohol, notif_check_ins, notif_invites, notif_nudges, founding_number').eq('id', uid).single(),
         supabase.from('user_badges').select('badge_id, earned_at, badge_definitions(id, name, icon, description)').eq('user_id', uid).order('earned_at', { ascending: false }).limit(6),
         supabase.from('check_ins').select('id, checked_at, checkin_method, list_items(items(body, categories(name, color_hex)))').eq('user_id', uid).order('checked_at', { ascending: false }).limit(5),
         supabase.from('check_ins').select('id', { count: 'exact', head: true }).eq('user_id', uid),
@@ -188,6 +182,37 @@ export default function ProfileScreen({ navigation }) {
     return `${Math.floor(diff / 86400)}d ago`
   }
 
+  // Detect Apple private relay gibberish names like "2rj2v78vyn"
+  function isGibberishName(p) {
+    if (!p?.email?.endsWith('@privaterelay.appleid.com')) return false
+    const name = p?.display_name ?? ''
+    // Real names contain spaces or mixed case. Relay IDs are long lowercase alphanumeric.
+    return /^[a-z0-9]{8,}$/.test(name)
+  }
+
+  function promptSetName() {
+    Alert.prompt(
+      'Set your display name',
+      'This is how you appear on leaderboards and to your crew.',
+      async (name) => {
+        const trimmed = name?.trim()
+        if (!trimmed) return
+        const { error } = await supabase
+          .from('users')
+          .update({ display_name: trimmed })
+          .eq('id', user.id)
+        if (error) {
+          Alert.alert('Could not update name', error.message)
+        } else {
+          load()
+        }
+      },
+      'plain-text',
+      '',
+      'default'
+    )
+  }
+
   if (!loading && !user) {
     return (
       <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
@@ -209,8 +234,11 @@ export default function ProfileScreen({ navigation }) {
     )
   }
 
-  const displayName = profile?.display_name || profile?.email?.split('@')[0] || 'CheckOffer'
-  const initials    = displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
+  const nameIsGibberish = isGibberishName(profile)
+  const displayName = nameIsGibberish
+    ? 'Tap to set your name'
+    : (profile?.display_name || profile?.email?.split('@')[0] || 'CheckOffer')
+  const initials    = nameIsGibberish ? '?' : displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
   const hasStreak   = (stats?.streak ?? 0) > 0
 
   return (
@@ -225,9 +253,18 @@ export default function ProfileScreen({ navigation }) {
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>{initials}</Text>
         </View>
-        <Text style={styles.displayName}>{displayName}</Text>
+        <TouchableOpacity onPress={promptSetName} activeOpacity={0.7}>
+          <Text style={[styles.displayName, nameIsGibberish && { color: AMBER, fontSize: 16 }]}>
+            {displayName}
+          </Text>
+        </TouchableOpacity>
         <Text style={styles.email}>{profile?.email}</Text>
         <Text style={styles.memberSince}>Member since {memberSince(profile?.created_at)}</Text>
+        {profile?.founding_number != null && (
+          <View style={styles.foundingBadge}>
+            <Text style={styles.foundingBadgeText}>⭐ Founding Member #{profile.founding_number}</Text>
+          </View>
+        )}
         {profile?.is_admin && (
           <View style={styles.adminBadge}><Text style={styles.adminBadgeText}>⚙ Admin</Text></View>
         )}
@@ -310,7 +347,18 @@ export default function ProfileScreen({ navigation }) {
       </View>
 
       {/* Actions */}
+      <StatusBar barStyle={STATUS_BAR} />
+
       <View style={styles.actionList}>
+        <TouchableOpacity style={styles.actionRow} onPress={promptSetName}>
+          <Text style={styles.actionIcon}>✏️</Text>
+          <View style={styles.actionBody}>
+            <Text style={styles.actionText}>Edit display name</Text>
+            {nameIsGibberish && <Text style={[styles.actionSub, { color: AMBER }]}>Name needs to be set</Text>}
+          </View>
+          <Text style={styles.actionChevron}>›</Text>
+        </TouchableOpacity>
+        <View style={styles.actionDivider} />
         <TouchableOpacity style={styles.actionRow} onPress={() => navigation.navigate('Badges')}>
           <Text style={styles.actionIcon}>🏅</Text>
           <Text style={styles.actionText}>All badges</Text>
@@ -322,6 +370,21 @@ export default function ProfileScreen({ navigation }) {
           <Text style={styles.actionText}>Dare inbox</Text>
           <Text style={styles.actionChevron}>›</Text>
         </TouchableOpacity>
+        <View style={styles.actionDivider} />
+        <View style={styles.actionRow}>
+          <Text style={styles.actionIcon}>{isDark ? '☀️' : '🌙'}</Text>
+          <View style={styles.actionBody}>
+            <Text style={styles.actionText}>Dark mode</Text>
+            <Text style={styles.actionSub}>{isDark ? 'Currently on' : 'Currently off'}</Text>
+          </View>
+          <Switch
+            value={isDark}
+            onValueChange={toggleTheme}
+            trackColor={{ false: BORDER, true: '#F0D29D' }}
+            thumbColor={isDark ? AMBER : '#fff'}
+            ios_backgroundColor={BORDER}
+          />
+        </View>
         <View style={styles.actionDivider} />
         <View style={styles.actionRow}>
           <Text style={styles.actionIcon}>🍺</Text>
@@ -411,7 +474,8 @@ export default function ProfileScreen({ navigation }) {
   )
 }
 
-const styles = StyleSheet.create({
+function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, RED }) {
+ return StyleSheet.create({
   container:         { flex: 1, backgroundColor: BG },
   content:           { padding: 20, paddingBottom: 60 },
   center:            { alignItems: 'center', justifyContent: 'center', flex: 1, padding: 32, backgroundColor: BG },
@@ -424,13 +488,15 @@ const styles = StyleSheet.create({
   memberSince:       { fontSize: 12, color: MUTED, fontWeight: '600' },
   adminBadge:        { marginTop: 10, backgroundColor: SOFT, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 5, borderWidth: 1, borderColor: '#E8C98E' },
   adminBadgeText:    { fontSize: 11, color: '#A16A00', fontWeight: '800' },
+  foundingBadge:     { marginTop: 8, backgroundColor: SOFT, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 5, borderWidth: 1, borderColor: '#F0D29D' },
+  foundingBadgeText: { fontSize: 12, color: AMBER, fontWeight: '800' },
 
   statsRow:          { flexDirection: 'row', gap: 8, marginBottom: 12 },
   statCard:          { flex: 1, backgroundColor: CARD, borderRadius: 16, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: BORDER },
   statNum:           { fontSize: 18, fontWeight: '800', color: TEXT, marginBottom: 3 },
   statLabel:         { fontSize: 9, color: MUTED, textAlign: 'center', fontWeight: '700', lineHeight: 13 },
 
-  streakCard:        { backgroundColor: '#FFF0EA', borderRadius: 14, padding: 12, marginBottom: 16, borderWidth: 1, borderColor: '#F5C9B3' },
+  streakCard:        { backgroundColor: SOFT, borderRadius: 14, padding: 12, marginBottom: 16, borderWidth: 1, borderColor: BORDER },
   streakCardNeutral: { backgroundColor: SOFT_2, borderColor: BORDER },
   streakCardText:    { fontSize: 13, color: TEXT, lineHeight: 18, fontWeight: '600' },
 
@@ -469,7 +535,7 @@ const styles = StyleSheet.create({
   signOutBtn:        { borderWidth: 1.5, borderColor: BORDER, borderRadius: 14, padding: 14, alignItems: 'center', marginBottom: 16 },
   signOutBtnText:    { fontSize: 14, color: MUTED, fontWeight: '700' },
 
-  dangerZone:        { borderWidth: 1, borderColor: '#F5C9B3', borderRadius: 14, padding: 16, marginBottom: 16, backgroundColor: '#FFF6F3' },
+  dangerZone:        { borderWidth: 1, borderColor: BORDER, borderRadius: 14, padding: 16, marginBottom: 16, backgroundColor: SOFT_2 },
   dangerZoneLabel:   { fontSize: 10, fontWeight: '800', color: RED, letterSpacing: 1.2, textTransform: 'uppercase', marginBottom: 12 },
   deleteBtn:         { borderWidth: 1.5, borderColor: RED, borderRadius: 10, padding: 13, alignItems: 'center', marginBottom: 8 },
   deleteBtnText:     { fontSize: 14, color: RED, fontWeight: '800' },
@@ -483,4 +549,5 @@ const styles = StyleSheet.create({
   guestSub:          { fontSize: 14, color: MUTED, textAlign: 'center', lineHeight: 20, marginBottom: 28, fontWeight: '600' },
   signInBtn:         { backgroundColor: AMBER, borderRadius: 14, paddingVertical: 16, paddingHorizontal: 40 },
   signInBtnText:     { fontSize: 16, fontWeight: '800', color: NAVY },
-})
+ }) // end StyleSheet.create
+} // end createStyles

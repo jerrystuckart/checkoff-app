@@ -1,10 +1,11 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ScrollView, ActivityIndicator, Alert, FlatList,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import { useTheme } from '../lib/ThemeContext'
 
 async function sendPushToUser(userId, title, body, data = {}) {
   try {
@@ -31,13 +32,7 @@ const NAVY  = '#1A1A2E'
 const GREEN = '#1D9E75'
 const RED   = '#D85A30'
 
-const BG = '#FFF9F2'
-const CARD = '#FFFFFF'
-const TEXT = '#243045'
-const MUTED = '#6F7785'
-const BORDER = '#E6D8C7'
-const SOFT = '#FFF1DB'
-const SOFT_2 = '#F8F3EC'
+// Colors come from ThemeContext — see useTheme() in the component
 const LILAC = '#F7EEFF'
 const LILAC_BORDER = '#E8D7FF'
 const LILAC_TEXT = '#7C3AED'
@@ -52,6 +47,10 @@ const LILAC_TEXT = '#7C3AED'
 export default function DareScreen({ route, navigation }) {
   const { item, listId } = route?.params ?? {}
   const insets = useSafeAreaInsets()
+  const { colors } = useTheme()
+  const { BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2 } = colors
+  const styles = useMemo(() => createDareStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2 }),
+    [BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2])
   const [userId, setUserId] = useState(null)
   const [userDisplayName, setUserDisplayName] = useState('Someone')
   const [mode, setMode] = useState(item ? 'issue' : 'inbox')
@@ -413,7 +412,8 @@ export default function DareScreen({ route, navigation }) {
   )
 }
 
-const styles = StyleSheet.create({
+function createDareStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2 }) {
+ return StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: BG,
@@ -542,7 +542,7 @@ const styles = StyleSheet.create({
 
   memberRowOn: {
     borderColor: AMBER,
-    backgroundColor: '#FFF7E8',
+    backgroundColor: SOFT,
   },
 
   memberAvatar: {
@@ -694,7 +694,7 @@ const styles = StyleSheet.create({
   },
 
   tabBtnOn: {
-    backgroundColor: '#FFF7E8',
+    backgroundColor: SOFT,
     borderColor: AMBER,
   },
 
@@ -790,7 +790,7 @@ const styles = StyleSheet.create({
 
   declineBtn: {
     flex: 1,
-    backgroundColor: '#F7F2EA',
+    backgroundColor: SOFT_2,
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center',
@@ -806,7 +806,7 @@ const styles = StyleSheet.create({
 
   goToListBtn: {
     marginTop: 10,
-    backgroundColor: '#FFF7E8',
+    backgroundColor: SOFT,
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center',
@@ -819,4 +819,5 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: '#A16A00',
   },
-})
+ })
+}

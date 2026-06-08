@@ -1,17 +1,13 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import {
   View, Text, FlatList, TouchableOpacity,
-  StyleSheet, ActivityIndicator,
+  StyleSheet, ActivityIndicator, Alert,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import { useTheme } from '../lib/ThemeContext'
 
 const AMBER  = '#F5A623'
-const BG     = '#FFF9F2'
-const CARD   = '#FFFFFF'
-const TEXT   = '#243045'
-const MUTED  = '#6F7785'
-const BORDER = '#E6D8C7'
 
 const ENDED_BG     = '#F4EEF9'
 const ENDED_BORDER = '#DCCCED'
@@ -27,10 +23,15 @@ function formatEndedDate(endsAt) {
 export default function PastListsScreen({ route, navigation }) {
   const { userId, metroId } = route.params ?? {}
   const insets = useSafeAreaInsets()
+  const { colors } = useTheme()
+  const { BG, CARD, TEXT, MUTED, BORDER } = colors
+  const styles = useMemo(() => createPastStyles({ BG, CARD, TEXT, MUTED, BORDER }),
+    [BG, CARD, TEXT, MUTED, BORDER])
 
   const [personalLists, setPersonalLists] = useState([])
   const [officialLists, setOfficialLists]  = useState([])
   const [loading, setLoading]              = useState(true)
+  const [deletingId, setDeletingId]        = useState(null)
 
   useEffect(() => { load() }, [])
 
@@ -81,6 +82,56 @@ export default function PastListsScreen({ route, navigation }) {
     }
   }
 
+  function confirmDelete(list) {
+    Alert.alert(
+      'Delete this list?',
+      `"${list.title}" will be permanently removed.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => deleteList(list),
+        },
+      ]
+    )
+  }
+
+  async function deleteList(list) {
+    // Optimistically remove from UI immediately
+    setPersonalLists(prev => prev.filter(l => l.id !== list.id))
+    setDeletingId(list.id)
+
+    try {
+      // Try to delete the whole list (succeeds if user is the creator via RLS)
+      const { error: listErr } = await supabase
+        .from('lists')
+        .delete()
+        .eq('id', list.id)
+
+      if (listErr) {
+        // Not the creator — just remove their membership so it leaves their view
+        const { error: memberErr } = await supabase
+          .from('list_members')
+          .delete()
+          .eq('list_id', list.id)
+          .eq('user_id', userId)
+
+        if (memberErr) throw memberErr
+      }
+    } catch (e) {
+      // Restore if both deletes failed
+      console.warn('PastListsScreen delete error:', e.message)
+      setPersonalLists(prev => {
+        const exists = prev.some(l => l.id === list.id)
+        return exists ? prev : [...prev, list].sort((a, b) => new Date(b.ends_at) - new Date(a.ends_at))
+      })
+      Alert.alert('Could not delete', 'Something went wrong — try again.')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   const sections = []
   if (personalLists.length > 0) {
     sections.push({ type: 'header', label: 'Your past lists' })
@@ -98,11 +149,14 @@ export default function PastListsScreen({ route, navigation }) {
 
     const { list } = row
     const isOfficial = row.type === 'official'
+    const isDeleting = deletingId === list.id
 
     return (
       <TouchableOpacity
-        style={[styles.card, isOfficial && styles.cardOfficial]}
+        style={[styles.card, isOfficial && styles.cardOfficial, isDeleting && styles.cardDeleting]}
         onPress={() => navigation.navigate('List', { listId: list.id, title: list.title })}
+        onLongPress={!isOfficial ? () => confirmDelete(list) : undefined}
+        delayLongPress={400}
         activeOpacity={0.85}
       >
         {isOfficial ? (
@@ -118,9 +172,13 @@ export default function PastListsScreen({ route, navigation }) {
           <Text style={styles.listMeta}>{formatEndedDate(list.ends_at)}</Text>
         </View>
 
-        <View style={styles.badge}>
-          <Text style={styles.badgeText}>{isOfficial ? 'Results →' : 'Ended'}</Text>
-        </View>
+        {isDeleting ? (
+          <ActivityIndicator size="small" color={ENDED_TEXT} />
+        ) : (
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>{isOfficial ? 'Results →' : 'Ended'}</Text>
+          </View>
+        )}
       </TouchableOpacity>
     )
   }
@@ -161,7 +219,8 @@ export default function PastListsScreen({ route, navigation }) {
   )
 }
 
-const styles = StyleSheet.create({
+function createPastStyles({ BG, CARD, TEXT, MUTED, BORDER }) {
+ return StyleSheet.create({
   container:  { flex: 1, backgroundColor: BG },
   center:     { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
   listContent: { paddingHorizontal: 16, paddingBottom: 40 },
@@ -205,6 +264,10 @@ const styles = StyleSheet.create({
     backgroundColor: CARD,
   },
 
+  cardDeleting: {
+    opacity: 0.45,
+  },
+
   accent: {
     width: 8,
     alignSelf: 'stretch',
@@ -244,4 +307,5 @@ const styles = StyleSheet.create({
   emptyEmoji:  { fontSize: 44, marginBottom: 16 },
   emptyTitle:  { fontSize: 18, fontWeight: '800', color: TEXT, marginBottom: 8 },
   emptySub:    { fontSize: 14, color: MUTED, textAlign: 'center', lineHeight: 20 },
-})
+ })
+}

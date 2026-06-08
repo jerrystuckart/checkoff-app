@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView,
   StyleSheet, Alert, ActivityIndicator, FlatList, Share, Linking, Platform, Keyboard,
@@ -9,23 +9,20 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { fetchCuratedListItems } from '../lib/useItems'
+import { useTheme } from '../lib/ThemeContext'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
 const GREEN = '#1D9E75'
 
-const BG = '#FFF9F2'
-const CARD = '#FFFFFF'
-const TEXT = '#243045'
-const MUTED = '#6F7785'
-const BORDER = '#E6D8C7'
-const SOFT_2 = '#F8F3EC'
-const SUCCESS_BG = '#EAF8F2'
-const SUCCESS_BORDER = '#BFE7D7'
 const RED = '#D85A30'
 
 export default function CreateListScreen({ navigation, route }) {
   const insets = useSafeAreaInsets()
+  const { colors } = useTheme()
+  const { BG, CARD, TEXT, MUTED, BORDER, SOFT_2, AMBER, NAVY, GREEN, RED, SUCCESS_BG, SUCCESS_BORDER } = colors
+  const styles = useMemo(() => createCreateStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT_2, AMBER, NAVY, GREEN, RED, SUCCESS_BG, SUCCESS_BORDER }),
+    [BG, CARD, TEXT, MUTED, BORDER, SOFT_2, AMBER, NAVY, GREEN, RED, SUCCESS_BG, SUCCESS_BORDER])
 
   // Legacy adoption mode: list already exists in the DB before arriving here.
   // Kept for backward compatibility; new curated flow uses curatedListId instead.
@@ -1026,7 +1023,8 @@ export default function CreateListScreen({ navigation, route }) {
   )
 }
 
-const styles = StyleSheet.create({
+function createCreateStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT_2, AMBER, NAVY, GREEN, RED, SUCCESS_BG, SUCCESS_BORDER }) {
+ return StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: BG,
@@ -1106,7 +1104,7 @@ const styles = StyleSheet.create({
   },
 
   input: {
-    backgroundColor: '#FFFDF9',
+    backgroundColor: SOFT_2,
     borderRadius: 14,
     paddingHorizontal: 14,
     paddingVertical: 13,
@@ -1123,7 +1121,7 @@ const styles = StyleSheet.create({
 
   inputError: {
     borderColor: RED,
-    backgroundColor: '#FFF3F0',
+    backgroundColor: SOFT_2,
   },
 
   hint: {
@@ -1149,7 +1147,7 @@ const styles = StyleSheet.create({
   },
 
   dateTrigger: {
-    backgroundColor: '#FFFDF9',
+    backgroundColor: SOFT_2,
     borderRadius: 14,
     paddingHorizontal: 16,
     paddingVertical: 14,
@@ -1187,7 +1185,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: BORDER,
-    backgroundColor: '#FFFDF9',
+    backgroundColor: SOFT_2,
     justifyContent: 'center',
     paddingTop: Platform.OS === 'ios' ? 8 : 0,
   },
@@ -1337,7 +1335,7 @@ filterPillTextOn: {
 
 filterPillHood: {
   borderColor: '#D4C5B0',
-  backgroundColor: '#FAF5EE',
+  backgroundColor: SOFT_2,
 },
 
 filterPillHoodOn: {
@@ -1624,5 +1622,11 @@ filterPillHoodTextOn: {
 
   datePicker: {
     height: Platform.OS === 'ios' ? 320 : undefined,
+    // themeVariant="light" forces dark text assuming a light background —
+    // give it an explicit white background so the calendar stays readable
+    // even when the surrounding container (pickerWrap) is dark/navy.
+    backgroundColor: '#fff',
+    borderRadius: 16,
   },
-})
+ })
+}

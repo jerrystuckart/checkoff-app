@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity,
   StyleSheet, StatusBar, ActivityIndicator, Alert,
@@ -6,31 +6,28 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as Location from 'expo-location'
+import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '../lib/supabase'
 import { fetchCuratedLists } from '../lib/useItems'
 import { useCrewInvite } from '../lib/useCrewInvite'
+import { useTheme } from '../lib/ThemeContext'
+import ExperiencesRail from '../components/ExperiencesRail'
 import * as Sentry from '@sentry/react-native'
 
-const AMBER = '#F5A623'
-const NAVY  = '#1A1A2E'
-const GREEN = '#1D9E75'
 const PURPLE = '#7A4DB3'
-
-const BG = '#FFF9F2'
-const CARD = '#FFFFFF'
-const TEXT = '#243045'
-const MUTED = '#6F7785'
-const BORDER = '#E6D8C7'
-const SOFT = '#FFF1DB'
-const SOFT_2 = '#F8F3EC'
-const SUCCESS_BG = '#EAF8F2'
-const SUCCESS_BORDER = '#BFE7D7'
-const ENDED_BG = '#F4EEF9'
-const ENDED_BORDER = '#DCCCED'
-const ENDED_TEXT = '#7A4DB3'
 
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets()
+  const { colors, isDark, toggleTheme } = useTheme()
+  const { BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, RED,
+          SUCCESS_BG, SUCCESS_BORDER, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT, STATUS_BAR } = colors
+
+  const styles = useMemo(() => createStyles({
+    BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN,
+    SUCCESS_BG, SUCCESS_BORDER, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT,
+  }), [BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN,
+       SUCCESS_BG, SUCCESS_BORDER, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT])
+
   const [metros, setMetros] = useState([])
   const [selectedMetro, setSelectedMetro] = useState(null)
   const [season, setSeason] = useState(null)
@@ -46,6 +43,8 @@ export default function HomeScreen({ navigation }) {
   const [listMemberMap, setListMemberMap] = useState({})
   const [userStreak, setUserStreak] = useState(0)
   const [showSignInPrompt, setShowSignInPrompt] = useState(false)
+  const [nextTenList, setNextTenList] = useState(null)
+  const [nextTenDismissed, setNextTenDismissed] = useState(false)
 
   const { savedCrew } = useCrewInvite()
 
@@ -66,13 +65,22 @@ export default function HomeScreen({ navigation }) {
   }, []) // eslint-disable-line
 
   useEffect(() => {
-  const unsubscribe = navigation.addListener('focus', () => {
-    if (selectedMetro) {
-      loadForMetro(selectedMetro.id, user?.id, selectedMetro.slug)
-    }
-  })
-  return unsubscribe
-}, [navigation, selectedMetro, user])
+    const unsubscribe = navigation.addListener('focus', () => {
+      if (selectedMetro) {
+        loadForMetro(selectedMetro.id, user?.id, selectedMetro.slug)
+      }
+    })
+    return unsubscribe
+  }, [navigation, selectedMetro, user])
+
+  // Check dismiss state whenever a new nextTenList loads (keyed by list id)
+  useEffect(() => {
+    if (!nextTenList) return
+    const key = `next10_dismissed_${nextTenList.id}`
+    AsyncStorage.getItem(key).then(val => {
+      if (val === 'true') setNextTenDismissed(true)
+    })
+  }, [nextTenList?.id])
 
   async function init() {
     let authUser = null
@@ -85,12 +93,22 @@ export default function HomeScreen({ navigation }) {
     setUser(authUser)
 
     try {
-      const { data: metroData } = await supabase
-        .from('metro_areas')
-        .select('id, name, state, slug')
-        .eq('is_active', true)
-        .order('name')
+      // Fetch metros and the Next 10 banner in parallel — banner never blocks the screen
+      const [{ data: metroData }, { data: n10Data }] = await Promise.all([
+        supabase
+          .from('metro_areas')
+          .select('id, name, state, slug')
+          .eq('is_active', true)
+          .order('name'),
+        supabase
+          .from('curated_lists')
+          .select('id, title')
+          .eq('audience_group', 'the-next-10')
+          .eq('is_active', true)
+          .maybeSingle(),
+      ])
 
+      setNextTenList(n10Data ?? null)
       setMetros(metroData ?? [])
 
       let defaultMetro = null
@@ -167,7 +185,7 @@ export default function HomeScreen({ navigation }) {
     if (userId) {
       const { data: memberLists } = await supabase
         .from('list_members')
-        .select('lists(id, title, starts_at, ends_at, is_public, is_official, creator_id)')
+        .select('lists(id, title, starts_at, ends_at, is_public, is_official, creator_id, cover_emoji)')
         .eq('user_id', userId)
 
       const all = (memberLists ?? []).map(m => m.lists).filter(Boolean)
@@ -332,20 +350,57 @@ export default function HomeScreen({ navigation }) {
     await loadForMetro(metro.id, user?.id, metro.slug)
   }
 
-  function daysLeft(endsAt) {
+  async function handleNext10Dismiss() {
+    if (!nextTenList) return
+    const key = `next10_dismissed_${nextTenList.id}`
+    await AsyncStorage.setItem(key, 'true')
+    setNextTenDismissed(true)
+  }
+
+  // Live tick so countdowns re-render every minute
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 60000)
+    return () => clearInterval(id)
+  }, [])
+
+  // Calendar-day comparison — how many full days remain including the end date itself
+  function calDaysLeft(endsAt) {
     if (!endsAt) return null
-    const diff = Math.ceil((new Date(endsAt) - new Date()) / (1000 * 60 * 60 * 24))
-    return diff > 0 ? diff : 0
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const end   = new Date(`${endsAt}T00:00:00`); end.setHours(0, 0, 0, 0)
+    return Math.round((end - today) / (1000 * 60 * 60 * 24))
+  }
+
+  // Returns a formatted time-left string; null if ended
+  function timeLeft(endsAt) {
+    if (!endsAt) return null
+    const days = calDaysLeft(endsAt)
+    if (days < 0) return null
+    if (days === 0) {
+      // Ending today — hour/minute countdown to end of day
+      const endOfDay = new Date(`${endsAt}T23:59:59`)
+      const msLeft   = endOfDay - new Date()
+      if (msLeft <= 0) return 'Ends tonight'
+      const h = Math.floor(msLeft / 3600000)
+      const m = Math.floor((msLeft % 3600000) / 60000)
+      return h > 0 ? `${h}h ${m}m left` : `${m}m left`
+    }
+    if (days === 1) return '1 day left'
+    return `${days} days left`
+  }
+
+  // True when a list is ending within N days (for highlighting)
+  function isUrgent(endsAt, withinDays = 7) {
+    if (!endsAt) return false
+    const days = calDaysLeft(endsAt)
+    return days !== null && days >= 0 && days <= withinDays
   }
 
   function isEnded(endsAt) {
     if (!endsAt) return false
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
-
-    const end = new Date(`${endsAt}T12:00:00`)
-    end.setHours(0, 0, 0, 0)
-
+    const today = new Date(); today.setHours(0, 0, 0, 0)
+    const end   = new Date(`${endsAt}T00:00:00`); end.setHours(0, 0, 0, 0)
     return end < today
   }
 
@@ -416,30 +471,39 @@ export default function HomeScreen({ navigation }) {
       }
       showsVerticalScrollIndicator={false}
     >
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle={STATUS_BAR} />
 
       <View style={styles.headerCard}>
         <View style={styles.headerTopRow}>
           <View style={styles.headerBadge}>
-            <Text style={styles.headerBadgeText}>
+            <Text style={styles.headerBadgeText} allowFontScaling={false} numberOfLines={1}>
               {selectedMetro ? `${selectedMetro.name.replace(' Metro', '')}` : 'Your city'}
             </Text>
           </View>
 
-          {user && (
-            <View style={[styles.streakPill, userStreak >= 4 && styles.streakPillActive]}>
-              <Text style={[styles.streakPillText, userStreak >= 4 && styles.streakPillTextActive]}>
-                {userStreak >= 1 ? (userStreak + 'w 🔥') : 'No streak'}
-              </Text>
-            </View>
-          )}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {user && (
+              <View style={[styles.streakPill, userStreak >= 4 && styles.streakPillActive]}>
+                <Text style={[styles.streakPillText, userStreak >= 4 && styles.streakPillTextActive]} allowFontScaling={false}>
+                  {userStreak >= 1 ? (userStreak + 'w 🔥') : 'No streak'}
+                </Text>
+              </View>
+            )}
+            <TouchableOpacity
+              onPress={toggleTheme}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              style={styles.themeToggle}
+            >
+              <Text style={styles.themeToggleIcon}>{isDark ? '☀️' : '🌙'}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
-        <Text style={styles.logo}>
-          Check<Text style={styles.logoOff}>Off</Text>
+        <Text style={styles.logo} allowFontScaling={false} numberOfLines={1}>
+          Check<Text style={styles.logoOff} allowFontScaling={false}>Off</Text>
         </Text>
 
-        <Text style={styles.tagline}>
+        <Text style={styles.tagline} maxFontSizeMultiplier={1.2}>
           Stop saying "What do you want to do?... I don't know, what do you want to do?"
         </Text>
 
@@ -449,6 +513,61 @@ export default function HomeScreen({ navigation }) {
           </View>
         ) : null}
       </View>
+
+      {/* ── The Next 10 Banner ── */}
+      {nextTenList && !nextTenDismissed && (() => {
+        const existingNext10 = lists.find(l => l.cover_emoji === '🔟')
+        return (
+          <TouchableOpacity
+            activeOpacity={0.88}
+            onPress={() => {
+              if (existingNext10) {
+                // Already joined — go straight to the list, no duplicate creation
+                navigation.navigate('List', {
+                  listId: existingNext10.id,
+                  title:  existingNext10.title || 'The Next 10',
+                })
+              } else {
+                navigation.navigate('CuratedListPreview', {
+                  listId:    nextTenList.id,
+                  listTitle: nextTenList.title,
+                  groupName: nextTenList.title,
+                })
+              }
+            }}
+            style={styles.next10Banner}
+          >
+            {/* Dismiss button — sibling to content, not a child, so taps don't bubble */}
+            <TouchableOpacity
+              onPress={handleNext10Dismiss}
+              style={styles.next10Dismiss}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.next10DismissText}>✕</Text>
+            </TouchableOpacity>
+
+            <Text style={styles.next10BannerLabel}>🔟  THE NEXT 10</Text>
+            <Text style={styles.next10BannerTitle} numberOfLines={2}>
+              {nextTenList.title}
+            </Text>
+            {!!nextTenList.tagline && (
+              <Text style={styles.next10BannerTagline}>{nextTenList.tagline}</Text>
+            )}
+
+            <View style={styles.next10BannerMeta}>
+              <Text style={styles.next10BannerMetaText}>
+                10 spots  ·  2 secret drops  ·  Drops Friday
+              </Text>
+            </View>
+
+            <View style={styles.next10BannerCTA}>
+              <Text style={styles.next10BannerCTAText}>
+                {existingNext10 ? 'Go to the list  →' : 'See the list  →'}
+              </Text>
+            </View>
+          </TouchableOpacity>
+        )
+      })()}
 
       <Text style={styles.sectionLabel}>City</Text>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pillRow}>
@@ -543,7 +662,9 @@ export default function HomeScreen({ navigation }) {
                 <View style={styles.officialCardBody}>
                   <Text style={styles.officialTitle}>{list.title}</Text>
                   {list.ends_at
-                    ? <Text style={styles.officialMeta}>{daysLeft(list.ends_at)} days left</Text>
+                    ? <Text style={[styles.officialMeta, isUrgent(list.ends_at) && styles.officialMetaUrgent]}>
+                        {timeLeft(list.ends_at)}
+                      </Text>
                     : <Text style={styles.officialMeta}>Open now</Text>
                   }
                 </View>
@@ -557,6 +678,8 @@ export default function HomeScreen({ navigation }) {
           })}
         </>
       )}
+
+      <ExperiencesRail />
 
       {curatedGroups.length > 0 && (
   <>
@@ -673,7 +796,7 @@ export default function HomeScreen({ navigation }) {
           return (
           <TouchableOpacity
             key={list.id}
-            style={styles.listCard}
+            style={[styles.listCard, isUrgent(list.ends_at) && styles.listCardUrgent]}
             onPress={() => navigation.navigate('List', { listId: list.id, title: list.title })}
             onLongPress={() => {
               if (list.creator_id === user?.id) {
@@ -690,7 +813,9 @@ export default function HomeScreen({ navigation }) {
               <Text style={styles.listTitle}>{list.title}</Text>
               <View style={styles.listMetaRow}>
                 {list.ends_at ? (
-                  <Text style={styles.listMeta}>{daysLeft(list.ends_at)} days remaining</Text>
+                  <Text style={[styles.listMeta, isUrgent(list.ends_at) && styles.listMetaUrgent]}>
+                    {timeLeft(list.ends_at)}
+                  </Text>
                 ) : (
                   <Text style={styles.listMeta}>Open-ended</Text>
                 )}
@@ -799,7 +924,8 @@ export default function HomeScreen({ navigation }) {
   )
 }
 
-const styles = StyleSheet.create({
+function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, SUCCESS_BG, SUCCESS_BORDER, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT }) {
+ return StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: BG,
@@ -815,6 +941,67 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: BG,
+  },
+
+  // ── The Next 10 Banner ──
+  next10Banner: {
+    backgroundColor: NAVY,
+    borderRadius: 16,
+    marginBottom: 12,
+    padding: 20,
+    borderLeftWidth: 3,
+    borderLeftColor: AMBER,
+  },
+  next10Dismiss: {
+    position: 'absolute',
+    top: 16,
+    right: 16,
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  next10DismissText: {
+    color: 'rgba(255,255,255,0.35)',
+    fontSize: 16,
+  },
+  next10BannerLabel: {
+    color: AMBER,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.5,
+    marginBottom: 4,
+  },
+  next10BannerTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '700',
+    marginTop: 4,
+    paddingRight: 28,
+  },
+  next10BannerTagline: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 14,
+    marginTop: 4,
+  },
+  next10BannerMeta: {
+    marginTop: 10,
+  },
+  next10BannerMetaText: {
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: 12,
+  },
+  next10BannerCTA: {
+    backgroundColor: AMBER,
+    borderRadius: 12,
+    paddingVertical: 13,
+    alignItems: 'center',
+    marginTop: 14,
+  },
+  next10BannerCTAText: {
+    color: NAVY,
+    fontSize: 15,
+    fontWeight: '700',
   },
 
   headerCard: {
@@ -1040,6 +1227,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
+  officialMetaUrgent: {
+    color: AMBER,
+    fontWeight: '800',
+  },
+
   endedMeta: {
     fontSize: 12,
     color: ENDED_TEXT,
@@ -1095,6 +1287,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: BORDER,
     gap: 12,
+  },
+
+  listCardUrgent: {
+    borderColor: 'rgba(245,166,35,0.5)',
+    backgroundColor: CARD_URGENT,
   },
 
   listMetaRow: {
@@ -1290,6 +1487,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 
+  listMetaUrgent: {
+    color: AMBER,
+    fontWeight: '800',
+  },
+
   listChevron: {
     fontSize: 17,
     color: MUTED,
@@ -1461,4 +1663,14 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     color: '#A16A00',
   },
-})
+
+  themeToggle: {
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+  },
+
+  themeToggleIcon: {
+    fontSize: 16,
+  },
+ }) // end StyleSheet.create
+} // end createStyles

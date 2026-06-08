@@ -125,7 +125,7 @@ export default function PartnerPreviewScreen({ route, navigation }) {
 
   function pitchMessage(item) {
     const hood = item.neighborhoods?.name ?? 'your area'
-    return `Hey! Your business is featured on CheckOff — the local experience app. People in ${hood} will see "${item.body}" on their list and come specifically to check it off. Download the app: https://checkoff.app`
+    return `Hey! Your business is featured on CheckOff — the local experience app. People in ${hood} will see "${item.body}" on their list and come specifically to check it off. Sign up or learn more: https://getcheckoff.com/partner`
   }
 
   async function sharePitch(item) {
