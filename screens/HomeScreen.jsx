@@ -2,10 +2,11 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity,
   StyleSheet, StatusBar, ActivityIndicator, Alert,
-  RefreshControl, Modal,
+  RefreshControl, Modal, ImageBackground,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as Location from 'expo-location'
+import { LinearGradient } from 'expo-linear-gradient'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '../lib/supabase'
 import { fetchCuratedLists } from '../lib/useItems'
@@ -15,6 +16,7 @@ import ExperiencesRail from '../components/ExperiencesRail'
 import * as Sentry from '@sentry/react-native'
 
 const PURPLE = '#7A4DB3'
+const LIST_ACCENT_COLORS = ['#F5A623', '#7A4DB3', '#2E7D8C', '#2E6B3E', '#C0674A', '#378ADD']
 
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets()
@@ -45,6 +47,7 @@ export default function HomeScreen({ navigation }) {
   const [showSignInPrompt, setShowSignInPrompt] = useState(false)
   const [nextTenList, setNextTenList] = useState(null)
   const [nextTenDismissed, setNextTenDismissed] = useState(false)
+  const [heroImage, setHeroImage] = useState(null)
 
   const { savedCrew } = useCrewInvite()
 
@@ -169,6 +172,14 @@ export default function HomeScreen({ navigation }) {
 
     setSeason(seasonData)
 
+    const { data: metroImg } = await supabase
+      .from('metro_areas')
+      .select('hero_images')
+      .eq('id', metroId)
+      .maybeSingle()
+    const imgs = metroImg?.hero_images ?? []
+    setHeroImage(imgs.length > 0 ? imgs[Math.floor(Math.random() * imgs.length)] : null)
+
     const { data: offLists } = await supabase
       .from('lists')
       .select('id, title, starts_at, ends_at, cover_emoji, metro_id')
@@ -260,7 +271,7 @@ export default function HomeScreen({ navigation }) {
 
   if (existing) {
     // Already a member — just navigate to the list
-    navigation.navigate('List', { listId: list.id, title: list.title })
+    navigation.navigate('List', { listId: list.id, title: list.title, heroImage: heroImage ?? undefined })
     return
   }
 
@@ -277,7 +288,11 @@ export default function HomeScreen({ navigation }) {
     return
   }
 
-  navigation.navigate('List', { listId: list.id, title: list.title })
+  Alert.alert(
+    '🎯 Quick tip',
+    "CheckOff is about going places — not counting places you've already been. Pick a few items you haven't done yet and go make it happen.",
+    [{ text: "Let's go →", onPress: () => navigation.navigate('List', { listId: list.id, title: list.title, heroImage: heroImage ?? undefined }) }]
+  )
 }
 
   async function deleteList(list) {
@@ -475,13 +490,29 @@ export default function HomeScreen({ navigation }) {
 
       <View style={styles.headerCard}>
         <View style={styles.headerTopRow}>
-          <View style={styles.headerBadge}>
-            <Text style={styles.headerBadgeText} allowFontScaling={false} numberOfLines={1}>
-              {selectedMetro ? `${selectedMetro.name.replace(' Metro', '')}` : 'Your city'}
-            </Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <View style={styles.headerBadge}>
+              <Text style={styles.headerBadgeText} allowFontScaling={false} numberOfLines={1}>
+                {selectedMetro ? `${selectedMetro.name.replace(' Metro', '')}` : 'Your city'}
+              </Text>
+            </View>
+            {season?.name ? (
+              <View style={styles.seasonPill}>
+                <Text style={styles.seasonPillText}>{season.name}</Text>
+              </View>
+            ) : null}
           </View>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            {user && (
+              <TouchableOpacity
+                onPress={() => navigation.navigate('WeeklyRecap')}
+                style={styles.thisWeekBtn}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Text style={styles.thisWeekBtnText}>✦ This Week</Text>
+              </TouchableOpacity>
+            )}
             {user && (
               <View style={[styles.streakPill, userStreak >= 4 && styles.streakPillActive]}>
                 <Text style={[styles.streakPillText, userStreak >= 4 && styles.streakPillTextActive]} allowFontScaling={false}>
@@ -503,15 +534,9 @@ export default function HomeScreen({ navigation }) {
           Check<Text style={styles.logoOff} allowFontScaling={false}>Off</Text>
         </Text>
 
-        <Text style={styles.tagline} maxFontSizeMultiplier={1.2}>
-          Stop saying "What do you want to do?... I don't know, what do you want to do?"
+        <Text style={styles.tagline} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+          Stop saying "I don't know what to do." Challenge your crew.
         </Text>
-
-        {season?.name ? (
-          <View style={styles.seasonPill}>
-            <Text style={styles.seasonPillText}>{season.name}</Text>
-          </View>
-        ) : null}
       </View>
 
       {/* ── The Next 10 Banner ── */}
@@ -649,29 +674,59 @@ export default function HomeScreen({ navigation }) {
             return (
               <TouchableOpacity
                 key={list.id}
-                style={styles.officialCard}
+                style={styles.heroCard}
                 onPress={() => joined
-                  ? navigation.navigate('List', { listId: list.id, title: list.title })
+                  ? navigation.navigate('List', { listId: list.id, title: list.title, heroImage: heroImage ?? undefined })
                   : joinOfficialList(list)
                 }
-                activeOpacity={0.88}
+                activeOpacity={0.92}
               >
-                <View style={styles.officialCardLeft}>
-                  <Text style={styles.officialEmoji}>{list.cover_emoji ?? '📋'}</Text>
-                </View>
-                <View style={styles.officialCardBody}>
-                  <Text style={styles.officialTitle}>{list.title}</Text>
-                  {list.ends_at
-                    ? <Text style={[styles.officialMeta, isUrgent(list.ends_at) && styles.officialMetaUrgent]}>
-                        {timeLeft(list.ends_at)}
-                      </Text>
-                    : <Text style={styles.officialMeta}>Open now</Text>
-                  }
-                </View>
-                <View style={[styles.joinBadge, joined && styles.joinBadgeJoined]}>
-                  <Text style={[styles.joinBadgeText, joined && styles.joinBadgeTextJoined]}>
-                    {joined ? 'Open →' : 'Join'}
-                  </Text>
+                {heroImage ? (
+                  <ImageBackground
+                    source={{ uri: heroImage }}
+                    style={styles.heroCardImageBg}
+                    borderRadius={20}
+                  >
+                    <LinearGradient
+                      colors={['rgba(0,0,0,0.15)', 'rgba(0,0,0,0.72)']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 0, y: 1 }}
+                      style={styles.heroCardGradient}
+                    >
+                      <Text style={styles.heroCardLabel}>SEASONAL LIST</Text>
+                      <Text style={styles.heroCardTitle}>{list.title}</Text>
+                      <View style={styles.heroCardPillRow}>
+                        {list.ends_at && (
+                          <View style={styles.heroCardPill}>
+                            <Text style={styles.heroCardPillText}>{timeLeft(list.ends_at)}</Text>
+                          </View>
+                        )}
+                        {/* TODO: item count */}
+                      </View>
+                    </LinearGradient>
+                  </ImageBackground>
+                ) : (
+                  <LinearGradient
+                    colors={[season?.gradient_start ?? '#1A1A2E', season?.gradient_end ?? '#2E1A4A']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.heroCardGradient}
+                  >
+                    <Text style={styles.heroCardLabel}>SEASONAL LIST</Text>
+                    <Text style={styles.heroCardTitle}>{list.title}</Text>
+                    <View style={styles.heroCardPillRow}>
+                      {list.ends_at && (
+                        <View style={styles.heroCardPill}>
+                          <Text style={styles.heroCardPillText}>{timeLeft(list.ends_at)}</Text>
+                        </View>
+                      )}
+                      {/* TODO: item count */}
+                    </View>
+                  </LinearGradient>
+                )}
+
+                <View style={styles.heroCardCTA}>
+                  <Text style={styles.heroCardCTAText}>{joined ? 'Open List →' : 'Join Free →'}</Text>
                 </View>
               </TouchableOpacity>
             )
@@ -679,7 +734,7 @@ export default function HomeScreen({ navigation }) {
         </>
       )}
 
-      <ExperiencesRail />
+      <ExperiencesRail citySlug={metroSlug} />
 
       {curatedGroups.length > 0 && (
   <>
@@ -710,21 +765,47 @@ export default function HomeScreen({ navigation }) {
       {curatedGroups.map(item => {
         const g = item.audience_groups
         if (!g) return null
+        const hasImage = !!g.image_url
+        const chipPress = () => navigation.navigate('CuratedListPreview', {
+          curatedListId: item.id,
+          groupName:     g.name,
+          groupEmoji:    g.emoji,
+          groupTagline:  g.tagline,
+          groupImageUrl: g.image_url ?? undefined,
+          citySlug:      metroSlug,
+          metroName:     metroDisplayName,
+        })
+
+        if (hasImage) {
+          return (
+            <TouchableOpacity
+              key={item.id}
+              activeOpacity={0.88}
+              onPress={chipPress}
+              style={styles.groupChipImageWrap}
+            >
+              <ImageBackground
+                source={{ uri: g.image_url }}
+                style={styles.groupChipImageBg}
+                imageStyle={{ borderRadius: 18 }}
+              >
+                <View style={styles.groupChipOverlay} />
+                <Text style={styles.groupChipEmojiOnImg}>{g.emoji ?? '📋'}</Text>
+                <Text style={styles.groupChipNameOnImg}>{g.name}</Text>
+                <Text style={styles.groupChipTaglineOnImg} numberOfLines={2}>
+                  "{g.tagline}"
+                </Text>
+              </ImageBackground>
+            </TouchableOpacity>
+          )
+        }
+
         return (
           <TouchableOpacity
             key={item.id}
             style={styles.groupChip}
             activeOpacity={0.88}
-            onPress={() =>
-              navigation.navigate('CuratedListPreview', {
-                curatedListId: item.id,
-                groupName:     g.name,
-                groupEmoji:    g.emoji,
-                groupTagline:  g.tagline,
-                citySlug:      metroSlug,
-                metroName:     metroDisplayName,
-              })
-            }
+            onPress={chipPress}
           >
             <Text style={styles.groupChipEmoji}>{g.emoji ?? '📋'}</Text>
             <Text style={styles.groupChipName}>{g.name}</Text>
@@ -793,6 +874,7 @@ export default function HomeScreen({ navigation }) {
       ) : (
         activeLists.map(list => {
           const crewMembers = listMemberMap[list.id] ?? []
+          const accent = LIST_ACCENT_COLORS[list.id.charCodeAt(0) % 6]
           return (
           <TouchableOpacity
             key={list.id}
@@ -807,7 +889,7 @@ export default function HomeScreen({ navigation }) {
             }}
             activeOpacity={0.85}
           >
-            <View style={styles.listAccent} />
+            <View style={[styles.listAccent, { backgroundColor: accent, borderColor: accent }]} />
 
             <View style={{ flex: 1 }}>
               <Text style={styles.listTitle}>{list.title}</Text>
@@ -1008,6 +1090,7 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     backgroundColor: CARD,
     borderRadius: 28,
     padding: 20,
+    paddingBottom: 12,
     marginBottom: 24,
     borderWidth: 1.2,
     borderColor: BORDER,
@@ -1018,6 +1101,20 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
+  },
+
+  thisWeekBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+  thisWeekBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: MUTED,
   },
 
   streakPill: {
@@ -1061,10 +1158,11 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   },
 
   logo: {
-    fontSize: 38,
+    fontSize: 36,
     fontWeight: '900',
     color: AMBER,
     letterSpacing: -1,
+    marginBottom: 6,
   },
 
   logoOff: {
@@ -1072,19 +1170,17 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   },
 
   tagline: {
-    fontSize: 15,
+    fontSize: 14,
     color: MUTED,
+    fontWeight: '400',
     marginTop: 6,
-    lineHeight: 22,
   },
 
   seasonPill: {
-    alignSelf: 'flex-start',
-    marginTop: 14,
     backgroundColor: SOFT,
     borderRadius: 999,
     paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingVertical: 7,
     borderWidth: 1,
     borderColor: '#E8C98E',
   },
@@ -1158,6 +1254,73 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   pillTextActive: {
     color: NAVY,
     fontWeight: '800',
+  },
+
+  heroCard: {
+    width: '100%',
+    borderRadius: 20,
+    overflow: 'hidden',
+    marginBottom: 14,
+  },
+
+  heroCardImageBg: {
+    width: '100%',
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+
+  heroCardGradient: {
+    paddingHorizontal: 20,
+    paddingTop: 18,
+    paddingBottom: 20,
+  },
+
+  heroCardLabel: {
+    color: AMBER,
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1,
+    opacity: 0.85,
+  },
+
+  heroCardTitle: {
+    color: '#FFFFFF',
+    fontSize: 26,
+    fontWeight: '900',
+    lineHeight: 30,
+    marginTop: 6,
+  },
+
+  heroCardPillRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 12,
+  },
+
+  heroCardPill: {
+    backgroundColor: 'rgba(245,166,35,0.18)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+  },
+
+  heroCardPillText: {
+    color: AMBER,
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  heroCardCTA: {
+    width: '100%',
+    paddingVertical: 14,
+    backgroundColor: AMBER,
+    alignItems: 'center',
+  },
+
+  heroCardCTAText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: NAVY,
   },
 
   officialCard: {
@@ -1645,6 +1808,52 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     color: MUTED,
     fontStyle: 'italic',
     lineHeight: 15,
+  },
+
+  groupChipImageWrap: {
+    marginRight: 10,
+    borderRadius: 18,
+    overflow: 'hidden',
+    width: 160,
+  },
+
+  groupChipImageBg: {
+    width: 160,
+    minHeight: 140,
+    padding: 14,
+    justifyContent: 'flex-end',
+    gap: 4,
+  },
+
+  groupChipOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.62)',
+    borderRadius: 18,
+  },
+
+  groupChipEmojiOnImg: {
+    fontSize: 28,
+    marginBottom: 4,
+  },
+
+  groupChipNameOnImg: {
+    fontSize: 13,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    lineHeight: 18,
+    textShadowColor: 'rgba(0,0,0,0.85)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+
+  groupChipTaglineOnImg: {
+    fontSize: 11,
+    color: 'rgba(255,255,255,0.9)',
+    fontStyle: 'italic',
+    lineHeight: 15,
+    textShadowColor: 'rgba(0,0,0,0.85)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
 
   groupChipSeeAll: {

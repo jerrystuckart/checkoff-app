@@ -50,6 +50,7 @@ import DeepLinkExperienceResolverScreen from './screens/DeepLinkExperienceResolv
 import SavedCrewScreen          from './screens/SavedCrewScreen'
 import SecretRevealScreen       from './screens/SecretRevealScreen'
 import PastListsScreen          from './screens/PastListsScreen'
+import WeeklyRecapScreen        from './screens/WeeklyRecapScreen'
 
 const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
@@ -239,6 +240,11 @@ function HomeStack() {
         component={PastListsScreen}
         options={{ headerShown: false }}
       />
+      <Stack.Screen
+        name="WeeklyRecap"
+        component={WeeklyRecapScreen}
+        options={{ title: 'This Week' }}
+      />
     </Stack.Navigator>
   )
 }
@@ -324,6 +330,11 @@ function ProfileStack() {
         name="SignIn"
         component={SignInScreen}
         options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="WeeklyRecap"
+        component={WeeklyRecapScreen}
+        options={{ title: 'This Week' }}
       />
     </Stack.Navigator>
   )

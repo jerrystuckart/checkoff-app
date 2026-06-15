@@ -28,6 +28,7 @@ export default function ProfileScreen({ navigation }) {
   const [notifNudges, setNotifNudges]         = useState(true)
   const [badges, setBadges]                 = useState([])
   const [recentCheckins, setRecentCheckins] = useState([])
+  const [weeklySummary, setWeeklySummary]   = useState(null) // { count, pts }
   const [loading, setLoading]               = useState(true)
   const [refreshing, setRefreshing]         = useState(false)
 
@@ -57,11 +58,25 @@ export default function ProfileScreen({ navigation }) {
     const uid = authUser.id
 
     try {
-      const [profileRes, badgesRes, checkinsRes, totalRes] = await Promise.all([
+      // Week range: Monday – Sunday
+      const now = new Date()
+      const day = now.getDay()
+      const monday = new Date(now)
+      monday.setDate(now.getDate() + (day === 0 ? -6 : 1 - day))
+      monday.setHours(0, 0, 0, 0)
+      const sunday = new Date(monday)
+      sunday.setDate(monday.getDate() + 6)
+      sunday.setHours(23, 59, 59, 999)
+
+      const [profileRes, badgesRes, checkinsRes, totalRes, weeklyRes] = await Promise.all([
         supabase.from('users').select('id, display_name, email, current_streak, longest_streak, created_at, is_admin, pref_show_alcohol, notif_check_ins, notif_invites, notif_nudges, founding_number').eq('id', uid).single(),
         supabase.from('user_badges').select('badge_id, earned_at, badge_definitions(id, name, icon, description)').eq('user_id', uid).order('earned_at', { ascending: false }).limit(6),
         supabase.from('check_ins').select('id, checked_at, checkin_method, list_items(items(body, categories(name, color_hex)))').eq('user_id', uid).order('checked_at', { ascending: false }).limit(5),
         supabase.from('check_ins').select('id', { count: 'exact', head: true }).eq('user_id', uid),
+        supabase.from('check_ins').select('id, list_items!inner(point_multiplier, items!inner(difficulty))')
+          .eq('user_id', uid)
+          .gte('checked_at', monday.toISOString())
+          .lte('checked_at', sunday.toISOString()),
       ])
 
       setProfile(profileRes.data)
@@ -72,6 +87,18 @@ export default function ProfileScreen({ navigation }) {
       setBadges((badgesRes.data ?? []).map(b => ({ ...b.badge_definitions, earned_at: b.earned_at })).filter(Boolean))
       setRecentCheckins(checkinsRes.data ?? [])
       setStats({ total: totalRes.count ?? 0, streak: profileRes.data?.current_streak ?? 0, longest: profileRes.data?.longest_streak ?? 0 })
+
+      // Weekly summary for recap card
+      const weeklyRows = weeklyRes.data ?? []
+      let weeklyPts = null
+      try {
+        weeklyPts = weeklyRows.reduce((sum, ci) => {
+          const d = ci.list_items?.items?.difficulty ?? null
+          const m = ci.list_items?.point_multiplier ?? 1
+          return d != null ? sum + Math.round(d * m) : sum
+        }, 0)
+      } catch { weeklyPts = null }
+      setWeeklySummary({ count: weeklyRows.length, pts: weeklyPts })
     } catch (e) {
       Sentry.captureException(e)
     } finally {
@@ -296,6 +323,28 @@ export default function ProfileScreen({ navigation }) {
         </View>
       ) : null}
 
+      {/* Weekly Recap */}
+      {user && (
+        <TouchableOpacity
+          style={styles.weeklyRecapCard}
+          onPress={() => navigation.navigate('WeeklyRecap')}
+          activeOpacity={0.8}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={styles.weeklyRecapTitle}>Weekly Recap</Text>
+            {weeklySummary ? (
+              <Text style={styles.weeklyRecapSub}>
+                {weeklySummary.count} check-in{weeklySummary.count !== 1 ? 's' : ''} this week
+                {weeklySummary.pts != null ? ` · ${weeklySummary.pts} pts` : ''}
+              </Text>
+            ) : (
+              <Text style={styles.weeklyRecapSub}>See your week at a glance</Text>
+            )}
+          </View>
+          <Text style={styles.weeklyRecapArrow}>→</Text>
+        </TouchableOpacity>
+      )}
+
       {/* Badges */}
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionLabel}>Badges</Text>
@@ -499,6 +548,11 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   streakCard:        { backgroundColor: SOFT, borderRadius: 14, padding: 12, marginBottom: 16, borderWidth: 1, borderColor: BORDER },
   streakCardNeutral: { backgroundColor: SOFT_2, borderColor: BORDER },
   streakCardText:    { fontSize: 13, color: TEXT, lineHeight: 18, fontWeight: '600' },
+
+  weeklyRecapCard:   { backgroundColor: CARD, borderRadius: 16, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: BORDER, flexDirection: 'row', alignItems: 'center' },
+  weeklyRecapTitle:  { fontSize: 14, fontWeight: '700', color: TEXT, marginBottom: 3 },
+  weeklyRecapSub:    { fontSize: 13, color: MUTED },
+  weeklyRecapArrow:  { fontSize: 18, color: MUTED, marginLeft: 8 },
 
   sectionHeader:     { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   sectionLabel:      { fontSize: 12, fontWeight: '800', letterSpacing: 1.4, color: MUTED, textTransform: 'uppercase' },
