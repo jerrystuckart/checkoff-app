@@ -700,7 +700,7 @@ export default function ListScreen({ route, navigation }) {
       const now = new Date().toISOString()
       const { data } = await supabase
         .from('item_partner_suggestions')
-        .select('suggestion_title, suggestion_body, partners!inner(id, business_name, address, photo_url)')
+        .select('suggestion_title, suggestion_body, is_secret_partner, reveal_item_id, partners!inner(id, business_name, address, photo_url)')
         .eq('item_id', itemId)
         .eq('is_active', true)
         .or(`starts_at.is.null,starts_at.lte.${now}`)
@@ -714,6 +714,34 @@ export default function ListScreen({ route, navigation }) {
       }
     } catch {
       // non-critical — never block or surface errors from this
+    }
+  }
+
+  async function navigateToRevealItem(revealItemId) {
+    if (!revealItemId) return
+    try {
+      const { data } = await supabase
+        .from('items')
+        .select(`
+          id, body, checkin_type, is_universal, ring_weight,
+          difficulty, photo_required, is_secret, secret_reveal_text,
+          maps_lat, maps_lng, geo_radius_m,
+          website_url, maps_query, partner_id, has_alcohol,
+          allows_personal_note, personal_prompt_label, personal_place_label,
+          categories ( name, color_hex ),
+          neighborhoods!items_neighborhood_id_fkey ( name ),
+          partners ( business_name )
+        `)
+        .eq('id', revealItemId)
+        .single()
+      if (!data) return
+      navigation.navigate('ItemDetail', {
+        item: data,
+        listId,
+        listTitle: route.params?.title ?? 'CheckOff',
+      })
+    } catch {
+      // non-critical
     }
   }
 
@@ -1274,10 +1302,19 @@ export default function ListScreen({ route, navigation }) {
             {/* Front card (index 0) — fully interactive */}
             {(() => {
               const front = suggestionStack[0]
+              const isSecret = !!front.is_secret_partner
               return (
-                <Animated.View style={[styles.suggInner, { opacity: suggDismissAnim }]}>
+                <Animated.View style={[
+                  styles.suggInner,
+                  isSecret && styles.suggInnerSecret,
+                  { opacity: suggDismissAnim },
+                ]}>
                   <View style={styles.suggTop}>
-                    {front.partners?.photo_url ? (
+                    {isSecret ? (
+                      <View style={styles.suggSecretLockArea}>
+                        <Text style={styles.suggSecretLockEmoji}>🔒</Text>
+                      </View>
+                    ) : front.partners?.photo_url ? (
                       <Image
                         source={{ uri: front.partners.photo_url }}
                         style={styles.suggImage}
@@ -1285,12 +1322,16 @@ export default function ListScreen({ route, navigation }) {
                     ) : null}
                     <View style={{ flex: 1 }}>
                       <Text style={styles.suggTitle}>
-                        {front.suggestion_title ?? 'Nice one. Want a reward nearby?'}
+                        {front.suggestion_title ?? (isSecret
+                          ? 'You unlocked something nearby'
+                          : 'Nice one. Want a reward nearby?')}
                       </Text>
                       <Text style={styles.suggBody}>
-                        {front.suggestion_body ?? 'People who check this off often stop here after.'}
+                        {front.suggestion_body ?? (isSecret
+                          ? 'Check off this item to reveal a secret spot.'
+                          : 'People who check this off often stop here after.')}
                       </Text>
-                      {(front.partners?.business_name || front.partners?.address) && (
+                      {!isSecret && (front.partners?.business_name || front.partners?.address) && (
                         <Text style={styles.suggPartnerMeta} numberOfLines={1}>
                           {[front.partners?.business_name, front.partners?.address]
                             .filter(Boolean).join(' · ')}
@@ -1299,15 +1340,31 @@ export default function ListScreen({ route, navigation }) {
                     </View>
                   </View>
                   <View style={styles.suggButtons}>
-                    <TouchableOpacity
-                      style={styles.suggPrimaryBtn}
-                      onPress={() => {
-                        dismissCard(0)
-                        navigation.navigate('PartnerPreview', { partner_id: front.partners?.id })
-                      }}
-                    >
-                      <Text style={styles.suggPrimaryBtnText}>View spot</Text>
-                    </TouchableOpacity>
+                    {isSecret ? (
+                      <TouchableOpacity
+                        style={front.reveal_item_id ? styles.suggPrimaryBtn : styles.suggPrimaryBtnDisabled}
+                        disabled={!front.reveal_item_id}
+                        onPress={() => {
+                          if (!front.reveal_item_id) return
+                          dismissCard(0)
+                          navigateToRevealItem(front.reveal_item_id)
+                        }}
+                      >
+                        <Text style={front.reveal_item_id ? styles.suggPrimaryBtnText : styles.suggPrimaryBtnTextDisabled}>
+                          {front.reveal_item_id ? 'Reveal the secret' : 'Coming soon'}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity
+                        style={styles.suggPrimaryBtn}
+                        onPress={() => {
+                          dismissCard(0)
+                          navigation.navigate('PartnerPreview', { partner_id: front.partners?.id })
+                        }}
+                      >
+                        <Text style={styles.suggPrimaryBtnText}>View spot</Text>
+                      </TouchableOpacity>
+                    )}
                     <TouchableOpacity
                       style={styles.suggGhostBtn}
                       onPress={() => dismissCard(0)}
@@ -2179,6 +2236,40 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, EN
   suggGhostBtnText: {
     fontSize: 14,
     fontWeight: '600',
+    color: MUTED,
+  },
+
+  // ── Secret partner suggestion card ──
+  suggInnerSecret: {
+    borderColor: '#F5A623',
+    borderWidth: 1.5,
+  },
+  suggSecretLockArea: {
+    width: 52,
+    height: 52,
+    borderRadius: 10,
+    backgroundColor: '#FFF9F2',
+    borderWidth: 1,
+    borderColor: '#F5A62355',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  suggSecretLockEmoji: {
+    fontSize: 22,
+  },
+  suggPrimaryBtnDisabled: {
+    flex: 1,
+    backgroundColor: SOFT ?? '#F4F2EE',
+    borderRadius: 12,
+    paddingVertical: 11,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+  suggPrimaryBtnTextDisabled: {
+    fontSize: 14,
+    fontWeight: '700',
     color: MUTED,
   },
 
