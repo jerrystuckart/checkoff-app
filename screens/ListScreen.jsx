@@ -605,8 +605,10 @@ export default function ListScreen({ route, navigation }) {
           setMemoryError(null)
           setMemoryModal({
             listItemId: listItemId,
-            placeLabel: item.personalPlaceLabel  ?? 'Place or location',
-            noteLabel:  item.personalPromptLabel ?? 'Any notes?',
+            placeLabel:  item.personalPlaceLabel  ?? 'Place or location',
+            noteLabel:   item.personalPromptLabel ?? 'Any notes?',
+            itemBody:    item.body    ?? '',
+            difficulty:  item.difficulty ?? 5,
           })
         }
 
@@ -624,16 +626,20 @@ export default function ListScreen({ route, navigation }) {
         ))
       })
 
-      // Celebrate and notify immediately on a fresh check (not un-check)
+      // Celebrate and notify immediately on a fresh check (not un-check).
+      // For memory-eligible items, notification is deferred to saveMemory / skip
+      // so personal_place and personal_note are already in the DB when it fires.
       if (!wasChecked) {
         if (difficulty >= 5) {
           triggerCelebration(listItemId, difficulty)
-          notifyCrewCheckIn({
-            listItemId,
-            itemBody:  item?.body ?? '',
-            difficulty,
-            checkInId: null,
-          }).catch(() => {})
+          if (!item?.allowsPersonalNote) {
+            notifyCrewCheckIn({
+              listItemId,
+              itemBody:  item?.body ?? '',
+              difficulty,
+              checkInId: null,
+            }).catch(() => {})
+          }
         } else {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)
         }
@@ -684,11 +690,13 @@ export default function ListScreen({ route, navigation }) {
     setMemoryError(null)
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      const { error } = await supabase
+      const { data: updatedCI, error } = await supabase
         .from('check_ins')
         .update({ personal_place: place || null, personal_note: note || null })
         .eq('user_id', user.id)
         .eq('list_item_id', memoryModal.listItemId)
+        .select('id')
+        .single()
       if (error) throw error
       // Optimistic update so the note displays immediately
       setLocalItems(prev => prev.map(i =>
@@ -696,6 +704,15 @@ export default function ListScreen({ route, navigation }) {
           ? { ...i, personalPlace: place || null, personalNote: note || null }
           : i
       ))
+      // Fire crew notification now that memory is in the DB
+      if ((memoryModal.difficulty ?? 0) >= 5) {
+        notifyCrewCheckIn({
+          listItemId: memoryModal.listItemId,
+          itemBody:   memoryModal.itemBody   ?? '',
+          difficulty: memoryModal.difficulty ?? 5,
+          checkInId:  updatedCI?.id ?? null,
+        }).catch(() => {})
+      }
       setMemoryModal(null)
     } catch {
       setMemoryError("Couldn't save your memory, but your check-in is safe.")
@@ -1328,7 +1345,17 @@ export default function ListScreen({ route, navigation }) {
 
             <TouchableOpacity
               style={styles.memorySkipBtn}
-              onPress={() => setMemoryModal(null)}
+              onPress={() => {
+                if ((memoryModal?.difficulty ?? 0) >= 5) {
+                  notifyCrewCheckIn({
+                    listItemId: memoryModal.listItemId,
+                    itemBody:   memoryModal.itemBody   ?? '',
+                    difficulty: memoryModal.difficulty ?? 5,
+                    checkInId:  null,
+                  }).catch(() => {})
+                }
+                setMemoryModal(null)
+              }}
               disabled={memorySaving}
             >
               <Text style={styles.memorySkipBtnText}>Skip</Text>
