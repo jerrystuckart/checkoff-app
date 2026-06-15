@@ -1,36 +1,67 @@
 import React, { useEffect } from 'react'
 import { View, ActivityIndicator, StyleSheet } from 'react-native'
+import { supabase } from '../lib/supabase'
 
 const NAVY = '#0F0F1E'
 const AMBER = '#F5A623'
 
-const SUPPORTED_TAGS = ['bachelorette', 'date-night']
-
 /**
  * DeepLinkExperienceResolverScreen
  *
- * Destination for checkoff://experience?tag=TAG deep links.
- * Follows the same "route here by name only, screen handles it" pattern as
- * next10 / DeepLinkListResolverScreen. There is no tag-filtered view yet, so
- * this simply logs the intent and forwards to the Lists tab (BrowseLists)
- * gracefully — tag pre-filtering is a future feature.
+ * Destination for checkoff://experience?tag=TAG deep links (both from external
+ * URL scheme and from ExperiencesRail for experience?tag= cards without list_id).
  *
- * Route params: { tag } — e.g. 'bachelorette', 'date-night'
+ * Resolution:
+ *   1. Query featured_experiences where deep_link contains the tag AND list_id is not null
+ *   2. If found → navigate to CuratedListPreview with that list_id
+ *   3. Otherwise → fall back to BrowseLists
+ *
+ * Route params:
+ *   tag       — e.g. 'bachelorette', 'date-night'
+ *   heroImage — forwarded from ExperiencesRail card image (optional)
  */
 export default function DeepLinkExperienceResolverScreen({ route, navigation }) {
-  const { tag } = route.params ?? {}
+  const { tag, heroImage } = route.params ?? {}
 
   useEffect(() => {
-    if (tag && SUPPORTED_TAGS.includes(tag)) {
-      console.log(`[deep link] checkoff://experience?tag=${tag} — tag-filtered views are a future feature; forwarding to Lists`)
-    } else if (tag) {
-      console.log(`[deep link] checkoff://experience?tag=${tag} — unsupported tag; forwarding to Lists`)
-    } else {
-      console.log('[deep link] checkoff://experience — no tag provided; forwarding to Lists')
+    resolveExperience()
+  }, [])
+
+  async function resolveExperience() {
+    if (!tag) {
+      navigation.replace('BrowseLists')
+      return
     }
 
+    try {
+      // Look for an active experience card whose deep_link contains this tag
+      // and has a list_id set — that's our direct navigation target.
+      const { data, error } = await supabase
+        .from('featured_experiences')
+        .select('list_id, image_url')
+        .ilike('deep_link', `%experience%tag=${tag}%`)
+        .not('list_id', 'is', null)
+        .eq('active', true)
+        .limit(1)
+        .maybeSingle()
+
+      if (error) throw error
+
+      if (data?.list_id) {
+        navigation.replace('CuratedListPreview', {
+          curatedListId: data.list_id,
+          groupImageUrl: heroImage ?? data.image_url ?? undefined,
+        })
+        return
+      }
+    } catch (e) {
+      console.error('[deep link] DeepLinkExperienceResolverScreen error:', e?.message ?? e)
+    }
+
+    // No matching experience with a list_id found — fall back to Browse Lists
+    console.log(`[deep link] checkoff://experience?tag=${tag} — no list_id found; forwarding to BrowseLists`)
     navigation.replace('BrowseLists')
-  }, [])
+  }
 
   return (
     <View style={styles.container}>

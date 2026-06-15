@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react'
 import {
+  Platform,
   View, Text, FlatList, TouchableOpacity, StyleSheet,
   ActivityIndicator, RefreshControl, Linking,
 } from 'react-native'
@@ -67,6 +68,18 @@ export default function NearbyScreen({ navigation }) {
       return
     }
     navigation.navigate('ItemDetail', { item, listId: null, listTitle: 'Nearby' })
+  }
+
+  async function openAppSettings() {
+    try {
+      if (Platform.OS === 'ios') {
+        await Linking.openURL('app-settings:')
+      } else {
+        await Linking.openSettings()
+      }
+    } catch (e) {
+      console.warn('openAppSettings failed:', e?.message ?? e)
+    }
   }
 
   function renderRow({ item: row }) {
@@ -137,7 +150,7 @@ export default function NearbyScreen({ navigation }) {
         </View>
         <Text style={styles.errorTitle}>Location needed</Text>
         <Text style={styles.errorSub}>{locError}</Text>
-        <TouchableOpacity style={styles.settingsBtn} onPress={() => Linking.openSettings()} activeOpacity={0.88}>
+        <TouchableOpacity style={styles.settingsBtn} onPress={openAppSettings} activeOpacity={0.88}>
           <Text style={styles.settingsBtnText}>Open Settings</Text>
         </TouchableOpacity>
       </View>

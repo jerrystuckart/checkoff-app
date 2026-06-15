@@ -1,7 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Linking } from 'react-native'
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Linking, ImageBackground } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
+import { useNavigation } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
+import { useTheme } from '../lib/ThemeContext'
 
 const NAVY  = '#0F0F1E'
 const AMBER = '#F5A623'
@@ -35,7 +37,9 @@ function getGradientColors(deepLink) {
   return match ? GRADIENT_MAP[match] : GRADIENT_MAP.fallback
 }
 
-export default function ExperiencesRail() {
+export default function ExperiencesRail({ citySlug }) {
+  const navigation = useNavigation()
+  const { colors } = useTheme()
   const [experiences, setExperiences] = useState([])
   const [loading, setLoading] = useState(true)
 
@@ -44,12 +48,19 @@ export default function ExperiencesRail() {
 
     async function load() {
       try {
-        const { data, error } = await supabase
+        // Include experiences scoped to this metro OR universal (no metro_slug set)
+        let query = supabase
           .from('featured_experiences')
           .select('*')
           .eq('active', true)
           .order('display_order', { ascending: true })
-          .limit(10)
+          .limit(20)
+
+        if (citySlug) {
+          query = query.or(`metro_slug.eq.${citySlug},metro_slug.is.null`)
+        }
+
+        const { data, error } = await query
 
         if (cancelled) return
 
@@ -67,12 +78,59 @@ export default function ExperiencesRail() {
 
     load()
     return () => { cancelled = true }
-  }, [])
+  }, [citySlug])
 
-  const handlePress = useCallback((deepLink) => {
+  const handlePress = useCallback((item) => {
+    const deepLink = item.deep_link
+    const imageUrl = item.image_url
+
+    // ── Priority 1: list_id set on the row → navigate directly ──────────────
+    if (item.list_id) {
+      navigation.navigate('CuratedListPreview', {
+        curatedListId: item.list_id,
+        groupImageUrl: imageUrl ?? undefined,
+        citySlug:      item.metro_slug ?? undefined,
+      })
+      return
+    }
+
     if (!deepLink) return
+
+    // ── Priority 2: checkoff://list?id= slug-based deep link ─────────────────
+    if (deepLink.includes('list?id=')) {
+      try {
+        const url = new URL(deepLink.replace('checkoff://', 'https://x.com/'))
+        const listId = url.searchParams.get('id')
+        const city   = url.searchParams.get('city')
+        navigation.navigate('DeepLinkListResolver', {
+          id:        listId,
+          city:      city ?? null,
+          heroImage: imageUrl ?? null,
+        })
+      } catch {
+        Linking.openURL(deepLink).catch(() => {})
+      }
+      return
+    }
+
+    // ── Priority 3: experience?tag= → resolver screen ────────────────────────
+    if (deepLink.includes('experience?tag=')) {
+      try {
+        const url = new URL(deepLink.replace('checkoff://', 'https://x.com/'))
+        const tag = url.searchParams.get('tag')
+        navigation.navigate('DeepLinkExperienceResolver', {
+          tag:       tag ?? null,
+          heroImage: imageUrl ?? null,
+        })
+      } catch {
+        Linking.openURL(deepLink).catch(() => {})
+      }
+      return
+    }
+
+    // ── Fallback: unknown deep link scheme ────────────────────────────────────
     Linking.openURL(deepLink).catch(() => {})
-  }, [])
+  }, [navigation])
 
   if (loading) {
     return (
@@ -86,8 +144,8 @@ export default function ExperiencesRail() {
 
   return (
     <View style={styles.section}>
-      <Text style={styles.title}>Plan something worth the drive</Text>
-      <Text style={styles.subtitle}>Curated day trips &amp; local experiences</Text>
+      <Text style={[styles.title, { color: colors.TEXT }]}>Plan something worth the drive</Text>
+      <Text style={[styles.subtitle, { color: colors.MUTED }]}>Curated day trips &amp; local experiences</Text>
 
       <FlatList
         horizontal
@@ -96,32 +154,38 @@ export default function ExperiencesRail() {
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={styles.listContent}
         renderItem={({ item }) => (
-          <ExperienceCard item={item} onPress={handlePress} />
+          <ExperienceCard item={item} onPress={handlePress} colors={colors} />
         )}
       />
     </View>
   )
 }
 
-function ExperienceCard({ item, onPress }) {
+function ExperienceCard({ item, onPress, colors }) {
   const vibe = Array.isArray(item.vibes) && item.vibes.length > 0 ? item.vibes[0] : null
   const distanceColor = DISTANCE_COLORS[item.distance_type] ?? AMBER
   const gradientColors = getGradientColors(item.deep_link)
+  const hasImage = !!item.image_url
 
-  return (
-    <TouchableOpacity
-      style={styles.card}
-      activeOpacity={0.88}
-      onPress={() => onPress(item.deep_link)}
-    >
-      <LinearGradient
-        colors={gradientColors}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 0 }}
-        style={styles.gradientBar}
-      />
+  const cardContent = (
+    <>
+      {hasImage ? (
+        <LinearGradient
+          colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.78)']}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 0, y: 1 }}
+          style={styles.cardImageOverlay}
+        />
+      ) : (
+        <LinearGradient
+          colors={gradientColors}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={styles.gradientBar}
+        />
+      )}
 
-      <View style={styles.cardBody}>
+      <View style={[styles.cardBody, hasImage && styles.cardBodyOnImage]}>
         <View style={styles.pillRow}>
           {!!vibe && (
             <View style={styles.vibePill}>
@@ -135,16 +199,46 @@ function ExperienceCard({ item, onPress }) {
           )}
         </View>
 
-        <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
+        <Text style={[styles.cardTitle, !hasImage && { color: colors?.TEXT ?? WHITE }]} numberOfLines={2}>{item.title}</Text>
         {!!item.subtitle && (
-          <Text style={styles.cardSubtitle} numberOfLines={2}>{item.subtitle}</Text>
+          <Text style={[styles.cardSubtitle, !hasImage && { color: colors?.MUTED ?? MUTED }]} numberOfLines={2}>{item.subtitle}</Text>
         )}
 
         <View style={styles.cardFooter}>
-          <Text style={styles.cardCity} numberOfLines={1}>{item.city ?? ''}</Text>
+          <Text style={[styles.cardCity, !hasImage && { color: colors?.MUTED ?? MUTED }]} numberOfLines={1}>{item.city ?? ''}</Text>
           <Text style={styles.cardOpen}>Open →</Text>
         </View>
       </View>
+    </>
+  )
+
+  const cardBg = colors?.CARD ?? NAVY
+
+  if (hasImage) {
+    return (
+      <TouchableOpacity
+        style={[styles.card, { backgroundColor: cardBg }]}
+        activeOpacity={0.88}
+        onPress={() => onPress(item)}
+      >
+        <ImageBackground
+          source={{ uri: item.image_url }}
+          style={styles.cardImageBg}
+          imageStyle={{ borderRadius: 16 }}
+        >
+          {cardContent}
+        </ImageBackground>
+      </TouchableOpacity>
+    )
+  }
+
+  return (
+    <TouchableOpacity
+      style={[styles.card, { backgroundColor: cardBg }]}
+      activeOpacity={0.88}
+      onPress={() => onPress(item)}
+    >
+      {cardContent}
     </TouchableOpacity>
   )
 }
@@ -192,8 +286,23 @@ const styles = StyleSheet.create({
     width: '100%',
   },
 
+  cardImageBg: {
+    width: '100%',
+    minHeight: 180,
+    justifyContent: 'flex-end',
+  },
+
+  cardImageOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 16,
+  },
+
   cardBody: {
     padding: 14,
+  },
+
+  cardBodyOnImage: {
+    paddingTop: 60,
   },
 
   pillRow: {

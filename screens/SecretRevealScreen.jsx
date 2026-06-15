@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react'
 import {
+  Platform,
   View, Text, TouchableOpacity, StyleSheet,
   ActivityIndicator, Animated, Linking, ScrollView,
 } from 'react-native'
@@ -81,6 +82,18 @@ export default function SecretRevealScreen({ route, navigation }) {
       pulseAnim.stopAnimation(() => pulseAnim.setValue(1))
     }
   }, [phase])
+
+  async function openAppSettings() {
+    try {
+      if (Platform.OS === 'ios') {
+        await Linking.openURL('app-settings:')
+      } else {
+        await Linking.openSettings()
+      }
+    } catch (e) {
+      console.warn('openAppSettings failed:', e?.message ?? e)
+    }
+  }
 
   async function startWatching() {
     setPhase('checking')
@@ -242,7 +255,7 @@ export default function SecretRevealScreen({ route, navigation }) {
             : 'We couldn\'t get your location. Make sure location services are on.'}
         </Text>
         {permDenied && (
-          <TouchableOpacity style={styles.directionsBtn} onPress={() => Linking.openSettings()} activeOpacity={0.88}>
+          <TouchableOpacity style={styles.directionsBtn} onPress={openAppSettings} activeOpacity={0.88}>
             <Text style={styles.directionsBtnText}>Open Settings</Text>
           </TouchableOpacity>
         )}

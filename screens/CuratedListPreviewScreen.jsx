@@ -1,10 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity,
-  StyleSheet, StatusBar, ActivityIndicator, Alert,
+  StyleSheet, StatusBar, ActivityIndicator, Alert, ImageBackground,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { CommonActions } from '@react-navigation/native'
+import { useHeaderHeight } from '@react-navigation/elements'
 import { supabase } from '../lib/supabase'
 import { fetchCuratedListItems } from '../lib/useItems'
 import { useTheme } from '../lib/ThemeContext'
@@ -24,6 +25,7 @@ const SEASON_META = {
 
 export default function CuratedListPreviewScreen({ navigation, route }) {
   const insets = useSafeAreaInsets()
+  const headerHeight = useHeaderHeight()
   const { colors } = useTheme()
   const { BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, GREEN, SUCCESS_BG, SUCCESS_BORDER } = colors
   const styles = useMemo(() => createCuratedStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, GREEN, SUCCESS_BG, SUCCESS_BORDER }),
@@ -36,6 +38,7 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
     groupName:     paramGroupName,
     groupEmoji:    paramGroupEmoji,
     groupTagline:  paramGroupTagline,
+    groupImageUrl: paramGroupImageUrl,
     citySlug:      paramCitySlug,
     metroName:     paramMetroName,
     variants,
@@ -49,7 +52,7 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
   // Standard mode: seeded from params immediately.
   // next10 mode: seeded to defaults then overwritten by fetch.
   const [groupName,    setGroupName]    = useState(paramGroupName    ?? '')
-  const [groupEmoji,   setGroupEmoji]   = useState(paramGroupEmoji   ?? '🔟')
+  const [groupEmoji,   setGroupEmoji]   = useState(paramGroupEmoji   ?? (next10Mode ? '🔟' : null))
   const [groupTagline, setGroupTagline] = useState(paramGroupTagline ?? '')
   const [citySlug,     setCitySlug]     = useState(paramCitySlug     ?? '')
   const [metroName,    setMetroName]    = useState(paramMetroName    ?? 'Phoenix')
@@ -66,6 +69,17 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
   const [fetchError, setFetchError]         = useState(null) // null | 'no_list' | 'fetch_failed'
   const [next10EndsAt, setNext10EndsAt]     = useState(null)
 
+  // Transparent header when group image is present
+  useEffect(() => {
+    if (paramGroupImageUrl) {
+      navigation.setOptions({
+        headerTransparent: true,
+        headerTintColor: '#FFFFFF',
+        headerTitleStyle: { color: '#FFFFFF', fontWeight: '800' },
+      })
+    }
+  }, [paramGroupImageUrl, navigation])
+
   // Resolve current user
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data?.user ?? null))
@@ -75,6 +89,27 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
   useEffect(() => {
     if (next10Mode) fetchNext10Meta()
   }, []) // eslint-disable-line
+
+  // Standard mode with no groupName passed (e.g. navigated from list_id on experience card):
+  // fetch title/tagline directly from curated_lists so the header isn't blank.
+  useEffect(() => {
+    if (!next10Mode && curatedListId && !paramGroupName) {
+      supabase
+        .from('curated_lists')
+        .select('title, tagline, city_slug, audience_groups (name, tagline, emoji)')
+        .eq('id', curatedListId)
+        .maybeSingle()
+        .then(({ data }) => {
+          if (!data) return
+          const ag = data.audience_groups
+          if (ag?.name  || data.title)   setGroupName(ag?.name  ?? data.title)
+          if (ag?.emoji)                  setGroupEmoji(ag.emoji)
+          if (ag?.tagline || data.tagline) setGroupTagline(ag?.tagline ?? data.tagline ?? '')
+          if (data.city_slug)             setCitySlug(data.city_slug)
+        })
+        .catch(() => {/* non-critical — title just stays blank */})
+    }
+  }, [curatedListId, next10Mode, paramGroupName]) // eslint-disable-line
 
   // Load preview items whenever selectedId is set / changes
   useEffect(() => {
@@ -296,8 +331,10 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
       const year        = selectedVariant?.year   ?? new Date().getFullYear()
       const seasonLabel = SEASON_META[season]?.label ?? 'My'
       const defaultTitle = next10Mode
-        ? groupName
-        : `${groupName} · ${seasonLabel} ${year}`
+        ? (groupName || 'The Next 10')
+        : groupName
+          ? `${groupName} · ${seasonLabel} ${year}`
+          : `${seasonLabel} ${year}`
 
       navigation.navigate('CreateList', {
         curatedListId:  selectedId,
@@ -376,42 +413,92 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
           </View>
         ) : (
           /* ── Standard hero header ── */
-          <View style={styles.heroCard}>
-            <View style={styles.emojiCircle}>
-              <Text style={styles.emojiText}>{groupEmoji ?? '📋'}</Text>
-            </View>
-            <Text style={styles.groupName}>{groupName}</Text>
-            <Text style={styles.groupTagline}>"{groupTagline}"</Text>
-
-            {/* Season variant selector — only if multiple */}
-            {variants && variants.length > 1 && (
-              <View style={styles.variantSelector}>
-                <Text style={styles.variantSelectorLabel}>Pick a season</Text>
-                <View style={styles.variantRow}>
-                  {variants.map(v => {
-                    const s = SEASON_META[v.season] ?? SEASON_META.anytime
-                    const active = v.id === selectedId
-                    return (
-                      <TouchableOpacity
-                        key={v.id}
-                        onPress={() => setSelectedId(v.id)}
-                        style={[
-                          styles.variantPill,
-                          { backgroundColor: s.bg, borderColor: s.border },
-                          active && styles.variantPillActive,
-                        ]}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={[styles.variantPillText, { color: s.text }]}>
-                          {s.label}{v.year ? ` ${v.year}` : ''}
-                        </Text>
-                      </TouchableOpacity>
-                    )
-                  })}
-                </View>
+          paramGroupImageUrl ? (
+            <ImageBackground
+              source={{ uri: paramGroupImageUrl }}
+              resizeMode="cover"
+              style={[
+                styles.heroCardImage,
+                {
+                  marginHorizontal: -20,
+                  marginTop: -(insets.top + 12),
+                  paddingTop: headerHeight + 16,
+                  borderRadius: 0,
+                  minHeight: headerHeight + 220,
+                },
+              ]}
+              imageStyle={{ borderRadius: 0 }}
+            >
+              <View style={[styles.heroCardImageOverlay, { borderRadius: 0 }]} />
+              <View style={styles.emojiCircle}>
+                <Text style={styles.emojiText}>{groupEmoji ?? '📋'}</Text>
               </View>
-            )}
-          </View>
+              <Text style={[styles.groupName, { color: '#FFFFFF' }]}>{groupName}</Text>
+              <Text style={[styles.groupTagline, { color: 'rgba(255,255,255,0.75)' }]}>"{groupTagline}"</Text>
+              {variants && variants.length > 1 && (
+                <View style={styles.variantSelector}>
+                  <Text style={styles.variantSelectorLabel}>Pick a season</Text>
+                  <View style={styles.variantRow}>
+                    {variants.map(v => {
+                      const s = SEASON_META[v.season] ?? SEASON_META.anytime
+                      const active = v.id === selectedId
+                      return (
+                        <TouchableOpacity
+                          key={v.id}
+                          onPress={() => setSelectedId(v.id)}
+                          style={[
+                            styles.variantPill,
+                            { backgroundColor: s.bg, borderColor: s.border },
+                            active && styles.variantPillActive,
+                          ]}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={[styles.variantPillText, { color: s.text }]}>
+                            {s.label}{v.year ? ` ${v.year}` : ''}
+                          </Text>
+                        </TouchableOpacity>
+                      )
+                    })}
+                  </View>
+                </View>
+              )}
+            </ImageBackground>
+          ) : (
+            <View style={styles.heroCard}>
+              <View style={styles.emojiCircle}>
+                <Text style={styles.emojiText}>{groupEmoji ?? '📋'}</Text>
+              </View>
+              <Text style={styles.groupName}>{groupName}</Text>
+              <Text style={styles.groupTagline}>"{groupTagline}"</Text>
+              {variants && variants.length > 1 && (
+                <View style={styles.variantSelector}>
+                  <Text style={styles.variantSelectorLabel}>Pick a season</Text>
+                  <View style={styles.variantRow}>
+                    {variants.map(v => {
+                      const s = SEASON_META[v.season] ?? SEASON_META.anytime
+                      const active = v.id === selectedId
+                      return (
+                        <TouchableOpacity
+                          key={v.id}
+                          onPress={() => setSelectedId(v.id)}
+                          style={[
+                            styles.variantPill,
+                            { backgroundColor: s.bg, borderColor: s.border },
+                            active && styles.variantPillActive,
+                          ]}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={[styles.variantPillText, { color: s.text }]}>
+                            {s.label}{v.year ? ` ${v.year}` : ''}
+                          </Text>
+                        </TouchableOpacity>
+                      )
+                    })}
+                  </View>
+                </View>
+              )}
+            </View>
+          )
         )}
 
         {/* Item preview */}
@@ -529,7 +616,7 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
               <ActivityIndicator color={NAVY} size="small" />
             ) : (
               <Text style={styles.adoptBtnText}>
-                {groupEmoji ?? '📋'}  Build my {groupName} list
+                {groupEmoji ? `${groupEmoji}  ` : ''}Build my {groupName || '…'} list
               </Text>
             )}
           </TouchableOpacity>
@@ -597,6 +684,22 @@ function createCuratedStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY,
     borderWidth: 1.2,
     borderColor: BORDER,
     alignItems: 'center',
+  },
+
+  heroCardImage: {
+    borderRadius: 24,
+    padding: 20,
+    marginBottom: 24,
+    alignItems: 'center',
+    overflow: 'hidden',
+    minHeight: 180,
+    justifyContent: 'flex-end',
+  },
+
+  heroCardImageOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.52)',
+    borderRadius: 24,
   },
   emojiCircle: {
     width: 72,

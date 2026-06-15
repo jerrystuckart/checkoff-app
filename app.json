@@ -2,7 +2,7 @@
   "expo": {
     "name": "CheckOff",
     "slug": "checkoff",
-    "version": "1.0.7",
+    "version": "1.0.8",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -16,7 +16,7 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.checkoff.app",
       "usesAppleSignIn": true,
-      "buildNumber": "75",
+      "buildNumber": "85",
       "associatedDomains": [
         "applinks:getcheckoff.com",
         "webcredentials:getcheckoff.com"

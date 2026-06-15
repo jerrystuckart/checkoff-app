@@ -9,20 +9,22 @@ const MUTED = 'rgba(255,255,255,0.5)'
 /**
  * DeepLinkListResolverScreen
  *
- * Destination for checkoff://list?id=SLUG deep links.
- * Mirrors the CuratedListPreviewScreen "next10" pattern: the linking config
- * routes here by name only (no params resolved ahead of time), and this
- * screen performs its own Supabase lookup, then proceeds — in this case by
- * replacing itself with the CuratedListPreview screen (in standard mode, via
- * curatedListId) once a matching curated list template is found — exactly the
- * same destination + params the home-screen curated-list chips navigate to —
- * or falling back to BrowseLists gracefully if no match exists.
+ * Destination for checkoff://list?id=SLUG&city=CITY_SLUG deep links.
  *
- * Route params: { id }  — a slug-like string, e.g. 'willcox-wine-trail',
- * matched against curated_lists.title (case-insensitive, hyphen/space tolerant).
+ * Resolution priority:
+ *   STEP 1 — slug exact + city_slug     (most specific, requires slug column populated)
+ *   STEP 2 — slug exact only            (any city)
+ *   STEP 3 — title word-pattern + city  (handles apostrophes: 'west%valley%best%')
+ *   STEP 4 — title word-pattern only    (any city)
+ *   STEP 5 — BrowseLists fallback
+ *
+ * Route params:
+ *   id        — slug, e.g. 'west-valley-best'
+ *   city      — city_slug, e.g. 'phoenix'  (optional)
+ *   heroImage — forwarded from ExperiencesRail card image (optional)
  */
 export default function DeepLinkListResolverScreen({ route, navigation }) {
-  const { id } = route.params ?? {}
+  const { id, city } = route.params ?? {}
   const [fetchError, setFetchError] = useState(null)
 
   useEffect(() => {
@@ -32,26 +34,70 @@ export default function DeepLinkListResolverScreen({ route, navigation }) {
   async function resolveList() {
     setFetchError(null)
 
-    if (!id) {
+    if (!id && !city) {
       setFetchError('no_list')
       navigation.replace('BrowseLists')
       return
     }
 
+    const SELECT = 'id, title, tagline, city_slug, audience_groups (name, tagline, emoji)'
+
+    // Build a word-by-word wildcard pattern so 'west-valley-best' matches
+    // "West Valley's Best" despite apostrophes or extra punctuation.
+    // e.g. 'west-valley-best' → '%west%valley%best%'
+    const titlePattern = id
+      ? '%' + String(id).replace(/[-_]+/g, '%').trim() + '%'
+      : null
+
     let listRow = null
     try {
-      // Slug → human title guess, e.g. 'willcox-wine-trail' → 'willcox wine trail'
-      const titleGuess = String(id).replace(/[-_]+/g, ' ').trim()
+      // ── STEP 1: slug exact + city_slug (most specific) ───────────────────
+      if (id && city) {
+        const { data, error } = await supabase
+          .from('curated_lists')
+          .select(SELECT)
+          .eq('slug', id)
+          .eq('city_slug', city)
+          .maybeSingle()
+        if (error) throw error
+        if (data) listRow = data
+      }
 
-      const { data, error } = await supabase
-        .from('curated_lists')
-        .select('id, title, city_slug, audience_groups (name, tagline, emoji)')
-        .ilike('title', `%${titleGuess}%`)
-        .limit(1)
-        .maybeSingle()
+      // ── STEP 2: slug exact, any city ─────────────────────────────────────
+      if (!listRow && id) {
+        const { data, error } = await supabase
+          .from('curated_lists')
+          .select(SELECT)
+          .eq('slug', id)
+          .maybeSingle()
+        if (error) throw error
+        if (data) listRow = data
+      }
 
-      if (error) throw error
-      listRow = data
+      // ── STEP 3: title word-pattern + city (handles apostrophes) ──────────
+      if (!listRow && titlePattern && city) {
+        const { data, error } = await supabase
+          .from('curated_lists')
+          .select(SELECT)
+          .ilike('title', titlePattern)
+          .eq('city_slug', city)
+          .limit(1)
+          .maybeSingle()
+        if (error) throw error
+        if (data) listRow = data
+      }
+
+      // ── STEP 4: title word-pattern only (any city) ───────────────────────
+      if (!listRow && titlePattern) {
+        const { data, error } = await supabase
+          .from('curated_lists')
+          .select(SELECT)
+          .ilike('title', titlePattern)
+          .limit(1)
+          .maybeSingle()
+        if (error) throw error
+        if (data) listRow = data
+      }
     } catch (e) {
       console.error('DeepLinkListResolverScreen resolveList error:', e?.message ?? e)
       setFetchError('fetch_failed')
@@ -68,10 +114,11 @@ export default function DeepLinkListResolverScreen({ route, navigation }) {
     const ag = listRow.audience_groups
     navigation.replace('CuratedListPreview', {
       curatedListId: listRow.id,
-      groupName:    ag?.name    ?? listRow.title,
-      groupEmoji:   ag?.emoji   ?? undefined,
-      groupTagline: ag?.tagline ?? undefined,
-      citySlug:     listRow.city_slug ?? undefined,
+      groupName:     ag?.name    ?? listRow.title,
+      groupEmoji:    ag?.emoji   ?? undefined,
+      groupTagline:  ag?.tagline ?? listRow.tagline ?? undefined,
+      citySlug:      listRow.city_slug ?? undefined,
+      groupImageUrl: route.params?.heroImage ?? undefined,
     })
   }
 

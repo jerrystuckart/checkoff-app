@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity,
-  StyleSheet, StatusBar, ActivityIndicator,
+  StyleSheet, StatusBar, ActivityIndicator, ImageBackground,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { fetchCuratedLists } from '../lib/useItems'
@@ -94,74 +94,98 @@ export default function BrowseListsScreen({ navigation, route }) {
         </Text>
       </View>
 
-      {groupList.map(({ group, variants }) => (
-        <TouchableOpacity
-          key={group.id}
-          style={styles.groupCard}
-          activeOpacity={0.88}
-          onPress={() =>
-            variants.length === 1
-              ? navigation.navigate('CuratedListPreview', {
-                  curatedListId: variants[0].id,
-                  groupName:     group.name,
-                  groupEmoji:    group.emoji,
-                  groupTagline:  group.tagline,
-                  citySlug,
-                  metroName,
-                })
-              : navigation.navigate('CuratedListPreview', {
-                  curatedListId: variants[0].id,
-                  groupName:     group.name,
-                  groupEmoji:    group.emoji,
-                  groupTagline:  group.tagline,
-                  variants,
-                  citySlug,
-                  metroName,
-                })
-          }
-        >
-          {/* City-specific badge */}
-          {group.city_slug && (
-            <View style={styles.cityBadge}>
-              <Text style={styles.cityBadgeText}>{metroName} only</Text>
-            </View>
-          )}
+      {groupList.map(({ group, variants }) => {
+        const hasImage = !!group.image_url
+        const navParams = {
+          curatedListId: variants[0].id,
+          groupName:     group.name,
+          groupEmoji:    group.emoji,
+          groupTagline:  group.tagline,
+          groupImageUrl: group.image_url ?? undefined,
+          citySlug,
+          metroName,
+        }
+        const cardInner = (
+          <>
+            {/* City-specific badge */}
+            {group.city_slug && (
+              <View style={styles.cityBadge}>
+                <Text style={styles.cityBadgeText}>{metroName} only</Text>
+              </View>
+            )}
 
-          <View style={styles.groupCardTop}>
-            <View style={styles.emojiCircle}>
-              <Text style={styles.emojiText}>{group.emoji ?? '📋'}</Text>
+            <View style={styles.groupCardTop}>
+              <View style={[styles.emojiCircle, hasImage && styles.emojiCircleOnImg]}>
+                <Text style={styles.emojiText}>{group.emoji ?? '📋'}</Text>
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.groupName, hasImage && styles.groupNameOnImg]}>{group.name}</Text>
+                <Text style={[styles.groupTagline, hasImage && styles.groupTaglineOnImg]} numberOfLines={2}>
+                  "{group.tagline}"
+                </Text>
+              </View>
+
+              <Text style={[styles.chevron, hasImage && { color: '#FFFFFF' }]}>→</Text>
             </View>
 
-            <View style={{ flex: 1 }}>
-              <Text style={styles.groupName}>{group.name}</Text>
-              <Text style={styles.groupTagline} numberOfLines={2}>
-                "{group.tagline}"
-              </Text>
-            </View>
+            {/* Season variant pills */}
+            {variants.length > 0 && (
+              <View style={styles.variantRow}>
+                {variants.map(v => {
+                  const s = SEASON_META[v.season] ?? SEASON_META.anytime
+                  return (
+                    <View
+                      key={v.id}
+                      style={[styles.variantPill, { backgroundColor: s.bg, borderColor: s.border }]}
+                    >
+                      <Text style={[styles.variantPillText, { color: s.text }]}>
+                        {s.label}{v.year ? ` ${v.year}` : ''}
+                      </Text>
+                    </View>
+                  )
+                })}
+              </View>
+            )}
+          </>
+        )
 
-            <Text style={styles.chevron}>→</Text>
-          </View>
+        if (hasImage) {
+          return (
+            <TouchableOpacity
+              key={group.id}
+              style={styles.groupCard}
+              activeOpacity={0.88}
+              onPress={() => navigation.navigate('CuratedListPreview',
+                variants.length > 1 ? { ...navParams, variants } : navParams
+              )}
+            >
+              <ImageBackground
+                source={{ uri: group.image_url }}
+                style={styles.groupCardImageBg}
+                imageStyle={{ borderRadius: 18 }}
+                resizeMode="cover"
+              >
+                <View style={styles.groupCardImageOverlay} />
+                {cardInner}
+              </ImageBackground>
+            </TouchableOpacity>
+          )
+        }
 
-          {/* Season variant pills */}
-          {variants.length > 0 && (
-            <View style={styles.variantRow}>
-              {variants.map(v => {
-                const s = SEASON_META[v.season] ?? SEASON_META.anytime
-                return (
-                  <View
-                    key={v.id}
-                    style={[styles.variantPill, { backgroundColor: s.bg, borderColor: s.border }]}
-                  >
-                    <Text style={[styles.variantPillText, { color: s.text }]}>
-                      {s.label}{v.year ? ` ${v.year}` : ''}
-                    </Text>
-                  </View>
-                )
-              })}
-            </View>
-          )}
-        </TouchableOpacity>
-      ))}
+        return (
+          <TouchableOpacity
+            key={group.id}
+            style={styles.groupCard}
+            activeOpacity={0.88}
+            onPress={() => navigation.navigate('CuratedListPreview',
+              variants.length > 1 ? { ...navParams, variants } : navParams
+            )}
+          >
+            {cardInner}
+          </TouchableOpacity>
+        )
+      })}
 
       {groupList.length === 0 && (
         <View style={styles.emptyCard}>
@@ -242,6 +266,40 @@ function createBrowseStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY }
     marginBottom: 12,
     borderWidth: 1.2,
     borderColor: BORDER,
+    overflow: 'hidden',
+  },
+
+  groupCardImageBg: {
+    margin: -16,
+    padding: 16,
+    borderRadius: 20,
+    minHeight: 120,
+    justifyContent: 'center',
+  },
+
+  groupCardImageOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.58)',
+    borderRadius: 18,
+  },
+
+  emojiCircleOnImg: {
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderColor: 'rgba(255,255,255,0.3)',
+  },
+
+  groupNameOnImg: {
+    color: '#FFFFFF',
+    textShadowColor: 'rgba(0,0,0,0.8)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+
+  groupTaglineOnImg: {
+    color: 'rgba(255,255,255,0.85)',
+    textShadowColor: 'rgba(0,0,0,0.8)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
   cityBadge: {
     alignSelf: 'flex-start',
