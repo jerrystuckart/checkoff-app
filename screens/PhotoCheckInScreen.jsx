@@ -66,7 +66,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaType.images,
+      mediaTypes: ImagePicker.MediaType?.images ?? ImagePicker.MediaTypeOptions.Images,
       quality: 0.7,
     })
 

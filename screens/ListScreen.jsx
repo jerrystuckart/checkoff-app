@@ -17,6 +17,7 @@ import {
   Modal,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from 'react-native'
 import * as Haptics from 'expo-haptics'
 import { LinearGradient } from 'expo-linear-gradient'
@@ -110,6 +111,11 @@ export default function ListScreen({ route, navigation }) {
   const [memoryNote,    setMemoryNote]    = useState('')
   const [memorySaving,  setMemorySaving]  = useState(false)
   const [memoryError,   setMemoryError]   = useState(null)
+
+  // Partner suggestion card — shown after check-in (after memory modal if present)
+  const [pendingPartnerSuggestion, setPendingPartnerSuggestion] = useState(null)
+  const [partnerSuggestion,        setPartnerSuggestion]        = useState(null)
+  const suggAnim = useRef(new Animated.Value(200)).current
 
   // Tick every minute so hour/minute countdown updates in real time
   const [tick, setTick] = useState(0)
@@ -354,6 +360,26 @@ export default function ListScreen({ route, navigation }) {
     }, [listId, cityId, refreshCheckedState, loadSuggestions, loadCityItems, triggerCelebration])
   )
 
+  // Promote pending partner suggestion once memory modal is fully dismissed
+  useEffect(() => {
+    if (!memoryModal && pendingPartnerSuggestion) {
+      setPartnerSuggestion(pendingPartnerSuggestion)
+      setPendingPartnerSuggestion(null)
+    }
+  }, [memoryModal, pendingPartnerSuggestion])
+
+  // Slide card in when a suggestion becomes active
+  useEffect(() => {
+    if (partnerSuggestion) {
+      Animated.spring(suggAnim, {
+        toValue: 0,
+        useNativeDriver: true,
+        tension: 100,
+        friction: 12,
+      }).start()
+    }
+  }, [partnerSuggestion])
+
   function isEnded() {
     if (!listMeta?.ends_at) return false
 
@@ -578,6 +604,11 @@ export default function ListScreen({ route, navigation }) {
             noteLabel:  item.personalPromptLabel ?? 'Any notes?',
           })
         }
+
+        // Fetch partner suggestion — fire-and-forget, never blocks check-in
+        if (!wasChecked) {
+          fetchPartnerSuggestion(item?.id, !!item?.allowsPersonalNote)
+        }
       }).catch(() => {
         checkOffInFlight.current = false
         // Revert on unexpected exception
@@ -604,6 +635,37 @@ export default function ListScreen({ route, navigation }) {
       }
     }
   }, [ended, listId, checkOff, localItems, cityItems, navigation, triggerCelebration, currentUserId])
+
+  function dismissSuggestion() {
+    Animated.timing(suggAnim, { toValue: 200, useNativeDriver: true, duration: 200 }).start(() => {
+      setPartnerSuggestion(null)
+      suggAnim.setValue(200)
+    })
+  }
+
+  async function fetchPartnerSuggestion(itemId, hasMemoryModal) {
+    if (!itemId) return
+    try {
+      const now = new Date().toISOString()
+      const { data } = await supabase
+        .from('item_partner_suggestions')
+        .select('suggestion_title, suggestion_body, partners!inner(id, business_name, address, photo_url)')
+        .eq('item_id', itemId)
+        .eq('is_active', true)
+        .or(`starts_at.is.null,starts_at.lte.${now}`)
+        .or(`ends_at.is.null,ends_at.gte.${now}`)
+        .order('priority', { ascending: true })
+        .limit(1)
+      if (!data?.length) return
+      if (hasMemoryModal) {
+        setPendingPartnerSuggestion(data[0])
+      } else {
+        setPartnerSuggestion(data[0])
+      }
+    } catch {
+      // non-critical — never block or surface errors from this
+    }
+  }
 
   const saveMemory = useCallback(async () => {
     if (!memoryModal) return
@@ -1036,6 +1098,56 @@ export default function ListScreen({ route, navigation }) {
         badges={celebrationBadges}
         onDismiss={() => setCelebrationBadges([])}
       />
+
+      {/* Partner suggestion card — slides up from bottom after check-in */}
+      {partnerSuggestion && (
+        <Animated.View
+          pointerEvents="box-none"
+          style={[styles.suggCard, { transform: [{ translateY: suggAnim }] }]}
+        >
+          <View style={styles.suggInner}>
+            <View style={styles.suggTop}>
+              {partnerSuggestion.partners?.photo_url ? (
+                <Image
+                  source={{ uri: partnerSuggestion.partners.photo_url }}
+                  style={styles.suggImage}
+                />
+              ) : null}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.suggTitle}>
+                  {partnerSuggestion.suggestion_title ?? 'Nice one. Want a reward nearby?'}
+                </Text>
+                <Text style={styles.suggBody}>
+                  {partnerSuggestion.suggestion_body ?? 'People who check this off often stop here after.'}
+                </Text>
+                {(partnerSuggestion.partners?.business_name || partnerSuggestion.partners?.address) && (
+                  <Text style={styles.suggPartnerMeta} numberOfLines={1}>
+                    {[partnerSuggestion.partners?.business_name, partnerSuggestion.partners?.address]
+                      .filter(Boolean).join(' · ')}
+                  </Text>
+                )}
+              </View>
+            </View>
+            <View style={styles.suggButtons}>
+              <TouchableOpacity
+                style={styles.suggPrimaryBtn}
+                onPress={() => {
+                  dismissSuggestion()
+                  navigation.navigate('PartnerPreview', { partner_id: partnerSuggestion.partners?.id })
+                }}
+              >
+                <Text style={styles.suggPrimaryBtnText}>View spot</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.suggGhostBtn}
+                onPress={dismissSuggestion}
+              >
+                <Text style={styles.suggGhostBtnText}>Maybe later</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Animated.View>
+      )}
 
       {/* Personalized check-in memory modal */}
       <Modal
@@ -1712,6 +1824,86 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, EN
     fontWeight: '700',
     color: MUTED,
   },
+  // ── Partner suggestion card ──
+  suggCard: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: 14,
+    paddingBottom: 28,
+    paddingTop: 4,
+  },
+  suggInner: {
+    backgroundColor: CARD,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: BORDER,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.08,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  suggTop: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 14,
+  },
+  suggImage: {
+    width: 52,
+    height: 52,
+    borderRadius: 10,
+    flexShrink: 0,
+  },
+  suggTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: TEXT,
+    marginBottom: 3,
+  },
+  suggBody: {
+    fontSize: 13,
+    color: MUTED,
+    lineHeight: 18,
+    marginBottom: 5,
+  },
+  suggPartnerMeta: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: MUTED,
+  },
+  suggButtons: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  suggPrimaryBtn: {
+    flex: 1,
+    backgroundColor: AMBER,
+    borderRadius: 12,
+    paddingVertical: 11,
+    alignItems: 'center',
+  },
+  suggPrimaryBtnText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: NAVY,
+  },
+  suggGhostBtn: {
+    flex: 1,
+    borderRadius: 12,
+    paddingVertical: 11,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+  suggGhostBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: MUTED,
+  },
+
   // ── Personalized memory modal ──
   memoryOverlay: {
     flex: 1,

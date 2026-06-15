@@ -46,9 +46,9 @@ export default function LeaderboardScreen({ route }) {
   const { listId } = route.params ?? {}
   const insets = useSafeAreaInsets()
   const { colors } = useTheme()
-  const { BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, GREEN, ENDED_BG, ENDED_BORDER, ENDED_TEXT } = colors
-  const styles = useMemo(() => createLeaderboardStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, GREEN, ENDED_BG, ENDED_BORDER, ENDED_TEXT }),
-    [BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, GREEN, ENDED_BG, ENDED_BORDER, ENDED_TEXT])
+  const { BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, GREEN, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT } = colors
+  const styles = useMemo(() => createLeaderboardStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, GREEN, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT }),
+    [BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, GREEN, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT])
   const { entries, loading } = useLeaderboard(listId)
 
   const [userId, setUserId] = useState(null)
@@ -542,7 +542,7 @@ export default function LeaderboardScreen({ route }) {
   )
 }
 
-function createLeaderboardStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, GREEN, ENDED_BG, ENDED_BORDER, ENDED_TEXT }) {
+function createLeaderboardStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, GREEN, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT }) {
  return StyleSheet.create({
   container:   { flex: 1, backgroundColor: BG },
   center:      { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, backgroundColor: BG },
@@ -641,15 +641,15 @@ function createLeaderboardStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, 
     fontWeight: '700',
   },
 
-  nudgeCard:   { backgroundColor: '#FFF0EA', borderRadius: 14, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: '#F5C9B3' },
-  nudgeChase:  { backgroundColor: SOFT, borderColor: '#F0D29D' },
+  nudgeCard:   { backgroundColor: SOFT, borderRadius: 14, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: BORDER },
+  nudgeChase:  { backgroundColor: SOFT, borderColor: BORDER },
   nudgeText:   { fontSize: 13, color: TEXT, fontWeight: '700', lineHeight: 18 },
 
   inviteCrewCard: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#F0F8FF', borderRadius: 14,
+    backgroundColor: SOFT, borderRadius: 14,
     padding: 14, marginBottom: 10,
-    borderWidth: 1, borderColor: '#BDD8F5',
+    borderWidth: 1, borderColor: BORDER,
   },
   inviteCrewLeft:  { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
   inviteCrewEmoji: { fontSize: 24 },
@@ -658,7 +658,7 @@ function createLeaderboardStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, 
   inviteCrewArrow: { fontSize: 16, color: BLUE, fontWeight: '800' },
 
   row:         { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12, paddingHorizontal: 14, backgroundColor: CARD, borderRadius: 18, borderWidth: 1, borderColor: BORDER },
-  rowMe:       { borderColor: AMBER, backgroundColor: '#FFF8E8', borderWidth: 2 },
+  rowMe:       { borderColor: AMBER, backgroundColor: CARD_URGENT, borderWidth: 2 },
   rowDeleted:  { opacity: 0.6 },
   nameDeleted: { color: '#B0A89E', fontStyle: 'italic' },
 
