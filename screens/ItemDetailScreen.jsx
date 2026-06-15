@@ -10,6 +10,9 @@ import {
   Alert,
   ScrollView,
   ActivityIndicator,
+  Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native'
 import Clipboard from '@react-native-clipboard/clipboard'
 import * as Haptics from 'expo-haptics'
@@ -17,6 +20,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { completeDare } from '../lib/completeDare'
+import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
 import { useTheme } from '../lib/ThemeContext'
 
 const AMBER = '#F5A623'
@@ -168,6 +172,12 @@ export default function ItemDetailScreen({ route, navigation }) {
   const [flagNote, setFlagNote] = useState('')
   const [flagSubmitting, setFlagSubmitting] = useState(false)
   const [flagDone, setFlagDone] = useState(false)
+
+  const [memoryModal,  setMemoryModal]  = useState(null) // { listItemId, placeLabel, noteLabel, itemBody, difficulty }
+  const [memoryPlace,  setMemoryPlace]  = useState('')
+  const [memoryNote,   setMemoryNote]   = useState('')
+  const [memoryError,  setMemoryError]  = useState(null)
+  const [memorySaving, setMemorySaving] = useState(false)
 
   // Nearby mode — shown when no listId, item came from Nearby tab
   const isNearbyMode = !listId
@@ -374,6 +384,22 @@ export default function ItemDetailScreen({ route, navigation }) {
           body: { user_id: userId },
         }).catch(() => {/* non-critical */})
         if (item?.id) completeDare(userId, item.id).catch(() => {})
+
+        const difficulty = item?.difficulty ?? 0
+        if (item?.allowsPersonalNote) {
+          setMemoryPlace('')
+          setMemoryNote('')
+          setMemoryError(null)
+          setMemoryModal({
+            listItemId: listItemId,
+            placeLabel:  item.personalPlaceLabel  ?? 'Place or location',
+            noteLabel:   item.personalPromptLabel ?? 'Any notes?',
+            itemBody:    item.body ?? '',
+            difficulty,
+          })
+        } else if (difficulty >= 5) {
+          notifyCrewCheckIn({ listItemId, itemBody: item?.body ?? '', difficulty, checkInId: null }).catch(() => {})
+        }
       }
     } catch (e) {
       Alert.alert('Could not check off', e.message)
@@ -486,6 +512,22 @@ export default function ItemDetailScreen({ route, navigation }) {
           body: { user_id: userId },
         }).catch(() => {/* non-critical */})
         if (item?.id) completeDare(userId, item.id).catch(() => {})
+
+        const difficulty = item?.difficulty ?? 0
+        if (item?.allowsPersonalNote) {
+          setMemoryPlace('')
+          setMemoryNote('')
+          setMemoryError(null)
+          setMemoryModal({
+            listItemId: itemOnListId,
+            placeLabel:  item.personalPlaceLabel  ?? 'Place or location',
+            noteLabel:   item.personalPromptLabel ?? 'Any notes?',
+            itemBody:    item.body ?? '',
+            difficulty,
+          })
+        } else if (difficulty >= 5) {
+          notifyCrewCheckIn({ listItemId: itemOnListId, itemBody: item?.body ?? '', difficulty, checkInId: null }).catch(() => {})
+        }
       }
     } catch (e) {
       Alert.alert('Could not check off', e.message)
@@ -618,6 +660,37 @@ export default function ItemDetailScreen({ route, navigation }) {
       Alert.alert('Could not submit', 'Try again in a moment.')
     } finally {
       setFlagSubmitting(false)
+    }
+  }
+
+  async function saveMemory() {
+    if (!memoryModal) return
+    const place = memoryPlace.trim()
+    const note  = memoryNote.trim()
+    setMemorySaving(true)
+    setMemoryError(null)
+    try {
+      const { data: updatedCI, error } = await supabase
+        .from('check_ins')
+        .update({ personal_place: place || null, personal_note: note || null })
+        .eq('user_id', userId)
+        .eq('list_item_id', memoryModal.listItemId)
+        .select('id')
+        .single()
+      if (error) throw error
+      if ((memoryModal.difficulty ?? 0) >= 5) {
+        notifyCrewCheckIn({
+          listItemId: memoryModal.listItemId,
+          itemBody:   memoryModal.itemBody   ?? '',
+          difficulty: memoryModal.difficulty ?? 5,
+          checkInId:  updatedCI?.id ?? null,
+        }).catch(() => {})
+      }
+      setMemoryModal(null)
+    } catch (e) {
+      setMemoryError('Could not save — try again.')
+    } finally {
+      setMemorySaving(false)
     }
   }
 
@@ -1072,6 +1145,83 @@ export default function ItemDetailScreen({ route, navigation }) {
         </View>
       </View>
     )}
+      <Modal
+        visible={!!memoryModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setMemoryModal(null)}
+      >
+        <KeyboardAvoidingView
+          style={styles.memoryOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <TouchableOpacity
+            style={StyleSheet.absoluteFillObject}
+            activeOpacity={1}
+            onPress={() => setMemoryModal(null)}
+          />
+          <View style={styles.memorySheet}>
+            <Text style={styles.memoryTitle}>Make this yours</Text>
+            <Text style={styles.memorySub}>
+              Want to add where you did it or what made it memorable?
+            </Text>
+
+            <Text style={styles.memoryLabel}>{memoryModal?.placeLabel ?? 'Place or location'}</Text>
+            <TextInput
+              style={styles.memoryInput}
+              placeholder="e.g. The Roosevelt Row location"
+              placeholderTextColor="#A0A0AA"
+              value={memoryPlace}
+              onChangeText={setMemoryPlace}
+              returnKeyType="next"
+            />
+
+            <Text style={styles.memoryLabel}>{memoryModal?.noteLabel ?? 'Any notes?'}</Text>
+            <TextInput
+              style={[styles.memoryInput, styles.memoryInputMulti]}
+              placeholder="What made it memorable?"
+              placeholderTextColor="#A0A0AA"
+              value={memoryNote}
+              onChangeText={setMemoryNote}
+              multiline
+              returnKeyType="done"
+              blurOnSubmit
+            />
+
+            {memoryError ? (
+              <Text style={styles.memoryErrorText}>{memoryError}</Text>
+            ) : null}
+
+            <TouchableOpacity
+              style={styles.memorySaveBtn}
+              onPress={saveMemory}
+              disabled={memorySaving}
+            >
+              <Text style={styles.memorySaveBtnText}>
+                {memorySaving ? 'Saving…' : 'Save memory'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.memorySkipBtn}
+              onPress={() => {
+                if ((memoryModal?.difficulty ?? 0) >= 5) {
+                  notifyCrewCheckIn({
+                    listItemId: memoryModal.listItemId,
+                    itemBody:   memoryModal.itemBody   ?? '',
+                    difficulty: memoryModal.difficulty ?? 5,
+                    checkInId:  null,
+                  }).catch(() => {})
+                }
+                setMemoryModal(null)
+              }}
+              disabled={memorySaving}
+            >
+              <Text style={styles.memorySkipBtnText}>Skip</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </View>
   )
 }
@@ -1636,6 +1786,80 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     fontSize: 13,
     fontWeight: '800',
     color: '#fff',
+  },
+
+  memoryOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  memorySheet: {
+    backgroundColor: CARD,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 36,
+  },
+  memoryTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: TEXT,
+    marginBottom: 6,
+  },
+  memorySub: {
+    fontSize: 14,
+    color: MUTED,
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  memoryLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: MUTED,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  memoryInput: {
+    backgroundColor: BG,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: BORDER,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: TEXT,
+    marginBottom: 16,
+  },
+  memoryInputMulti: {
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  memoryErrorText: {
+    fontSize: 13,
+    color: '#D85A30',
+    marginBottom: 12,
+  },
+  memorySaveBtn: {
+    backgroundColor: '#F5A623',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  memorySaveBtnText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#1A1A2E',
+  },
+  memorySkipBtn: {
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  memorySkipBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: MUTED,
   },
  })
 }
