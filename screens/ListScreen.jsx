@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 
 import { useFocusEffect } from '@react-navigation/native'
+import { useHeaderHeight } from '@react-navigation/elements'
 import {
   View,
   Text,
@@ -12,8 +13,13 @@ import {
   ScrollView,
   Animated,
   Alert,
+  ImageBackground,
+  Modal,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native'
 import * as Haptics from 'expo-haptics'
+import { LinearGradient } from 'expo-linear-gradient'
 import { useItems } from '../lib/useItems'
 import { useLeaderboard } from '../lib/useLeaderboard'
 import { supabase } from '../lib/supabase'
@@ -28,9 +34,7 @@ import { useTheme } from '../lib/ThemeContext'
 const ACCENT = '#FFB84D'
 const ACCENT_DARK = '#7A4B00'
 // Colors now come from ThemeContext — see useTheme() inside the component
-const ENDED_BG = '#F4EEF9'
-const ENDED_BORDER = '#DCCCED'
-const ENDED_TEXT = '#7A4DB3'
+// ENDED_BG, ENDED_BORDER, ENDED_TEXT now come from ThemeContext (light/dark aware)
 
 // Difficulty tier config — mirrors admin DIFFICULTY_TIERS
 const DIFFICULTY_LABELS = { 5: 'Partner', 10: 'Rare', 25: 'Legend' }
@@ -42,11 +46,12 @@ const DIFFICULTY_COLORS = {
 
 
 export default function ListScreen({ route, navigation }) {
-  const { listId, cityId, title } = route.params ?? {}
+  const { listId, cityId, title, heroImage } = route.params ?? {}
   const { colors } = useTheme()
-  const { BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY } = colors
-  const styles = useMemo(() => createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY }),
-    [BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY])
+  const { BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, ENDED_BG, ENDED_BORDER, ENDED_TEXT } = colors
+  const styles = useMemo(() => createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, ENDED_BG, ENDED_BORDER, ENDED_TEXT }),
+    [BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, ENDED_BG, ENDED_BORDER, ENDED_TEXT])
+  const headerHeight = useHeaderHeight()
 
   const [filter, setFilter] = useState('All')
   const [search, setSearch] = useState('')
@@ -64,6 +69,17 @@ export default function ListScreen({ route, navigation }) {
   // Leaderboard entries used to compute user's rank for the summary screen
   const { entries: lbEntries } = useLeaderboard(listId)
   const [currentUserId, setCurrentUserId] = useState(null)
+
+  // Transparent nav bar when hero image is present so photo fills behind the header
+  useEffect(() => {
+    if (heroImage) {
+      navigation.setOptions({
+        headerTransparent: true,
+        headerTintColor: '#FFFFFF',
+        headerTitleStyle: { color: '#FFFFFF', fontWeight: '800' },
+      })
+    }
+  }, [heroImage, navigation])
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -87,6 +103,13 @@ export default function ListScreen({ route, navigation }) {
 
   // Badge celebration modal
   const [celebrationBadges, setCelebrationBadges] = useState([])
+
+  // Personalized check-in memory modal
+  const [memoryModal,   setMemoryModal]   = useState(null)  // { listItemId, placeLabel, noteLabel }
+  const [memoryPlace,   setMemoryPlace]   = useState('')
+  const [memoryNote,    setMemoryNote]    = useState('')
+  const [memorySaving,  setMemorySaving]  = useState(false)
+  const [memoryError,   setMemoryError]   = useState(null)
 
   // Tick every minute so hour/minute countdown updates in real time
   const [tick, setTick] = useState(0)
@@ -272,7 +295,7 @@ export default function ListScreen({ route, navigation }) {
 
       const { data: checkIns, error: checkErr } = await supabase
         .from('check_ins')
-        .select('list_item_id, checked_at')
+        .select('list_item_id, checked_at, personal_place, personal_note')
         .eq('user_id', user.id)
         .in('list_item_id', listItemIds)
 
@@ -282,7 +305,7 @@ export default function ListScreen({ route, navigation }) {
       if (checkOffInFlight.current) return
 
       const checkedMap = new Map(
-        (checkIns ?? []).map(ci => [String(ci.list_item_id), ci.checked_at])
+        (checkIns ?? []).map(ci => [String(ci.list_item_id), ci])
       )
 
       // Use localItems as base to preserve any optimistic state not yet in DB
@@ -291,7 +314,14 @@ export default function ListScreen({ route, navigation }) {
         return base.map(item => {
           // If DB confirms this item is checked, always trust DB
           if (checkedMap.has(String(item.listItemId))) {
-            return { ...item, checked: true, checkedAt: checkedMap.get(String(item.listItemId)) }
+            const ci = checkedMap.get(String(item.listItemId))
+            return {
+              ...item,
+              checked:       true,
+              checkedAt:     ci.checked_at,
+              personalPlace: ci.personal_place ?? null,
+              personalNote:  ci.personal_note  ?? null,
+            }
           }
           // If DB says not checked but we have an in-progress optimistic check,
           // keep the optimistic state until the next refresh confirms it
@@ -536,6 +566,18 @@ export default function ListScreen({ route, navigation }) {
             if (earned.length > 0) setCelebrationBadges(earned)
           })
         }
+
+        // Open the personal memory modal if the item supports it
+        if (!wasChecked && item?.allowsPersonalNote) {
+          setMemoryPlace('')
+          setMemoryNote('')
+          setMemoryError(null)
+          setMemoryModal({
+            listItemId: listItemId,
+            placeLabel: item.personalPlaceLabel  ?? 'Place or location',
+            noteLabel:  item.personalPromptLabel ?? 'Any notes?',
+          })
+        }
       }).catch(() => {
         checkOffInFlight.current = false
         // Revert on unexpected exception
@@ -562,6 +604,38 @@ export default function ListScreen({ route, navigation }) {
       }
     }
   }, [ended, listId, checkOff, localItems, cityItems, navigation, triggerCelebration, currentUserId])
+
+  const saveMemory = useCallback(async () => {
+    if (!memoryModal) return
+    const place = memoryPlace.trim()
+    const note  = memoryNote.trim()
+    if (!place && !note) {
+      setMemoryModal(null)
+      return
+    }
+    setMemorySaving(true)
+    setMemoryError(null)
+    try {
+      const { data: { user } } = await supabase.auth.getUser()
+      const { error } = await supabase
+        .from('check_ins')
+        .update({ personal_place: place || null, personal_note: note || null })
+        .eq('user_id', user.id)
+        .eq('list_item_id', memoryModal.listItemId)
+      if (error) throw error
+      // Optimistic update so the note displays immediately
+      setLocalItems(prev => prev.map(i =>
+        i.listItemId === memoryModal.listItemId
+          ? { ...i, personalPlace: place || null, personalNote: note || null }
+          : i
+      ))
+      setMemoryModal(null)
+    } catch {
+      setMemoryError("Couldn't save your memory, but your check-in is safe.")
+    } finally {
+      setMemorySaving(false)
+    }
+  }, [memoryModal, memoryPlace, memoryNote])
 
   const renderItem = useCallback(({ item }) => {
     const isCelebrating = celebratingId === item.listItemId
@@ -670,6 +744,12 @@ export default function ListScreen({ route, navigation }) {
               </View>
             )}
           </View>
+
+          {item.checked && (item.personalPlace || item.personalNote) && (
+            <Text style={{ color: '#6F7785', fontSize: 12, marginTop: 4 }}>
+              {item.personalPlace}{item.personalNote ? (item.personalPlace ? ' · ' : '') + item.personalNote : ''}
+            </Text>
+          )}
         </View>
 
         <View style={styles.rowRight}>
@@ -698,7 +778,20 @@ export default function ListScreen({ route, navigation }) {
   }, [navigation, route.params, listId, ended, handleCheckOff, celebratingId, flashAnim])
 
   const headerEl = useMemo(() => (
-    <View style={styles.headerBlock}>
+    <View style={[styles.headerBlock, heroImage && { paddingTop: headerHeight }]}>
+      {heroImage ? (
+        <ImageBackground
+          source={{ uri: heroImage }}
+          style={[styles.headerHeroImage, { height: headerHeight + 180 }]}
+          imageStyle={{ borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }}
+        >
+          <LinearGradient
+            colors={['rgba(0,0,0,0.08)', 'rgba(0,0,0,0.5)', BG]}
+            locations={[0, 0.55, 1]}
+            style={[styles.headerHeroGradient, { height: headerHeight + 180 }]}
+          />
+        </ImageBackground>
+      ) : null}
       {ended && (
         <View style={styles.endedBanner}>
           <View style={styles.endedBannerTop}>
@@ -819,6 +912,9 @@ export default function ListScreen({ route, navigation }) {
     filtered.length,
     navigation,
     tick,
+    heroImage,
+    headerHeight,
+    BG,
   ])
 
   const suggestionsFooter = listId ? (
@@ -940,11 +1036,80 @@ export default function ListScreen({ route, navigation }) {
         badges={celebrationBadges}
         onDismiss={() => setCelebrationBadges([])}
       />
+
+      {/* Personalized check-in memory modal */}
+      <Modal
+        visible={!!memoryModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setMemoryModal(null)}
+      >
+        <KeyboardAvoidingView
+          style={styles.memoryOverlay}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        >
+          <TouchableOpacity
+            style={StyleSheet.absoluteFillObject}
+            activeOpacity={1}
+            onPress={() => setMemoryModal(null)}
+          />
+          <View style={styles.memorySheet}>
+            <Text style={styles.memoryTitle}>Make this yours</Text>
+            <Text style={styles.memorySub}>
+              Want to add where you did it or what made it memorable?
+            </Text>
+
+            <Text style={styles.memoryLabel}>{memoryModal?.placeLabel ?? 'Place or location'}</Text>
+            <TextInput
+              style={styles.memoryInput}
+              placeholder="e.g. The Roosevelt Row location"
+              placeholderTextColor="#A0A0AA"
+              value={memoryPlace}
+              onChangeText={setMemoryPlace}
+              returnKeyType="next"
+            />
+
+            <Text style={styles.memoryLabel}>{memoryModal?.noteLabel ?? 'Any notes?'}</Text>
+            <TextInput
+              style={[styles.memoryInput, styles.memoryInputMulti]}
+              placeholder="What made it memorable?"
+              placeholderTextColor="#A0A0AA"
+              value={memoryNote}
+              onChangeText={setMemoryNote}
+              multiline
+              returnKeyType="done"
+              blurOnSubmit
+            />
+
+            {memoryError ? (
+              <Text style={styles.memoryErrorText}>{memoryError}</Text>
+            ) : null}
+
+            <TouchableOpacity
+              style={styles.memorySaveBtn}
+              onPress={saveMemory}
+              disabled={memorySaving}
+            >
+              <Text style={styles.memorySaveBtnText}>
+                {memorySaving ? 'Saving…' : 'Save memory'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.memorySkipBtn}
+              onPress={() => setMemoryModal(null)}
+              disabled={memorySaving}
+            >
+              <Text style={styles.memorySkipBtnText}>Skip</Text>
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+      </Modal>
     </SafeAreaView>
   )
 }
 
-function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY }) {
+function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, ENDED_BG, ENDED_BORDER, ENDED_TEXT }) {
  return StyleSheet.create({
   container: {
     flex: 1,
@@ -966,6 +1131,19 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY }) 
     paddingTop: 8,
     paddingHorizontal: 16,
     paddingBottom: 12,
+  },
+
+  headerHeroImage: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 220,
+  },
+
+  headerHeroGradient: {
+    flex: 1,
+    height: 220,
   },
 
   endedBanner: {
@@ -1532,6 +1710,80 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY }) 
   suggestBtnText: {
     fontSize: 14,
     fontWeight: '700',
+    color: MUTED,
+  },
+  // ── Personalized memory modal ──
+  memoryOverlay: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  memorySheet: {
+    backgroundColor: CARD,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 36,
+  },
+  memoryTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: TEXT,
+    marginBottom: 6,
+  },
+  memorySub: {
+    fontSize: 14,
+    color: MUTED,
+    marginBottom: 20,
+    lineHeight: 20,
+  },
+  memoryLabel: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: MUTED,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+  },
+  memoryInput: {
+    backgroundColor: BG,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: BORDER,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    fontSize: 15,
+    color: TEXT,
+    marginBottom: 16,
+  },
+  memoryInputMulti: {
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  memoryErrorText: {
+    fontSize: 13,
+    color: '#D85A30',
+    marginBottom: 12,
+  },
+  memorySaveBtn: {
+    backgroundColor: '#F5A623',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  memorySaveBtnText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#1A1A2E',
+  },
+  memorySkipBtn: {
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  memorySkipBtnText: {
+    fontSize: 14,
+    fontWeight: '600',
     color: MUTED,
   },
  }) // end StyleSheet.create
