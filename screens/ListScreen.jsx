@@ -764,6 +764,10 @@ export default function ListScreen({ route, navigation }) {
         <TouchableOpacity
           style={[styles.rowCard, item.checked && styles.rowCardChecked]}
           onPress={() => {
+            if (item.checked) {
+              openDetailModal(item)
+              return
+            }
             if (item.is_secret || item.isSecret) {
               navigation.navigate('SecretReveal', { item, listItemId: item.listItemId })
               return
@@ -852,6 +856,11 @@ export default function ListScreen({ route, navigation }) {
               {item.personalPlace}{item.personalNote ? (item.personalPlace ? ' · ' : '') + item.personalNote : ''}
             </Text>
           )}
+          {item.checked && (
+            <Text style={{ color: '#F5A623', fontSize: 11, marginTop: 4, textAlign: 'right' }}>
+              View memory →
+            </Text>
+          )}
         </View>
 
         <View style={styles.rowRight}>
@@ -864,15 +873,7 @@ export default function ListScreen({ route, navigation }) {
             </Text>
           ) : null}
 
-          {item.checked ? (
-            <TouchableOpacity
-              style={styles.infoBtn}
-              onPress={() => openDetailModal(item)}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Text style={styles.infoBtnText}>ⓘ</Text>
-            </TouchableOpacity>
-          ) : !ended && listId ? (
+          {!item.checked && !ended && listId ? (
             <TouchableOpacity
               style={styles.dareBtn}
               onPress={() => navigation.navigate('Dare', { item, listId })}
