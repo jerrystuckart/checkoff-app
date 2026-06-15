@@ -118,9 +118,10 @@ export default function ListScreen({ route, navigation }) {
   const [detailLoading, setDetailLoading] = useState(false)
 
   // Partner suggestion card — shown after check-in (after memory modal if present)
-  const [pendingPartnerSuggestion, setPendingPartnerSuggestion] = useState(null)
-  const [partnerSuggestion,        setPartnerSuggestion]        = useState(null)
-  const suggAnim = useRef(new Animated.Value(200)).current
+  const [pendingSuggestionStack, setPendingSuggestionStack] = useState(null)
+  const [suggestionStack,        setSuggestionStack]        = useState(null)
+  const suggAnim        = useRef(new Animated.Value(200)).current
+  const suggDismissAnim = useRef(new Animated.Value(1)).current
 
   // Tick every minute so hour/minute countdown updates in real time
   const [tick, setTick] = useState(0)
@@ -367,15 +368,16 @@ export default function ListScreen({ route, navigation }) {
 
   // Promote pending partner suggestion once memory modal is fully dismissed
   useEffect(() => {
-    if (!memoryModal && pendingPartnerSuggestion) {
-      setPartnerSuggestion(pendingPartnerSuggestion)
-      setPendingPartnerSuggestion(null)
+    if (!memoryModal && pendingSuggestionStack) {
+      setSuggestionStack(pendingSuggestionStack)
+      setPendingSuggestionStack(null)
     }
-  }, [memoryModal, pendingPartnerSuggestion])
+  }, [memoryModal, pendingSuggestionStack])
 
-  // Slide card in when a suggestion becomes active
+  // Slide card in when a suggestion stack becomes active
   useEffect(() => {
-    if (partnerSuggestion) {
+    if (suggestionStack?.length) {
+      suggDismissAnim.setValue(1)
       Animated.spring(suggAnim, {
         toValue: 0,
         useNativeDriver: true,
@@ -383,7 +385,7 @@ export default function ListScreen({ route, navigation }) {
         friction: 12,
       }).start()
     }
-  }, [partnerSuggestion])
+  }, [suggestionStack])
 
   function isEnded() {
     if (!listMeta?.ends_at) return false
@@ -647,10 +649,48 @@ export default function ListScreen({ route, navigation }) {
     }
   }, [ended, listId, checkOff, localItems, cityItems, navigation, triggerCelebration, currentUserId])
 
-  function dismissSuggestion() {
+  function slideOutSuggStack(onDone) {
     Animated.timing(suggAnim, { toValue: 200, useNativeDriver: true, duration: 200 }).start(() => {
-      setPartnerSuggestion(null)
+      setSuggestionStack(null)
       suggAnim.setValue(200)
+      onDone?.()
+    })
+  }
+
+  function dismissCard(idx) {
+    if (!suggestionStack) return
+    if (idx !== 0) {
+      // Peeking card — remove instantly without animation
+      setSuggestionStack(prev => {
+        const next = prev.filter((_, i) => i !== idx)
+        return next.length ? next : null
+      })
+      return
+    }
+    // Front card — fade out then remove
+    Animated.timing(suggDismissAnim, { toValue: 0, useNativeDriver: true, duration: 180 }).start(() => {
+      setSuggestionStack(prev => {
+        if (!prev) return null
+        const next = prev.slice(1)
+        if (!next.length) {
+          slideOutSuggStack()
+          return null
+        }
+        suggDismissAnim.setValue(1)
+        return next
+      })
+    })
+  }
+
+  function bringToFront(idx) {
+    if (!suggestionStack || idx === 0) return
+    setSuggestionStack(prev => {
+      if (!prev) return prev
+      const next = [...prev]
+      const [card] = next.splice(idx, 1)
+      next.unshift(card)
+      suggDismissAnim.setValue(1)
+      return next
     })
   }
 
@@ -666,12 +706,11 @@ export default function ListScreen({ route, navigation }) {
         .or(`starts_at.is.null,starts_at.lte.${now}`)
         .or(`ends_at.is.null,ends_at.gte.${now}`)
         .order('priority', { ascending: true })
-        .limit(1)
       if (!data?.length) return
       if (hasMemoryModal) {
-        setPendingPartnerSuggestion(data[0])
+        setPendingSuggestionStack(data)
       } else {
-        setPartnerSuggestion(data[0])
+        setSuggestionStack(data)
       }
     } catch {
       // non-critical — never block or surface errors from this
@@ -1165,52 +1204,120 @@ export default function ListScreen({ route, navigation }) {
         onDismiss={() => setCelebrationBadges([])}
       />
 
-      {/* Partner suggestion card — slides up from bottom after check-in */}
-      {partnerSuggestion && (
+      {/* Partner suggestion cards — stacked, slides up from bottom after check-in */}
+      {suggestionStack?.length > 0 && (
         <Animated.View
           pointerEvents="box-none"
           style={[styles.suggCard, { transform: [{ translateY: suggAnim }] }]}
         >
-          <View style={styles.suggInner}>
-            <View style={styles.suggTop}>
-              {partnerSuggestion.partners?.photo_url ? (
-                <Image
-                  source={{ uri: partnerSuggestion.partners.photo_url }}
-                  style={styles.suggImage}
-                />
-              ) : null}
-              <View style={{ flex: 1 }}>
-                <Text style={styles.suggTitle}>
-                  {partnerSuggestion.suggestion_title ?? 'Nice one. Want a reward nearby?'}
-                </Text>
-                <Text style={styles.suggBody}>
-                  {partnerSuggestion.suggestion_body ?? 'People who check this off often stop here after.'}
-                </Text>
-                {(partnerSuggestion.partners?.business_name || partnerSuggestion.partners?.address) && (
-                  <Text style={styles.suggPartnerMeta} numberOfLines={1}>
-                    {[partnerSuggestion.partners?.business_name, partnerSuggestion.partners?.address]
-                      .filter(Boolean).join(' · ')}
-                  </Text>
-                )}
-              </View>
+          {/* Count badge — only when 3+ cards */}
+          {suggestionStack.length >= 3 && (
+            <View style={styles.suggCountBadge}>
+              <Text style={styles.suggCountText}>{suggestionStack.length} spots nearby</Text>
             </View>
-            <View style={styles.suggButtons}>
-              <TouchableOpacity
-                style={styles.suggPrimaryBtn}
-                onPress={() => {
-                  dismissSuggestion()
-                  navigation.navigate('PartnerPreview', { partner_id: partnerSuggestion.partners?.id })
-                }}
-              >
-                <Text style={styles.suggPrimaryBtnText}>View spot</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.suggGhostBtn}
-                onPress={dismissSuggestion}
-              >
-                <Text style={styles.suggGhostBtnText}>Maybe later</Text>
-              </TouchableOpacity>
-            </View>
+          )}
+
+          <View style={styles.suggStack}>
+            {/* Render peek cards behind front card (index 2 first = furthest back) */}
+            {suggestionStack.length >= 3 && (() => {
+              const peek = suggestionStack[2]
+              return (
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => bringToFront(2)}
+                  style={[
+                    styles.suggInner,
+                    styles.suggPeekCard,
+                    { transform: [{ translateY: 15 }, { scale: 0.94 }], opacity: 0.85 },
+                  ]}
+                >
+                  <View style={styles.suggTop}>
+                    {peek.partners?.photo_url ? (
+                      <Image source={{ uri: peek.partners.photo_url }} style={styles.suggImage} />
+                    ) : null}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.suggTitle} numberOfLines={1}>
+                        {peek.suggestion_title ?? 'Nice one. Want a reward nearby?'}
+                      </Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              )
+            })()}
+
+            {suggestionStack.length >= 2 && (() => {
+              const peek = suggestionStack[1]
+              return (
+                <TouchableOpacity
+                  activeOpacity={0.85}
+                  onPress={() => bringToFront(1)}
+                  style={[
+                    styles.suggInner,
+                    styles.suggPeekCard,
+                    { transform: [{ translateY: 9 }, { scale: 0.96 }], opacity: 0.90 },
+                  ]}
+                >
+                  <View style={styles.suggTop}>
+                    {peek.partners?.photo_url ? (
+                      <Image source={{ uri: peek.partners.photo_url }} style={styles.suggImage} />
+                    ) : null}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.suggTitle} numberOfLines={1}>
+                        {peek.suggestion_title ?? 'Nice one. Want a reward nearby?'}
+                      </Text>
+                    </View>
+                  </View>
+                </TouchableOpacity>
+              )
+            })()}
+
+            {/* Front card (index 0) — fully interactive */}
+            {(() => {
+              const front = suggestionStack[0]
+              return (
+                <Animated.View style={[styles.suggInner, { opacity: suggDismissAnim }]}>
+                  <View style={styles.suggTop}>
+                    {front.partners?.photo_url ? (
+                      <Image
+                        source={{ uri: front.partners.photo_url }}
+                        style={styles.suggImage}
+                      />
+                    ) : null}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.suggTitle}>
+                        {front.suggestion_title ?? 'Nice one. Want a reward nearby?'}
+                      </Text>
+                      <Text style={styles.suggBody}>
+                        {front.suggestion_body ?? 'People who check this off often stop here after.'}
+                      </Text>
+                      {(front.partners?.business_name || front.partners?.address) && (
+                        <Text style={styles.suggPartnerMeta} numberOfLines={1}>
+                          {[front.partners?.business_name, front.partners?.address]
+                            .filter(Boolean).join(' · ')}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+                  <View style={styles.suggButtons}>
+                    <TouchableOpacity
+                      style={styles.suggPrimaryBtn}
+                      onPress={() => {
+                        dismissCard(0)
+                        navigation.navigate('PartnerPreview', { partner_id: front.partners?.id })
+                      }}
+                    >
+                      <Text style={styles.suggPrimaryBtnText}>View spot</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.suggGhostBtn}
+                      onPress={() => dismissCard(0)}
+                    >
+                      <Text style={styles.suggGhostBtnText}>Maybe later</Text>
+                    </TouchableOpacity>
+                  </View>
+                </Animated.View>
+              )
+            })()}
           </View>
         </Animated.View>
       )}
@@ -1979,6 +2086,31 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, EN
     paddingHorizontal: 14,
     paddingBottom: 28,
     paddingTop: 4,
+  },
+  suggStack: {
+    position: 'relative',
+  },
+  suggPeekCard: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: -1,
+  },
+  suggCountBadge: {
+    alignSelf: 'flex-end',
+    marginBottom: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E6D8C7',
+  },
+  suggCountText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#6F7785',
   },
   suggInner: {
     backgroundColor: CARD,
