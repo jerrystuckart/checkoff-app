@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
+  Share,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useTheme } from '../lib/ThemeContext'
@@ -32,7 +33,7 @@ function formatDateRange(weekStart, weekEnd) {
   return `${weekStart.toLocaleDateString(undefined, opts)} – ${weekEnd.toLocaleDateString(undefined, opts)}`
 }
 
-export default function WeeklyRecapScreen({ navigation }) {
+export default function WeeklyRecapScreen({ navigation, route }) {
   const insets = useSafeAreaInsets()
   const { colors } = useTheme()
   const { BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY } = colors
@@ -43,7 +44,21 @@ export default function WeeklyRecapScreen({ navigation }) {
   const [totalPts, setTotalPts]     = useState(null) // null = unavailable
   const [streak, setStreak]         = useState(0)
 
-  const { weekStart, weekEnd } = getWeekRange()
+  // Accept an optional weekStart param (ISO string) from the Monday modal.
+  // If not provided, default to the current week.
+  const { weekStart, weekEnd } = useMemo(() => {
+    const paramStart = route?.params?.weekStart
+    if (paramStart) {
+      const monday = new Date(paramStart)
+      monday.setHours(0, 0, 0, 0)
+      const sunday = new Date(monday)
+      sunday.setDate(monday.getDate() + 6)
+      sunday.setHours(23, 59, 59, 999)
+      return { weekStart: monday, weekEnd: sunday }
+    }
+    return getWeekRange()
+  }, [route?.params?.weekStart])
+
   const dateRange = formatDateRange(weekStart, weekEnd)
 
   const load = useCallback(async (isRefresh = false) => {
@@ -243,9 +258,16 @@ export default function WeeklyRecapScreen({ navigation }) {
           {/* Share button */}
           <TouchableOpacity
             style={styles.shareBtn}
-            onPress={() =>
-              Alert.alert('Coming soon', 'Shareable recap image coming in the next update.')
-            }
+            onPress={async () => {
+              const parts = [`${checkIns.length} check-in${checkIns.length !== 1 ? 's' : ''}`]
+              if (totalPts != null) parts.push(`${totalPts} points`)
+              if (streak > 0) parts.push(`${streak} day streak`)
+              const statsLine = parts.join(' · ')
+              const msg = `My week in CheckOff 🔥\n${statsLine}\nStop saying "I don't know what to do."\ngetcheckoff.com`
+              try {
+                await Share.share({ message: msg })
+              } catch { /* cancelled or unavailable */ }
+            }}
           >
             <Text style={styles.shareBtnText}>Share my week ↗</Text>
           </TouchableOpacity>

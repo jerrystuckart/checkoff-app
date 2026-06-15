@@ -48,6 +48,7 @@ export default function HomeScreen({ navigation }) {
   const [nextTenList, setNextTenList] = useState(null)
   const [nextTenDismissed, setNextTenDismissed] = useState(false)
   const [heroImage, setHeroImage] = useState(null)
+  const [recapModal, setRecapModal] = useState(null) // { count, pts, streak, weekStartIso }
 
   const { savedCrew } = useCrewInvite()
 
@@ -378,6 +379,87 @@ export default function HomeScreen({ navigation }) {
     const id = setInterval(() => setTick(t => t + 1), 60000)
     return () => clearInterval(id)
   }, [])
+
+  // Monday recap trigger — fires once on mount, entirely fire-and-forget
+  useEffect(() => {
+    async function checkMondayRecap() {
+      try {
+        // Only run on Monday (local time)
+        if (new Date().getDay() !== 1) return
+
+        const { data: { user } } = await supabase.auth.getUser()
+        if (!user) return
+        const uid = user.id
+
+        // Last week: Monday 00:00 → Sunday 23:59 local time
+        const now = new Date()
+        const lastMonday = new Date(now)
+        lastMonday.setDate(now.getDate() - 7)
+        lastMonday.setHours(0, 0, 0, 0)
+        const lastSunday = new Date(lastMonday)
+        lastSunday.setDate(lastMonday.getDate() + 6)
+        lastSunday.setHours(23, 59, 59, 999)
+        const weekStartDate = lastMonday.toISOString().split('T')[0]
+
+        // Check if already viewed or dismissed this recap
+        const { data: existing } = await supabase
+          .from('user_recap_views')
+          .select('id')
+          .eq('user_id', uid)
+          .eq('recap_week_start', weekStartDate)
+          .maybeSingle()
+        if (existing) return
+
+        // Check for check-ins last week
+        const { data: lastWeekCIs } = await supabase
+          .from('check_ins')
+          .select('id, list_items!inner(point_multiplier, items!inner(difficulty))')
+          .eq('user_id', uid)
+          .gte('checked_at', lastMonday.toISOString())
+          .lte('checked_at', lastSunday.toISOString())
+        if (!lastWeekCIs?.length) return
+
+        // Compute summary stats
+        let pts = null
+        try {
+          pts = lastWeekCIs.reduce((sum, ci) => {
+            const d = ci.list_items?.items?.difficulty ?? null
+            const m = ci.list_items?.point_multiplier ?? 1
+            return d != null ? sum + Math.round(d * m) : sum
+          }, 0)
+        } catch { pts = null }
+
+        const { data: streakRow } = await supabase
+          .from('users')
+          .select('current_streak')
+          .eq('id', uid)
+          .single()
+        const streakVal = streakRow?.current_streak ?? 0
+
+        // Mark as viewed
+        await supabase.from('user_recap_views').insert({
+          user_id:           uid,
+          recap_week_start:  weekStartDate,
+          viewed_at:         new Date().toISOString(),
+        })
+
+        // Show modal after short delay so home screen renders first
+        setTimeout(() => {
+          setRecapModal({
+            count:        lastWeekCIs.length,
+            pts,
+            streak:       streakVal,
+            weekStartIso: lastMonday.toISOString(),
+            viewRowWeekStart: weekStartDate,
+            uid,
+          })
+        }, 500)
+      } catch {
+        // Fail silently — never block app load
+      }
+    }
+    checkMondayRecap()
+  }, []) // eslint-disable-line
 
   // Calendar-day comparison — how many full days remain including the end date itself
   function calDaysLeft(endsAt) {
@@ -962,6 +1044,61 @@ export default function HomeScreen({ navigation }) {
           <Text style={styles.signInText}>Sign in to save your lists, join seasonal lists, and compete with your crew →</Text>
         </TouchableOpacity>
       )}
+
+      {/* Weekly recap teaser — shown on Mondays if user had check-ins last week */}
+      <Modal
+        visible={!!recapModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setRecapModal(null)}
+      >
+        <TouchableOpacity
+          style={styles.signInModalOverlay}
+          activeOpacity={1}
+          onPress={() => setRecapModal(null)}
+        >
+          <TouchableOpacity activeOpacity={1} style={styles.recapModalCard}>
+            <Text style={styles.recapModalTitle}>Your week in CheckOff</Text>
+            <Text style={styles.recapModalStats}>
+              {recapModal
+                ? [
+                    `${recapModal.count} check-in${recapModal.count !== 1 ? 's' : ''}`,
+                    recapModal.pts != null ? `${recapModal.pts} points` : null,
+                    recapModal.streak > 0 ? `🔥 ${recapModal.streak} day streak` : null,
+                  ].filter(Boolean).join(' · ')
+                : ''}
+            </Text>
+
+            <TouchableOpacity
+              style={styles.recapModalPrimary}
+              onPress={() => {
+                setRecapModal(null)
+                navigation.navigate('WeeklyRecap', { weekStart: recapModal?.weekStartIso })
+              }}
+              activeOpacity={0.88}
+            >
+              <Text style={styles.recapModalPrimaryText}>View Recap</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.recapModalSecondary}
+              onPress={async () => {
+                setRecapModal(null)
+                // Update the row to record dismissal — fire and forget
+                try {
+                  await supabase
+                    .from('user_recap_views')
+                    .update({ dismissed_at: new Date().toISOString() })
+                    .eq('user_id', recapModal?.uid)
+                    .eq('recap_week_start', recapModal?.viewRowWeekStart)
+                } catch { /* non-critical */ }
+              }}
+            >
+              <Text style={styles.recapModalSecondaryText}>Maybe Later</Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
 
       {/* Sign-in prompt modal — shown when unauthenticated user taps "Start your first list" */}
       <Modal
@@ -1767,6 +1904,23 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   signInModalBtnText:     { fontSize: 15, fontWeight: '800', color: NAVY },
   signInModalDismiss:     { paddingVertical: 10 },
   signInModalDismissText: { fontSize: 14, color: MUTED, fontWeight: '600' },
+
+  recapModalCard: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    padding: 28,
+    paddingBottom: 40,
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderColor: '#E6D8C7',
+  },
+  recapModalTitle:         { fontSize: 20, fontWeight: '800', color: '#243045', marginBottom: 8, textAlign: 'center' },
+  recapModalStats:         { fontSize: 14, color: '#6F7785', textAlign: 'center', marginBottom: 28, lineHeight: 20 },
+  recapModalPrimary:       { backgroundColor: '#F5A623', borderRadius: 16, paddingVertical: 17, paddingHorizontal: 32, alignItems: 'center', width: '100%', marginBottom: 12 },
+  recapModalPrimaryText:   { fontSize: 15, fontWeight: '800', color: '#FFFFFF' },
+  recapModalSecondary:     { paddingVertical: 10 },
+  recapModalSecondaryText: { fontSize: 14, color: '#6F7785', fontWeight: '600' },
 
   seeAllText: {
     fontSize: 13,
