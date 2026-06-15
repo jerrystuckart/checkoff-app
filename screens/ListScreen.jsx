@@ -112,6 +112,11 @@ export default function ListScreen({ route, navigation }) {
   const [memorySaving,  setMemorySaving]  = useState(false)
   const [memoryError,   setMemoryError]   = useState(null)
 
+  // Check-in detail sheet — shown when user taps ⓘ on a completed item
+  const [detailModal,   setDetailModal]   = useState(null)   // { item }
+  const [detailCI,      setDetailCI]      = useState(null)   // fetched check_in row
+  const [detailLoading, setDetailLoading] = useState(false)
+
   // Partner suggestion card — shown after check-in (after memory modal if present)
   const [pendingPartnerSuggestion, setPendingPartnerSuggestion] = useState(null)
   const [partnerSuggestion,        setPartnerSuggestion]        = useState(null)
@@ -699,6 +704,41 @@ export default function ListScreen({ route, navigation }) {
     }
   }, [memoryModal, memoryPlace, memoryNote])
 
+  function formatCheckInDate(isoStr) {
+    const d = new Date(isoStr)
+    const datePart = d.toLocaleDateString('en-US', {
+      weekday: 'long', month: 'long', day: 'numeric',
+    })
+    const timePart = d.toLocaleTimeString('en-US', {
+      hour: 'numeric', minute: '2-digit', hour12: true,
+    })
+    return `${datePart} at ${timePart}`
+  }
+
+  async function openDetailModal(item) {
+    setDetailCI(null)
+    setDetailModal({ item })
+    if (!currentUserId) return
+    setDetailLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('check_ins')
+        .select('id, checked_at, photo_url, personal_place, personal_note')
+        .eq('list_item_id', item.listItemId)
+        .eq('user_id', currentUserId)
+        .maybeSingle()
+      if (error) {
+        console.error('openDetailModal: check_ins query failed:', error.message)
+      }
+      setDetailCI(data ?? null)
+    } catch (e) {
+      console.error('openDetailModal error:', e.message)
+      setDetailCI(null)
+    } finally {
+      setDetailLoading(false)
+    }
+  }
+
   const renderItem = useCallback(({ item }) => {
     const isCelebrating = celebratingId === item.listItemId
     const overlayColor = item.difficulty === 25
@@ -824,7 +864,15 @@ export default function ListScreen({ route, navigation }) {
             </Text>
           ) : null}
 
-          {!ended && !item.checked && listId && (
+          {item.checked ? (
+            <TouchableOpacity
+              style={styles.infoBtn}
+              onPress={() => openDetailModal(item)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.infoBtnText}>ⓘ</Text>
+            </TouchableOpacity>
+          ) : !ended && listId ? (
             <TouchableOpacity
               style={styles.dareBtn}
               onPress={() => navigation.navigate('Dare', { item, listId })}
@@ -832,7 +880,7 @@ export default function ListScreen({ route, navigation }) {
             >
               <Text style={styles.dareBtnText}>😈</Text>
             </TouchableOpacity>
-          )}
+          ) : null}
         </View>
       </TouchableOpacity>
       </View>
@@ -1150,6 +1198,76 @@ export default function ListScreen({ route, navigation }) {
       )}
 
       {/* Personalized check-in memory modal */}
+      {/* Check-in detail sheet */}
+      <Modal
+        visible={!!detailModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setDetailModal(null)}
+      >
+        <TouchableOpacity
+          style={styles.memoryOverlay}
+          activeOpacity={1}
+          onPress={() => setDetailModal(null)}
+        >
+          <TouchableOpacity activeOpacity={1} style={styles.detailSheet}>
+            {detailLoading ? (
+              <ActivityIndicator color={AMBER} style={{ marginVertical: 32 }} />
+            ) : !detailCI ? (
+              <Text style={styles.detailFallback}>Check-in details unavailable.</Text>
+            ) : (
+              <>
+                <Text style={styles.detailTitle} numberOfLines={0}>
+                  {detailModal?.item?.body ?? ''}
+                </Text>
+
+                <Text style={styles.detailDate}>
+                  {detailCI.checked_at ? formatCheckInDate(detailCI.checked_at) : ''}
+                </Text>
+
+                {detailCI.photo_url ? (
+                  <Image
+                    source={{ uri: detailCI.photo_url }}
+                    style={styles.detailPhoto}
+                    resizeMode="cover"
+                  />
+                ) : null}
+
+                {detailCI.personal_place ? (
+                  <Text style={styles.detailPlace}>📍 {detailCI.personal_place}</Text>
+                ) : null}
+
+                {detailCI.personal_note ? (
+                  <Text style={styles.detailNote}>{detailCI.personal_note}</Text>
+                ) : null}
+
+                {!detailCI.personal_place && !detailCI.personal_note ? (
+                  <Text style={styles.detailNoMemory}>No memory added for this one.</Text>
+                ) : null}
+
+                <TouchableOpacity
+                  style={styles.detailEditBtn}
+                  onPress={() => {
+                    const item = detailModal?.item
+                    setDetailModal(null)
+                    setMemoryPlace(detailCI.personal_place ?? '')
+                    setMemoryNote(detailCI.personal_note ?? '')
+                    setMemoryError(null)
+                    setMemoryModal({
+                      listItemId: item?.listItemId,
+                      placeLabel: item?.personalPlaceLabel ?? 'Place or location',
+                      noteLabel:  item?.personalPromptLabel ?? 'Any notes?',
+                    })
+                  }}
+                >
+                  <Text style={styles.detailEditBtnText}>Edit memory</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
       <Modal
         visible={!!memoryModal}
         transparent
@@ -1977,6 +2095,78 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, EN
     fontSize: 14,
     fontWeight: '600',
     color: MUTED,
+  },
+
+  // ── Check-in detail sheet ──
+  infoBtn: {
+    paddingHorizontal: 4,
+    paddingVertical: 2,
+  },
+  infoBtnText: {
+    fontSize: 15,
+    color: MUTED,
+    opacity: 0.6,
+  },
+  detailSheet: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 40,
+    borderTopWidth: 1,
+    borderColor: '#E6D8C7',
+  },
+  detailTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#243045',
+    marginBottom: 6,
+    lineHeight: 24,
+  },
+  detailDate: {
+    fontSize: 13,
+    color: '#6F7785',
+    marginBottom: 16,
+  },
+  detailPhoto: {
+    width: '100%',
+    height: 200,
+    borderRadius: 12,
+    marginBottom: 16,
+  },
+  detailPlace: {
+    fontSize: 15,
+    color: '#243045',
+    fontWeight: '600',
+    marginBottom: 6,
+  },
+  detailNote: {
+    fontSize: 14,
+    color: '#6F7785',
+    lineHeight: 20,
+    marginBottom: 16,
+  },
+  detailNoMemory: {
+    fontSize: 14,
+    color: '#6F7785',
+    fontStyle: 'italic',
+    marginBottom: 16,
+  },
+  detailFallback: {
+    fontSize: 14,
+    color: '#6F7785',
+    textAlign: 'center',
+    marginVertical: 32,
+  },
+  detailEditBtn: {
+    alignItems: 'center',
+    paddingVertical: 14,
+    marginTop: 4,
+  },
+  detailEditBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#F5A623',
   },
  }) // end StyleSheet.create
 } // end createListStyles
