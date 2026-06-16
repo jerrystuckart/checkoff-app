@@ -21,6 +21,7 @@ import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { completeDare } from '../lib/completeDare'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
+import { updateUserLifetimePoints } from '../lib/points'
 import { useTheme } from '../lib/ThemeContext'
 
 const AMBER = '#F5A623'
@@ -383,6 +384,7 @@ export default function ItemDetailScreen({ route, navigation }) {
         supabase.functions.invoke('update-streak', {
           body: { user_id: userId },
         }).catch(() => {/* non-critical */})
+        updateUserLifetimePoints(userId).catch(() => {})
         if (item?.id) completeDare(userId, item.id).catch(() => {})
 
         const difficulty = item?.difficulty ?? 0
@@ -511,6 +513,7 @@ export default function ItemDetailScreen({ route, navigation }) {
         supabase.functions.invoke('update-streak', {
           body: { user_id: userId },
         }).catch(() => {/* non-critical */})
+        updateUserLifetimePoints(userId).catch(() => {})
         if (item?.id) completeDare(userId, item.id).catch(() => {})
 
         const difficulty = item?.difficulty ?? 0

@@ -157,6 +157,54 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
         }
       }
 
+      case 'streak_4wk':
+      case 'streak_8wk':
+      case 'streak_12wk': {
+        const weeks = parseInt(badgeId.replace('streak_', '').replace('wk', ''))
+        const cutoff = new Date(earnedDate)
+        cutoff.setDate(cutoff.getDate() - weeks * 7)
+        const { data } = await supabase
+          .from('check_ins')
+          .select('checked_at, list_items(items(body))')
+          .eq('user_id', userId)
+          .gte('checked_at', cutoff.toISOString())
+          .lte('checked_at', earnedDate.toISOString())
+          .order('checked_at', { ascending: false })
+          .limit(10)
+        const formatted = (data ?? []).map(ci => ({
+          body: ci.list_items?.items?.body ?? 'Unknown item',
+          date: ci.checked_at,
+        }))
+        return {
+          summary: `${weeks} consecutive weeks checking off. That's not an accident.`,
+          items: formatted,
+        }
+      }
+
+      case 'points_5':
+      case 'points_25':
+      case 'points_75':
+      case 'points_150':
+      case 'points_300':
+      case 'points_500': {
+        const pts = parseInt(badgeId.replace('points_', ''))
+        // Show the check-ins that pushed the user over this threshold
+        const { data } = await supabase
+          .from('check_ins')
+          .select('checked_at, points_awarded, list_items(items(body))')
+          .eq('user_id', userId)
+          .order('checked_at', { ascending: false })
+          .limit(5)
+        const formatted = (data ?? []).map(ci => ({
+          body: ci.list_items?.items?.body ?? 'Unknown item',
+          date: ci.checked_at,
+        }))
+        return {
+          summary: `You crossed ${pts} lifetime points. This is a Checkpoint.`,
+          items: formatted,
+        }
+      }
+
       case 'neighborhood_sweep': {
         const { data } = await supabase
           .from('check_ins')

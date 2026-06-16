@@ -6,10 +6,29 @@ import {
   TouchableOpacity,
   StyleSheet,
   Animated,
+  Share,
 } from 'react-native'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
+
+// Checkpoint badges get enhanced title/body copy and a share button.
+// Keys match badge_id values in badge_definitions.
+const CHECKPOINT_COPY = {
+  points_5:   { title: 'First Checkpoint 🔑',     body: "You're officially on your way. Keep checking off." },
+  points_25:  { title: 'Explorer 🧭',              body: 'You know this city better than most.' },
+  points_75:  { title: 'Local 🗺️',               body: "You've reached Local status. The city is yours." },
+  points_150: { title: 'Insider Checkpoint ⚡',    body: "Halfway to Insider. You're ahead of the crowd." },
+  points_300: { title: 'Insider 💎',               body: "Insider Access unlocked. Not everyone gets here." },
+  points_500: { title: 'Legend 🌟',               body: "You are a Legend. There's nothing left to prove." },
+  streak_4wk: { title: '4 Week Streak 🌊',         body: 'Four weeks straight. Your city knows your name.' },
+  streak_8wk: { title: '8 Week Streak 🔥🔥',       body: 'Two months of showing up. Impressive.' },
+  streak_12wk:{ title: '12 Week Streak 🏅',        body: "Three months. You don't just check things off. You live it." },
+}
+
+function isCheckpointBadge(badgeId) {
+  return badgeId?.startsWith('points_') || ['streak_4wk', 'streak_8wk', 'streak_12wk'].includes(badgeId)
+}
 
 export default function BadgeCelebrationModal({ badges = [], onDismiss }) {
   const [currentIndex, setCurrentIndex] = useState(0)
@@ -17,8 +36,10 @@ export default function BadgeCelebrationModal({ badges = [], onDismiss }) {
   const scaleAnim = useRef(new Animated.Value(0)).current
   const fadeAnim  = useRef(new Animated.Value(0)).current
 
-  const currentBadge = badges[currentIndex]
-  const hasMore      = currentIndex < badges.length - 1
+  const currentBadge  = badges[currentIndex]
+  const hasMore       = currentIndex < badges.length - 1
+  const isCheckpoint  = isCheckpointBadge(currentBadge?.id)
+  const checkpointCopy = isCheckpoint ? CHECKPOINT_COPY[currentBadge.id] : null
 
   // Reset index and visibility whenever a new batch of badges is passed in
   useEffect(() => {
@@ -51,7 +72,6 @@ export default function BadgeCelebrationModal({ badges = [], onDismiss }) {
 
   function handleNext() {
     if (hasMore) {
-      // Animate out, then advance to the next badge
       Animated.timing(scaleAnim, {
         toValue:  0.8,
         duration: 150,
@@ -67,7 +87,20 @@ export default function BadgeCelebrationModal({ badges = [], onDismiss }) {
     onDismiss?.()
   }
 
+  async function handleShare() {
+    if (!currentBadge) return
+    const title = checkpointCopy?.title ?? currentBadge.name
+    const msg = `Just hit ${title} on CheckOff.\nStop saying "I don't know what to do."\ngetcheckoff.com`
+    try {
+      await Share.share({ message: msg })
+    } catch { /* user cancelled */ }
+  }
+
   if (!visible || !currentBadge) return null
+
+  const displayName = checkpointCopy?.title ?? currentBadge.name
+  const displayDesc = checkpointCopy?.body  ?? currentBadge.description
+  const earnedLabel = isCheckpoint ? 'CHECKPOINT REACHED' : 'BADGE UNLOCKED'
 
   return (
     <Modal
@@ -80,6 +113,7 @@ export default function BadgeCelebrationModal({ badges = [], onDismiss }) {
         <Animated.View
           style={[
             styles.card,
+            isCheckpoint && styles.cardCheckpoint,
             { opacity: fadeAnim, transform: [{ scale: scaleAnim }] },
           ]}
         >
@@ -93,9 +127,11 @@ export default function BadgeCelebrationModal({ badges = [], onDismiss }) {
           {/* Badge emoji */}
           <Text style={styles.emoji}>{currentBadge.icon}</Text>
 
-          <Text style={styles.earnedLabel}>BADGE UNLOCKED</Text>
-          <Text style={styles.badgeName}>{currentBadge.name}</Text>
-          <Text style={styles.badgeDesc}>{currentBadge.description}</Text>
+          <Text style={[styles.earnedLabel, isCheckpoint && styles.earnedLabelCheckpoint]}>
+            {earnedLabel}
+          </Text>
+          <Text style={styles.badgeName}>{displayName}</Text>
+          <Text style={styles.badgeDesc}>{displayDesc}</Text>
 
           <TouchableOpacity
             style={styles.btn}
@@ -106,6 +142,17 @@ export default function BadgeCelebrationModal({ badges = [], onDismiss }) {
               {hasMore ? 'Next Badge →' : "Let's go!"}
             </Text>
           </TouchableOpacity>
+
+          {/* Share button — checkpoint badges only, on the last (or only) badge */}
+          {isCheckpoint && !hasMore && (
+            <TouchableOpacity
+              style={styles.shareBtn}
+              onPress={handleShare}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.shareBtnText}>Share this milestone ↗</Text>
+            </TouchableOpacity>
+          )}
 
           {badges.length > 1 && (
             <TouchableOpacity onPress={handleDismiss} style={styles.skipBtn}>
@@ -136,6 +183,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(245,166,35,0.3)',
   },
+  cardCheckpoint: {
+    borderColor: 'rgba(245,166,35,0.65)',
+    borderWidth: 1.5,
+  },
   counter: {
     fontSize: 11,
     fontWeight: '700',
@@ -155,6 +206,9 @@ const styles = StyleSheet.create({
     letterSpacing: 3,
     textTransform: 'uppercase',
     marginBottom: 8,
+  },
+  earnedLabelCheckpoint: {
+    letterSpacing: 2,
   },
   badgeName: {
     fontSize: 26,
@@ -183,6 +237,22 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: NAVY,
+  },
+  shareBtn: {
+    marginTop: 12,
+    backgroundColor: 'rgba(245,166,35,0.12)',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    alignItems: 'center',
+    width: '100%',
+    borderWidth: 1,
+    borderColor: 'rgba(245,166,35,0.25)',
+  },
+  shareBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: AMBER,
   },
   skipBtn: {
     marginTop: 14,

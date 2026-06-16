@@ -16,6 +16,13 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 const SUPABASE_URL     = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
+// current_streak is stored in consecutive ISO weeks, so thresholds are in weeks.
+const STREAK_MILESTONES = [
+  { weeks: 4,  badgeId: 'streak_4wk'  },
+  { weeks: 8,  badgeId: 'streak_8wk'  },
+  { weeks: 12, badgeId: 'streak_12wk' },
+]
+
 function getISOWeek(date: Date): string {
   // Returns "YYYY-WNN" for the ISO week containing date
   const d = new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
@@ -100,8 +107,46 @@ Deno.serve(async (req) => {
 
     if (updateErr) throw updateErr
 
+    // Check streak milestone badges — only runs when streak actually advanced
+    const awardedBadges: string[] = []
+    try {
+      const milestonesHit = STREAK_MILESTONES.filter(m => newStreak >= m.weeks)
+      if (milestonesHit.length > 0) {
+        const hitIds = milestonesHit.map(m => m.badgeId)
+
+        const { data: alreadyEarned } = await supabase
+          .from('user_badges')
+          .select('badge_id')
+          .eq('user_id', user_id)
+          .in('badge_id', hitIds)
+
+        const earnedSet = new Set((alreadyEarned ?? []).map((b: any) => b.badge_id))
+        const toAward = milestonesHit.filter(m => !earnedSet.has(m.badgeId))
+
+        if (toAward.length > 0) {
+          const now = new Date().toISOString()
+
+          await supabase.from('user_badges').insert(
+            toAward.map(m => ({ user_id, badge_id: m.badgeId, earned_at: now }))
+          )
+          await supabase.from('notification_queue').insert(
+            toAward.map(m => ({
+              type:      'badge',
+              payload:   { to_user_id: user_id, badge_id: m.badgeId },
+              delivered: false,
+            }))
+          )
+
+          awardedBadges.push(...toAward.map(m => m.badgeId))
+        }
+      }
+    } catch (e) {
+      // Streak milestone badge awards are non-critical — log but don't fail
+      console.warn('Streak milestone badge check failed:', e)
+    }
+
     return new Response(
-      JSON.stringify({ streak: newStreak, longest: newLongest, updated: true, week: thisWeek }),
+      JSON.stringify({ streak: newStreak, longest: newLongest, updated: true, week: thisWeek, awarded_badges: awardedBadges }),
       { headers: { 'Content-Type': 'application/json' } }
     )
   } catch (e) {
