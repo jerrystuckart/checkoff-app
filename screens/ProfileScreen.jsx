@@ -73,7 +73,7 @@ export default function ProfileScreen({ navigation }) {
         supabase.from('user_badges').select('badge_id, earned_at, badge_definitions(id, name, icon, description)').eq('user_id', uid).order('earned_at', { ascending: false }).limit(6),
         supabase.from('check_ins').select('id, checked_at, checkin_method, list_items(items(body, categories(name, color_hex)))').eq('user_id', uid).order('checked_at', { ascending: false }).limit(5),
         supabase.from('check_ins').select('id', { count: 'exact', head: true }).eq('user_id', uid),
-        supabase.from('check_ins').select('id, list_items!inner(point_multiplier, items!inner(difficulty))')
+        supabase.from('check_ins').select('id, points_awarded, list_items!inner(point_multiplier, items!inner(difficulty))')
           .eq('user_id', uid)
           .gte('checked_at', monday.toISOString())
           .lte('checked_at', sunday.toISOString()),
@@ -88,16 +88,17 @@ export default function ProfileScreen({ navigation }) {
       setRecentCheckins(checkinsRes.data ?? [])
       setStats({ total: totalRes.count ?? 0, streak: profileRes.data?.current_streak ?? 0, longest: profileRes.data?.longest_streak ?? 0 })
 
-      // Weekly summary for recap card
+      // Weekly summary for recap card — use points_awarded as source of truth;
+      // fall back to inline calculation only if points_awarded is null on a row
       const weeklyRows = weeklyRes.data ?? []
-      let weeklyPts = null
-      try {
-        weeklyPts = weeklyRows.reduce((sum, ci) => {
+      const weeklyPts = weeklyRows.reduce((sum, ci) => {
+        const pts = ci.points_awarded ?? (() => {
           const d = ci.list_items?.items?.difficulty ?? null
           const m = ci.list_items?.point_multiplier ?? 1
-          return d != null ? sum + Math.round(d * m) : sum
-        }, 0)
-      } catch { weeklyPts = null }
+          return d != null ? Math.round(d * m) : 0
+        })()
+        return sum + pts
+      }, 0)
       setWeeklySummary({ count: weeklyRows.length, pts: weeklyPts })
     } catch (e) {
       Sentry.captureException(e)

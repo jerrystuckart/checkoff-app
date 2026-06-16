@@ -79,6 +79,7 @@ export default function WeeklyRecapScreen({ navigation, route }) {
             photo_url,
             personal_place,
             personal_note,
+            points_awarded,
             list_items!inner(
               point_multiplier,
               list_id,
@@ -100,19 +101,14 @@ export default function WeeklyRecapScreen({ navigation, route }) {
 
       const rawCheckIns = checkInsRes.data ?? []
 
-      // Flatten and compute per-check-in points
-      let pointsAvailable = true
+      // Flatten — use points_awarded as source of truth; fall back to inline
+      // calculation only if points_awarded is null on a given row
       const flat = rawCheckIns.map(ci => {
         const li = ci.list_items
         const item = li?.items
         const difficulty = item?.difficulty ?? null
         const multiplier = li?.point_multiplier ?? 1.0
-        let pts = null
-        if (difficulty != null) {
-          pts = Math.round(difficulty * multiplier)
-        } else {
-          pointsAvailable = false
-        }
+        const pts = ci.points_awarded ?? (difficulty != null ? Math.round(difficulty * multiplier) : null)
         return {
           id:            ci.id,
           checkedAt:     ci.checked_at,
@@ -125,15 +121,7 @@ export default function WeeklyRecapScreen({ navigation, route }) {
         }
       })
 
-      // Sum weekly points
-      if (pointsAvailable && flat.length > 0) {
-        setTotalPts(flat.reduce((sum, ci) => sum + (ci.pts ?? 0), 0))
-      } else if (!pointsAvailable) {
-        console.warn('WeeklyRecapScreen: difficulty unavailable for some items, falling back to count only')
-        setTotalPts(null)
-      } else {
-        setTotalPts(0)
-      }
+      setTotalPts(flat.reduce((sum, ci) => sum + (ci.pts ?? 0), 0))
 
       setCheckIns(flat)
       setStreak(streakRes.data?.current_streak ?? 0)

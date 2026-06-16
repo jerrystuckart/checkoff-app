@@ -166,12 +166,13 @@ export default function LeaderboardScreen({ route }) {
       // Get this user's check-ins on this list
       const { data: checkins } = await supabase
         .from('check_ins')
-        .select('list_item_id, checked_at')
+        .select('list_item_id, checked_at, points_awarded')
         .eq('user_id', entry.userId)
         .in('list_item_id', listItemIds)
         .order('checked_at', { ascending: false })
 
-      // Join with item details and compute pts
+      // Join with item details — use points_awarded as source of truth;
+      // fall back to inline calculation if points_awarded is null
       const itemMap = {}
       ;(listItems ?? []).forEach(li => { itemMap[li.id] = li })
 
@@ -182,7 +183,7 @@ export default function LeaderboardScreen({ route }) {
         const difficulty   = li?.items?.difficulty    ?? 1
         const multiplier   = li?.point_multiplier     ?? 1.0
         const streakBonus  = (userStreak >= 4 && difficulty < 25) ? 1.5 : 1.0
-        const pts          = Math.round(difficulty * multiplier * streakBonus)
+        const pts          = ci.points_awarded ?? Math.round(difficulty * multiplier * streakBonus)
         return {
           body:        li?.items?.body                    ?? 'Unknown item',
           category:    li?.items?.categories?.name        ?? '',
