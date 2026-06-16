@@ -38,6 +38,21 @@ const TIER_ORDER = ['Starter', 'Explorer', 'Local', 'Insider', 'Legend']
 // Colors now come from ThemeContext — see useTheme() inside the component
 // ENDED_BG, ENDED_BORDER, ENDED_TEXT now come from ThemeContext (light/dark aware)
 
+function computeInsiderUnlocked(item, userLifetimePts, userInsiderTier) {
+  if (!item.isInsiderDrop) return true
+  const reqPts    = item.insiderDropRequiresPoints
+  const reqStatus = item.insiderDropRequiresStatus
+  if (reqPts == null && reqStatus == null) return true
+  let unlocked = false
+  if (reqPts != null && (userLifetimePts ?? 0) >= reqPts) unlocked = true
+  if (!unlocked && reqStatus != null) {
+    const userIdx = TIER_ORDER.indexOf(userInsiderTier ?? 'Starter')
+    const reqIdx  = TIER_ORDER.indexOf(reqStatus)
+    if (reqIdx >= 0 && userIdx >= reqIdx) unlocked = true
+  }
+  return unlocked
+}
+
 // Difficulty tier config — mirrors admin DIFFICULTY_TIERS
 const DIFFICULTY_LABELS = { 5: 'Partner', 10: 'Rare', 25: 'Legend' }
 const DIFFICULTY_COLORS = {
@@ -517,6 +532,17 @@ export default function ListScreen({ route, navigation }) {
     })
   }, [displayItems, filter, search, showChecked])
 
+  const sortedFiltered = useMemo(() => {
+    const getGroup = (item) => {
+      if (item.checked) return 3
+      const unlocked = computeInsiderUnlocked(item, userLifetimePts, userInsiderTier)
+      if (item.isInsiderDrop && !unlocked) return 0
+      if (item.isInsiderDrop && unlocked)  return 1
+      return 2
+    }
+    return [...filtered].sort((a, b) => getGroup(a) - getGroup(b))
+  }, [filtered, userLifetimePts, userInsiderTier])
+
   // Runs a flash animation on the checked item row for Rare/Legend/Partner
   const triggerCelebration = useCallback((listItemId, difficulty) => {
     setCelebratingId(listItemId)
@@ -845,23 +871,8 @@ export default function ListScreen({ route, navigation }) {
         : 'rgba(55,138,221,0.22)' // blue for Partner
 
     // ── Insider Drop unlock check ──────────────────────────────────
-    const isInsiderDrop = item.isInsiderDrop ?? false
-    let insiderUnlocked = true
-    if (isInsiderDrop) {
-      const reqPts    = item.insiderDropRequiresPoints
-      const reqStatus = item.insiderDropRequiresStatus
-      if (reqPts == null && reqStatus == null) {
-        insiderUnlocked = true // no requirement — treat as unlocked
-      } else {
-        insiderUnlocked = false
-        if (reqPts != null && userLifetimePts >= reqPts) insiderUnlocked = true
-        if (!insiderUnlocked && reqStatus != null) {
-          const userIdx = TIER_ORDER.indexOf(userInsiderTier ?? 'Starter')
-          const reqIdx  = TIER_ORDER.indexOf(reqStatus)
-          if (reqIdx >= 0 && userIdx >= reqIdx) insiderUnlocked = true
-        }
-      }
-    }
+    const isInsiderDrop    = item.isInsiderDrop ?? false
+    const insiderUnlocked  = computeInsiderUnlocked(item, userLifetimePts, userInsiderTier)
 
     // ── Locked Insider Drop card ────────────────────────────────────
     if (isInsiderDrop && !insiderUnlocked) {
@@ -1276,7 +1287,7 @@ export default function ListScreen({ route, navigation }) {
         </View>
       ) : (
         <FlatList
-          data={filtered}
+          data={sortedFiltered}
           keyExtractor={item => String(item.listItemId)}
           renderItem={renderItem}
           ListHeaderComponent={headerEl}
