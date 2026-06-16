@@ -34,6 +34,7 @@ import { useTheme } from '../lib/ThemeContext'
 
 const ACCENT = '#FFB84D'
 const ACCENT_DARK = '#7A4B00'
+const TIER_ORDER = ['Starter', 'Explorer', 'Local', 'Insider', 'Legend']
 // Colors now come from ThemeContext — see useTheme() inside the component
 // ENDED_BG, ENDED_BORDER, ENDED_TEXT now come from ThemeContext (light/dark aware)
 
@@ -70,6 +71,8 @@ export default function ListScreen({ route, navigation }) {
   // Leaderboard entries used to compute user's rank for the summary screen
   const { entries: lbEntries } = useLeaderboard(listId)
   const [currentUserId, setCurrentUserId] = useState(null)
+  const [userLifetimePts, setUserLifetimePts] = useState(0)
+  const [userInsiderTier, setUserInsiderTier] = useState('Starter')
 
   // Transparent nav bar when hero image is present so photo fills behind the header
   useEffect(() => {
@@ -84,7 +87,17 @@ export default function ListScreen({ route, navigation }) {
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
-      setCurrentUserId(data?.user?.id ?? null)
+      const uid = data?.user?.id ?? null
+      setCurrentUserId(uid)
+      if (uid) {
+        supabase.from('users').select('lifetime_points, insider_tier').eq('id', uid).single()
+          .then(({ data: u }) => {
+            if (u) {
+              setUserLifetimePts(u.lifetime_points ?? 0)
+              setUserInsiderTier(u.insider_tier ?? 'Starter')
+            }
+          })
+      }
     })
   }, [])
 
@@ -831,6 +844,64 @@ export default function ListScreen({ route, navigation }) {
         ? 'rgba(186,117,23,0.22)' // amber for Rare
         : 'rgba(55,138,221,0.22)' // blue for Partner
 
+    // ── Insider Drop unlock check ──────────────────────────────────
+    const isInsiderDrop = item.isInsiderDrop ?? false
+    let insiderUnlocked = true
+    if (isInsiderDrop) {
+      const reqPts    = item.insiderDropRequiresPoints
+      const reqStatus = item.insiderDropRequiresStatus
+      if (reqPts == null && reqStatus == null) {
+        insiderUnlocked = true // no requirement — treat as unlocked
+      } else {
+        insiderUnlocked = false
+        if (reqPts != null && userLifetimePts >= reqPts) insiderUnlocked = true
+        if (!insiderUnlocked && reqStatus != null) {
+          const userIdx = TIER_ORDER.indexOf(userInsiderTier ?? 'Starter')
+          const reqIdx  = TIER_ORDER.indexOf(reqStatus)
+          if (reqIdx >= 0 && userIdx >= reqIdx) insiderUnlocked = true
+        }
+      }
+    }
+
+    // ── Locked Insider Drop card ────────────────────────────────────
+    if (isInsiderDrop && !insiderUnlocked) {
+      const reqPts    = item.insiderDropRequiresPoints
+      const reqStatus = item.insiderDropRequiresStatus
+      const ptsNeeded = reqPts != null ? Math.max(0, reqPts - userLifetimePts) : null
+      return (
+        <TouchableOpacity
+          style={[styles.rowCard, styles.rowCardLocked]}
+          onPress={() => {
+            const bodyParts = ['Keep checking off items to unlock this.']
+            if (ptsNeeded != null) {
+              bodyParts.push(`${ptsNeeded} more point${ptsNeeded !== 1 ? 's' : ''} and it's yours.`)
+            } else if (reqStatus) {
+              bodyParts.push(`Reach ${reqStatus} status to unlock.`)
+            }
+            Alert.alert('This is an Insider Drop', bodyParts.join(' '), [{ text: 'Got it' }])
+          }}
+          activeOpacity={0.9}
+        >
+          <View style={styles.lockedIconWrap}>
+            <Text style={styles.lockedIcon}>🔒</Text>
+          </View>
+          <View style={styles.rowBody}>
+            <Text style={styles.lockedTeaserText}>
+              {item.insiderDropTeaserText ?? 'Insider Drop'}
+            </Text>
+            <Text style={styles.lockedReqText}>
+              {reqPts != null
+                ? `Unlock at ${reqPts} pts · You have ${userLifetimePts} pts`
+                : reqStatus != null
+                  ? `Unlock at ${reqStatus} status`
+                  : ''}
+            </Text>
+          </View>
+        </TouchableOpacity>
+      )
+    }
+
+    // ── Normal card (+ ⭐ badge for unlocked Insider Drops) ─────────
     return (
       <View style={{ position: 'relative' }}>
         {isCelebrating && (
@@ -891,6 +962,12 @@ export default function ListScreen({ route, navigation }) {
           </Text>
 
           <View style={styles.tagRow}>
+            {isInsiderDrop && (
+              <View style={styles.tagInsiderDrop}>
+                <Text style={styles.tagInsiderDropText}>⭐ Insider Drop</Text>
+              </View>
+            )}
+
             <View
               style={[
                 styles.tag,
@@ -970,7 +1047,7 @@ export default function ListScreen({ route, navigation }) {
       </TouchableOpacity>
       </View>
     )
-  }, [navigation, route.params, listId, ended, handleCheckOff, celebratingId, flashAnim])
+  }, [navigation, route.params, listId, ended, handleCheckOff, celebratingId, flashAnim, userLifetimePts, userInsiderTier])
 
   const headerEl = useMemo(() => (
     <View style={[styles.headerBlock, heroImage && { paddingTop: headerHeight }]}>
@@ -1808,6 +1885,52 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, EN
 
   rowCardChecked: {
     opacity: 0.72,
+  },
+
+  rowCardLocked: {
+    backgroundColor: '#1A1A2E',
+    borderColor: '#F5A623',
+    borderWidth: 1.5,
+  },
+
+  lockedIconWrap: {
+    width: 24,
+    marginTop: 2,
+    alignItems: 'center',
+    flexShrink: 0,
+  },
+
+  lockedIcon: {
+    fontSize: 18,
+  },
+
+  lockedTeaserText: {
+    fontSize: 17,
+    color: '#F5A623',
+    lineHeight: 24,
+    fontWeight: '700',
+  },
+
+  lockedReqText: {
+    fontSize: 11,
+    color: '#6F7785',
+    marginTop: 6,
+    fontWeight: '600',
+  },
+
+  tagInsiderDrop: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(245,166,35,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,166,35,0.35)',
+  },
+
+  tagInsiderDropText: {
+    fontSize: 10,
+    color: '#F5A623',
+    fontWeight: '800',
   },
 
   checkbox: {
