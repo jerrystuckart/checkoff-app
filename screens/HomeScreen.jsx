@@ -11,6 +11,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '../lib/supabase'
 import { fetchCuratedLists } from '../lib/useItems'
 import { useCrewInvite } from '../lib/useCrewInvite'
+import { getTierByName, getNextTier, getTierProgress } from '../lib/tiers'
 import { useTheme } from '../lib/ThemeContext'
 import ExperiencesRail from '../components/ExperiencesRail'
 import * as Sentry from '@sentry/react-native'
@@ -44,6 +45,8 @@ export default function HomeScreen({ navigation }) {
   const [refreshing, setRefreshing] = useState(false)
   const [listMemberMap, setListMemberMap] = useState({})
   const [userStreak, setUserStreak] = useState(0)
+  const [userLifetimePts, setUserLifetimePts] = useState(0)
+  const [userInsiderTier, setUserInsiderTier] = useState('Starter')
   const [showSignInPrompt, setShowSignInPrompt] = useState(false)
   const [nextTenList, setNextTenList] = useState(null)
   const [nextTenDismissed, setNextTenDismissed] = useState(false)
@@ -216,12 +219,14 @@ export default function HomeScreen({ navigation }) {
           : Promise.resolve({ data: [] }),
         supabase
           .from('users')
-          .select('current_streak')
+          .select('current_streak, lifetime_points, insider_tier')
           .eq('id', userId)
           .single(),
       ])
 
       setUserStreak(streakRes.data?.current_streak ?? 0)
+      setUserLifetimePts(streakRes.data?.lifetime_points ?? 0)
+      setUserInsiderTier(streakRes.data?.insider_tier ?? 'Starter')
 
       // Load crew members for each list (up to 4 avatars per list)
       if (userLists.length > 0) {
@@ -620,6 +625,36 @@ export default function HomeScreen({ navigation }) {
           Stop saying "I don't know what to do." Challenge your crew.
         </Text>
       </View>
+
+      {/* ── CheckOff Status card ── */}
+      {user && (() => {
+        const tier = getTierByName(userInsiderTier)
+        const next = getNextTier(userInsiderTier)
+        const progress = getTierProgress(userInsiderTier, userLifetimePts)
+        const ptsNeeded = next ? next.minPoints - userLifetimePts : 0
+        return (
+          <TouchableOpacity
+            style={styles.statusCard}
+            onPress={() => navigation.navigate('ProfileTab')}
+            activeOpacity={0.85}
+          >
+            <View style={styles.statusCardTop}>
+              <View style={[styles.statusTierPill, { backgroundColor: tier.bg }]}>
+                <Text style={[styles.statusTierPillText, { color: tier.text }]}>{userInsiderTier.toUpperCase()}</Text>
+              </View>
+              <Text style={styles.statusCardLabel}>CheckOff Status</Text>
+            </View>
+            <View style={styles.statusBarWrap}>
+              <View style={[styles.statusBarFill, { width: `${Math.round(progress * 100)}%` }]} />
+            </View>
+            <Text style={styles.statusBarHint}>
+              {next
+                ? `${userLifetimePts} pts · ${ptsNeeded} to ${next.name}`
+                : `${userLifetimePts} pts · Legend — you're at the top`}
+            </Text>
+          </TouchableOpacity>
+        )
+      })()}
 
       {/* ── The Next 10 Banner ── */}
       {nextTenList && !nextTenDismissed && (() => {
@@ -2034,6 +2069,54 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
 
   themeToggleIcon: {
     fontSize: 16,
+  },
+
+  statusCard: {
+    backgroundColor: CARD,
+    borderRadius: 16,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+  statusCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  statusCardLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: MUTED,
+    letterSpacing: 0.5,
+  },
+  statusTierPill: {
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  statusTierPillText: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1,
+  },
+  statusBarWrap: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#E6D8C7',
+    overflow: 'hidden',
+    marginBottom: 6,
+  },
+  statusBarFill: {
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#F5A623',
+  },
+  statusBarHint: {
+    fontSize: 11,
+    color: MUTED,
+    fontWeight: '600',
   },
  }) // end StyleSheet.create
 } // end createStyles

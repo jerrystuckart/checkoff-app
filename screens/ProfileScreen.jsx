@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Alert, RefreshControl, Switch, StatusBar,
+  ActivityIndicator, Alert, RefreshControl, Switch, StatusBar, Share,
 } from 'react-native'
+import { getTierByName, getNextTier, getTierProgress } from '../lib/tiers'
 import { useFocusEffect } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
@@ -69,7 +70,7 @@ export default function ProfileScreen({ navigation }) {
       sunday.setHours(23, 59, 59, 999)
 
       const [profileRes, badgesRes, checkinsRes, totalRes, weeklyRes] = await Promise.all([
-        supabase.from('users').select('id, display_name, email, current_streak, longest_streak, created_at, is_admin, pref_show_alcohol, notif_check_ins, notif_invites, notif_nudges, founding_number').eq('id', uid).single(),
+        supabase.from('users').select('id, display_name, email, current_streak, longest_streak, created_at, is_admin, pref_show_alcohol, notif_check_ins, notif_invites, notif_nudges, founding_number, lifetime_points, insider_tier').eq('id', uid).single(),
         supabase.from('user_badges').select('badge_id, earned_at, badge_definitions(id, name, icon, description)').eq('user_id', uid).order('earned_at', { ascending: false }).limit(6),
         supabase.from('check_ins').select('id, checked_at, checkin_method, list_items(items(body, categories(name, color_hex)))').eq('user_id', uid).order('checked_at', { ascending: false }).limit(5),
         supabase.from('check_ins').select('id', { count: 'exact', head: true }).eq('user_id', uid),
@@ -296,20 +297,55 @@ export default function ProfileScreen({ navigation }) {
         {profile?.is_admin && (
           <View style={styles.adminBadge}><Text style={styles.adminBadgeText}>⚙ Admin</Text></View>
         )}
+        {/* Tier badge pill */}
+        {(() => {
+          const tierName = profile?.insider_tier ?? 'Starter'
+          const tier = getTierByName(tierName)
+          const next = getNextTier(tierName)
+          const pts = profile?.lifetime_points ?? 0
+          const progress = getTierProgress(tierName, pts)
+          const ptsNeeded = next ? next.minPoints - pts : 0
+          return (
+            <>
+              <View style={[styles.tierPill, { backgroundColor: tier.bg, marginTop: 10 }]}>
+                <Text style={[styles.tierPillText, { color: tier.text }]}>{tierName.toUpperCase()}</Text>
+              </View>
+              <View style={styles.tierBarWrap}>
+                <View style={[styles.tierBarFill, { width: `${Math.round(progress * 100)}%`, backgroundColor: '#F5A623' }]} />
+              </View>
+              <Text style={styles.tierBarLabel}>
+                {next
+                  ? `${pts} pts · ${ptsNeeded} pts to ${next.name}`
+                  : `${pts} pts · Legend — you're at the top`}
+              </Text>
+              <TouchableOpacity
+                style={styles.tierShareBtn}
+                onPress={async () => {
+                  try {
+                    await Share.share({ message: `I'm a ${tierName} on CheckOff.\nStop saying "I don't know what to do."\ngetcheckoff.com` })
+                  } catch { /* user cancelled */ }
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.tierShareBtnText}>Share my status</Text>
+              </TouchableOpacity>
+            </>
+          )
+        })()}
       </View>
 
       {/* Stats */}
       <View style={styles.statsRow}>
         {[
-          { num: stats?.total ?? 0,   label: 'check-ins' },
-          { num: hasStreak ? `${stats.streak} 🔥` : '0', label: 'week streak', color: hasStreak ? RED : undefined },
-          { num: stats?.longest ?? 0, label: 'best streak' },
-          { num: badges.length,        label: 'badges' },
+          { num: stats?.total ?? 0,   label: 'check-ins', onPress: null },
+          { num: hasStreak ? `${stats.streak} 🔥` : '0', label: 'week streak', color: hasStreak ? RED : undefined, onPress: null },
+          { num: stats?.longest ?? 0, label: 'best streak', onPress: null },
+          { num: profile?.lifetime_points ?? 0, label: 'lifetime pts', onPress: () => navigation.navigate('Badges') },
         ].map((s, i) => (
-          <View key={i} style={styles.statCard}>
+          <TouchableOpacity key={i} style={styles.statCard} onPress={s.onPress ?? undefined} activeOpacity={s.onPress ? 0.7 : 1}>
             <Text style={[styles.statNum, s.color && { color: s.color }]}>{s.num}</Text>
             <Text style={styles.statLabel}>{s.label}</Text>
-          </View>
+          </TouchableOpacity>
         ))}
       </View>
 
@@ -540,6 +576,14 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   adminBadgeText:    { fontSize: 11, color: '#A16A00', fontWeight: '800' },
   foundingBadge:     { marginTop: 8, backgroundColor: SOFT, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 5, borderWidth: 1, borderColor: '#F0D29D' },
   foundingBadgeText: { fontSize: 12, color: AMBER, fontWeight: '800' },
+
+  tierPill:          { borderRadius: 999, paddingHorizontal: 14, paddingVertical: 5 },
+  tierPillText:      { fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },
+  tierBarWrap:       { marginTop: 8, width: '80%', height: 6, borderRadius: 3, backgroundColor: '#E6D8C7', overflow: 'hidden' },
+  tierBarFill:       { height: 6, borderRadius: 3 },
+  tierBarLabel:      { fontSize: 11, color: MUTED, fontWeight: '600', marginTop: 5, textAlign: 'center' },
+  tierShareBtn:      { marginTop: 10, borderRadius: 12, borderWidth: 1, borderColor: AMBER, paddingVertical: 8, paddingHorizontal: 24 },
+  tierShareBtnText:  { fontSize: 13, fontWeight: '700', color: AMBER },
 
   statsRow:          { flexDirection: 'row', gap: 8, marginBottom: 12 },
   statCard:          { flex: 1, backgroundColor: CARD, borderRadius: 16, padding: 12, alignItems: 'center', borderWidth: 1, borderColor: BORDER },

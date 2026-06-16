@@ -5,6 +5,7 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useLeaderboard } from '../lib/useLeaderboard'
+import { getTierByName } from '../lib/tiers'
 import { supabase } from '../lib/supabase'
 import { useTheme } from '../lib/ThemeContext'
 
@@ -275,6 +276,15 @@ export default function LeaderboardScreen({ route }) {
               {item.displayName ?? 'Anonymous'}{isMe ? '  (you)' : ''}
             </Text>
 
+            {!isDeleted && (() => {
+              const tier = getTierByName(item.insiderTier ?? 'Starter')
+              return (
+                <View style={[styles.tierPill, { backgroundColor: tier.bg }]}>
+                  <Text style={[styles.tierPillText, { color: tier.text }]}>{(item.insiderTier ?? 'Starter').toUpperCase()}</Text>
+                </View>
+              )
+            })()}
+
             {!isEnded() && !isDeleted && (item.streak ?? 0) >= 4 && (
               <Text style={styles.streakBadge}>🔥{item.streak}</Text>
             )}
@@ -308,6 +318,9 @@ export default function LeaderboardScreen({ route }) {
             {item.score}
           </Text>
           <Text style={styles.scoreLabel}>pts</Text>
+          {!isDeleted && (
+            <Text style={styles.lifetimePtsLabel}>{item.lifetimePoints ?? 0} total</Text>
+          )}
         </View>
       </TouchableOpacity>
     )
@@ -675,9 +688,13 @@ function createLeaderboardStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, 
   barWrap:     { height: 4, backgroundColor: '#F2EBE0', borderRadius: 2, overflow: 'hidden' },
   bar:         { height: 4, borderRadius: 2 },
 
-  scoreWrap:   { alignItems: 'flex-end', flexShrink: 0 },
-  score:       { fontSize: 22, fontWeight: '800', color: MUTED },
-  scoreLabel:  { fontSize: 10, color: MUTED, fontWeight: '600' },
+  scoreWrap:       { alignItems: 'flex-end', flexShrink: 0 },
+  score:           { fontSize: 22, fontWeight: '800', color: MUTED },
+  scoreLabel:      { fontSize: 10, color: MUTED, fontWeight: '600' },
+  lifetimePtsLabel: { fontSize: 11, color: MUTED, fontWeight: '600', marginTop: 2 },
+
+  tierPill:     { borderRadius: 999, paddingHorizontal: 8, paddingVertical: 2, marginLeft: 6 },
+  tierPillText: { fontSize: 11, fontWeight: '800', letterSpacing: 0.8 },
 
   sep:         { height: 8 },
 
