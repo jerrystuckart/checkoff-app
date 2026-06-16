@@ -382,6 +382,19 @@ export default function ProfileScreen({ navigation }) {
         </TouchableOpacity>
       )}
 
+      {/* Insider Access */}
+      <TouchableOpacity
+        style={[styles.actionList, { marginBottom: 20 }]}
+        onPress={() => navigation.navigate('InsiderAccess')}
+        activeOpacity={0.8}
+      >
+        <View style={styles.actionRow}>
+          <Text style={styles.actionIcon}>🔓</Text>
+          <Text style={styles.actionText}>Insider Access</Text>
+          <Text style={styles.actionChevron}>›</Text>
+        </View>
+      </TouchableOpacity>
+
       {/* Badges */}
       <View style={styles.sectionHeader}>
         <Text style={styles.sectionLabel}>Badges</Text>

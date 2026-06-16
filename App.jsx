@@ -51,6 +51,7 @@ import SavedCrewScreen          from './screens/SavedCrewScreen'
 import SecretRevealScreen       from './screens/SecretRevealScreen'
 import PastListsScreen          from './screens/PastListsScreen'
 import WeeklyRecapScreen        from './screens/WeeklyRecapScreen'
+import InsiderAccessScreen      from './screens/InsiderAccessScreen'
 
 const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
@@ -335,6 +336,11 @@ function ProfileStack() {
         name="WeeklyRecap"
         component={WeeklyRecapScreen}
         options={{ title: 'This Week' }}
+      />
+      <Stack.Screen
+        name="InsiderAccess"
+        component={InsiderAccessScreen}
+        options={{ title: 'Insider Access' }}
       />
     </Stack.Navigator>
   )
