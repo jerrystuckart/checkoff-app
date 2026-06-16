@@ -4,6 +4,7 @@ import {
   ActivityIndicator, Alert, RefreshControl, Switch, StatusBar, Share,
 } from 'react-native'
 import { getTierByName, getNextTier, getTierProgress } from '../lib/tiers'
+import { recordReferral } from '../lib/referral'
 import { useFocusEffect } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
@@ -32,6 +33,7 @@ export default function ProfileScreen({ navigation }) {
   const [weeklySummary, setWeeklySummary]   = useState(null) // { count, pts }
   const [loading, setLoading]               = useState(true)
   const [refreshing, setRefreshing]         = useState(false)
+  const [referralCount, setReferralCount]   = useState(0)
 
   useFocusEffect(
     useCallback(() => {
@@ -101,6 +103,13 @@ export default function ProfileScreen({ navigation }) {
         return sum + pts
       }, 0)
       setWeeklySummary({ count: weeklyRows.length, pts: weeklyPts })
+
+      const { count: refCount } = await supabase
+        .from('invite_referrals')
+        .select('id', { count: 'exact', head: true })
+        .eq('inviter_user_id', uid)
+        .not('invitee_user_id', 'is', null)
+      setReferralCount(refCount ?? 0)
     } catch (e) {
       Sentry.captureException(e)
     } finally {
@@ -108,6 +117,28 @@ export default function ProfileScreen({ navigation }) {
       setRefreshing(false)
     }
   }, [])
+
+  async function handleInvite() {
+    if (!user) return
+    const uid  = user.id
+    const code = uid.replace(/-/g, '').slice(0, 8)
+    try {
+      const { count } = await supabase
+        .from('invite_referrals')
+        .select('id', { count: 'exact', head: true })
+        .eq('invite_code', code)
+      if (!count || count === 0) {
+        await supabase.from('invite_referrals').insert({ inviter_user_id: uid, invite_code: code })
+      }
+    } catch { /* non-critical */ }
+
+    const url = `https://getcheckoff.com/join/ref_${code}`
+    try {
+      await Share.share({
+        message: `Join me on CheckOff — the app that gets you out and doing things in your city.\n\nUse my link and we both earn bonus points when you check off your first item:\n${url}\n\nStop saying "I don't know what to do."\ngetcheckoff.com`,
+      })
+    } catch { /* user dismissed */ }
+  }
 
   async function toggleAlcohol(value) {
     setShowAlcohol(value)
@@ -382,9 +413,28 @@ export default function ProfileScreen({ navigation }) {
         </TouchableOpacity>
       )}
 
+      {/* Invite Friends */}
+      <TouchableOpacity
+        style={[styles.actionList, { marginBottom: referralCount > 0 ? 4 : 20 }]}
+        onPress={handleInvite}
+        activeOpacity={0.8}
+      >
+        <View style={styles.actionRow}>
+          <Text style={styles.actionIcon}>👥</Text>
+          <View style={styles.actionBody}>
+            <Text style={styles.actionText}>Invite Friends</Text>
+            <Text style={styles.actionSub}>You both earn 5 pts when they check off their first item</Text>
+          </View>
+          <Text style={styles.actionChevron}>›</Text>
+        </View>
+      </TouchableOpacity>
+      {referralCount > 0 && (
+        <Text style={styles.referralStat}>{referralCount} {referralCount === 1 ? 'friend' : 'friends'} joined via your invite</Text>
+      )}
+
       {/* Insider Access */}
       <TouchableOpacity
-        style={[styles.actionList, { marginBottom: 20 }]}
+        style={[styles.actionList, { marginBottom: 20, marginTop: referralCount > 0 ? 12 : 0 }]}
         onPress={() => navigation.navigate('InsiderAccess')}
         activeOpacity={0.8}
       >
@@ -643,6 +693,7 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   actionChevron:     { fontSize: 20, color: MUTED },
   actionBody:        { flex: 1 },
   actionSub:         { fontSize: 11, color: MUTED, marginTop: 2, fontWeight: '600' },
+  referralStat:      { fontSize: 12, color: MUTED, textAlign: 'center', marginBottom: 4 },
 
   signOutBtn:        { borderWidth: 1.5, borderColor: BORDER, borderRadius: 14, padding: 14, alignItems: 'center', marginBottom: 16 },
   signOutBtnText:    { fontSize: 14, color: MUTED, fontWeight: '700' },

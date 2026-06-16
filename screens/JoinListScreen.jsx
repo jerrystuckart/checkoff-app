@@ -5,6 +5,7 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import { recordReferral } from '../lib/referral'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
@@ -43,6 +44,7 @@ export default function JoinListScreen({ route, navigation }) {
   const [alreadyMember, setAlreadyMember] = useState(false)
   const [error, setError]       = useState(null)
   const [userId, setUserId]     = useState(null)
+  const [isReferralLink, setIsReferralLink] = useState(false)
 
   useEffect(() => {
     loadPreview()
@@ -57,6 +59,17 @@ export default function JoinListScreen({ route, navigation }) {
 
     if (!invite_code || invite_code === 'null' || invite_code === 'undefined') {
       setError('Invalid invite link — no code found.')
+      setLoading(false)
+      return
+    }
+
+    // Handle referral invite links (ref_ prefix — not a list join)
+    if (invite_code.startsWith('ref_')) {
+      setIsReferralLink(true)
+      const referralCode = invite_code.slice(4)
+      if (user?.id) {
+        recordReferral(user.id, referralCode).catch(() => {})
+      }
       setLoading(false)
       return
     }
@@ -163,6 +176,32 @@ export default function JoinListScreen({ route, navigation }) {
       <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
         <ActivityIndicator color={AMBER} size="large" />
         <Text style={styles.loadingText}>Loading invite…</Text>
+      </View>
+    )
+  }
+
+  // ── Referral link (not a list join) ──
+  if (isReferralLink) {
+    return (
+      <View style={[styles.container, styles.center, { paddingTop: insets.top, padding: 32 }]}>
+        <Text style={{ fontSize: 48, marginBottom: 16 }}>🎉</Text>
+        <Text style={[styles.errorTitle, { textAlign: 'center', marginBottom: 8 }]}>You're connected!</Text>
+        <Text style={[styles.errorSub, { textAlign: 'center', marginBottom: 32 }]}>
+          {userId
+            ? 'Your friend will earn bonus points when you check off your first item. So will you.'
+            : 'Sign in to link your account and earn bonus points together when you check off your first item.'}
+        </Text>
+        {!userId && (
+          <TouchableOpacity
+            style={[styles.homeBtn, { marginBottom: 12 }]}
+            onPress={() => navigation.navigate('SignIn')}
+          >
+            <Text style={styles.homeBtnText}>Sign in</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity style={styles.skipBtn} onPress={() => navigation.navigate('Home')}>
+          <Text style={styles.skipBtnText}>{userId ? 'Go home' : 'Maybe later'}</Text>
+        </TouchableOpacity>
       </View>
     )
   }

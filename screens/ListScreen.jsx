@@ -28,6 +28,7 @@ import { SafeAreaView } from 'react-native-safe-area-context'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
 import { consumePendingCheckIn } from '../lib/checkInResult'
 import { pollForNewBadges } from '../lib/badges'
+import { handleFirstCheckinReferralBonus } from '../lib/referral'
 import SuggestPlaceSheet from './SuggestPlaceSheet'
 import BadgeCelebrationModal from '../components/BadgeCelebrationModal'
 import { useTheme } from '../lib/ThemeContext'
@@ -636,6 +637,9 @@ export default function ListScreen({ route, navigation }) {
         if (!wasChecked && currentUserId) {
           pollForNewBadges(currentUserId, supabase).then(earned => {
             if (earned.length > 0) setCelebrationBadges(earned)
+            if (earned.some(b => b.id === 'first_checkin')) {
+              handleFirstCheckinReferralBonus(currentUserId).catch(() => {})
+            }
           })
         }
 
