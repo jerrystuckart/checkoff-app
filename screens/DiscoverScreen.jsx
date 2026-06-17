@@ -268,7 +268,7 @@ export default function DiscoverScreen({ navigation, route }) {
         if (matchedIds.length === 0) {
           setTagResultItems([])
         } else {
-          const numericIds = matchedIds.slice(0, 100).map(id => parseInt(id, 10))
+          const uuidIds = matchedIds.slice(0, 100)  // items.id is UUID — no parseInt
           const { data: rawItems, error: itemErr } = await supabase
             .from('items')
             .select(`
@@ -279,7 +279,7 @@ export default function DiscoverScreen({ navigation, route }) {
               neighborhoods!items_neighborhood_id_fkey(name),
               partners(business_name)
             `)
-            .in('id', numericIds)
+            .in('id', uuidIds)
             .eq('is_active', true)
             .eq('is_approved', true)
           console.log('[tag search] items query result:', rawItems?.length ?? 0, 'items', itemErr)
@@ -335,7 +335,7 @@ export default function DiscoverScreen({ navigation, route }) {
         return
       }
 
-      const numericIds = matchedIds.slice(0, 100).map(id => parseInt(id, 10))
+      const uuidIds = matchedIds.slice(0, 100)  // items.id is UUID — no parseInt
       const { data: rawItems, error: itemErr } = await supabase
         .from('items')
         .select(`
@@ -346,7 +346,7 @@ export default function DiscoverScreen({ navigation, route }) {
           neighborhoods!items_neighborhood_id_fkey(name),
           partners(business_name)
         `)
-        .in('id', numericIds)
+        .in('id', uuidIds)
         .eq('is_active', true)
         .eq('is_approved', true)
       if (__DEV__ && itemErr) console.log('items fetch error:', itemErr?.message)
