@@ -35,6 +35,7 @@ import AdminScreen             from './screens/AdminScreen'
 import CreateListScreen        from './screens/CreateListScreen'
 import ItemDetailScreen        from './screens/ItemDetailScreen'
 import NearbyScreen            from './screens/NearbyScreen'
+import DiscoverScreen          from './screens/DiscoverScreen'
 import JoinListScreen          from './screens/JoinListScreen'
 import PartnerPreviewScreen    from './screens/PartnerPreviewScreen'
 import BadgesScreen            from './screens/BadgesScreen'
@@ -92,7 +93,7 @@ function NearbyStack() {
     <Stack.Navigator screenOptions={stackOpts}>
       <Stack.Screen
         name="Nearby"
-        component={NearbyScreen}
+        component={DiscoverScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen

@@ -317,6 +317,26 @@ export default function ItemDetailScreen({ route, navigation }) {
     return `Hey! I'm trying to check off "${item?.body}"${listPart}. ${callToAction}`
   }
 
+  function triggerPostCheckinDiscover() {
+    const checkinLat = item?.maps_lat ?? item?.mapsLat ?? null
+    const checkinLng = item?.maps_lng ?? item?.mapsLng ?? null
+    if (!checkinLat || !checkinLng || !item?.id) return
+    supabase
+      .from('item_tags')
+      .select('tags(name)')
+      .eq('item_id', item.id)
+      .limit(5)
+      .then(({ data }) => {
+        const checkinTags = (data ?? []).map(r => r.tags?.name).filter(Boolean)
+        if (!checkinTags.length) return
+        navigation.navigate('NearbyTab', {
+          screen: 'Nearby',
+          params: { mode: 'post_checkin', checkinLat, checkinLng, checkinItemId: item.id, checkinTags },
+        })
+      })
+      .catch(() => {})
+  }
+
   async function handleCheckOff() {
     if (!userId) {
       Alert.alert('Sign in first', 'You need an account to check off items.', [
@@ -386,6 +406,7 @@ export default function ItemDetailScreen({ route, navigation }) {
         }).catch(() => {/* non-critical */})
         updateUserLifetimePoints(userId).catch(() => {})
         if (item?.id) completeDare(userId, item.id).catch(() => {})
+        triggerPostCheckinDiscover()
 
         const difficulty = item?.difficulty ?? 0
         if (item?.allowsPersonalNote) {
@@ -515,6 +536,7 @@ export default function ItemDetailScreen({ route, navigation }) {
         }).catch(() => {/* non-critical */})
         updateUserLifetimePoints(userId).catch(() => {})
         if (item?.id) completeDare(userId, item.id).catch(() => {})
+        triggerPostCheckinDiscover()
 
         const difficulty = item?.difficulty ?? 0
         if (item?.allowsPersonalNote) {
