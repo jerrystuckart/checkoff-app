@@ -66,6 +66,7 @@ const DIFFICULTY_COLORS = {
 function PhotoWithLoader({ uri, style }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(false)
+  console.log('[view memory] rendering image with uri:', uri)
   return (
     <View style={[style, { overflow: 'hidden' }]}>
       {!error && (
@@ -956,26 +957,8 @@ export default function ListScreen({ route, navigation }) {
         console.error('openDetailModal: check_ins query failed:', error.message)
       }
 
-      let ciData = data ?? null
-
-      // Resolve photo to a signed URL — public URLs fail on private buckets
-      if (ciData?.photo_url) {
-        const url = ciData.photo_url
-        const marker = '/object/public/checkin-photos/'
-        const markerIdx = url.indexOf(marker)
-        if (markerIdx >= 0) {
-          const storagePath = url.slice(markerIdx + marker.length)
-          try {
-            const { data: signed } = await supabase.storage
-              .from('checkin-photos')
-              .createSignedUrl(storagePath, 3600)
-            if (signed?.signedUrl) {
-              ciData = { ...ciData, photo_url: signed.signedUrl }
-            }
-          } catch { /* fall back to original URL */ }
-        }
-      }
-
+      const ciData = data ?? null
+      console.log('[view memory] photo_url raw:', ciData?.photo_url ?? null)
       setDetailCI(ciData)
     } catch (e) {
       console.error('openDetailModal error:', e.message)

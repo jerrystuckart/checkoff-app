@@ -16,6 +16,7 @@ import {
 } from 'react-native'
 import Clipboard from '@react-native-clipboard/clipboard'
 import * as Haptics from 'expo-haptics'
+import * as Location from 'expo-location'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
@@ -331,19 +332,55 @@ export default function ItemDetailScreen({ route, navigation }) {
     return `Hey! I'm trying to check off "${item?.body}"${listPart}. ${callToAction}`
   }
 
-  function triggerPostCheckinDiscover() {
-    const checkinLat = item?.maps_lat ?? item?.mapsLat ?? null
-    const checkinLng = item?.maps_lng ?? item?.mapsLng ?? null
+  function haversineMeters(lat1, lng1, lat2, lng2) {
+    const R = 6371000
+    const toRad = d => (d * Math.PI) / 180
+    const dLat = toRad(lat2 - lat1)
+    const dLng = toRad(lng2 - lng1)
+    const a = Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+  }
 
-    if (__DEV__) console.log('postCheckin: item coords =', checkinLat, checkinLng)
+  async function triggerPostCheckinDiscover() {
+    const itemLat = item?.maps_lat ?? item?.mapsLat ?? null
+    const itemLng = item?.maps_lng ?? item?.mapsLng ?? null
 
-    if (!checkinLat || !checkinLng || !item?.id) {
-      if (__DEV__) console.log('postCheckin skip: no coordinates for item', item?.id)
+    console.log('[postCheckin] item location:', itemLat, itemLng)
+
+    if (!itemLat || !itemLng || !item?.id) {
+      console.log('[postCheckin] skip: no coordinates for item', item?.id)
       return
     }
 
-    // Use !inner join — if tags RLS returns null via left join, inner join at least
-    // returns the rows that are readable; fall back to empty tags so banner still shows.
+    // Distance gate: only navigate if user is within 3200m of the item
+    let userLat = null
+    let userLng = null
+    try {
+      const pos = await Location.getLastKnownPositionAsync({})
+      userLat = pos?.coords?.latitude ?? null
+      userLng = pos?.coords?.longitude ?? null
+    } catch {
+      // ignore — treated as unavailable below
+    }
+
+    console.log('[postCheckin] user location:', userLat, userLng)
+
+    if (!userLat || !userLng) {
+      console.log('[postCheckin] skip: user location unavailable')
+      return
+    }
+
+    const distM = haversineMeters(userLat, userLng, itemLat, itemLng)
+    const withinRange = distM <= 3200
+    console.log('[postCheckin] distance to item:', Math.round(distM), 'm')
+    console.log('[postCheckin] within range:', withinRange)
+
+    if (!withinRange) {
+      console.log('[postCheckin] skip: user not near item (dist:', Math.round(distM) + 'm)')
+      return
+    }
+
     supabase
       .from('item_tags')
       .select('tag_id, tags!inner(name)')
@@ -351,18 +388,18 @@ export default function ItemDetailScreen({ route, navigation }) {
       .limit(10)
       .then(({ data, error }) => {
         if (error) {
-          if (__DEV__) console.log('postCheckin skip: tags fetch failed', error.message)
+          console.log('[postCheckin] tags fetch failed:', error.message)
         }
         const checkinTags = (data ?? []).map(r => r.tags?.name).filter(Boolean)
-        if (__DEV__) console.log('postCheckin: tags found =', checkinTags)
-        if (__DEV__) console.log('postCheckin fired for', item.id)
+        console.log('[postCheckin] tags:', checkinTags)
+        console.log('[postCheckin] fired for item:', item.id)
         navigation.navigate('NearbyTab', {
           screen: 'Nearby',
-          params: { mode: 'post_checkin', checkinLat, checkinLng, checkinItemId: item.id, checkinTags },
+          params: { mode: 'post_checkin', checkinLat: itemLat, checkinLng: itemLng, checkinItemId: item.id, checkinTags },
         })
       })
       .catch(e => {
-        if (__DEV__) console.log('postCheckin skip: exception', e?.message)
+        console.log('[postCheckin] skip: exception', e?.message)
       })
   }
 

@@ -224,58 +224,70 @@ export default function DiscoverScreen({ navigation, route }) {
   // tags-table RLS restrictions. Falls back to body text if no tag match.
   async function runSearch(text) {
     setLoadingSearch(true)
+    console.log('[tag search] input:', text)
     try {
-      // Single joined query: item_tags → tags filtered by name
-      // This works even if the tags table has restrictive RLS on direct reads,
-      // because we're querying through item_tags which is accessible for check-ins.
-      const { data: joinedRows, error: joinErr } = await supabase
-        .from('item_tags')
-        .select('item_id, tags!inner(id, name)')
-        .filter('tags.name', 'ilike', `%${text}%`)
-        .limit(500)
+      // Step 1: find matching tags by name (direct query — works with user session JWT)
+      const { data: tagRows, error: tagErr } = await supabase
+        .from('tags')
+        .select('id, name')
+        .ilike('name', `%${text}%`)
+        .limit(50)
 
-      if (__DEV__ && joinErr) console.log('item_tags join search error:', joinErr?.message)
+      console.log('[tag search] item_tags query result:', tagRows, tagErr)
 
-      const rows = joinedRows ?? []
+      const matchedTags = tagRows ?? []
+      const tagNames = matchedTags.map(t => t.name)
+      console.log('[tag search] matched tag names:', tagNames)
 
-      // Build unique tag list for suggestions and item→count map
-      const tagMap = {}   // tagId → {id, name}
-      const counts = {}   // String(item_id) → match count
-      rows.forEach(row => {
-        const tag = row.tags
-        if (tag?.id) tagMap[String(tag.id)] = tag
-        const key = String(row.item_id)
-        counts[key] = (counts[key] ?? 0) + 1
-      })
+      const activeIds = new Set(activeTags.map(t => String(t.id)))
+      setSuggestions(matchedTags.filter(t => !activeIds.has(String(t.id))).slice(0, 8))
 
-      const uniqueTags = Object.values(tagMap)
-      const activeIds  = new Set(activeTags.map(t => String(t.id)))
-      setSuggestions(uniqueTags.filter(t => !activeIds.has(String(t.id))).slice(0, 8))
+      if (matchedTags.length > 0) {
+        const tagIds = matchedTags.map(t => t.id)
 
-      if (uniqueTags.length > 0) {
-        // Tags matched — fetch full item data
+        // Step 2: find item_ids that have any of these tags
+        const { data: tagItemRows, error: tiErr } = await supabase
+          .from('item_tags')
+          .select('item_id, tag_id')
+          .in('tag_id', tagIds)
+          .limit(500)
+
+        if (__DEV__ && tiErr) console.log('[tag search] item_tags error:', tiErr?.message)
+
+        const counts = {}
+        ;(tagItemRows ?? []).forEach(row => {
+          const key = String(row.item_id)
+          counts[key] = (counts[key] ?? 0) + 1
+        })
         const matchedIds = Object.keys(counts)
+        console.log('[tag search] matched item IDs:', matchedIds.length, 'items')
+
         setTagMatchData({ counts })
         setBodyMatchIds(null)
 
-        const numericIds = matchedIds.slice(0, 100).map(id => parseInt(id, 10))
-        const { data: rawItems, error: itemErr } = await supabase
-          .from('items')
-          .select(`
-            id, body, difficulty, maps_lat, maps_lng, is_active, is_approved,
-            is_secret, secret_reveal_text, has_alcohol,
-            partner_id, maps_query, website_url, geo_radius_m,
-            categories(name, color_hex),
-            neighborhoods!items_neighborhood_id_fkey(name),
-            partners(business_name)
-          `)
-          .in('id', numericIds)
-          .eq('is_active', true)
-          .eq('is_approved', true)
-        if (__DEV__ && itemErr) console.log('items fetch error:', itemErr?.message)
+        if (matchedIds.length === 0) {
+          setTagResultItems([])
+        } else {
+          const numericIds = matchedIds.slice(0, 100).map(id => parseInt(id, 10))
+          const { data: rawItems, error: itemErr } = await supabase
+            .from('items')
+            .select(`
+              id, body, difficulty, maps_lat, maps_lng, is_active, is_approved,
+              is_secret, secret_reveal_text, has_alcohol,
+              partner_id, maps_query, website_url, geo_radius_m,
+              categories(name, color_hex),
+              neighborhoods!items_neighborhood_id_fkey(name),
+              partners(business_name)
+            `)
+            .in('id', numericIds)
+            .eq('is_active', true)
+            .eq('is_approved', true)
+          console.log('[tag search] items query result:', rawItems?.length ?? 0, 'items', itemErr)
 
-        const augmented = augmentWithDistance(rawItems, locationRef.current ?? location)
-        setTagResultItems(augmented)
+          const augmented = augmentWithDistance(rawItems, locationRef.current ?? location)
+          setTagResultItems(augmented)
+          console.log('[tag search] displayItems after merge:', augmented.length)
+        }
       } else if (activeTags.length === 0) {
         // No tag matches — fall back to body text search on nearbyItems
         setTagResultItems(null)
@@ -292,7 +304,7 @@ export default function DiscoverScreen({ navigation, route }) {
         setBodyMatchIds(null)
       }
     } catch (e) {
-      if (__DEV__) console.log('runSearch error:', e?.message)
+      if (__DEV__) console.log('[tag search] runSearch error:', e?.message)
     }
     setLoadingSearch(false)
   }
