@@ -63,6 +63,30 @@ const DIFFICULTY_COLORS = {
 }
 
 
+function PhotoWithLoader({ uri, style }) {
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
+  return (
+    <View style={[style, { overflow: 'hidden' }]}>
+      {!error && (
+        <Image
+          source={{ uri }}
+          style={StyleSheet.absoluteFill}
+          resizeMode="cover"
+          onLoadEnd={() => setLoading(false)}
+          onError={() => { setLoading(false); setError(true) }}
+        />
+      )}
+      {loading && !error && (
+        <ActivityIndicator
+          style={StyleSheet.absoluteFill}
+          color="#888"
+        />
+      )}
+    </View>
+  )
+}
+
 export default function ListScreen({ route, navigation }) {
   const { listId, cityId, title, heroImage } = route.params ?? {}
   const { colors } = useTheme()
@@ -931,7 +955,28 @@ export default function ListScreen({ route, navigation }) {
       if (error) {
         console.error('openDetailModal: check_ins query failed:', error.message)
       }
-      setDetailCI(data ?? null)
+
+      let ciData = data ?? null
+
+      // Resolve photo to a signed URL — public URLs fail on private buckets
+      if (ciData?.photo_url) {
+        const url = ciData.photo_url
+        const marker = '/object/public/checkin-photos/'
+        const markerIdx = url.indexOf(marker)
+        if (markerIdx >= 0) {
+          const storagePath = url.slice(markerIdx + marker.length)
+          try {
+            const { data: signed } = await supabase.storage
+              .from('checkin-photos')
+              .createSignedUrl(storagePath, 3600)
+            if (signed?.signedUrl) {
+              ciData = { ...ciData, photo_url: signed.signedUrl }
+            }
+          } catch { /* fall back to original URL */ }
+        }
+      }
+
+      setDetailCI(ciData)
     } catch (e) {
       console.error('openDetailModal error:', e.message)
       setDetailCI(null)
@@ -1574,11 +1619,7 @@ export default function ListScreen({ route, navigation }) {
                 </Text>
 
                 {detailCI.photo_url ? (
-                  <Image
-                    source={{ uri: detailCI.photo_url }}
-                    style={styles.detailPhoto}
-                    resizeMode="cover"
-                  />
+                  <PhotoWithLoader uri={detailCI.photo_url} style={styles.detailPhoto} />
                 ) : null}
 
                 {detailCI.personal_place ? (
@@ -2593,7 +2634,7 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, EN
   },
   detailPhoto: {
     width: '100%',
-    height: 200,
+    height: 220,
     borderRadius: 12,
     marginBottom: 16,
   },

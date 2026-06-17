@@ -286,7 +286,11 @@ export default function ItemDetailScreen({ route, navigation }) {
   }
 
   async function loadCheckedState(passedUid = null) {
-    const uid = passedUid ?? userId
+    let uid = passedUid ?? userId
+    if (!uid) {
+      const { data: authData } = await supabase.auth.getUser()
+      uid = authData?.user?.id ?? null
+    }
     if (!uid || !item) return
 
     try {
@@ -330,33 +334,35 @@ export default function ItemDetailScreen({ route, navigation }) {
   function triggerPostCheckinDiscover() {
     const checkinLat = item?.maps_lat ?? item?.mapsLat ?? null
     const checkinLng = item?.maps_lng ?? item?.mapsLng ?? null
+
+    if (__DEV__) console.log('postCheckin: item coords =', checkinLat, checkinLng)
+
     if (!checkinLat || !checkinLng || !item?.id) {
-      if (__DEV__) console.log('postCheckin skip: no coordinates', item?.id)
+      if (__DEV__) console.log('postCheckin skip: no coordinates for item', item?.id)
       return
     }
+
+    // Use !inner join — if tags RLS returns null via left join, inner join at least
+    // returns the rows that are readable; fall back to empty tags so banner still shows.
     supabase
       .from('item_tags')
-      .select('tags(name)')
+      .select('tag_id, tags!inner(name)')
       .eq('item_id', item.id)
-      .limit(5)
+      .limit(10)
       .then(({ data, error }) => {
         if (error) {
-          if (__DEV__) console.log('postCheckin skip: fetch failed', error.message)
-          return
+          if (__DEV__) console.log('postCheckin skip: tags fetch failed', error.message)
         }
         const checkinTags = (data ?? []).map(r => r.tags?.name).filter(Boolean)
-        if (!checkinTags.length) {
-          if (__DEV__) console.log('postCheckin skip: no tags', item.id)
-          return
-        }
-        if (__DEV__) console.log('postCheckin fired:', item.id, checkinTags)
+        if (__DEV__) console.log('postCheckin: tags found =', checkinTags)
+        if (__DEV__) console.log('postCheckin fired for', item.id)
         navigation.navigate('NearbyTab', {
           screen: 'Nearby',
           params: { mode: 'post_checkin', checkinLat, checkinLng, checkinItemId: item.id, checkinTags },
         })
       })
-      .catch(() => {
-        if (__DEV__) console.log('postCheckin skip: fetch failed')
+      .catch(e => {
+        if (__DEV__) console.log('postCheckin skip: exception', e?.message)
       })
   }
 
