@@ -1099,7 +1099,7 @@ export default function HomeScreen({ navigation }) {
                 ? [
                     `${recapModal.count} check-in${recapModal.count !== 1 ? 's' : ''}`,
                     recapModal.pts != null ? `${recapModal.pts} points` : null,
-                    recapModal.streak > 0 ? `🔥 ${recapModal.streak} day streak` : null,
+                    recapModal.streak > 0 ? `🔥 ${recapModal.streak} week streak` : null,
                   ].filter(Boolean).join(' · ')
                 : ''}
             </Text>

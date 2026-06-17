@@ -249,7 +249,7 @@ export default function WeeklyRecapScreen({ navigation, route }) {
             onPress={async () => {
               const parts = [`${checkIns.length} check-in${checkIns.length !== 1 ? 's' : ''}`]
               if (totalPts != null) parts.push(`${totalPts} points`)
-              if (streak > 0) parts.push(`${streak} day streak`)
+              if (streak > 0) parts.push(`${streak} week streak`)
               const statsLine = parts.join(' · ')
               const msg = `My week in CheckOff 🔥\n${statsLine}\nStop saying "I don't know what to do."\ngetcheckoff.com`
               try {

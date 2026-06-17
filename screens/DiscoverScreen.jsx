@@ -71,7 +71,8 @@ export default function DiscoverScreen({ navigation, route }) {
   const [suggestions, setSuggestions] = useState([])
   const [activeTags, setActiveTags]   = useState([])   // [{id, name}]
   const [tagMatchData, setTagMatchData] = useState({ ids: new Set(), counts: {} })
-  const [bodyMatchIds, setBodyMatchIds] = useState(null)  // Set<id> or null
+  const [bodyMatchIds, setBodyMatchIds] = useState(null)   // Set<id> or null — body text fallback
+  const [liveTagIds, setLiveTagIds]     = useState(null)   // Set<id> or null — live filter while typing
   const [loadingSearch, setLoadingSearch] = useState(false)
 
   // Ring filter
@@ -164,6 +165,7 @@ export default function DiscoverScreen({ navigation, route }) {
     if (searchText.length < 2) {
       setSuggestions([])
       setBodyMatchIds(null)
+      setLiveTagIds(null)
       return
     }
     debounceRef.current = setTimeout(() => runSearch(searchText), 300)
@@ -188,8 +190,18 @@ export default function DiscoverScreen({ navigation, route }) {
 
       setSuggestions(filtered)
 
-      // Body fallback only when no tags found and no active tags
-      if (filtered.length === 0 && activeTags.length === 0) {
+      if (found.length > 0) {
+        // Tags found — filter the list immediately via item_tags (live filter, no tap required)
+        const allTagIds = found.map(t => t.id)
+        const { data: tagItemRows } = await supabase
+          .from('item_tags')
+          .select('item_id')
+          .in('tag_id', allTagIds)
+        setLiveTagIds(new Set((tagItemRows ?? []).map(r => r.item_id)))
+        setBodyMatchIds(null)
+      } else if (activeTags.length === 0) {
+        // No tags found at all — fall back to body text search
+        setLiveTagIds(null)
         const { data: bodyItems } = await supabase
           .from('items')
           .select('id')
@@ -200,6 +212,7 @@ export default function DiscoverScreen({ navigation, route }) {
           .limit(100)
         setBodyMatchIds(new Set((bodyItems ?? []).map(i => i.id)))
       } else {
+        setLiveTagIds(null)
         setBodyMatchIds(null)
       }
     } catch { /* silently fail */ }
@@ -214,6 +227,7 @@ export default function DiscoverScreen({ navigation, route }) {
     setSuggestions([])
     setSearchText('')
     setBodyMatchIds(null)
+    setLiveTagIds(null)
     fetchTagItems(next.map(t => t.id))
   }
 
@@ -275,9 +289,11 @@ export default function DiscoverScreen({ navigation, route }) {
       }).filter(i => i.ring_weight !== -1)
     }
 
-    // Tag filter
+    // Tag filter — active tags (tapped) take priority, then live (typed), then body fallback
     if (activeTags.length > 0) {
       base = base.filter(i => tagMatchData.ids.has(i.id))
+    } else if (liveTagIds !== null) {
+      base = base.filter(i => liveTagIds.has(i.id))
     } else if (bodyMatchIds !== null) {
       base = base.filter(i => bodyMatchIds.has(i.id))
     }
@@ -294,7 +310,7 @@ export default function DiscoverScreen({ navigation, route }) {
       if (bc !== ac) return bc - ac
       return (a.dist_m ?? 9999999) - (b.dist_m ?? 9999999)
     })
-  }, [nearbyItems, postCheckin, activeTags, tagMatchData, bodyMatchIds, ringFilter])
+  }, [nearbyItems, postCheckin, activeTags, tagMatchData, liveTagIds, bodyMatchIds, ringFilter])
 
   // Ring counts (before ring filter, after tag/body filter)
   const ringCounts = useMemo(() => {
@@ -311,12 +327,14 @@ export default function DiscoverScreen({ navigation, route }) {
     }
     if (activeTags.length > 0) {
       base = base.filter(i => tagMatchData.ids.has(i.id))
+    } else if (liveTagIds !== null) {
+      base = base.filter(i => liveTagIds.has(i.id))
     } else if (bodyMatchIds !== null) {
       base = base.filter(i => bodyMatchIds.has(i.id))
     }
     base.forEach(i => { if (i.ring_weight in counts) counts[i.ring_weight]++ })
     return counts
-  }, [nearbyItems, postCheckin, activeTags, tagMatchData, bodyMatchIds])
+  }, [nearbyItems, postCheckin, activeTags, tagMatchData, liveTagIds, bodyMatchIds])
 
   // ── Navigation ───────────────────────────────────────────────────────────
   function openItem(item) {
@@ -399,7 +417,7 @@ export default function DiscoverScreen({ navigation, route }) {
     )
   }
 
-  const hasActiveSearch = activeTags.length > 0 || bodyMatchIds !== null
+  const hasActiveSearch = activeTags.length > 0 || liveTagIds !== null || bodyMatchIds !== null
 
   const emptyReason = hasActiveSearch
     ? 'No nearby items match these tags. Try removing one or adjusting your search.'
@@ -478,6 +496,7 @@ export default function DiscoverScreen({ navigation, route }) {
                     setActiveTags([])
                     setTagMatchData({ ids: new Set(), counts: {} })
                     setBodyMatchIds(null)
+                    setLiveTagIds(null)
                     setSearchText('')
                     setSuggestions([])
                     setRingFilter('all')
