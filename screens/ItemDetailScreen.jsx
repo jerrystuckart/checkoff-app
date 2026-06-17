@@ -320,21 +320,34 @@ export default function ItemDetailScreen({ route, navigation }) {
   function triggerPostCheckinDiscover() {
     const checkinLat = item?.maps_lat ?? item?.mapsLat ?? null
     const checkinLng = item?.maps_lng ?? item?.mapsLng ?? null
-    if (!checkinLat || !checkinLng || !item?.id) return
+    if (!checkinLat || !checkinLng || !item?.id) {
+      if (__DEV__) console.log('postCheckin skip: no coordinates', item?.id)
+      return
+    }
     supabase
       .from('item_tags')
       .select('tags(name)')
       .eq('item_id', item.id)
       .limit(5)
-      .then(({ data }) => {
+      .then(({ data, error }) => {
+        if (error) {
+          if (__DEV__) console.log('postCheckin skip: fetch failed', error.message)
+          return
+        }
         const checkinTags = (data ?? []).map(r => r.tags?.name).filter(Boolean)
-        if (!checkinTags.length) return
+        if (!checkinTags.length) {
+          if (__DEV__) console.log('postCheckin skip: no tags', item.id)
+          return
+        }
+        if (__DEV__) console.log('postCheckin fired:', item.id, checkinTags)
         navigation.navigate('NearbyTab', {
           screen: 'Nearby',
           params: { mode: 'post_checkin', checkinLat, checkinLng, checkinItemId: item.id, checkinTags },
         })
       })
-      .catch(() => {})
+      .catch(() => {
+        if (__DEV__) console.log('postCheckin skip: fetch failed')
+      })
   }
 
   async function handleCheckOff() {

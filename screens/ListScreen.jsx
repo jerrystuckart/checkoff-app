@@ -90,6 +90,10 @@ export default function ListScreen({ route, navigation }) {
   const [userLifetimePts, setUserLifetimePts] = useState(0)
   const [userInsiderTier, setUserInsiderTier] = useState('Starter')
 
+  // IDs of items checked in the last 600ms — kept in current sort position
+  // during this window so the UI shows the in-place check before reordering.
+  const [pendingSortIds, setPendingSortIds] = useState(() => new Set())
+
   // Transparent nav bar when hero image is present so photo fills behind the header
   useEffect(() => {
     if (heroImage) {
@@ -526,23 +530,26 @@ export default function ListScreen({ route, navigation }) {
 
   const filtered = useMemo(() => {
     return displayItems.filter(item => {
-      if (!showChecked && item.checked) return false
+      // Keep recently-checked items visible for 600ms regardless of showChecked,
+      // so the UI shows the in-place checkmark before any reorder or removal.
+      if (!showChecked && item.checked && !pendingSortIds.has(item.listItemId)) return false
       if (filter !== 'All' && item.categoryName !== filter) return false
       if (search && !item.body.toLowerCase().includes(search.toLowerCase())) return false
       return true
     })
-  }, [displayItems, filter, search, showChecked])
+  }, [displayItems, filter, search, showChecked, pendingSortIds])
 
   const sortedFiltered = useMemo(() => {
     const getGroup = (item) => {
-      if (item.checked) return 3
+      // Pending items stay in their pre-check position for 600ms
+      if (item.checked && !pendingSortIds.has(item.listItemId)) return 3
       const unlocked = computeInsiderUnlocked(item, userLifetimePts, userInsiderTier)
       if (item.isInsiderDrop && !unlocked) return 0
       if (item.isInsiderDrop && unlocked)  return 1
       return 2
     }
     return [...filtered].sort((a, b) => getGroup(a) - getGroup(b))
-  }, [filtered, userLifetimePts, userInsiderTier])
+  }, [filtered, userLifetimePts, userInsiderTier, pendingSortIds])
 
   // Runs a flash animation on the checked item row for Rare/Legend/Partner
   const triggerCelebration = useCallback((listItemId, difficulty) => {
@@ -579,6 +586,47 @@ export default function ListScreen({ route, navigation }) {
     setCelebrationBadges(badges)
   }
 
+  // Fire-and-forget: opens Discover screen in post-checkin mode if the item
+  // has coordinates and tags. Never throws — skips silently on any missing data.
+  function triggerPostCheckinDiscover(item) {
+    const lat = item?.maps_lat ?? null
+    const lng = item?.maps_lng ?? null
+    if (!lat || !lng) {
+      if (__DEV__) console.log('postCheckin skip: no coordinates', item?.id)
+      return
+    }
+    supabase
+      .from('item_tags')
+      .select('tags(name)')
+      .eq('item_id', item.id)
+      .limit(5)
+      .then(({ data, error }) => {
+        if (error) {
+          if (__DEV__) console.log('postCheckin skip: fetch failed', error.message)
+          return
+        }
+        const checkinTags = (data ?? []).map(r => r.tags?.name).filter(Boolean)
+        if (!checkinTags.length) {
+          if (__DEV__) console.log('postCheckin skip: no tags', item.id)
+          return
+        }
+        if (__DEV__) console.log('postCheckin fired:', item.id, checkinTags)
+        navigation.navigate('NearbyTab', {
+          screen: 'Nearby',
+          params: {
+            mode:          'post_checkin',
+            checkinLat:    lat,
+            checkinLng:    lng,
+            checkinItemId: item.id,
+            checkinTags,
+          },
+        })
+      })
+      .catch(() => {
+        if (__DEV__) console.log('postCheckin skip: fetch failed')
+      })
+  }
+
   const handleCheckOff = useCallback(async (listItemId) => {
     if (ended || metaLoading) return  // also block while meta is loading
 
@@ -603,6 +651,15 @@ export default function ListScreen({ route, navigation }) {
           ? { ...i, checked: !wasChecked, checkedAt: !wasChecked ? now : null }
           : i
       ))
+
+      // Hold the item in its current sort position for 600ms so the user sees
+      // the in-place checkmark before any reorder or removal.
+      if (!wasChecked) {
+        setPendingSortIds(prev => new Set([...prev, listItemId]))
+        setTimeout(() => {
+          setPendingSortIds(prev => { const n = new Set(prev); n.delete(listItemId); return n })
+        }, 600)
+      }
 
       // Set in-flight flag so refreshCheckedState won't overwrite our optimistic update
       checkOffInFlight.current = true
@@ -660,6 +717,7 @@ export default function ListScreen({ route, navigation }) {
         // Fetch partner suggestion — fire-and-forget, never blocks check-in
         if (!wasChecked) {
           fetchPartnerSuggestion(item?.id, !!item?.allowsPersonalNote)
+          triggerPostCheckinDiscover(item)
         }
       }).catch(() => {
         checkOffInFlight.current = false
