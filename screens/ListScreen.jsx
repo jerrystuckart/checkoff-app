@@ -93,6 +93,8 @@ export default function ListScreen({ route, navigation }) {
   // IDs of items checked in the last 600ms — kept in current sort position
   // during this window so the UI shows the in-place check before reordering.
   const [pendingSortIds, setPendingSortIds] = useState(() => new Set())
+  // Item to navigate to Discover after memory modal closes (Fix 5)
+  const [pendingDiscoverItem, setPendingDiscoverItem] = useState(null)
 
   // Transparent nav bar when hero image is present so photo fills behind the header
   useEffect(() => {
@@ -407,6 +409,14 @@ export default function ListScreen({ route, navigation }) {
     }
   }, [memoryModal, pendingSuggestionStack])
 
+  // Fire post-checkin discover after memory modal is dismissed (Fix 5)
+  useEffect(() => {
+    if (!memoryModal && pendingDiscoverItem) {
+      triggerPostCheckinDiscover(pendingDiscoverItem)
+      setPendingDiscoverItem(null)
+    }
+  }, [memoryModal, pendingDiscoverItem])
+
   // Slide card in when a suggestion stack becomes active
   useEffect(() => {
     if (suggestionStack?.length) {
@@ -541,15 +551,14 @@ export default function ListScreen({ route, navigation }) {
 
   const sortedFiltered = useMemo(() => {
     const getGroup = (item) => {
-      // Pending items stay in their pre-check position for 600ms
-      if (item.checked && !pendingSortIds.has(item.listItemId)) return 3
+      // Checked items stay in their original position (Fix 4 — no sort-to-bottom)
       const unlocked = computeInsiderUnlocked(item, userLifetimePts, userInsiderTier)
       if (item.isInsiderDrop && !unlocked) return 0
       if (item.isInsiderDrop && unlocked)  return 1
       return 2
     }
     return [...filtered].sort((a, b) => getGroup(a) - getGroup(b))
-  }, [filtered, userLifetimePts, userInsiderTier, pendingSortIds])
+  }, [filtered, userLifetimePts, userInsiderTier])
 
   // Runs a flash animation on the checked item row for Rare/Legend/Partner
   const triggerCelebration = useCallback((listItemId, difficulty) => {
@@ -589,10 +598,11 @@ export default function ListScreen({ route, navigation }) {
   // Fire-and-forget: opens Discover screen in post-checkin mode if the item
   // has coordinates and tags. Never throws — skips silently on any missing data.
   function triggerPostCheckinDiscover(item) {
-    const lat = item?.maps_lat ?? null
-    const lng = item?.maps_lng ?? null
+    // useItems returns mapsLat/mapsLng (camelCase); also handle maps_lat/maps_lng as fallback
+    const lat = item?.mapsLat ?? item?.maps_lat ?? null
+    const lng = item?.mapsLng ?? item?.maps_lng ?? null
     if (!lat || !lng) {
-      if (__DEV__) console.log('postCheckin skip: no coordinates', item?.id)
+      if (__DEV__) console.log('postCheckin skip: no coordinates on item', item?.id)
       return
     }
     supabase
@@ -607,10 +617,10 @@ export default function ListScreen({ route, navigation }) {
         }
         const checkinTags = (data ?? []).map(r => r.tags?.name).filter(Boolean)
         if (!checkinTags.length) {
-          if (__DEV__) console.log('postCheckin skip: no tags', item.id)
+          if (__DEV__) console.log('postCheckin skip: no tags found for item', item.id)
           return
         }
-        if (__DEV__) console.log('postCheckin fired:', item.id, checkinTags)
+        if (__DEV__) console.log('postCheckin fired for item', item.id, 'with tags', checkinTags)
         navigation.navigate('NearbyTab', {
           screen: 'Nearby',
           params: {
@@ -717,7 +727,13 @@ export default function ListScreen({ route, navigation }) {
         // Fetch partner suggestion — fire-and-forget, never blocks check-in
         if (!wasChecked) {
           fetchPartnerSuggestion(item?.id, !!item?.allowsPersonalNote)
-          triggerPostCheckinDiscover(item)
+          // Defer discover navigation until after the memory modal (if any) so the
+          // modal doesn't get dismissed by navigation away from this screen.
+          if (item?.allowsPersonalNote) {
+            setPendingDiscoverItem(item)
+          } else {
+            triggerPostCheckinDiscover(item)
+          }
         }
       }).catch(() => {
         checkOffInFlight.current = false

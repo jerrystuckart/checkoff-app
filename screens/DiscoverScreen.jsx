@@ -12,15 +12,14 @@ import { supabase } from '../lib/supabase'
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
 
-// Mirror the ring system from useNearby — not rebuilt, just referenced here
 const RING_RADII = [12875, 32187, 64374, 96561]
 const MAX_DEST_M = 804672
 
 const RINGS = [
-  { weight: 0, label: 'Core',        sublabel: 'Right in your neighborhood', color: '#1D9E75' },
-  { weight: 1, label: 'Near',        sublabel: 'Easy drive',                  color: '#378ADD' },
-  { weight: 2, label: 'Metro',       sublabel: 'Worth the trip',              color: '#BA7517' },
-  { weight: 3, label: 'Destination', sublabel: 'Special occasion',            color: '#D85A30' },
+  { weight: 0, label: 'Core',        color: '#1D9E75' },
+  { weight: 1, label: 'Near',        color: '#378ADD' },
+  { weight: 2, label: 'Metro',       color: '#BA7517' },
+  { weight: 3, label: 'Destination', color: '#D85A30' },
 ]
 
 const QUICK_PICKS = [
@@ -32,7 +31,6 @@ const QUICK_PICKS = [
   { label: 'Chill',         tags: ['park', 'art', 'museum', 'bookstore', 'coffee shop', 'relax', 'patio', 'scenic', 'view'] },
 ]
 
-// Distance utilities — mirrors useNearby, not duplicating logic (pure math)
 function distMeters(lat1, lng1, lat2, lng2) {
   const R    = 6371000
   const dLat = (lat2 - lat1) * Math.PI / 180
@@ -57,6 +55,43 @@ function ringForDist(m) {
   return -1
 }
 
+// Augment raw item rows (from items table) with computed distance/ring
+function augmentWithDistance(rawItems, userCoords) {
+  return (rawItems ?? []).map(item => {
+    let dist = null
+    let ring = 0
+    if (item.maps_lat && item.maps_lng && userCoords) {
+      dist = distMeters(userCoords.latitude, userCoords.longitude, item.maps_lat, item.maps_lng)
+      ring = ringForDist(dist)
+    }
+    return {
+      id:               item.id,
+      listItemId:       item.id,
+      body:             item.body,
+      difficulty:       item.difficulty ?? 1,
+      maps_lat:         item.maps_lat ?? null,
+      maps_lng:         item.maps_lng ?? null,
+      is_secret:        item.is_secret ?? false,
+      secret_reveal_text: item.secret_reveal_text ?? null,
+      partner_id:       item.partner_id ?? null,
+      maps_query:       item.maps_query ?? null,
+      website_url:      item.website_url ?? null,
+      geo_radius_m:     item.geo_radius_m ?? null,
+      categoryName:     item.categories?.name ?? 'Misc',
+      categoryColor:    item.categories?.color_hex ?? '#888780',
+      neighborhoodName: item.neighborhoods?.name ?? null,
+      partnerName:      item.partners?.business_name ?? null,
+      has_alcohol:      item.has_alcohol ?? false,
+      checked:          false,
+      isUniversal:      false,
+      hasExactLocation: !!(item.maps_lat && item.maps_lng),
+      dist_m:           dist ?? 99999999,
+      dist_label:       dist ? distLabel(dist) : null,
+      ring_weight:      ring,
+    }
+  }).filter(i => !userCoords || i.ring_weight !== -1)
+}
+
 export default function DiscoverScreen({ navigation, route }) {
   const insets = useSafeAreaInsets()
   const { colors } = useTheme()
@@ -66,29 +101,29 @@ export default function DiscoverScreen({ navigation, route }) {
 
   const { items: nearbyItems, loading: nearbyLoading, locError, location } = useNearby()
 
-  // Search
-  const [searchText, setSearchText]   = useState('')
-  const [suggestions, setSuggestions] = useState([])
-  const [activeTags, setActiveTags]   = useState([])   // [{id, name}]
-  const [tagMatchData, setTagMatchData] = useState({ ids: new Set(), counts: {} })
-  const [bodyMatchIds, setBodyMatchIds] = useState(null)   // Set<id> or null — body text fallback
-  const [liveTagIds, setLiveTagIds]     = useState(null)   // Set<id> or null — live filter while typing
-  const [loadingSearch, setLoadingSearch] = useState(false)
+  // Search state
+  const [searchText, setSearchText]     = useState('')
+  const [suggestions, setSuggestions]   = useState([])
+  const [activeTags, setActiveTags]     = useState([])   // [{id, name}] — manually tapped
+  const [activeQuickPick, setActiveQuickPick] = useState(null)  // label of selected group
 
-  // Ring filter
-  const [ringFilter, setRingFilter] = useState('all')
+  // Result state — either direct DB items (tag search) or null (use nearbyItems)
+  const [tagResultItems, setTagResultItems] = useState(null)  // array|null
+  const [tagMatchData, setTagMatchData]     = useState({ counts: {} })
+  const [bodyMatchIds, setBodyMatchIds]     = useState(null)  // Set<string>|null — body fallback
+  const [loadingSearch, setLoadingSearch]   = useState(false)
 
-  // Checked-in items (grayed out)
+  // Checked-in items (grayed out in Discover)
   const [checkedIds, setCheckedIds] = useState(new Set())
 
   // Post-checkin mode
-  const [postCheckin, setPostCheckin] = useState(null)  // { lat, lng, itemId }
+  const [postCheckin, setPostCheckin]   = useState(null)
   const [bannerVisible, setBannerVisible] = useState(false)
-  const pulseAnim   = useRef(new Animated.Value(1)).current
+  const pulseAnim    = useRef(new Animated.Value(1)).current
   const appliedParamsRef = useRef(null)
-  const debounceRef = useRef(null)
+  const debounceRef  = useRef(null)
 
-  // ── Load checked IDs on mount ────────────────────────────────────────────
+  // ── Load checked IDs ─────────────────────────────────────────────────────
   useEffect(() => { loadCheckedIds() }, [])
 
   async function loadCheckedIds() {
@@ -99,10 +134,9 @@ export default function DiscoverScreen({ navigation, route }) {
         .from('check_ins')
         .select('list_items(item_id)')
         .eq('user_id', user.id)
-      const ids = new Set(
-        (data ?? []).map(ci => ci.list_items?.item_id).filter(Boolean)
-      )
-      setCheckedIds(ids)
+      setCheckedIds(new Set(
+        (data ?? []).map(ci => ci.list_items?.item_id).filter(Boolean).map(String)
+      ))
     } catch { /* non-critical */ }
   }
 
@@ -119,9 +153,8 @@ export default function DiscoverScreen({ navigation, route }) {
     const { checkinLat, checkinLng, checkinItemId, checkinTags = [] } = params
     setPostCheckin({ lat: checkinLat, lng: checkinLng, itemId: checkinItemId })
     setBannerVisible(true)
-    setRingFilter('all')
+    clearSearch()
 
-    // Look up tag IDs for the provided tag names (up to 3)
     const tagNames = checkinTags.slice(0, 3)
     if (tagNames.length > 0) {
       try {
@@ -133,13 +166,13 @@ export default function DiscoverScreen({ navigation, route }) {
         )
         if (found.length) {
           setActiveTags(found)
-          fetchTagItems(found.map(t => t.id))
+          fetchTagResultItems(found.map(t => t.id))
         }
       } catch { /* non-critical */ }
     }
   }
 
-  // ── Banner pulse animation ───────────────────────────────────────────────
+  // ── Banner pulse ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!bannerVisible) return
     const loop = Animated.loop(Animated.sequence([
@@ -153,19 +186,29 @@ export default function DiscoverScreen({ navigation, route }) {
   function dismissBanner() {
     setBannerVisible(false)
     setPostCheckin(null)
-    setActiveTags([])
-    setTagMatchData({ ids: new Set(), counts: {} })
-    setBodyMatchIds(null)
-    setRingFilter('all')
+    clearSearch()
   }
 
-  // ── Search: debounced tag autocomplete + body fallback ───────────────────
+  function clearSearch() {
+    setActiveTags([])
+    setTagResultItems(null)
+    setTagMatchData({ counts: {} })
+    setBodyMatchIds(null)
+    setSearchText('')
+    setSuggestions([])
+    setActiveQuickPick(null)
+  }
+
+  // ── Search: debounced ────────────────────────────────────────────────────
   useEffect(() => {
     clearTimeout(debounceRef.current)
     if (searchText.length < 2) {
       setSuggestions([])
-      setBodyMatchIds(null)
-      setLiveTagIds(null)
+      // Only clear tag results from live search, not from active tag chips
+      if (activeTags.length === 0) {
+        setTagResultItems(null)
+        setBodyMatchIds(null)
+      }
       return
     }
     debounceRef.current = setTimeout(() => runSearch(searchText), 300)
@@ -175,51 +218,92 @@ export default function DiscoverScreen({ navigation, route }) {
   async function runSearch(text) {
     setLoadingSearch(true)
     try {
-      // Tag autocomplete
-      const { data: tagRows } = await supabase
-        .from('tags')
-        .select('id, name')
-        .ilike('name', `%${text}%`)
-        .order('name')
-        .limit(8)
+      const { data: tagRows, error: tagErr } = await supabase
+        .from('tags').select('id, name').ilike('name', `%${text}%`).order('name').limit(8)
+
+      if (__DEV__ && tagErr) console.log('tags query error:', tagErr?.message)
 
       const found = tagRows ?? []
-      // Exclude already-active tags
       const activeIds = new Set(activeTags.map(t => t.id))
-      const filtered = found.filter(t => !activeIds.has(t.id))
-
-      setSuggestions(filtered)
+      setSuggestions(found.filter(t => !activeIds.has(t.id)))
 
       if (found.length > 0) {
-        // Tags found — filter the list immediately via item_tags (live filter, no tap required)
+        // Tags found — query items directly so we get results even if they lack neighborhood_id
         const allTagIds = found.map(t => t.id)
-        const { data: tagItemRows } = await supabase
-          .from('item_tags')
-          .select('item_id')
-          .in('tag_id', allTagIds)
-        setLiveTagIds(new Set((tagItemRows ?? []).map(r => r.item_id)))
+        await fetchTagResultItems(allTagIds)
         setBodyMatchIds(null)
       } else if (activeTags.length === 0) {
-        // No tags found at all — fall back to body text search
-        setLiveTagIds(null)
+        // No matching tags — fall back to body text search on nearbyItems
+        setTagResultItems(null)
         const { data: bodyItems } = await supabase
-          .from('items')
-          .select('id')
+          .from('items').select('id')
           .ilike('body', `%${text}%`)
-          .eq('is_active', true)
-          .eq('is_approved', true)
-          .eq('is_universal', false)
+          .eq('is_active', true).eq('is_approved', true).eq('is_universal', false)
           .limit(100)
-        setBodyMatchIds(new Set((bodyItems ?? []).map(i => i.id)))
+        setBodyMatchIds(new Set((bodyItems ?? []).map(i => String(i.id))))
       } else {
-        setLiveTagIds(null)
+        setTagResultItems(null)
         setBodyMatchIds(null)
       }
-    } catch { /* silently fail */ }
+    } catch (e) {
+      if (__DEV__) console.log('runSearch error:', e?.message)
+    }
     setLoadingSearch(false)
   }
 
-  // ── Tag selection ────────────────────────────────────────────────────────
+  // ── Core: fetch items by tag IDs directly from DB ────────────────────────
+  // Used by: typed search, chip selection, quick-pick taps, post-checkin
+  async function fetchTagResultItems(tagIds) {
+    if (!tagIds.length) {
+      setTagResultItems(null)
+      setTagMatchData({ counts: {} })
+      return
+    }
+    try {
+      // Step 1: which items have these tags, and how many?
+      const { data: tagItemRows, error: tiErr } = await supabase
+        .from('item_tags').select('item_id, tag_id').in('tag_id', tagIds)
+      if (__DEV__ && tiErr) console.log('item_tags error:', tiErr?.message)
+
+      const counts = {}
+      ;(tagItemRows ?? []).forEach(row => {
+        const key = String(row.item_id)
+        counts[key] = (counts[key] ?? 0) + 1
+      })
+      setTagMatchData({ counts })
+
+      const matchedIds = Object.keys(counts)
+      if (!matchedIds.length) {
+        setTagResultItems([])
+        return
+      }
+
+      // Step 2: fetch full item data
+      const { data: rawItems, error: itemErr } = await supabase
+        .from('items')
+        .select(`
+          id, body, difficulty, maps_lat, maps_lng, is_active, is_approved,
+          is_secret, secret_reveal_text, has_alcohol,
+          partner_id, maps_query, website_url, geo_radius_m,
+          categories(name, color_hex),
+          neighborhoods!items_neighborhood_id_fkey(name),
+          partners(business_name)
+        `)
+        .in('id', matchedIds.slice(0, 100))
+        .eq('is_active', true)
+        .eq('is_approved', true)
+      if (__DEV__ && itemErr) console.log('items fetch error:', itemErr?.message)
+
+      // Step 3: augment with distance from user's location
+      const augmented = augmentWithDistance(rawItems, location)
+      setTagResultItems(augmented)
+    } catch (e) {
+      if (__DEV__) console.log('fetchTagResultItems error:', e?.message)
+      setTagResultItems([])
+    }
+  }
+
+  // ── Tag chip selection ───────────────────────────────────────────────────
   function selectTag(tag) {
     if (activeTags.some(t => t.id === tag.id)) return
     const next = [...activeTags, tag]
@@ -227,114 +311,86 @@ export default function DiscoverScreen({ navigation, route }) {
     setSuggestions([])
     setSearchText('')
     setBodyMatchIds(null)
-    setLiveTagIds(null)
-    fetchTagItems(next.map(t => t.id))
+    fetchTagResultItems(next.map(t => t.id))
   }
 
   function removeTag(tagId) {
     const next = activeTags.filter(t => t.id !== tagId)
     setActiveTags(next)
     if (next.length === 0) {
-      setTagMatchData({ ids: new Set(), counts: {} })
+      setTagResultItems(null)
+      setTagMatchData({ counts: {} })
+      setActiveQuickPick(null)
     } else {
-      fetchTagItems(next.map(t => t.id))
+      fetchTagResultItems(next.map(t => t.id))
     }
   }
 
-  async function fetchTagItems(tagIds) {
-    if (!tagIds.length) return
-    try {
-      const { data } = await supabase
-        .from('item_tags')
-        .select('item_id, tag_id')
-        .in('tag_id', tagIds)
-      const counts = {}
-      ;(data ?? []).forEach(row => {
-        counts[row.item_id] = (counts[row.item_id] ?? 0) + 1
-      })
-      setTagMatchData({ ids: new Set(Object.keys(counts)), counts })
-    } catch { /* non-critical */ }
-  }
-
-  // ── Quick-pick groups ────────────────────────────────────────────────────
+  // ── Quick-pick group taps ────────────────────────────────────────────────
   async function applyQuickPick(qp) {
+    if (activeQuickPick === qp.label) {
+      // Toggle off
+      setActiveQuickPick(null)
+      setActiveTags([])
+      setTagResultItems(null)
+      setTagMatchData({ counts: {} })
+      return
+    }
     setSuggestions([])
     setSearchText('')
+    setActiveQuickPick(qp.label)
     try {
       const filter = qp.tags.map(t => `name.ilike.%${t}%`).join(',')
       const { data } = await supabase.from('tags').select('id, name').or(filter).limit(30)
-      const found    = data ?? []
-      const activeIds = new Set(activeTags.map(t => t.id))
-      const newTags  = found.filter(t => !activeIds.has(t.id))
-      if (!newTags.length) return
-      const next = [...activeTags, ...newTags]
-      setActiveTags(next)
-      fetchTagItems(next.map(t => t.id))
+      const found = data ?? []
+      if (!found.length) return
+      setActiveTags(found)
+      fetchTagResultItems(found.map(t => t.id))
     } catch { /* non-critical */ }
   }
 
-  // ── Display items computation ────────────────────────────────────────────
+  // ── Display items ────────────────────────────────────────────────────────
   const displayItems = useMemo(() => {
-    // Start from nearby items (already location-filtered by useNearby)
-    let base = [...nearbyItems]
+    let base
+
+    if (tagResultItems !== null) {
+      // Tag/search results from direct DB query
+      base = [...tagResultItems]
+    } else {
+      // Default: nearby items (already ring-sorted by useNearby)
+      base = [...nearbyItems]
+    }
 
     // Post-checkin: exclude the checked-in item, recompute distances from checkin origin
     if (postCheckin?.lat && postCheckin?.lng) {
       base = base.filter(i => i.id !== postCheckin.itemId)
-      base = base.map(item => {
-        if (!item.maps_lat || !item.maps_lng) return item
-        const d    = distMeters(postCheckin.lat, postCheckin.lng, item.maps_lat, item.maps_lng)
-        const ring = ringForDist(d)
-        return { ...item, dist_m: d, dist_label: distLabel(d), ring_weight: ring }
-      }).filter(i => i.ring_weight !== -1)
+      // For nearbyItems (not already-computed tag results), recompute distances
+      if (tagResultItems === null) {
+        base = base.map(item => {
+          if (!item.maps_lat || !item.maps_lng) return item
+          const d    = distMeters(postCheckin.lat, postCheckin.lng, item.maps_lat, item.maps_lng)
+          const ring = ringForDist(d)
+          return { ...item, dist_m: d, dist_label: distLabel(d), ring_weight: ring }
+        }).filter(i => i.ring_weight !== -1)
+      }
     }
 
-    // Tag filter — active tags (tapped) take priority, then live (typed), then body fallback
-    if (activeTags.length > 0) {
-      base = base.filter(i => tagMatchData.ids.has(i.id))
-    } else if (liveTagIds !== null) {
-      base = base.filter(i => liveTagIds.has(i.id))
-    } else if (bodyMatchIds !== null) {
-      base = base.filter(i => bodyMatchIds.has(i.id))
+    // Body text fallback filter on nearbyItems (only when no tag results)
+    if (tagResultItems === null && bodyMatchIds !== null) {
+      base = base.filter(i => bodyMatchIds.has(String(i.id)))
     }
 
-    // Ring filter
-    if (ringFilter !== 'all') {
-      base = base.filter(i => i.ring_weight === ringFilter)
-    }
-
-    // Sort: tag match count desc, distance asc
+    // Sort: tag match count desc → ring asc → distance asc
     return base.sort((a, b) => {
-      const ac = tagMatchData.counts[a.id] ?? 0
-      const bc = tagMatchData.counts[b.id] ?? 0
+      const ac = tagMatchData.counts[String(a.id)] ?? 0
+      const bc = tagMatchData.counts[String(b.id)] ?? 0
       if (bc !== ac) return bc - ac
+      const ar = a.ring_weight ?? 99
+      const br = b.ring_weight ?? 99
+      if (ar !== br) return ar - br
       return (a.dist_m ?? 9999999) - (b.dist_m ?? 9999999)
     })
-  }, [nearbyItems, postCheckin, activeTags, tagMatchData, liveTagIds, bodyMatchIds, ringFilter])
-
-  // Ring counts (before ring filter, after tag/body filter)
-  const ringCounts = useMemo(() => {
-    const counts = { 0: 0, 1: 0, 2: 0, 3: 0 }
-    let base = [...nearbyItems]
-    if (postCheckin?.lat && postCheckin?.lng) {
-      base = base.filter(i => i.id !== postCheckin.itemId)
-      base = base.map(item => {
-        if (!item.maps_lat || !item.maps_lng) return item
-        const d    = distMeters(postCheckin.lat, postCheckin.lng, item.maps_lat, item.maps_lng)
-        const ring = ringForDist(d)
-        return { ...item, ring_weight: ring }
-      }).filter(i => i.ring_weight !== -1)
-    }
-    if (activeTags.length > 0) {
-      base = base.filter(i => tagMatchData.ids.has(i.id))
-    } else if (liveTagIds !== null) {
-      base = base.filter(i => liveTagIds.has(i.id))
-    } else if (bodyMatchIds !== null) {
-      base = base.filter(i => bodyMatchIds.has(i.id))
-    }
-    base.forEach(i => { if (i.ring_weight in counts) counts[i.ring_weight]++ })
-    return counts
-  }, [nearbyItems, postCheckin, activeTags, tagMatchData, liveTagIds, bodyMatchIds])
+  }, [nearbyItems, tagResultItems, postCheckin, tagMatchData, bodyMatchIds])
 
   // ── Navigation ───────────────────────────────────────────────────────────
   function openItem(item) {
@@ -359,9 +415,9 @@ export default function DiscoverScreen({ navigation, route }) {
 
   // ── Render helpers ───────────────────────────────────────────────────────
   function renderItem({ item }) {
-    const ring     = RINGS.find(r => r.weight === item.ring_weight) ?? RINGS[0]
-    const isChecked = checkedIds.has(item.id)
-    const matchCnt  = tagMatchData.counts[item.id] ?? 0
+    const ring      = RINGS.find(r => r.weight === item.ring_weight) ?? RINGS[0]
+    const isChecked = checkedIds.has(String(item.id))
+    const matchCnt  = tagMatchData.counts[String(item.id)] ?? 0
 
     return (
       <TouchableOpacity
@@ -388,7 +444,6 @@ export default function DiscoverScreen({ navigation, route }) {
               : item.body}
           </Text>
           <View style={styles.rowMeta}>
-            {/* Ring dot */}
             <View style={[styles.ringDotSmall, { backgroundColor: ring.color }]} />
             {item.dist_label && (
               <Text style={[styles.distLabel, !item.hasExactLocation && { color: MUTED, fontWeight: '600' }]}>
@@ -417,7 +472,7 @@ export default function DiscoverScreen({ navigation, route }) {
     )
   }
 
-  const hasActiveSearch = activeTags.length > 0 || liveTagIds !== null || bodyMatchIds !== null
+  const hasActiveSearch = tagResultItems !== null || bodyMatchIds !== null
 
   const emptyReason = hasActiveSearch
     ? 'No nearby items match these tags. Try removing one or adjusting your search.'
@@ -425,7 +480,6 @@ export default function DiscoverScreen({ navigation, route }) {
     ? 'No items found. Try a different search term.'
     : 'No location-specific items found near you.'
 
-  // ── Error state ──────────────────────────────────────────────────────────
   if (locError) {
     return (
       <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
@@ -441,7 +495,7 @@ export default function DiscoverScreen({ navigation, route }) {
     )
   }
 
-  if (nearbyLoading && nearbyItems.length === 0) {
+  if (nearbyLoading && nearbyItems.length === 0 && tagResultItems === null) {
     return (
       <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
         <ActivityIndicator color={AMBER} size="large" />
@@ -470,18 +524,16 @@ export default function DiscoverScreen({ navigation, route }) {
             activeTags={activeTags}
             selectTag={selectTag}
             removeTag={removeTag}
-            ringFilter={ringFilter}
-            setRingFilter={setRingFilter}
-            ringCounts={ringCounts}
+            activeQuickPick={activeQuickPick}
+            applyQuickPick={applyQuickPick}
             displayCount={displayItems.length}
             hasActiveSearch={hasActiveSearch}
             loadingSearch={loadingSearch}
-            applyQuickPick={applyQuickPick}
             location={location}
             bannerVisible={bannerVisible}
             dismissBanner={dismissBanner}
             pulseAnim={pulseAnim}
-            postCheckin={postCheckin}
+            clearSearch={clearSearch}
           />
         }
         ListEmptyComponent={
@@ -490,18 +542,7 @@ export default function DiscoverScreen({ navigation, route }) {
               <Text style={styles.emptyTitle}>Nothing found</Text>
               <Text style={styles.emptySub}>{emptyReason}</Text>
               {hasActiveSearch && (
-                <TouchableOpacity
-                  style={styles.clearBtn}
-                  onPress={() => {
-                    setActiveTags([])
-                    setTagMatchData({ ids: new Set(), counts: {} })
-                    setBodyMatchIds(null)
-                    setLiveTagIds(null)
-                    setSearchText('')
-                    setSuggestions([])
-                    setRingFilter('all')
-                  }}
-                >
+                <TouchableOpacity style={styles.clearBtn} onPress={clearSearch}>
                   <Text style={styles.clearBtnText}>Clear filters</Text>
                 </TouchableOpacity>
               )}
@@ -513,12 +554,12 @@ export default function DiscoverScreen({ navigation, route }) {
   )
 }
 
-// ── List header component ───────────────────────────────────────────────────
+// ── List header ─────────────────────────────────────────────────────────────
 function ListHeader({
   styles, searchText, setSearchText, suggestions, activeTags,
-  selectTag, removeTag, ringFilter, setRingFilter, ringCounts,
-  displayCount, hasActiveSearch, loadingSearch, applyQuickPick,
-  location, bannerVisible, dismissBanner, pulseAnim, postCheckin,
+  selectTag, removeTag, activeQuickPick, applyQuickPick,
+  displayCount, hasActiveSearch, loadingSearch, location,
+  bannerVisible, dismissBanner, pulseAnim, clearSearch,
 }) {
   const { colors } = useTheme()
   const { TEXT, MUTED } = colors
@@ -536,16 +577,6 @@ function ListHeader({
           </TouchableOpacity>
         </Animated.View>
       )}
-
-      {/* Header title */}
-      <View style={styles.headerCard}>
-        <Text style={styles.headerTitle}>Discover</Text>
-        <Text style={styles.headerSub}>
-          {location
-            ? `${displayCount} thing${displayCount === 1 ? '' : 's'}${hasActiveSearch ? ' matching your search' : ' near you'}`
-            : 'Things to do around you'}
-        </Text>
-      </View>
 
       {/* Search bar */}
       <View style={styles.searchWrap}>
@@ -567,97 +598,55 @@ function ListHeader({
       {/* Tag autocomplete suggestions */}
       {suggestions.length > 0 && (
         <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.suggestRow}
-          contentContainerStyle={styles.suggestContent}
+          horizontal showsHorizontalScrollIndicator={false}
+          style={styles.suggestRow} contentContainerStyle={styles.suggestContent}
           keyboardShouldPersistTaps="handled"
         >
           {suggestions.map(tag => (
-            <TouchableOpacity
-              key={tag.id}
-              style={styles.suggestChip}
-              onPress={() => selectTag(tag)}
-              activeOpacity={0.8}
-            >
+            <TouchableOpacity key={tag.id} style={styles.suggestChip} onPress={() => selectTag(tag)} activeOpacity={0.8}>
               <Text style={styles.suggestChipText}>+ {tag.name}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
       )}
 
+      {/* Quick-pick group pills (visible whenever no search text) */}
+      {searchText.length === 0 && (
+        <ScrollView
+          horizontal showsHorizontalScrollIndicator={false}
+          style={styles.quickPickRow} contentContainerStyle={styles.quickPickContent}
+        >
+          {QUICK_PICKS.map(qp => {
+            const on = activeQuickPick === qp.label
+            return (
+              <TouchableOpacity
+                key={qp.label}
+                style={[styles.quickPill, on && styles.quickPillActive]}
+                onPress={() => applyQuickPick(qp)}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.quickPillText, on && styles.quickPillTextActive]}>{qp.label}</Text>
+              </TouchableOpacity>
+            )
+          })}
+        </ScrollView>
+      )}
+
       {/* Active tag chips */}
       {activeTags.length > 0 && (
         <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.activeTagRow}
-          contentContainerStyle={styles.activeTagContent}
+          horizontal showsHorizontalScrollIndicator={false}
+          style={styles.activeTagRow} contentContainerStyle={styles.activeTagContent}
           keyboardShouldPersistTaps="handled"
         >
           {activeTags.map(tag => (
-            <TouchableOpacity
-              key={tag.id}
-              style={styles.activeChip}
-              onPress={() => removeTag(tag.id)}
-              activeOpacity={0.75}
-            >
+            <TouchableOpacity key={tag.id} style={styles.activeChip} onPress={() => removeTag(tag.id)} activeOpacity={0.75}>
               <Text style={styles.activeChipText}>{tag.name}</Text>
               <Text style={styles.activeChipX}> ✕</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
       )}
-
-      {/* Quick-pick group pills (only when nothing typed or no active tags) */}
-      {searchText.length === 0 && activeTags.length === 0 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={styles.quickPickRow}
-          contentContainerStyle={styles.quickPickContent}
-        >
-          {QUICK_PICKS.map(qp => (
-            <TouchableOpacity
-              key={qp.label}
-              style={styles.quickPill}
-              onPress={() => applyQuickPick(qp)}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.quickPillText}>{qp.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      )}
-
-      {/* Ring filter pills */}
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.ringFilterRow}
-        contentContainerStyle={styles.ringFilterContent}
-      >
-        {[
-          { key: 'all', label: 'All', count: Object.values(ringCounts).reduce((s, n) => s + n, 0), color: MUTED },
-          ...RINGS.map(r => ({ key: r.weight, label: r.label, count: ringCounts[r.weight] ?? 0, color: r.color })),
-        ].map(({ key, label, count, color }) => {
-          const on = ringFilter === key
-          return (
-            <TouchableOpacity
-              key={String(key)}
-              style={[styles.ringPill, on && { borderColor: color, backgroundColor: `${color}18` }]}
-              onPress={() => setRingFilter(key)}
-              activeOpacity={0.8}
-            >
-              {key !== 'all' && (
-                <View style={[styles.ringPillDot, { backgroundColor: color }]} />
-              )}
-              <Text style={[styles.ringPillText, on && { color }]}>{label}</Text>
-              <Text style={[styles.ringPillCount, on && { color }]}>{count}</Text>
-            </TouchableOpacity>
-          )
-        })}
-      </ScrollView>
     </>
   )
 }
@@ -668,50 +657,33 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT_2 }) {
     container: { flex: 1, backgroundColor: BG },
     center:    { alignItems: 'center', justifyContent: 'center', flex: 1, padding: 32, backgroundColor: BG },
 
-    // Post-checkin banner
     banner:         { flexDirection: 'row', alignItems: 'center', backgroundColor: NAVY, marginHorizontal: 16, marginTop: 8, borderRadius: 14, padding: 12, borderWidth: 1.5, borderColor: AMBER, gap: 10 },
     bannerText:     { flex: 1, fontSize: 13, color: AMBER, fontWeight: '700', lineHeight: 18 },
     bannerClose:    { padding: 4 },
     bannerCloseText:{ fontSize: 14, color: AMBER, fontWeight: '700' },
 
-    // Header
-    headerCard:  { marginHorizontal: 16, marginTop: 8, marginBottom: 8, backgroundColor: CARD, borderRadius: 24, padding: 18, borderWidth: 1.2, borderColor: BORDER },
-    headerTitle: { fontSize: 28, fontWeight: '800', color: TEXT },
-    headerSub:   { fontSize: 13, color: MUTED, marginTop: 4, lineHeight: 18, fontWeight: '600' },
-
-    // Search
-    searchWrap:  { flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginBottom: 8, backgroundColor: CARD, borderRadius: 14, borderWidth: 1, borderColor: BORDER, paddingHorizontal: 12, height: 44 },
+    searchWrap:  { flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginTop: 8, marginBottom: 8, backgroundColor: CARD, borderRadius: 14, borderWidth: 1, borderColor: BORDER, paddingHorizontal: 12, height: 44 },
     searchIcon:  { fontSize: 18, color: MUTED, marginRight: 8 },
     searchInput: { flex: 1, fontSize: 14, fontWeight: '600', height: 44 },
 
-    // Tag suggestions (autocomplete dropdown)
     suggestRow:     { flexGrow: 0, marginBottom: 4 },
     suggestContent: { paddingHorizontal: 16, gap: 8, paddingVertical: 4 },
     suggestChip:    { paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, backgroundColor: `${AMBER}18`, borderWidth: 1, borderColor: `${AMBER}50` },
     suggestChipText:{ fontSize: 13, color: '#9A6A00', fontWeight: '700' },
 
-    // Active tag chips
+    quickPickRow:        { flexGrow: 0, marginBottom: 6 },
+    quickPickContent:    { paddingHorizontal: 16, gap: 8, paddingVertical: 4 },
+    quickPill:           { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD },
+    quickPillActive:     { borderColor: AMBER, backgroundColor: `${AMBER}18` },
+    quickPillText:       { fontSize: 13, color: TEXT, fontWeight: '700' },
+    quickPillTextActive: { color: '#9A6A00' },
+
     activeTagRow:     { flexGrow: 0, marginBottom: 6 },
     activeTagContent: { paddingHorizontal: 16, gap: 8, paddingVertical: 4 },
     activeChip:       { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, backgroundColor: AMBER, borderWidth: 1, borderColor: AMBER },
     activeChipText:   { fontSize: 13, color: NAVY, fontWeight: '800' },
     activeChipX:      { fontSize: 11, color: NAVY, fontWeight: '700' },
 
-    // Quick-pick group pills
-    quickPickRow:     { flexGrow: 0, marginBottom: 6 },
-    quickPickContent: { paddingHorizontal: 16, gap: 8, paddingVertical: 4 },
-    quickPill:        { paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD },
-    quickPillText:    { fontSize: 13, color: TEXT, fontWeight: '700' },
-
-    // Ring filter pills
-    ringFilterRow:     { flexGrow: 0, marginBottom: 8 },
-    ringFilterContent: { paddingHorizontal: 16, gap: 8, paddingVertical: 4 },
-    ringPill:          { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD },
-    ringPillDot:       { width: 7, height: 7, borderRadius: 3.5 },
-    ringPillText:      { fontSize: 12, color: MUTED, fontWeight: '700' },
-    ringPillCount:     { fontSize: 12, color: MUTED, fontWeight: '800' },
-
-    // Result row
     rowCard:        { flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, paddingVertical: 14, paddingHorizontal: 14, gap: 12, backgroundColor: CARD, borderRadius: 18, borderWidth: 1, borderColor: BORDER },
     rowCardChecked: { opacity: 0.45 },
     rowLeft:        { width: 28, alignItems: 'center' },
@@ -733,7 +705,6 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT_2 }) {
     chevron:        { fontSize: 20, color: '#B0A69A', fontWeight: '600' },
     sep:            { height: 10 },
 
-    // Error / loading
     errorIconWrap:   { width: 72, height: 72, borderRadius: 36, backgroundColor: SOFT_2, borderWidth: 1, borderColor: '#DED3C5', alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
     errorIcon:       { fontSize: 34, color: '#A79A89' },
     errorTitle:      { fontSize: 22, fontWeight: '800', color: TEXT, marginBottom: 8, textAlign: 'center' },
@@ -743,7 +714,6 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT_2 }) {
     loadingText:     { fontSize: 15, color: TEXT, fontWeight: '700', marginTop: 16 },
     loadingSub:      { fontSize: 12, color: MUTED, marginTop: 6, fontWeight: '600' },
 
-    // Empty state
     empty:        { alignItems: 'center', justifyContent: 'center', padding: 32, marginTop: 10 },
     emptyTitle:   { fontSize: 18, fontWeight: '800', color: TEXT, marginBottom: 8, textAlign: 'center' },
     emptySub:     { fontSize: 13, color: MUTED, textAlign: 'center', lineHeight: 19, fontWeight: '600', maxWidth: 300, marginBottom: 20 },

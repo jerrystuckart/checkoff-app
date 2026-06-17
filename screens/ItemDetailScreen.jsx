@@ -179,6 +179,8 @@ export default function ItemDetailScreen({ route, navigation }) {
   const [memoryNote,   setMemoryNote]   = useState('')
   const [memoryError,  setMemoryError]  = useState(null)
   const [memorySaving, setMemorySaving] = useState(false)
+  // Deferred flag: fire triggerPostCheckinDiscover after memory modal closes (Fix 5)
+  const [pendingDiscover, setPendingDiscover] = useState(false)
 
   // Nearby mode — shown when no listId, item came from Nearby tab
   const isNearbyMode = !listId
@@ -192,6 +194,14 @@ export default function ItemDetailScreen({ route, navigation }) {
   useEffect(() => {
     loadUser()
   }, [])
+
+  // Fire discover navigation after memory modal is dismissed (Fix 5)
+  useEffect(() => {
+    if (!memoryModal && pendingDiscover) {
+      setPendingDiscover(false)
+      triggerPostCheckinDiscover()
+    }
+  }, [memoryModal, pendingDiscover])
 
   useFocusEffect(
     useCallback(() => {
@@ -419,7 +429,6 @@ export default function ItemDetailScreen({ route, navigation }) {
         }).catch(() => {/* non-critical */})
         updateUserLifetimePoints(userId).catch(() => {})
         if (item?.id) completeDare(userId, item.id).catch(() => {})
-        triggerPostCheckinDiscover()
 
         const difficulty = item?.difficulty ?? 0
         if (item?.allowsPersonalNote) {
@@ -433,8 +442,13 @@ export default function ItemDetailScreen({ route, navigation }) {
             itemBody:    item.body ?? '',
             difficulty,
           })
-        } else if (difficulty >= 5) {
-          notifyCrewCheckIn({ listItemId, itemBody: item?.body ?? '', difficulty, checkInId: null }).catch(() => {})
+          // Defer discover until modal is dismissed (Fix 5)
+          setPendingDiscover(true)
+        } else {
+          if (difficulty >= 5) {
+            notifyCrewCheckIn({ listItemId, itemBody: item?.body ?? '', difficulty, checkInId: null }).catch(() => {})
+          }
+          triggerPostCheckinDiscover()
         }
       }
     } catch (e) {
@@ -549,7 +563,6 @@ export default function ItemDetailScreen({ route, navigation }) {
         }).catch(() => {/* non-critical */})
         updateUserLifetimePoints(userId).catch(() => {})
         if (item?.id) completeDare(userId, item.id).catch(() => {})
-        triggerPostCheckinDiscover()
 
         const difficulty = item?.difficulty ?? 0
         if (item?.allowsPersonalNote) {
@@ -563,8 +576,12 @@ export default function ItemDetailScreen({ route, navigation }) {
             itemBody:    item.body ?? '',
             difficulty,
           })
-        } else if (difficulty >= 5) {
-          notifyCrewCheckIn({ listItemId: itemOnListId, itemBody: item?.body ?? '', difficulty, checkInId: null }).catch(() => {})
+          setPendingDiscover(true)
+        } else {
+          if (difficulty >= 5) {
+            notifyCrewCheckIn({ listItemId: itemOnListId, itemBody: item?.body ?? '', difficulty, checkInId: null }).catch(() => {})
+          }
+          triggerPostCheckinDiscover()
         }
       }
     } catch (e) {
