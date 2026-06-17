@@ -22,15 +22,6 @@ const RINGS = [
   { weight: 3, label: 'Destination', color: '#D85A30' },
 ]
 
-const QUICK_PICKS = [
-  { label: 'Bars & Drinks', tags: ['bar', 'drinks', 'beer', 'cocktails', 'happy hour', 'wine', 'brewery', 'pub'] },
-  { label: 'Food',          tags: ['food', 'restaurant', 'brunch', 'tacos', 'pizza', 'coffee', 'eat', 'diner', 'cafe'] },
-  { label: 'Active',        tags: ['hiking', 'sports', 'fitness', 'yoga', 'running', 'biking', 'active', 'outdoors', 'gym'] },
-  { label: 'Night Out',     tags: ['nightlife', 'club', 'live music', 'concert', 'dancing', 'karaoke', 'DJ', 'late night'] },
-  { label: 'Play',          tags: ['games', 'darts', 'bowling', 'mini golf', 'arcade', 'trivia', 'pool', 'pinball', 'billiards'] },
-  { label: 'Chill',         tags: ['park', 'art', 'museum', 'bookstore', 'coffee shop', 'relax', 'patio', 'scenic', 'view'] },
-]
-
 function distMeters(lat1, lng1, lat2, lng2) {
   const R    = 6371000
   const dLat = (lat2 - lat1) * Math.PI / 180
@@ -55,14 +46,16 @@ function ringForDist(m) {
   return -1
 }
 
-// Augment raw item rows (from items table) with computed distance/ring
+// Augment raw item rows (from items table) with computed distance/ring.
+// Does NOT filter by distance — tag search shows all matching items.
 function augmentWithDistance(rawItems, userCoords) {
   return (rawItems ?? []).map(item => {
     let dist = null
-    let ring = 0
+    let ring = 3  // default to Destination ring when no location
     if (item.maps_lat && item.maps_lng && userCoords) {
       dist = distMeters(userCoords.latitude, userCoords.longitude, item.maps_lat, item.maps_lng)
-      ring = ringForDist(dist)
+      const r = ringForDist(dist)
+      ring = r < 0 ? 3 : r  // cap beyond-max items at Destination, don't exclude
     }
     return {
       id:               item.id,
@@ -89,7 +82,7 @@ function augmentWithDistance(rawItems, userCoords) {
       dist_label:       dist ? distLabel(dist) : null,
       ring_weight:      ring,
     }
-  }).filter(i => !userCoords || i.ring_weight !== -1)
+  })
 }
 
 export default function DiscoverScreen({ navigation, route }) {
@@ -101,11 +94,18 @@ export default function DiscoverScreen({ navigation, route }) {
 
   const { items: nearbyItems, loading: nearbyLoading, locError, location } = useNearby()
 
+  // Keep a ref to the latest location so async functions get fresh coords
+  const locationRef = useRef(null)
+  useEffect(() => { if (location) locationRef.current = location }, [location, nearbyItems])
+
   // Search state
   const [searchText, setSearchText]     = useState('')
   const [suggestions, setSuggestions]   = useState([])
   const [activeTags, setActiveTags]     = useState([])   // [{id, name}] — manually tapped
-  const [activeQuickPick, setActiveQuickPick] = useState(null)  // label of selected group
+
+  // Category filter state
+  const [categories, setCategories]         = useState([])
+  const [activeCategoryName, setActiveCategoryName] = useState(null)
 
   // Result state — either direct DB items (tag search) or null (use nearbyItems)
   const [tagResultItems, setTagResultItems] = useState(null)  // array|null
@@ -117,11 +117,17 @@ export default function DiscoverScreen({ navigation, route }) {
   const [checkedIds, setCheckedIds] = useState(new Set())
 
   // Post-checkin mode
-  const [postCheckin, setPostCheckin]   = useState(null)
+  const [postCheckin, setPostCheckin]     = useState(null)
   const [bannerVisible, setBannerVisible] = useState(false)
-  const pulseAnim    = useRef(new Animated.Value(1)).current
+  const pulseAnim       = useRef(new Animated.Value(1)).current
   const appliedParamsRef = useRef(null)
-  const debounceRef  = useRef(null)
+  const debounceRef     = useRef(null)
+
+  // ── Load categories ──────────────────────────────────────────────────────
+  useEffect(() => {
+    supabase.from('categories').select('id, name, color_hex').order('name')
+      .then(({ data }) => setCategories(data ?? []))
+  }, [])
 
   // ── Load checked IDs ─────────────────────────────────────────────────────
   useEffect(() => { loadCheckedIds() }, [])
@@ -196,7 +202,7 @@ export default function DiscoverScreen({ navigation, route }) {
     setBodyMatchIds(null)
     setSearchText('')
     setSuggestions([])
-    setActiveQuickPick(null)
+    setActiveCategoryName(null)
   }
 
   // ── Search: debounced ────────────────────────────────────────────────────
@@ -204,7 +210,6 @@ export default function DiscoverScreen({ navigation, route }) {
     clearTimeout(debounceRef.current)
     if (searchText.length < 2) {
       setSuggestions([])
-      // Only clear tag results from live search, not from active tag chips
       if (activeTags.length === 0) {
         setTagResultItems(null)
         setBodyMatchIds(null)
@@ -215,26 +220,66 @@ export default function DiscoverScreen({ navigation, route }) {
     return () => clearTimeout(debounceRef.current)
   }, [searchText])
 
+  // Primary search: query item_tags joined to tags so we bypass any direct
+  // tags-table RLS restrictions. Falls back to body text if no tag match.
   async function runSearch(text) {
     setLoadingSearch(true)
     try {
-      const { data: tagRows, error: tagErr } = await supabase
-        .from('tags').select('id, name').ilike('name', `%${text}%`).order('name').limit(8)
+      // Single joined query: item_tags → tags filtered by name
+      // This works even if the tags table has restrictive RLS on direct reads,
+      // because we're querying through item_tags which is accessible for check-ins.
+      const { data: joinedRows, error: joinErr } = await supabase
+        .from('item_tags')
+        .select('item_id, tags!inner(id, name)')
+        .filter('tags.name', 'ilike', `%${text}%`)
+        .limit(500)
 
-      if (__DEV__ && tagErr) console.log('tags query error:', tagErr?.message)
+      if (__DEV__ && joinErr) console.log('item_tags join search error:', joinErr?.message)
 
-      const found = tagRows ?? []
-      const activeIds = new Set(activeTags.map(t => t.id))
-      setSuggestions(found.filter(t => !activeIds.has(t.id)))
+      const rows = joinedRows ?? []
 
-      if (found.length > 0) {
-        // Tags found — query items directly so we get results even if they lack neighborhood_id
-        const allTagIds = found.map(t => t.id)
-        await fetchTagResultItems(allTagIds)
+      // Build unique tag list for suggestions and item→count map
+      const tagMap = {}   // tagId → {id, name}
+      const counts = {}   // String(item_id) → match count
+      rows.forEach(row => {
+        const tag = row.tags
+        if (tag?.id) tagMap[String(tag.id)] = tag
+        const key = String(row.item_id)
+        counts[key] = (counts[key] ?? 0) + 1
+      })
+
+      const uniqueTags = Object.values(tagMap)
+      const activeIds  = new Set(activeTags.map(t => String(t.id)))
+      setSuggestions(uniqueTags.filter(t => !activeIds.has(String(t.id))).slice(0, 8))
+
+      if (uniqueTags.length > 0) {
+        // Tags matched — fetch full item data
+        const matchedIds = Object.keys(counts)
+        setTagMatchData({ counts })
         setBodyMatchIds(null)
+
+        const numericIds = matchedIds.slice(0, 100).map(id => parseInt(id, 10))
+        const { data: rawItems, error: itemErr } = await supabase
+          .from('items')
+          .select(`
+            id, body, difficulty, maps_lat, maps_lng, is_active, is_approved,
+            is_secret, secret_reveal_text, has_alcohol,
+            partner_id, maps_query, website_url, geo_radius_m,
+            categories(name, color_hex),
+            neighborhoods!items_neighborhood_id_fkey(name),
+            partners(business_name)
+          `)
+          .in('id', numericIds)
+          .eq('is_active', true)
+          .eq('is_approved', true)
+        if (__DEV__ && itemErr) console.log('items fetch error:', itemErr?.message)
+
+        const augmented = augmentWithDistance(rawItems, locationRef.current ?? location)
+        setTagResultItems(augmented)
       } else if (activeTags.length === 0) {
-        // No matching tags — fall back to body text search on nearbyItems
+        // No tag matches — fall back to body text search on nearbyItems
         setTagResultItems(null)
+        setTagMatchData({ counts: {} })
         const { data: bodyItems } = await supabase
           .from('items').select('id')
           .ilike('body', `%${text}%`)
@@ -243,6 +288,7 @@ export default function DiscoverScreen({ navigation, route }) {
         setBodyMatchIds(new Set((bodyItems ?? []).map(i => String(i.id))))
       } else {
         setTagResultItems(null)
+        setTagMatchData({ counts: {} })
         setBodyMatchIds(null)
       }
     } catch (e) {
@@ -252,7 +298,7 @@ export default function DiscoverScreen({ navigation, route }) {
   }
 
   // ── Core: fetch items by tag IDs directly from DB ────────────────────────
-  // Used by: typed search, chip selection, quick-pick taps, post-checkin
+  // Used by: chip selection (selectTag/removeTag), post-checkin
   async function fetchTagResultItems(tagIds) {
     if (!tagIds.length) {
       setTagResultItems(null)
@@ -260,7 +306,6 @@ export default function DiscoverScreen({ navigation, route }) {
       return
     }
     try {
-      // Step 1: which items have these tags, and how many?
       const { data: tagItemRows, error: tiErr } = await supabase
         .from('item_tags').select('item_id, tag_id').in('tag_id', tagIds)
       if (__DEV__ && tiErr) console.log('item_tags error:', tiErr?.message)
@@ -278,7 +323,7 @@ export default function DiscoverScreen({ navigation, route }) {
         return
       }
 
-      // Step 2: fetch full item data
+      const numericIds = matchedIds.slice(0, 100).map(id => parseInt(id, 10))
       const { data: rawItems, error: itemErr } = await supabase
         .from('items')
         .select(`
@@ -289,13 +334,12 @@ export default function DiscoverScreen({ navigation, route }) {
           neighborhoods!items_neighborhood_id_fkey(name),
           partners(business_name)
         `)
-        .in('id', matchedIds.slice(0, 100))
+        .in('id', numericIds)
         .eq('is_active', true)
         .eq('is_approved', true)
       if (__DEV__ && itemErr) console.log('items fetch error:', itemErr?.message)
 
-      // Step 3: augment with distance from user's location
-      const augmented = augmentWithDistance(rawItems, location)
+      const augmented = augmentWithDistance(rawItems, locationRef.current ?? location)
       setTagResultItems(augmented)
     } catch (e) {
       if (__DEV__) console.log('fetchTagResultItems error:', e?.message)
@@ -320,33 +364,14 @@ export default function DiscoverScreen({ navigation, route }) {
     if (next.length === 0) {
       setTagResultItems(null)
       setTagMatchData({ counts: {} })
-      setActiveQuickPick(null)
     } else {
       fetchTagResultItems(next.map(t => t.id))
     }
   }
 
-  // ── Quick-pick group taps ────────────────────────────────────────────────
-  async function applyQuickPick(qp) {
-    if (activeQuickPick === qp.label) {
-      // Toggle off
-      setActiveQuickPick(null)
-      setActiveTags([])
-      setTagResultItems(null)
-      setTagMatchData({ counts: {} })
-      return
-    }
-    setSuggestions([])
-    setSearchText('')
-    setActiveQuickPick(qp.label)
-    try {
-      const filter = qp.tags.map(t => `name.ilike.%${t}%`).join(',')
-      const { data } = await supabase.from('tags').select('id, name').or(filter).limit(30)
-      const found = data ?? []
-      if (!found.length) return
-      setActiveTags(found)
-      fetchTagResultItems(found.map(t => t.id))
-    } catch { /* non-critical */ }
+  // ── Category pill toggle ─────────────────────────────────────────────────
+  function toggleCategory(name) {
+    setActiveCategoryName(prev => prev === name ? null : name)
   }
 
   // ── Display items ────────────────────────────────────────────────────────
@@ -354,23 +379,20 @@ export default function DiscoverScreen({ navigation, route }) {
     let base
 
     if (tagResultItems !== null) {
-      // Tag/search results from direct DB query
       base = [...tagResultItems]
     } else {
-      // Default: nearby items (already ring-sorted by useNearby)
       base = [...nearbyItems]
     }
 
     // Post-checkin: exclude the checked-in item, recompute distances from checkin origin
     if (postCheckin?.lat && postCheckin?.lng) {
       base = base.filter(i => i.id !== postCheckin.itemId)
-      // For nearbyItems (not already-computed tag results), recompute distances
       if (tagResultItems === null) {
         base = base.map(item => {
           if (!item.maps_lat || !item.maps_lng) return item
           const d    = distMeters(postCheckin.lat, postCheckin.lng, item.maps_lat, item.maps_lng)
           const ring = ringForDist(d)
-          return { ...item, dist_m: d, dist_label: distLabel(d), ring_weight: ring }
+          return { ...item, dist_m: d, dist_label: distLabel(d), ring_weight: ring < 0 ? 3 : ring }
         }).filter(i => i.ring_weight !== -1)
       }
     }
@@ -378,6 +400,11 @@ export default function DiscoverScreen({ navigation, route }) {
     // Body text fallback filter on nearbyItems (only when no tag results)
     if (tagResultItems === null && bodyMatchIds !== null) {
       base = base.filter(i => bodyMatchIds.has(String(i.id)))
+    }
+
+    // Category filter — AND with any active tag search
+    if (activeCategoryName) {
+      base = base.filter(i => i.categoryName === activeCategoryName)
     }
 
     // Sort: tag match count desc → ring asc → distance asc
@@ -390,7 +417,7 @@ export default function DiscoverScreen({ navigation, route }) {
       if (ar !== br) return ar - br
       return (a.dist_m ?? 9999999) - (b.dist_m ?? 9999999)
     })
-  }, [nearbyItems, tagResultItems, postCheckin, tagMatchData, bodyMatchIds])
+  }, [nearbyItems, tagResultItems, postCheckin, tagMatchData, bodyMatchIds, activeCategoryName])
 
   // ── Navigation ───────────────────────────────────────────────────────────
   function openItem(item) {
@@ -415,7 +442,7 @@ export default function DiscoverScreen({ navigation, route }) {
 
   // ── Render helpers ───────────────────────────────────────────────────────
   function renderItem({ item }) {
-    const ring      = RINGS.find(r => r.weight === item.ring_weight) ?? RINGS[0]
+    const ring      = RINGS.find(r => r.weight === item.ring_weight) ?? RINGS[3]
     const isChecked = checkedIds.has(String(item.id))
     const matchCnt  = tagMatchData.counts[String(item.id)] ?? 0
 
@@ -472,10 +499,10 @@ export default function DiscoverScreen({ navigation, route }) {
     )
   }
 
-  const hasActiveSearch = tagResultItems !== null || bodyMatchIds !== null
+  const hasActiveSearch = tagResultItems !== null || bodyMatchIds !== null || activeCategoryName !== null
 
   const emptyReason = hasActiveSearch
-    ? 'No nearby items match these tags. Try removing one or adjusting your search.'
+    ? 'No items match these filters. Try removing one or adjusting your search.'
     : searchText.length >= 2
     ? 'No items found. Try a different search term.'
     : 'No location-specific items found near you.'
@@ -524,8 +551,9 @@ export default function DiscoverScreen({ navigation, route }) {
             activeTags={activeTags}
             selectTag={selectTag}
             removeTag={removeTag}
-            activeQuickPick={activeQuickPick}
-            applyQuickPick={applyQuickPick}
+            categories={categories}
+            activeCategoryName={activeCategoryName}
+            toggleCategory={toggleCategory}
             displayCount={displayItems.length}
             hasActiveSearch={hasActiveSearch}
             loadingSearch={loadingSearch}
@@ -557,7 +585,7 @@ export default function DiscoverScreen({ navigation, route }) {
 // ── List header ─────────────────────────────────────────────────────────────
 function ListHeader({
   styles, searchText, setSearchText, suggestions, activeTags,
-  selectTag, removeTag, activeQuickPick, applyQuickPick,
+  selectTag, removeTag, categories, activeCategoryName, toggleCategory,
   displayCount, hasActiveSearch, loadingSearch, location,
   bannerVisible, dismissBanner, pulseAnim, clearSearch,
 }) {
@@ -610,22 +638,22 @@ function ListHeader({
         </ScrollView>
       )}
 
-      {/* Quick-pick group pills (visible whenever no search text) */}
-      {searchText.length === 0 && (
+      {/* Category filter pills (visible whenever no search text) */}
+      {searchText.length === 0 && categories.length > 0 && (
         <ScrollView
           horizontal showsHorizontalScrollIndicator={false}
           style={styles.quickPickRow} contentContainerStyle={styles.quickPickContent}
         >
-          {QUICK_PICKS.map(qp => {
-            const on = activeQuickPick === qp.label
+          {categories.map(cat => {
+            const on = activeCategoryName === cat.name
             return (
               <TouchableOpacity
-                key={qp.label}
+                key={cat.id}
                 style={[styles.quickPill, on && styles.quickPillActive]}
-                onPress={() => applyQuickPick(qp)}
+                onPress={() => toggleCategory(cat.name)}
                 activeOpacity={0.8}
               >
-                <Text style={[styles.quickPillText, on && styles.quickPillTextActive]}>{qp.label}</Text>
+                <Text style={[styles.quickPillText, on && styles.quickPillTextActive]}>{cat.name}</Text>
               </TouchableOpacity>
             )
           })}
