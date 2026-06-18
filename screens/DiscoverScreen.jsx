@@ -105,7 +105,7 @@ export default function DiscoverScreen({ navigation, route }) {
 
   // Category filter state
   const [categories, setCategories]         = useState([])
-  const [activeCategoryName, setActiveCategoryName] = useState(null)
+  const [activeCategoryName, setActiveCategoryName] = useState('All')
 
   // Result state — either direct DB items (tag search) or null (use nearbyItems)
   const [tagResultItems, setTagResultItems] = useState(null)  // array|null
@@ -202,7 +202,7 @@ export default function DiscoverScreen({ navigation, route }) {
     setBodyMatchIds(null)
     setSearchText('')
     setSuggestions([])
-    setActiveCategoryName(null)
+    setActiveCategoryName('All')
   }
 
   // ── Search: debounced ────────────────────────────────────────────────────
@@ -383,7 +383,7 @@ export default function DiscoverScreen({ navigation, route }) {
 
   // ── Category pill toggle ─────────────────────────────────────────────────
   function toggleCategory(name) {
-    setActiveCategoryName(prev => prev === name ? null : name)
+    setActiveCategoryName(name)
   }
 
   // ── Display items ────────────────────────────────────────────────────────
@@ -415,7 +415,7 @@ export default function DiscoverScreen({ navigation, route }) {
     }
 
     // Category filter — AND with any active tag search
-    if (activeCategoryName) {
+    if (activeCategoryName && activeCategoryName !== 'All') {
       base = base.filter(i => i.categoryName === activeCategoryName)
     }
 
@@ -511,7 +511,7 @@ export default function DiscoverScreen({ navigation, route }) {
     )
   }
 
-  const hasActiveSearch = tagResultItems !== null || bodyMatchIds !== null || activeCategoryName !== null
+  const hasActiveSearch = tagResultItems !== null || bodyMatchIds !== null || (activeCategoryName !== null && activeCategoryName !== 'All')
 
   const emptyReason = hasActiveSearch
     ? 'No items match these filters. Try removing one or adjusting your search.'
@@ -656,16 +656,16 @@ function ListHeader({
           horizontal showsHorizontalScrollIndicator={false}
           style={styles.quickPickRow} contentContainerStyle={styles.quickPickContent}
         >
-          {categories.map(cat => {
-            const on = activeCategoryName === cat.name
+          {['All', ...categories.map(c => c.name)].map(name => {
+            const on = activeCategoryName === name
             return (
               <TouchableOpacity
-                key={cat.id}
+                key={name}
                 style={[styles.quickPill, on && styles.quickPillActive]}
-                onPress={() => toggleCategory(cat.name)}
+                onPress={() => toggleCategory(name)}
                 activeOpacity={0.8}
               >
-                <Text style={[styles.quickPillText, on && styles.quickPillTextActive]}>{cat.name}</Text>
+                <Text style={[styles.quickPillText, on && styles.quickPillTextActive]}>{name}</Text>
               </TouchableOpacity>
             )
           })}
