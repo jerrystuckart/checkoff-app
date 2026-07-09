@@ -31,7 +31,10 @@ import { pollForNewBadges } from '../lib/badges'
 import { handleFirstCheckinReferralBonus } from '../lib/referral'
 import SuggestPlaceSheet from './SuggestPlaceSheet'
 import BadgeCelebrationModal from '../components/BadgeCelebrationModal'
+import TierUpgradeCelebrationModal from '../components/TierUpgradeCelebrationModal'
+import { checkTierCrossingForUser } from '../lib/points'
 import { useTheme } from '../lib/ThemeContext'
+import * as Location from 'expo-location'
 
 const ACCENT = '#FFB84D'
 const ACCENT_DARK = '#7A4B00'
@@ -165,6 +168,10 @@ export default function ListScreen({ route, navigation }) {
   // Badge celebration modal
   const [celebrationBadges, setCelebrationBadges] = useState([])
 
+  // Tier upgrade celebration modal
+  const [tierUpgrade, setTierUpgrade] = useState(null)  // { tier, newPoints }
+  const pendingBadgesRef = useRef([])
+
   // Personalized check-in memory modal
   const [memoryModal,   setMemoryModal]   = useState(null)  // { listItemId, placeLabel, noteLabel }
   const [memoryPlace,   setMemoryPlace]   = useState('')
@@ -258,7 +265,10 @@ export default function ListScreen({ route, navigation }) {
       .select('id, user_id, checked, checked_at, user_suggestions(place_name, experience_body, website_url)')
       .eq('list_id', listId)
       .order('created_at', { ascending: true })
-    setSuggestions(data ?? [])
+    setSuggestions((data ?? []).map(s => ({
+      ...s,
+      user_suggestions: Array.isArray(s.user_suggestions) ? s.user_suggestions[0] ?? null : s.user_suggestions,
+    })))
   }, [listId])
 
   const handleSuggestionCheckOff = useCallback(async (suggestionItemId, currentChecked, ownerId) => {
@@ -622,14 +632,58 @@ export default function ListScreen({ route, navigation }) {
 
   // Fire-and-forget: opens Discover screen in post-checkin mode if the item
   // has coordinates and tags. Never throws — skips silently on any missing data.
-  function triggerPostCheckinDiscover(item) {
-    // useItems returns mapsLat/mapsLng (camelCase); also handle maps_lat/maps_lng as fallback
+  async function triggerPostCheckinDiscover(item) {
     const lat = item?.mapsLat ?? item?.maps_lat ?? null
     const lng = item?.mapsLng ?? item?.maps_lng ?? null
-    if (!lat || !lng) {
-      if (__DEV__) console.log('postCheckin skip: no coordinates on item', item?.id)
+    const neighborhoodId = item?.neighborhoodId ?? null
+
+    // Gate 1 — item must have coordinates and a neighborhood
+    if (!lat || !lng || !neighborhoodId) {
+      if (__DEV__) console.log('postCheckin skip: missing coords or neighborhood', { lat, lng, neighborhoodId })
       return
     }
+
+    // Gate 1 — Distance: user must be within 5 miles (8047 m) of the item
+    let userLat = null
+    let userLng = null
+    try {
+      const pos = await Location.getLastKnownPositionAsync({})
+      userLat = pos?.coords?.latitude  ?? null
+      userLng = pos?.coords?.longitude ?? null
+    } catch { /* location unavailable */ }
+
+    if (!userLat || !userLng) {
+      if (__DEV__) console.log('postCheckin skip: user location unavailable')
+      return
+    }
+
+    const toRad = d => (d * Math.PI) / 180
+    const R = 6371000
+    const dLat = toRad(lat - userLat)
+    const dLng = toRad(lng - userLng)
+    const a = Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(userLat)) * Math.cos(toRad(lat)) * Math.sin(dLng / 2) ** 2
+    const distM = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+
+    if (distM > 8047) {
+      if (__DEV__) console.log('postCheckin skip: user too far from item', Math.round(distM) + 'm')
+      return
+    }
+
+    // Gate 2 — Item density: neighborhood must have > 25 active approved items
+    const { count, error: countErr } = await supabase
+      .from('items')
+      .select('id', { count: 'exact', head: true })
+      .eq('neighborhood_id', neighborhoodId)
+      .eq('is_active', true)
+      .eq('is_approved', true)
+
+    if (countErr || count == null || count <= 25) {
+      if (__DEV__) console.log('postCheckin skip: low item density', count)
+      return
+    }
+
+    // Both gates passed — fetch tags and navigate
     supabase
       .from('item_tags')
       .select('tags(name)')
@@ -637,15 +691,15 @@ export default function ListScreen({ route, navigation }) {
       .limit(5)
       .then(({ data, error }) => {
         if (error) {
-          if (__DEV__) console.log('postCheckin skip: fetch failed', error.message)
+          if (__DEV__) console.log('postCheckin skip: tags fetch failed', error.message)
           return
         }
         const checkinTags = (data ?? []).map(r => r.tags?.name).filter(Boolean)
         if (!checkinTags.length) {
-          if (__DEV__) console.log('postCheckin skip: no tags found for item', item.id)
+          if (__DEV__) console.log('postCheckin skip: no tags on item', item.id)
           return
         }
-        if (__DEV__) console.log('postCheckin fired for item', item.id, 'with tags', checkinTags)
+        if (__DEV__) console.log('postCheckin fired for item', item.id, 'tags', checkinTags)
         navigation.navigate('NearbyTab', {
           screen: 'Nearby',
           params: {
@@ -658,8 +712,51 @@ export default function ListScreen({ route, navigation }) {
         })
       })
       .catch(() => {
-        if (__DEV__) console.log('postCheckin skip: fetch failed')
+        if (__DEV__) console.log('postCheckin skip: tags fetch exception')
       })
+  }
+
+  async function enforceGpsCheckin(item) {
+    const checkinType = item?.checkin_type ?? item?.checkinType
+    if (checkinType !== 'gps') return true
+
+    const itemLat = item?.maps_lat ?? item?.mapsLat ?? null
+    const itemLng = item?.maps_lng ?? item?.mapsLng ?? null
+
+    if (!itemLat || !itemLng) return true
+
+    let userLat = null, userLng = null
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync()
+      if (status !== 'granted') {
+        Alert.alert('Location required', 'Location access is needed to check off this item.')
+        return false
+      }
+      const pos = await Promise.race([
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 6000)),
+      ]).catch(() => Location.getLastKnownPositionAsync({}))
+      userLat = pos?.coords?.latitude  ?? null
+      userLng = pos?.coords?.longitude ?? null
+    } catch { /* permission denied or device error */ }
+
+    if (!userLat || !userLng) {
+      Alert.alert('Location unavailable', 'Location access is needed to check off this item.')
+      return false
+    }
+
+    const R = 6371000, toRad = d => d * Math.PI / 180
+    const dLat = toRad(itemLat - userLat), dLng = toRad(itemLng - userLng)
+    const a = Math.sin(dLat / 2) ** 2 +
+      Math.cos(toRad(userLat)) * Math.cos(toRad(itemLat)) * Math.sin(dLng / 2) ** 2
+    const distM = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+
+    const thresholdM = item?.geo_radius_m ?? 500
+    if (distM > thresholdM) {
+      Alert.alert('Not there yet', `You need to be at this location to check it off (${Math.round(distM)}m away).`)
+      return false
+    }
+    return true
   }
 
   const handleCheckOff = useCallback(async (listItemId) => {
@@ -673,6 +770,8 @@ export default function ListScreen({ route, navigation }) {
       navigation.navigate('PhotoCheckIn', { item, listItemId })
       return
     }
+
+    if (!await enforceGpsCheckin(item)) return
 
     const difficulty  = item?.difficulty  ?? 1
     const wasChecked  = item?.checked     ?? false
@@ -725,12 +824,24 @@ export default function ListScreen({ route, navigation }) {
           return
         }
 
-        // Poll for newly awarded badges only when the insert confirmed (not on error or un-check)
+        // Poll for badges + check tier crossing when a new check-in confirmed
         if (!wasChecked && currentUserId) {
-          pollForNewBadges(currentUserId, supabase).then(earned => {
-            if (earned.length > 0) setCelebrationBadges(earned)
+          const pointsBefore = userLifetimePts
+          Promise.all([
+            pollForNewBadges(currentUserId, supabase),
+            checkTierCrossingForUser(currentUserId, pointsBefore),
+          ]).then(([earned, { crossedTier, newPoints }]) => {
+            // Keep lifetime pts fresh so subsequent check-ins use the correct before value
+            setUserLifetimePts(newPoints)
             if (earned.some(b => b.id === 'first_checkin')) {
               handleFirstCheckinReferralBonus(currentUserId).catch(() => {})
+            }
+            if (crossedTier) {
+              // Show tier upgrade first; release held badges after it dismisses
+              pendingBadgesRef.current = earned
+              setTierUpgrade({ tier: crossedTier, newPoints })
+            } else if (earned.length > 0) {
+              setCelebrationBadges(earned)
             }
           })
         }
@@ -789,7 +900,7 @@ export default function ListScreen({ route, navigation }) {
         }
       }
     }
-  }, [ended, listId, checkOff, localItems, cityItems, navigation, triggerCelebration, currentUserId])
+  }, [ended, listId, checkOff, localItems, cityItems, navigation, triggerCelebration, currentUserId, userLifetimePts])
 
   function slideOutSuggStack(onDone) {
     Animated.timing(suggAnim, { toValue: 200, useNativeDriver: true, duration: 200 }).start(() => {
@@ -872,7 +983,7 @@ export default function ListScreen({ route, navigation }) {
           allows_personal_note, personal_prompt_label, personal_place_label,
           categories ( name, color_hex ),
           neighborhoods!items_neighborhood_id_fkey ( name ),
-          partners ( business_name )
+          partners!items_partner_id_fkey ( business_name )
         `)
         .eq('id', revealItemId)
         .single()
@@ -1426,6 +1537,24 @@ export default function ListScreen({ route, navigation }) {
         onDismiss={() => setCelebrationBadges([])}
       />
 
+      {tierUpgrade && (
+        <TierUpgradeCelebrationModal
+          tier={tierUpgrade.tier}
+          newPoints={tierUpgrade.newPoints}
+          onDismiss={() => {
+            setTierUpgrade(null)
+            const held = pendingBadgesRef.current
+            pendingBadgesRef.current = []
+            if (held.length > 0) setCelebrationBadges(held)
+          }}
+          onExploreInsider={() => {
+            setTierUpgrade(null)
+            pendingBadgesRef.current = []
+            navigation.navigate('ProfileTab', { screen: 'InsiderAccess' })
+          }}
+        />
+      )}
+
       {/* Partner suggestion cards — stacked, slides up from bottom after check-in */}
       {suggestionStack?.length > 0 && (
         <Animated.View
@@ -1520,7 +1649,7 @@ export default function ListScreen({ route, navigation }) {
                           ? 'You unlocked something nearby'
                           : 'Nice one. Want a reward nearby?')}
                       </Text>
-                      <Text style={styles.suggBody}>
+                      <Text style={styles.suggCardBody}>
                         {front.suggestion_body ?? (isSecret
                           ? 'Check off this item to reveal a secret spot.'
                           : 'People who check this off often stop here after.')}
@@ -2434,7 +2563,7 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, EN
     color: TEXT,
     marginBottom: 3,
   },
-  suggBody: {
+  suggCardBody: {
     fontSize: 13,
     color: MUTED,
     lineHeight: 18,

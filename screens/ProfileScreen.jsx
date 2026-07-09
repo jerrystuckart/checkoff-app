@@ -1,9 +1,12 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, RefreshControl, Switch, StatusBar, Share,
+  Animated, Modal, Pressable,
 } from 'react-native'
+import * as Haptics from 'expo-haptics'
 import { getTierByName, getNextTier, getTierProgress } from '../lib/tiers'
+import TierUpgradeCelebrationModal from '../components/TierUpgradeCelebrationModal'
 import { recordReferral } from '../lib/referral'
 import { useFocusEffect } from '@react-navigation/native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -34,6 +37,11 @@ export default function ProfileScreen({ navigation }) {
   const [loading, setLoading]               = useState(true)
   const [refreshing, setRefreshing]         = useState(false)
   const [referralCount, setReferralCount]   = useState(0)
+  const [devTierTest,   setDevTierTest]     = useState(null)  // DEV-only
+  const devLongPressRef = useRef(false)
+  const [levelPeekVisible, setLevelPeekVisible] = useState(false)
+  const levelPeekAnim = useRef(new Animated.Value(0)).current
+  const levelPeekTimer = useRef(null)
 
   useFocusEffect(
     useCallback(() => {
@@ -228,6 +236,15 @@ export default function ProfileScreen({ navigation }) {
     )
   }
 
+  function dismissLevelPeek() {
+    Animated.timing(levelPeekAnim, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => setLevelPeekVisible(false))
+    if (levelPeekTimer.current) clearTimeout(levelPeekTimer.current)
+  }
+
   function memberSince(iso) {
     if (!iso) return ''
     return new Date(iso).toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
@@ -302,6 +319,7 @@ export default function ProfileScreen({ navigation }) {
   const hasStreak   = (stats?.streak ?? 0) > 0
 
   return (
+    <>
     <ScrollView
       style={styles.container}
       contentContainerStyle={[styles.content, { paddingTop: insets.top + 16 }]}
@@ -371,9 +389,36 @@ export default function ProfileScreen({ navigation }) {
           { num: stats?.total ?? 0,   label: 'check-ins', onPress: null },
           { num: hasStreak ? `${stats.streak} 🔥` : '0', label: 'week streak', color: hasStreak ? RED : undefined, onPress: null },
           { num: stats?.longest ?? 0, label: 'best streak', onPress: null },
-          { num: profile?.lifetime_points ?? 0, label: 'lifetime pts', onPress: () => navigation.navigate('Badges') },
+          {
+            num: profile?.lifetime_points ?? 0,
+            label: 'lifetime pts',
+            onPress: () => {
+              if (devLongPressRef.current) { devLongPressRef.current = false; return }
+              navigation.navigate('Badges')
+            },
+            onLongPress: () => {
+              devLongPressRef.current = true
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+              setLevelPeekVisible(true)
+              Animated.spring(levelPeekAnim, {
+                toValue: 1,
+                useNativeDriver: true,
+                tension: 120,
+                friction: 8,
+              }).start()
+              if (levelPeekTimer.current) clearTimeout(levelPeekTimer.current)
+              levelPeekTimer.current = setTimeout(dismissLevelPeek, 2500)
+            },
+          },
         ].map((s, i) => (
-          <TouchableOpacity key={i} style={styles.statCard} onPress={s.onPress ?? undefined} activeOpacity={s.onPress ? 0.7 : 1}>
+          <TouchableOpacity
+            key={i}
+            style={styles.statCard}
+            onPress={s.onPress ?? undefined}
+            onLongPress={s.onLongPress}
+            delayLongPress={600}
+            activeOpacity={s.onPress ? 0.7 : 1}
+          >
             <Text style={[styles.statNum, s.color && { color: s.color }]}>{s.num}</Text>
             <Text style={styles.statLabel}>{s.label}</Text>
           </TouchableOpacity>
@@ -620,6 +665,49 @@ export default function ProfileScreen({ navigation }) {
 
       <Text style={styles.version}>CheckOff · getcheckoff.com</Text>
     </ScrollView>
+
+    {devTierTest && (
+      <TierUpgradeCelebrationModal
+        tier={devTierTest.tier}
+        newPoints={devTierTest.newPoints}
+        onDismiss={() => setDevTierTest(null)}
+        onExploreInsider={() => {
+          setDevTierTest(null)
+          navigation.navigate('InsiderAccess')
+        }}
+      />
+    )}
+
+    {levelPeekVisible && (() => {
+      const nextTier = getNextTier(profile?.insider_tier ?? 'Starter')
+      const UNLOCK_COPY = {
+        Explorer: 'Track streaks and see how you stack up on leaderboards.',
+        Local:    'Unlock secret items and rare check-in opportunities.',
+        Insider:  'Early access to Insider Drops and exclusive experiences.',
+        Legend:   'Legendary status — you\'ve seen everything CheckOff has to offer.',
+      }
+      if (!nextTier) return null
+      return (
+        <Modal transparent animationType="none" onRequestClose={dismissLevelPeek}>
+          <Pressable style={levelPeekStyles.backdrop} onPress={dismissLevelPeek}>
+            <Animated.View style={[
+              levelPeekStyles.card,
+              {
+                opacity: levelPeekAnim,
+                transform: [{ scale: levelPeekAnim.interpolate({ inputRange: [0, 1], outputRange: [0.85, 1] }) }],
+              },
+            ]}>
+              <Text style={levelPeekStyles.eyebrow}>NEXT LEVEL</Text>
+              <Text style={[levelPeekStyles.tierName, { color: nextTier.text }]}>{nextTier.name}</Text>
+              <Text style={levelPeekStyles.threshold}>{nextTier.minPoints} pts to unlock</Text>
+              <Text style={levelPeekStyles.description}>{UNLOCK_COPY[nextTier.name]}</Text>
+            </Animated.View>
+          </Pressable>
+        </Modal>
+      )
+    })()}
+
+    </>
   )
 }
 
@@ -714,3 +802,49 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   signInBtnText:     { fontSize: 16, fontWeight: '800', color: NAVY },
  }) // end StyleSheet.create
 } // end createStyles
+
+const levelPeekStyles = StyleSheet.create({
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  card: {
+    backgroundColor: '#1A1A2E',
+    borderRadius: 20,
+    paddingVertical: 28,
+    paddingHorizontal: 32,
+    alignItems: 'center',
+    width: 260,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.4,
+    shadowRadius: 20,
+    elevation: 12,
+  },
+  eyebrow: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 2,
+    color: 'rgba(255,255,255,0.4)',
+    marginBottom: 8,
+  },
+  tierName: {
+    fontSize: 32,
+    fontWeight: '900',
+    marginBottom: 6,
+  },
+  threshold: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.5)',
+    fontWeight: '600',
+    marginBottom: 14,
+  },
+  description: {
+    fontSize: 13,
+    color: 'rgba(255,255,255,0.7)',
+    textAlign: 'center',
+    lineHeight: 19,
+  },
+})

@@ -22,7 +22,8 @@ import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { completeDare } from '../lib/completeDare'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
-import { updateUserLifetimePoints } from '../lib/points'
+import { updateUserLifetimePoints, getUserLifetimePoints, checkTierCrossingForUser } from '../lib/points'
+import TierUpgradeCelebrationModal from '../components/TierUpgradeCelebrationModal'
 import { useTheme } from '../lib/ThemeContext'
 
 const AMBER = '#F5A623'
@@ -182,6 +183,8 @@ export default function ItemDetailScreen({ route, navigation }) {
   const [memorySaving, setMemorySaving] = useState(false)
   // Deferred flag: fire triggerPostCheckinDiscover after memory modal closes (Fix 5)
   const [pendingDiscover, setPendingDiscover] = useState(false)
+  const [tierUpgrade, setTierUpgrade] = useState(null)          // { tier, newPoints, triggerDiscoverOnDismiss? }
+  const [pendingTierUpgrade, setPendingTierUpgrade] = useState(null)
 
   // Nearby mode — shown when no listId, item came from Nearby tab
   const isNearbyMode = !listId
@@ -196,13 +199,18 @@ export default function ItemDetailScreen({ route, navigation }) {
     loadUser()
   }, [])
 
-  // Fire discover navigation after memory modal is dismissed (Fix 5)
+  // Fire tier upgrade (then discover) after memory modal is dismissed
   useEffect(() => {
     if (!memoryModal && pendingDiscover) {
       setPendingDiscover(false)
-      triggerPostCheckinDiscover()
+      if (pendingTierUpgrade) {
+        setTierUpgrade({ ...pendingTierUpgrade, triggerDiscoverOnDismiss: true })
+        setPendingTierUpgrade(null)
+      } else {
+        triggerPostCheckinDiscover()
+      }
     }
-  }, [memoryModal, pendingDiscover])
+  }, [memoryModal, pendingDiscover, pendingTierUpgrade])
 
   useFocusEffect(
     useCallback(() => {
@@ -345,26 +353,22 @@ export default function ItemDetailScreen({ route, navigation }) {
   async function triggerPostCheckinDiscover() {
     const itemLat = item?.maps_lat ?? item?.mapsLat ?? null
     const itemLng = item?.maps_lng ?? item?.mapsLng ?? null
+    const neighborhoodId = item?.neighborhoodId ?? null
 
-    console.log('[postCheckin] item location:', itemLat, itemLng)
-
-    if (!itemLat || !itemLng || !item?.id) {
-      console.log('[postCheckin] skip: no coordinates for item', item?.id)
+    // Gate 1 — item must have coordinates and a neighborhood
+    if (!itemLat || !itemLng || !neighborhoodId) {
+      console.log('[postCheckin] skip: missing coords or neighborhood', { itemLat, itemLng, neighborhoodId })
       return
     }
 
-    // Distance gate: only navigate if user is within 3200m of the item
+    // Gate 1 — Distance: user must be within 5 miles (8047 m) of the item
     let userLat = null
     let userLng = null
     try {
       const pos = await Location.getLastKnownPositionAsync({})
-      userLat = pos?.coords?.latitude ?? null
+      userLat = pos?.coords?.latitude  ?? null
       userLng = pos?.coords?.longitude ?? null
-    } catch {
-      // ignore — treated as unavailable below
-    }
-
-    console.log('[postCheckin] user location:', userLat, userLng)
+    } catch { /* location unavailable */ }
 
     if (!userLat || !userLng) {
       console.log('[postCheckin] skip: user location unavailable')
@@ -372,15 +376,27 @@ export default function ItemDetailScreen({ route, navigation }) {
     }
 
     const distM = haversineMeters(userLat, userLng, itemLat, itemLng)
-    const withinRange = distM <= 3200
-    console.log('[postCheckin] distance to item:', Math.round(distM), 'm')
-    console.log('[postCheckin] within range:', withinRange)
+    console.log('[postCheckin] distance to item:', Math.round(distM) + 'm')
 
-    if (!withinRange) {
-      console.log('[postCheckin] skip: user not near item (dist:', Math.round(distM) + 'm)')
+    if (distM > 8047) {
+      console.log('[postCheckin] skip: user too far from item')
       return
     }
 
+    // Gate 2 — Item density: neighborhood must have > 25 active approved items
+    const { count, error: countErr } = await supabase
+      .from('items')
+      .select('id', { count: 'exact', head: true })
+      .eq('neighborhood_id', neighborhoodId)
+      .eq('is_active', true)
+      .eq('is_approved', true)
+
+    if (countErr || count == null || count <= 25) {
+      console.log('[postCheckin] skip: low item density', count)
+      return
+    }
+
+    // Both gates passed — fetch tags and navigate
     supabase
       .from('item_tags')
       .select('tag_id, tags!inner(name)')
@@ -389,10 +405,10 @@ export default function ItemDetailScreen({ route, navigation }) {
       .then(({ data, error }) => {
         if (error) {
           console.log('[postCheckin] tags fetch failed:', error.message)
+          return
         }
         const checkinTags = (data ?? []).map(r => r.tags?.name).filter(Boolean)
-        console.log('[postCheckin] tags:', checkinTags)
-        console.log('[postCheckin] fired for item:', item.id)
+        console.log('[postCheckin] fired for item:', item.id, 'tags:', checkinTags)
         navigation.navigate('NearbyTab', {
           screen: 'Nearby',
           params: { mode: 'post_checkin', checkinLat: itemLat, checkinLng: itemLng, checkinItemId: item.id, checkinTags },
@@ -401,6 +417,55 @@ export default function ItemDetailScreen({ route, navigation }) {
       .catch(e => {
         console.log('[postCheckin] skip: exception', e?.message)
       })
+  }
+
+  // Returns true if the GPS gate passes (or is not applicable).
+  // Returns false and shows an alert if the user is too far or location is unavailable.
+  async function enforceGpsCheckin() {
+    const checkinType = item?.checkin_type ?? item?.checkinType
+    if (checkinType !== 'gps') return true
+
+    const itemLat = item?.maps_lat ?? item?.mapsLat ?? null
+    const itemLng = item?.maps_lng ?? item?.mapsLng ?? null
+
+    if (!itemLat || !itemLng) return true // no coords on item — let it through
+
+    let userLat = null
+    let userLng = null
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync()
+      if (status !== 'granted') {
+        Alert.alert('Location required', 'Location access is needed to check off this item.')
+        return false
+      }
+      // Try a fresh fix first; fall back to last-known if it times out
+      const pos = await Promise.race([
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 6000)),
+      ]).catch(() => Location.getLastKnownPositionAsync({}))
+      userLat = pos?.coords?.latitude  ?? null
+      userLng = pos?.coords?.longitude ?? null
+    } catch {
+      // permission denied or device error
+    }
+
+    if (!userLat || !userLng) {
+      Alert.alert('Location unavailable', 'Location access is needed to check off this item.')
+      return false
+    }
+
+    const thresholdM = item?.geo_radius_m ?? 500
+    const distM = haversineMeters(userLat, userLng, itemLat, itemLng)
+
+    if (distM > thresholdM) {
+      Alert.alert(
+        'Not there yet',
+        `You need to be at this location to check it off (${Math.round(distM)}m away).`
+      )
+      return false
+    }
+
+    return true
   }
 
   async function handleCheckOff() {
@@ -412,8 +477,13 @@ export default function ItemDetailScreen({ route, navigation }) {
       return
     }
 
+    if (!await enforceGpsCheckin()) return
+
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
     setSaving(true)
+
+    // Capture points before the insert so tier crossing can be detected after
+    const pointsBeforePromise = getUserLifetimePoints(userId)
 
     try {
       let listItemId = item?.listItemId
@@ -470,7 +540,9 @@ export default function ItemDetailScreen({ route, navigation }) {
         supabase.functions.invoke('update-streak', {
           body: { user_id: userId },
         }).catch(() => {/* non-critical */})
-        updateUserLifetimePoints(userId).catch(() => {})
+
+        const pointsBefore = await pointsBeforePromise.catch(() => 0)
+        await updateUserLifetimePoints(userId).catch(() => {})
         if (item?.id) completeDare(userId, item.id).catch(() => {})
 
         const difficulty = item?.difficulty ?? 0
@@ -485,14 +557,30 @@ export default function ItemDetailScreen({ route, navigation }) {
             itemBody:    item.body ?? '',
             difficulty,
           })
-          // Defer discover until modal is dismissed (Fix 5)
+          // Defer discover until modal is dismissed
           setPendingDiscover(true)
         } else {
           if (difficulty >= 5) {
             notifyCrewCheckIn({ listItemId, itemBody: item?.body ?? '', difficulty, checkInId: null }).catch(() => {})
           }
-          triggerPostCheckinDiscover()
         }
+
+        // Check tier crossing after points have been updated.
+        // For non-memory items: discover fires here (deferred until we know if tier crossed).
+        // For memory items: pendingTierUpgrade + pendingDiscover useEffect handles sequencing.
+        checkTierCrossingForUser(userId, pointsBefore).then(({ crossedTier, newPoints }) => {
+          if (crossedTier) {
+            if (item?.allowsPersonalNote) {
+              setPendingTierUpgrade({ tier: crossedTier, newPoints })
+            } else {
+              setTierUpgrade({ tier: crossedTier, newPoints, triggerDiscoverOnDismiss: true })
+            }
+          } else if (!item?.allowsPersonalNote) {
+            triggerPostCheckinDiscover()
+          }
+        }).catch(() => {
+          if (!item?.allowsPersonalNote) triggerPostCheckinDiscover()
+        })
       }
     } catch (e) {
       Alert.alert('Could not check off', e.message)
@@ -583,6 +671,8 @@ export default function ItemDetailScreen({ route, navigation }) {
     }
 
     // Item is on a list — check it off there
+    if (!await enforceGpsCheckin()) return
+
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
     setSaving(true)
     try {
@@ -1320,6 +1410,22 @@ export default function ItemDetailScreen({ route, navigation }) {
           </View>
         </KeyboardAvoidingView>
       </Modal>
+
+      {tierUpgrade && (
+        <TierUpgradeCelebrationModal
+          tier={tierUpgrade.tier}
+          newPoints={tierUpgrade.newPoints}
+          onDismiss={() => {
+            const shouldDiscover = tierUpgrade?.triggerDiscoverOnDismiss
+            setTierUpgrade(null)
+            if (shouldDiscover) triggerPostCheckinDiscover()
+          }}
+          onExploreInsider={() => {
+            setTierUpgrade(null)
+            navigation.navigate('ProfileTab', { screen: 'InsiderAccess' })
+          }}
+        />
+      )}
     </View>
   )
 }

@@ -113,9 +113,6 @@ export default function DiscoverScreen({ navigation, route }) {
   const [bodyMatchIds, setBodyMatchIds]     = useState(null)  // Set<string>|null — body fallback
   const [loadingSearch, setLoadingSearch]   = useState(false)
 
-  // Checked-in items (grayed out in Discover)
-  const [checkedIds, setCheckedIds] = useState(new Set())
-
   // Post-checkin mode
   const [postCheckin, setPostCheckin]     = useState(null)
   const [bannerVisible, setBannerVisible] = useState(false)
@@ -128,23 +125,6 @@ export default function DiscoverScreen({ navigation, route }) {
     supabase.from('categories').select('id, name, color_hex').order('name')
       .then(({ data }) => setCategories(data ?? []))
   }, [])
-
-  // ── Load checked IDs ─────────────────────────────────────────────────────
-  useEffect(() => { loadCheckedIds() }, [])
-
-  async function loadCheckedIds() {
-    try {
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) return
-      const { data } = await supabase
-        .from('check_ins')
-        .select('list_items(item_id)')
-        .eq('user_id', user.id)
-      setCheckedIds(new Set(
-        (data ?? []).map(ci => ci.list_items?.item_id).filter(Boolean).map(String)
-      ))
-    } catch { /* non-critical */ }
-  }
 
   // ── Post-checkin params ──────────────────────────────────────────────────
   useFocusEffect(useCallback(() => {
@@ -277,7 +257,7 @@ export default function DiscoverScreen({ navigation, route }) {
               partner_id, maps_query, website_url, geo_radius_m,
               categories(name, color_hex),
               neighborhoods!items_neighborhood_id_fkey(name),
-              partners(business_name)
+              partners!items_partner_id_fkey(business_name)
             `)
             .in('id', uuidIds)
             .eq('is_active', true)
@@ -344,7 +324,7 @@ export default function DiscoverScreen({ navigation, route }) {
           partner_id, maps_query, website_url, geo_radius_m,
           categories(name, color_hex),
           neighborhoods!items_neighborhood_id_fkey(name),
-          partners(business_name)
+          partners!items_partner_id_fkey(business_name)
         `)
         .in('id', uuidIds)
         .eq('is_active', true)
@@ -455,12 +435,11 @@ export default function DiscoverScreen({ navigation, route }) {
   // ── Render helpers ───────────────────────────────────────────────────────
   function renderItem({ item }) {
     const ring      = RINGS.find(r => r.weight === item.ring_weight) ?? RINGS[3]
-    const isChecked = checkedIds.has(String(item.id))
     const matchCnt  = tagMatchData.counts[String(item.id)] ?? 0
 
     return (
       <TouchableOpacity
-        style={[styles.rowCard, isChecked && styles.rowCardChecked]}
+        style={styles.rowCard}
         onPress={() => openItem(item)}
         activeOpacity={0.85}
       >
@@ -475,7 +454,7 @@ export default function DiscoverScreen({ navigation, route }) {
 
         <View style={styles.rowBody}>
           <Text
-            style={[styles.rowText, isChecked && styles.rowTextChecked]}
+            style={styles.rowText}
             numberOfLines={2}
           >
             {item.is_secret
@@ -500,7 +479,6 @@ export default function DiscoverScreen({ navigation, route }) {
                 <Text style={styles.matchText}>{matchCnt} tags</Text>
               </View>
             )}
-            {isChecked && <Text style={styles.checkedLabel}>✓ done</Text>}
           </View>
         </View>
 
@@ -725,13 +703,11 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT_2 }) {
     activeChipX:      { fontSize: 11, color: NAVY, fontWeight: '700' },
 
     rowCard:        { flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, paddingVertical: 14, paddingHorizontal: 14, gap: 12, backgroundColor: CARD, borderRadius: 18, borderWidth: 1, borderColor: BORDER },
-    rowCardChecked: { opacity: 0.45 },
     rowLeft:        { width: 28, alignItems: 'center' },
     catDotWrap:     { width: 22, height: 22, borderRadius: 11, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
     catDot:         { width: 8, height: 8, borderRadius: 4 },
     rowBody:        { flex: 1 },
     rowText:        { fontSize: 15, color: TEXT, lineHeight: 21, fontWeight: '700' },
-    rowTextChecked: { textDecorationLine: 'line-through' },
     rowMeta:        { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6, flexWrap: 'wrap' },
     ringDotSmall:   { width: 6, height: 6, borderRadius: 3, flexShrink: 0 },
     distLabel:      { fontSize: 11, color: '#9A6A00', fontWeight: '800' },
@@ -740,7 +716,6 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT_2 }) {
     ptsText:        { fontSize: 11, color: '#9A6A00', fontWeight: '800' },
     matchBadge:     { backgroundColor: `${AMBER}18`, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, borderWidth: 1, borderColor: `${AMBER}50` },
     matchText:      { fontSize: 10, color: '#9A6A00', fontWeight: '700' },
-    checkedLabel:   { fontSize: 11, color: MUTED, fontWeight: '700' },
     rowRight:       { width: 20, alignItems: 'center' },
     chevron:        { fontSize: 20, color: '#B0A69A', fontWeight: '600' },
     sep:            { height: 10 },

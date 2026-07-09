@@ -52,6 +52,7 @@ export default function HomeScreen({ navigation }) {
   const [nextTenDismissed, setNextTenDismissed] = useState(false)
   const [heroImage, setHeroImage] = useState(null)
   const [recapModal, setRecapModal] = useState(null) // { count, pts, streak, weekStartIso }
+  const [featuredCreators, setFeaturedCreators] = useState([])
 
   const { savedCrew } = useCrewInvite()
 
@@ -104,7 +105,7 @@ export default function HomeScreen({ navigation }) {
       const [{ data: metroData }, { data: n10Data }] = await Promise.all([
         supabase
           .from('metro_areas')
-          .select('id, name, state, slug')
+          .select('id, name, state, slug, center_lat, center_lng')
           .eq('is_active', true)
           .order('name'),
         supabase
@@ -127,15 +128,30 @@ export default function HomeScreen({ navigation }) {
             const pos = await Location.getCurrentPositionAsync({
               accuracy: Location.Accuracy.Low,
             })
-            return pos.coords.latitude
+            return { latitude: pos.coords.latitude, longitude: pos.coords.longitude }
           })(),
           new Promise(resolve => setTimeout(() => resolve(null), 3000)),
         ])
 
         if (locationResult !== null) {
-          defaultMetro = locationResult < 37
-            ? (metroData ?? []).find(m => m.name.includes('Phoenix'))
-            : (metroData ?? []).find(m => m.name.includes('Milwaukee'))
+          const { latitude: uLat, longitude: uLng } = locationResult
+          const metros = metroData ?? []
+          // Pick the metro whose center_lat/center_lng is closest to the user.
+          // Falls back to name-match if center coords are missing (e.g. during migration).
+          const metrosWithCoords = metros.filter(m => m.center_lat != null && m.center_lng != null)
+          if (metrosWithCoords.length > 0) {
+            defaultMetro = metrosWithCoords.reduce((closest, m) => {
+              const dLat = uLat - m.center_lat, dLng = uLng - m.center_lng
+              const distSq = dLat * dLat + dLng * dLng
+              const cLat = uLat - closest.center_lat, cLng = uLng - closest.center_lng
+              const closestSq = cLat * cLat + cLng * cLng
+              return distSq < closestSq ? m : closest
+            })
+          } else {
+            defaultMetro = uLat < 37
+              ? metros.find(m => m.name.includes('Phoenix'))
+              : metros.find(m => m.name.includes('Milwaukee'))
+          }
         }
       } catch (e) {
         /* GPS optional */
@@ -197,10 +213,32 @@ export default function HomeScreen({ navigation }) {
     const { data: curatedData } = await fetchCuratedLists(slug)
     setCuratedGroups((curatedData ?? []).slice(0, 6))
 
+    // Fetch creators with a featured-eligible list in this metro for the Creators tile
+    const { data: creatorListRows } = await supabase
+      .from('lists')
+      .select('checkoff_creator_id')
+      .eq('metro_id', metroId)
+      .eq('is_featured_eligible', true)
+      .not('goes_public_at', 'is', null)
+      .not('checkoff_creator_id', 'is', null)
+
+    const featuredCreatorIds = [...new Set((creatorListRows ?? []).map(l => l.checkoff_creator_id).filter(Boolean))]
+    if (featuredCreatorIds.length > 0) {
+      const { data: creatorRows } = await supabase
+        .from('creators')
+        .select('id, handle, display_name, avatar_url')
+        .in('id', featuredCreatorIds)
+        .eq('is_active', true)
+        .order('display_name')
+      setFeaturedCreators(creatorRows ?? [])
+    } else {
+      setFeaturedCreators([])
+    }
+
     if (userId) {
       const { data: memberLists } = await supabase
         .from('list_members')
-        .select('lists(id, title, starts_at, ends_at, is_public, is_official, creator_id, cover_emoji)')
+        .select('lists(id, title, starts_at, ends_at, is_public, is_official, creator_id, cover_emoji, checkoff_creator_id, is_featured_eligible)')
         .eq('user_id', userId)
 
       const all = (memberLists ?? []).map(m => m.lists).filter(Boolean)
@@ -230,6 +268,17 @@ export default function HomeScreen({ navigation }) {
 
       // Load crew members for each list (up to 4 avatars per list)
       if (userLists.length > 0) {
+        // Fetch creator handles for any creator lists in a separate query
+        const creatorIds = [...new Set(userLists.map(l => l.checkoff_creator_id).filter(Boolean))]
+        const creatorHandleMap = {}
+        if (creatorIds.length > 0) {
+          const { data: creatorRows } = await supabase
+            .from('creators')
+            .select('id, handle')
+            .in('id', creatorIds)
+          ;(creatorRows ?? []).forEach(c => { creatorHandleMap[c.id] = c.handle })
+        }
+
         const memberMap = {}
         const memberCountMap = {}
         ;(memberships.data ?? []).forEach(m => {
@@ -243,7 +292,11 @@ export default function HomeScreen({ navigation }) {
           }
         })
         setListMemberMap(memberMap)
-        setLists(userLists.map(l => ({ ...l, memberCount: (memberCountMap[l.id] ?? 0) + 1 })))
+        setLists(userLists.map(l => ({
+          ...l,
+          memberCount:   (memberCountMap[l.id] ?? 0) + 1,
+          creatorHandle: creatorHandleMap[l.checkoff_creator_id] ?? null,
+        })))
       } else {
         setLists([])
       }
@@ -577,18 +630,9 @@ export default function HomeScreen({ navigation }) {
 
       <View style={styles.headerCard}>
         <View style={styles.headerTopRow}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <View style={styles.headerBadge}>
-              <Text style={styles.headerBadgeText} allowFontScaling={false} numberOfLines={1}>
-                {selectedMetro ? `${selectedMetro.name.replace(' Metro', '')}` : 'Your city'}
-              </Text>
-            </View>
-            {season?.name ? (
-              <View style={styles.seasonPill}>
-                <Text style={styles.seasonPillText}>{season.name}</Text>
-              </View>
-            ) : null}
-          </View>
+          <Text style={styles.logo} allowFontScaling={false} numberOfLines={1}>
+            Check<Text style={styles.logoOff} allowFontScaling={false}>Off</Text>
+          </Text>
 
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
             {user && (
@@ -617,115 +661,76 @@ export default function HomeScreen({ navigation }) {
           </View>
         </View>
 
-        <Text style={styles.logo} allowFontScaling={false} numberOfLines={1}>
-          Check<Text style={styles.logoOff} allowFontScaling={false}>Off</Text>
-        </Text>
-
-        <Text style={styles.tagline} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-          Stop saying "I don't know what to do." Challenge your crew.
+        <Text style={styles.tagline} maxFontSizeMultiplier={1.0} numberOfLines={1}>
+          Stop saying "I don't know what to do."
         </Text>
       </View>
 
-      {/* ── CheckOff Status card ── */}
-      {user && (() => {
-        const tier = getTierByName(userInsiderTier)
-        const next = getNextTier(userInsiderTier)
+      {/* ── Metro + Status combined row ── */}
+      {(() => {
+        const tier     = getTierByName(userInsiderTier)
+        const next     = getNextTier(userInsiderTier)
         const progress = getTierProgress(userInsiderTier, userLifetimePts)
-        const ptsNeeded = next ? next.minPoints - userLifetimePts : 0
-        return (
-          <TouchableOpacity
-            style={styles.statusCard}
-            onPress={() => navigation.navigate('ProfileTab')}
-            activeOpacity={0.85}
-          >
-            <View style={styles.statusCardTop}>
-              <View style={[styles.statusTierPill, { backgroundColor: tier.bg }]}>
-                <Text style={[styles.statusTierPillText, { color: tier.text }]}>{userInsiderTier.toUpperCase()}</Text>
-              </View>
-              <Text style={styles.statusCardLabel}>CheckOff Status</Text>
-            </View>
-            <View style={styles.statusBarWrap}>
-              <View style={[styles.statusBarFill, { width: `${Math.round(progress * 100)}%` }]} />
-            </View>
-            <Text style={styles.statusBarHint}>
-              {next
-                ? `${userLifetimePts} pts · ${ptsNeeded} to ${next.name}`
-                : `${userLifetimePts} pts · Legend — you're at the top`}
-            </Text>
-          </TouchableOpacity>
-        )
-      })()}
+        const tierIdx  = ['Starter','Explorer','Local','Insider','Legend'].indexOf(userInsiderTier)
+        const DOT_COUNT = 5
+        const filledDots = tierIdx < 0 ? 1 : tierIdx + 1
 
-      {/* ── The Next 10 Banner ── */}
-      {nextTenList && !nextTenDismissed && (() => {
-        const existingNext10 = lists.find(l => l.cover_emoji === '🔟')
+        const metroLabel = selectedMetro?.name?.replace(' Metro', '') ?? '—'
+        const multiMetro = metros.length > 1
+
+        function openMetroPicker() {
+          if (!multiMetro) return
+          Alert.alert(
+            'Switch City',
+            'Choose your city',
+            metros.map(m => ({
+              text: m.name.replace(' Metro', ''),
+              onPress: () => switchMetro(m),
+            })).concat([{ text: 'Cancel', style: 'cancel' }])
+          )
+        }
+
         return (
-          <TouchableOpacity
-            activeOpacity={0.88}
-            onPress={() => {
-              if (existingNext10) {
-                // Already joined — go straight to the list, no duplicate creation
-                navigation.navigate('List', {
-                  listId: existingNext10.id,
-                  title:  existingNext10.title || 'The Next 10',
-                })
-              } else {
-                navigation.navigate('CuratedListPreview', {
-                  listId:    nextTenList.id,
-                  listTitle: nextTenList.title,
-                  groupName: nextTenList.title,
-                })
-              }
-            }}
-            style={styles.next10Banner}
-          >
-            {/* Dismiss button — sibling to content, not a child, so taps don't bubble */}
+          <View style={styles.metroStatusRow}>
+            {/* Left — Metro selector */}
             <TouchableOpacity
-              onPress={handleNext10Dismiss}
-              style={styles.next10Dismiss}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              onPress={openMetroPicker}
+              activeOpacity={multiMetro ? 0.7 : 1}
+              style={styles.metroSelector}
+              disabled={!multiMetro}
             >
-              <Text style={styles.next10DismissText}>✕</Text>
+              <Text style={styles.metroSelectorText}>{metroLabel}</Text>
+              {multiMetro && <Text style={styles.metroChevron}> ▾</Text>}
             </TouchableOpacity>
 
-            <Text style={styles.next10BannerLabel}>🔟  THE NEXT 10</Text>
-            <Text style={styles.next10BannerTitle} numberOfLines={2}>
-              {nextTenList.title}
-            </Text>
-            {!!nextTenList.tagline && (
-              <Text style={styles.next10BannerTagline}>{nextTenList.tagline}</Text>
+            {/* Right — Compact status (only when logged in) */}
+            {user && (
+              <TouchableOpacity
+                onPress={() => navigation.navigate('ProfileTab')}
+                activeOpacity={0.75}
+                style={styles.compactStatus}
+              >
+                <Text style={[styles.compactTierLabel, { color: tier.text }]}>
+                  {userInsiderTier.toUpperCase()}
+                </Text>
+                <View style={styles.compactDots}>
+                  {Array.from({ length: DOT_COUNT }).map((_, i) => (
+                    <View
+                      key={i}
+                      style={[
+                        styles.compactDot,
+                        i < filledDots
+                          ? { backgroundColor: tier.text }
+                          : { backgroundColor: BORDER },
+                      ]}
+                    />
+                  ))}
+                </View>
+              </TouchableOpacity>
             )}
-
-            <View style={styles.next10BannerMeta}>
-              <Text style={styles.next10BannerMetaText}>
-                10 spots  ·  2 secret drops  ·  Drops Friday
-              </Text>
-            </View>
-
-            <View style={styles.next10BannerCTA}>
-              <Text style={styles.next10BannerCTAText}>
-                {existingNext10 ? 'Go to the list  →' : 'See the list  →'}
-              </Text>
-            </View>
-          </TouchableOpacity>
+          </View>
         )
       })()}
-
-      <Text style={styles.sectionLabel}>City</Text>
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.pillRow}>
-        {metros.map(m => (
-          <TouchableOpacity
-            key={m.id}
-            style={[styles.pill, selectedMetro?.id === m.id && styles.pillActive]}
-            onPress={() => switchMetro(m)}
-            activeOpacity={0.85}
-          >
-            <Text style={[styles.pillText, selectedMetro?.id === m.id && styles.pillTextActive]}>
-              {m.name.replace(' Metro', '')}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
 
       {homeOfficialLists.length > 0 && (
         <>
@@ -851,105 +856,6 @@ export default function HomeScreen({ navigation }) {
         </>
       )}
 
-      <ExperiencesRail citySlug={metroSlug} />
-
-      {curatedGroups.length > 0 && (
-  <>
-    <View style={styles.sectionRow}>
-      <View>
-        <Text style={styles.sectionLabel}>Start from a template</Text>
-        <Text style={styles.sectionSubSmall}>Lists built for your kind of crew</Text>
-      </View>
-      <TouchableOpacity
-        onPress={() =>
-          navigation.navigate('BrowseLists', {
-            citySlug:  metroSlug,
-            metroName: metroDisplayName,
-          })
-        }
-        activeOpacity={0.8}
-      >
-        <Text style={styles.seeAllText}>See all →</Text>
-      </TouchableOpacity>
-    </View>
-
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      style={styles.groupScrollRow}
-      contentContainerStyle={{ paddingRight: 20 }}
-    >
-      {curatedGroups.map(item => {
-        const g = item.audience_groups
-        if (!g) return null
-        const hasImage = !!g.image_url
-        const chipPress = () => navigation.navigate('CuratedListPreview', {
-          curatedListId: item.id,
-          groupName:     g.name,
-          groupEmoji:    g.emoji,
-          groupTagline:  g.tagline,
-          groupImageUrl: g.image_url ?? undefined,
-          citySlug:      metroSlug,
-          metroName:     metroDisplayName,
-        })
-
-        if (hasImage) {
-          return (
-            <TouchableOpacity
-              key={item.id}
-              activeOpacity={0.88}
-              onPress={chipPress}
-              style={styles.groupChipImageWrap}
-            >
-              <ImageBackground
-                source={{ uri: g.image_url }}
-                style={styles.groupChipImageBg}
-                imageStyle={{ borderRadius: 18 }}
-              >
-                <View style={styles.groupChipOverlay} />
-                <Text style={styles.groupChipEmojiOnImg}>{g.emoji ?? '📋'}</Text>
-                <Text style={styles.groupChipNameOnImg}>{g.name}</Text>
-                <Text style={styles.groupChipTaglineOnImg} numberOfLines={2}>
-                  "{g.tagline}"
-                </Text>
-              </ImageBackground>
-            </TouchableOpacity>
-          )
-        }
-
-        return (
-          <TouchableOpacity
-            key={item.id}
-            style={styles.groupChip}
-            activeOpacity={0.88}
-            onPress={chipPress}
-          >
-            <Text style={styles.groupChipEmoji}>{g.emoji ?? '📋'}</Text>
-            <Text style={styles.groupChipName}>{g.name}</Text>
-            <Text style={styles.groupChipTagline} numberOfLines={2}>
-              "{g.tagline}"
-            </Text>
-          </TouchableOpacity>
-        )
-      })}
-
-      {/* "See all" card at end of scroll */}
-      <TouchableOpacity
-        style={styles.groupChipSeeAll}
-        activeOpacity={0.88}
-        onPress={() =>
-          navigation.navigate('BrowseLists', {
-            citySlug:  metroSlug,
-            metroName: metroDisplayName,
-          })
-        }
-      >
-        <Text style={styles.groupChipSeeAllText}>See all →</Text>
-      </TouchableOpacity>
-    </ScrollView>
-  </>
-)}
-
       <View style={styles.sectionRow}>
         <View>
           <Text style={styles.sectionLabel}>Your lists</Text>
@@ -991,11 +897,15 @@ export default function HomeScreen({ navigation }) {
       ) : (
         activeLists.map(list => {
           const crewMembers = listMemberMap[list.id] ?? []
-          const accent = LIST_ACCENT_COLORS[list.id.charCodeAt(0) % 6]
+          // A list can be a creator list without being promoted — only featured-eligible
+          // creator lists get the amber accent + byline; followed-but-unfeatured lists
+          // still appear here, just without the visual promotion.
+          const isFeaturedCreatorList = !!list.creatorHandle && !!list.is_featured_eligible
+          const accent = isFeaturedCreatorList ? '#F5A623' : LIST_ACCENT_COLORS[list.id.charCodeAt(0) % 6]
           return (
           <TouchableOpacity
             key={list.id}
-            style={[styles.listCard, isUrgent(list.ends_at) && styles.listCardUrgent]}
+            style={[styles.listCard, isUrgent(list.ends_at) && styles.listCardUrgent, isFeaturedCreatorList && styles.listCardCreator]}
             onPress={() => navigation.navigate('List', { listId: list.id, title: list.title })}
             onLongPress={() => {
               if (list.creator_id === user?.id) {
@@ -1010,6 +920,9 @@ export default function HomeScreen({ navigation }) {
 
             <View style={{ flex: 1 }}>
               <Text style={styles.listTitle}>{list.title}</Text>
+              {isFeaturedCreatorList ? (
+                <Text style={styles.listCreatorByline}>by @{list.creatorHandle}</Text>
+              ) : null}
               <View style={styles.listMetaRow}>
                 {list.ends_at ? (
                   <Text style={[styles.listMeta, isUrgent(list.ends_at) && styles.listMetaUrgent]}>
@@ -1049,6 +962,96 @@ export default function HomeScreen({ navigation }) {
 
       {activeLists.length > 0 && (
         <Text style={styles.deleteHint}>Long-press a list to delete or leave it</Text>
+      )}
+
+      {/* ── 2×2 navigation grid (always 2×2, bottom-right swaps on creator availability) ── */}
+      <View style={styles.navGrid}>
+        <View style={styles.navGridRow}>
+          <TouchableOpacity
+            style={styles.navTileWrap}
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate('Destinations', { metro: selectedMetro })}
+          >
+            <LinearGradient colors={['#D85A30', '#8B2E2E']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.navTile}>
+              <Text style={styles.navTileGhostEmoji}>📍</Text>
+              <Text style={styles.navTileEmoji}>📍</Text>
+              <Text style={styles.navTileLabel}>Destinations</Text>
+              <Text style={styles.navTileChevron}>›</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.navTileWrap}
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate('LocalGuides', { metro: selectedMetro })}
+          >
+            <LinearGradient colors={['#E8A020', '#C4520A']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.navTile}>
+              <Text style={styles.navTileGhostEmoji}>🏙️</Text>
+              <Text style={styles.navTileEmoji}>🏙️</Text>
+              <Text style={styles.navTileLabel}>Local Guides</Text>
+              <Text style={styles.navTileChevron}>›</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+        </View>
+        <View style={styles.navGridRow}>
+          <TouchableOpacity
+            style={styles.navTileWrap}
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate('BrowseLists', { citySlug: metroSlug, metroName: metroDisplayName })}
+          >
+            <LinearGradient colors={['#378ADD', '#1D9E75']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.navTile}>
+              <Text style={styles.navTileGhostEmoji}>📋</Text>
+              <Text style={styles.navTileEmoji}>📋</Text>
+              <Text style={styles.navTileLabel}>Curated Lists</Text>
+              <Text style={styles.navTileChevron}>›</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+          {featuredCreators.length > 0 ? (
+            <TouchableOpacity
+              style={styles.navTileWrap}
+              activeOpacity={0.85}
+              onPress={() => navigation.navigate('CreatorList', { metro: selectedMetro })}
+            >
+              <LinearGradient colors={['#7A4DB3', '#E0588F']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.navTile}>
+                <Text style={styles.navTileGhostEmoji}>✨</Text>
+                <Text style={styles.navTileEmoji}>✨</Text>
+                <Text style={styles.navTileLabel}>Creators</Text>
+                <Text style={styles.navTileChevron}>›</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={styles.navTileWrap}
+              activeOpacity={0.85}
+              onPress={() => navigation.navigate('NearbyTab')}
+            >
+              <LinearGradient colors={['#1A6B52', '#243045']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.navTile}>
+                <Text style={styles.navTileGhostEmoji}>🗺️</Text>
+                <Text style={styles.navTileEmoji}>🗺️</Text>
+                <Text style={styles.navTileLabel}>Explore Nearby</Text>
+                <Text style={styles.navTileChevron}>›</Text>
+              </LinearGradient>
+            </TouchableOpacity>
+          )}
+        </View>
+      </View>
+
+      {/* ── Featured editorial card ── */}
+      {currentOnHome && (
+        <TouchableOpacity
+          style={styles.editorialCard}
+          activeOpacity={0.88}
+          onPress={() => navigation.navigate('List', {
+            listId: currentOnHome.id,
+            title:  currentOnHome.title.replace(/\s—\s.+$/, ''),
+          })}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={styles.editorialLabel}>FEATURED</Text>
+            <Text style={styles.editorialTitle}>{currentOnHome.title.replace(/\s—\s.+$/, '')}</Text>
+            <Text style={styles.editorialSub}>{'The ultimate local checklist for ' + (selectedMetro?.name?.replace(' Metro', '') ?? 'your city')}</Text>
+          </View>
+          <Text style={styles.editorialChevron}>›</Text>
+        </TouchableOpacity>
       )}
 
       {totalPastCount > 0 && (
@@ -1261,9 +1264,10 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   headerCard: {
     backgroundColor: CARD,
     borderRadius: 28,
-    padding: 20,
-    paddingBottom: 12,
-    marginBottom: 24,
+    paddingTop: 24,
+    paddingBottom: 22,
+    paddingHorizontal: 24,
+    marginBottom: 0,
     borderWidth: 1.2,
     borderColor: BORDER,
   },
@@ -1272,7 +1276,7 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 8,
   },
 
   thisWeekBtn: {
@@ -1330,11 +1334,10 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   },
 
   logo: {
-    fontSize: 36,
+    fontSize: 32,
     fontWeight: '900',
     color: AMBER,
     letterSpacing: -1,
-    marginBottom: 6,
   },
 
   logoOff: {
@@ -1342,10 +1345,10 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   },
 
   tagline: {
-    fontSize: 14,
+    fontSize: 15,
     color: MUTED,
     fontWeight: '400',
-    marginTop: 6,
+    marginTop: 2,
   },
 
   seasonPill: {
@@ -1395,6 +1398,57 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     marginTop: 10,
     marginBottom: 12,
     gap: 12,
+  },
+
+  metroStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 14,
+    paddingBottom: 6,
+    marginBottom: 8,
+  },
+
+  metroSelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
+  metroSelectorText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: TEXT,
+  },
+
+  metroChevron: {
+    fontSize: 13,
+    color: MUTED,
+    fontWeight: '600',
+  },
+
+  compactStatus: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+
+  compactTierLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+
+  compactDots: {
+    flexDirection: 'row',
+    gap: 4,
+    alignItems: 'center',
+  },
+
+  compactDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
   },
 
   pillRow: {
@@ -1628,6 +1682,9 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     borderColor: 'rgba(245,166,35,0.5)',
     backgroundColor: CARD_URGENT,
   },
+  listCardCreator: {
+    borderColor: 'rgba(245,166,35,0.35)',
+  },
 
   listMetaRow: {
     flexDirection: 'row',
@@ -1814,6 +1871,13 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     fontWeight: '800',
     flex: 1,
   },
+  listCreatorByline: {
+    fontSize: 12,
+    color: '#F5A623',
+    fontWeight: '600',
+    marginTop: 2,
+    marginBottom: 2,
+  },
 
   listMeta: {
     fontSize: 12,
@@ -1957,6 +2021,163 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   recapModalSecondary:     { paddingVertical: 10 },
   recapModalSecondaryText: { fontSize: 14, color: '#6F7785', fontWeight: '600' },
 
+  navGrid: {
+    gap: 10,
+    marginBottom: 20,
+  },
+
+  navGridRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+
+  navTileWrap: {
+    flex: 1,
+    borderRadius: 18,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+    elevation: 4,
+  },
+
+  navTile: {
+    flex: 1,
+    padding: 20,
+    minHeight: 110,
+    justifyContent: 'flex-end',
+  },
+
+  navTileGhostEmoji: {
+    position: 'absolute',
+    top: 8,
+    right: 10,
+    fontSize: 52,
+    opacity: 0.10,
+  },
+
+  navTileEmoji: {
+    fontSize: 30,
+    marginBottom: 10,
+  },
+
+  navTileLabel: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    marginBottom: 10,
+    lineHeight: 22,
+    textShadowColor: 'rgba(0,0,0,0.35)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+
+  navTileChevron: {
+    fontSize: 24,
+    color: 'rgba(255,255,255,0.85)',
+    fontWeight: '700',
+    alignSelf: 'flex-end',
+  },
+
+  editorialCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: CARD,
+    borderRadius: 18,
+    padding: 18,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderLeftWidth: 4,
+    borderLeftColor: AMBER,
+  },
+
+  editorialLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    color: AMBER,
+    marginBottom: 4,
+  },
+
+  editorialTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: TEXT,
+    marginBottom: 3,
+  },
+
+  editorialSub: {
+    fontSize: 13,
+    color: MUTED,
+    fontWeight: '500',
+    lineHeight: 18,
+  },
+
+  editorialChevron: {
+    fontSize: 26,
+    color: AMBER,
+    fontWeight: '700',
+    marginLeft: 14,
+  },
+
+  creatorsTile: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: CARD,
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#E8C98E',
+  },
+
+  creatorsTileLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+
+  creatorsTileAvatarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+
+  creatorsTileAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: AMBER,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: CARD,
+  },
+
+  creatorsTileAvatarText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: NAVY,
+  },
+
+  creatorsTileTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: TEXT,
+  },
+
+  creatorsTileSub: {
+    fontSize: 12,
+    color: MUTED,
+    marginTop: 2,
+    fontWeight: '600',
+  },
+
   seeAllText: {
     fontSize: 13,
     fontWeight: '800',
@@ -2071,52 +2292,5 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     fontSize: 16,
   },
 
-  statusCard: {
-    backgroundColor: CARD,
-    borderRadius: 16,
-    padding: 14,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: BORDER,
-  },
-  statusCardTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 10,
-  },
-  statusCardLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: MUTED,
-    letterSpacing: 0.5,
-  },
-  statusTierPill: {
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  statusTierPillText: {
-    fontSize: 11,
-    fontWeight: '800',
-    letterSpacing: 1,
-  },
-  statusBarWrap: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#E6D8C7',
-    overflow: 'hidden',
-    marginBottom: 6,
-  },
-  statusBarFill: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: '#F5A623',
-  },
-  statusBarHint: {
-    fontSize: 11,
-    color: MUTED,
-    fontWeight: '600',
-  },
  }) // end StyleSheet.create
 } // end createStyles

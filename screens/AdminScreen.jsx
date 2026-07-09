@@ -12,9 +12,11 @@ import {
   Modal,
   ScrollView,
   Share,
+  Switch,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNavigation } from '@react-navigation/native'
+import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../lib/supabase'
 
 const AMBER = '#F5A623'
@@ -73,6 +75,13 @@ const emptyItem = {
   maps_query: '',
   checkin_type: 'tap',
   _metroId: '',
+  allows_personal_note: false,
+  personal_prompt_label: '',
+  personal_place_label: '',
+  is_insider_drop: false,
+  insider_drop_requires_points: null,
+  insider_drop_requires_status: '',
+  insider_drop_teaser_text: '',
 }
 
 const emptyPartner = {
@@ -440,7 +449,70 @@ const ItemForm = memo(function ItemForm({ item, onChange, categories, neighborho
         </>
       )}
 
+      <Text style={styles.fieldLabel}>Season</Text>
+      <View style={styles.segRow}>
+        {SEASON_OPTIONS.map(s => (
+          <TouchableOpacity
+            key={s.value}
+            style={[styles.seg, (item.season_tag ?? '') === s.value && styles.segOn]}
+            onPress={() => onChange({ ...item, season_tag: s.value || null })}
+          >
+            <Text style={[styles.segText, (item.season_tag ?? '') === s.value && styles.segTextOn]}>{s.label}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <Text style={styles.fieldLabel}>Recurrence</Text>
+      <View style={styles.segRow}>
+        <TouchableOpacity style={[styles.seg, item.is_recurring !== false && styles.segOn]} onPress={() => onChange({ ...item, is_recurring: true, active_from: '', active_until: '' })}>
+          <Text style={[styles.segText, item.is_recurring !== false && styles.segTextOn]}>Every year</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.seg, item.is_recurring === false && styles.segOn]} onPress={() => onChange({ ...item, is_recurring: false })}>
+          <Text style={[styles.segText, item.is_recurring === false && styles.segTextOn]}>One-time</Text>
+        </TouchableOpacity>
+      </View>
+      {(item.is_recurring === false || item.active_from || item.active_until) && (
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.fieldHint, { marginBottom: 4 }]}>Active from</Text>
+            <TextInput
+              style={styles.input}
+              value={item.active_from ?? ''}
+              onChangeText={v => onChange({ ...item, active_from: v || null })}
+              placeholder="YYYY-MM-DD" placeholderTextColor="rgba(255,255,255,0.3)"
+              autoCapitalize="none"
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.fieldHint, { marginBottom: 4 }]}>Active until</Text>
+            <TextInput
+              style={styles.input}
+              value={item.active_until ?? ''}
+              onChangeText={v => onChange({ ...item, active_until: v || null })}
+              placeholder="YYYY-MM-DD" placeholderTextColor="rgba(255,255,255,0.3)"
+              autoCapitalize="none"
+            />
+          </View>
+        </View>
+      )}
+
+      <Text style={styles.fieldLabel}>Website URL (optional)</Text>
+      <TextInput
+        style={styles.input}
+        value={item.website_url ?? ''}
+        onChangeText={v => onChange({ ...item, website_url: v })}
+        placeholder="https://..." placeholderTextColor="rgba(255,255,255,0.3)"
+        autoCapitalize="none" keyboardType="url"
+      />
+
       <Text style={styles.fieldLabel}>GPS coordinates</Text>
+      <TextInput
+        style={[styles.input, { marginBottom: 8 }]}
+        value={item.maps_query ?? ''}
+        onChangeText={v => onChange({ ...item, maps_query: v })}
+        placeholder="Maps search query (e.g. Baba's Burgers Tucson AZ)"
+        placeholderTextColor="rgba(255,255,255,0.3)"
+      />
       <View style={{ flexDirection: 'row', gap: 8, marginBottom: 8 }}>
         <TextInput
           style={[styles.input, { flex: 1 }]}
@@ -473,7 +545,7 @@ const ItemForm = memo(function ItemForm({ item, onChange, categories, neighborho
       </TouchableOpacity>
       {item.maps_lat && item.maps_lng
         ? <Text style={[styles.fieldHint, { color: GREEN }]}>✓ GPS set: {Number(item.maps_lat).toFixed(5)}, {Number(item.maps_lng).toFixed(5)} · radius {item.geo_radius_m ?? 100}m</Text>
-        : <Text style={styles.fieldHint}>Auto-fill from Maps search above, or enter lat/lng manually. For new businesses, right-click in Google Maps to copy coordinates.</Text>
+        : <Text style={styles.fieldHint}>Enter a search query above and tap Auto-fill, or type lat/lng manually.</Text>
       }
 
       {partners.length > 0 && (
@@ -496,6 +568,72 @@ const ItemForm = memo(function ItemForm({ item, onChange, categories, neighborho
               </TouchableOpacity>
             ))}
           </View>
+        </>
+      )}
+
+      <Text style={styles.fieldLabel}>Personal note</Text>
+      <TouchableOpacity
+        style={[styles.seg, { alignItems: 'flex-start' }]}
+        onPress={() => onChange({ ...item, allows_personal_note: !item.allows_personal_note })}
+      >
+        <Text style={[styles.segText, item.allows_personal_note && styles.segTextOn]}>
+          {item.allows_personal_note ? '✓ Allows personal note' : 'No personal note'}
+        </Text>
+      </TouchableOpacity>
+      {item.allows_personal_note && (
+        <>
+          <Text style={[styles.fieldHint, { marginTop: 8, marginBottom: 4 }]}>Prompt label (e.g. "What did you order?")</Text>
+          <TextInput
+            style={styles.input}
+            value={item.personal_prompt_label ?? ''}
+            onChangeText={v => onChange({ ...item, personal_prompt_label: v })}
+            placeholder="e.g. What did you order?" placeholderTextColor="rgba(255,255,255,0.3)"
+          />
+          <Text style={[styles.fieldHint, { marginTop: 8, marginBottom: 4 }]}>Place label (e.g. "Your order")</Text>
+          <TextInput
+            style={styles.input}
+            value={item.personal_place_label ?? ''}
+            onChangeText={v => onChange({ ...item, personal_place_label: v })}
+            placeholder="e.g. Your order" placeholderTextColor="rgba(255,255,255,0.3)"
+          />
+        </>
+      )}
+
+      <Text style={styles.fieldLabel}>Insider Drop</Text>
+      <TouchableOpacity
+        style={[styles.seg, { alignItems: 'flex-start' }]}
+        onPress={() => onChange({ ...item, is_insider_drop: !item.is_insider_drop })}
+      >
+        <Text style={[styles.segText, item.is_insider_drop && styles.segTextOn]}>
+          {item.is_insider_drop ? '✓ Insider drop (gated)' : 'Not an insider drop'}
+        </Text>
+      </TouchableOpacity>
+      {item.is_insider_drop && (
+        <>
+          <Text style={[styles.fieldHint, { marginTop: 8, marginBottom: 4 }]}>Requires points (optional)</Text>
+          <TextInput
+            style={styles.input}
+            value={item.insider_drop_requires_points != null ? String(item.insider_drop_requires_points) : ''}
+            onChangeText={v => onChange({ ...item, insider_drop_requires_points: parseInt(v) || null })}
+            placeholder="e.g. 50" placeholderTextColor="rgba(255,255,255,0.3)"
+            keyboardType="number-pad"
+          />
+          <Text style={[styles.fieldHint, { marginTop: 8, marginBottom: 4 }]}>Requires status (optional)</Text>
+          <TextInput
+            style={styles.input}
+            value={item.insider_drop_requires_status ?? ''}
+            onChangeText={v => onChange({ ...item, insider_drop_requires_status: v })}
+            placeholder="e.g. trailblazer" placeholderTextColor="rgba(255,255,255,0.3)"
+            autoCapitalize="none"
+          />
+          <Text style={[styles.fieldHint, { marginTop: 8, marginBottom: 4 }]}>Teaser text (shown before unlock)</Text>
+          <TextInput
+            style={styles.textArea}
+            value={item.insider_drop_teaser_text ?? ''}
+            onChangeText={v => onChange({ ...item, insider_drop_teaser_text: v })}
+            multiline numberOfLines={2}
+            placeholder="Unlock this after earning 50 points…" placeholderTextColor="rgba(255,255,255,0.3)"
+          />
         </>
       )}
     </>
@@ -574,7 +712,7 @@ export default function AdminScreen() {
   const navigation = useNavigation()
 
   // ── Tab ──
-  const [adminTab, setAdminTab] = useState('items') // 'items' | 'lists' | 'partners' | 'suggestions'
+  const [adminTab, setAdminTab] = useState('items') // 'items' | 'lists' | 'partners' | 'metrics' | 'home' | 'images'
 
   // ── Items tab state ──
   const [items, setItems] = useState([])
@@ -602,9 +740,23 @@ export default function AdminScreen() {
   const editPartnerRef = useRef(null)
   const [geocoding, setGeocoding]           = useState(false)
 
-  // ── Suggestions tab state ──
-  const [suggestions, setSuggestions]               = useState([])
-  const [loadingSuggestions, setLoadingSuggestions] = useState(false)
+  // ── Metrics tab state ──
+  const [metrics, setMetrics]           = useState(null)
+  const [loadingMetrics, setLoadingMetrics] = useState(false)
+
+  // ── Home tab state ──
+  const [homeData, setHomeData]         = useState(null)
+  const [loadingHome, setLoadingHome]   = useState(false)
+
+  // ── Images tab state ──
+  const [imgMetroId, setImgMetroId]     = useState('')
+  const [imgExpId, setImgExpId]         = useState('')
+  const [imgGroupId, setImgGroupId]     = useState('')
+  const [imgExpUrl, setImgExpUrl]       = useState(null)
+  const [imgGroupUrl, setImgGroupUrl]   = useState(null)
+  const [imgMetroUrls, setImgMetroUrls] = useState([])
+  const [uploadingImg, setUploadingImg] = useState(false)
+  const [featuredExps, setFeaturedExps] = useState([])
 
   // ── Curated Lists tab state ──
   const [curatedLists, setCuratedLists]     = useState([])
@@ -617,6 +769,9 @@ export default function AdminScreen() {
   const [pickerSearch, setPickerSearch]     = useState('')
   const [pickerSelected, setPickerSelected] = useState(new Set())
   const [addingItems, setAddingItems]       = useState(false)
+  const [showNewList, setShowNewList]       = useState(false)
+  const [newListForm, setNewListForm]       = useState({ title: '', city_slug: '', season: '', is_active: true })
+  const [savingList, setSavingList]         = useState(false)
 
   const [newItem, setNewItem] = useState(emptyItem)
 
@@ -649,6 +804,8 @@ export default function AdminScreen() {
           secret_reveal_text, maps_lat, maps_lng, geo_radius_m,
           season_tag, is_recurring, active_from, active_until,
           website_url, maps_query, partner_id, neighborhood_id, category_id,
+          allows_personal_note, personal_prompt_label, personal_place_label,
+          is_insider_drop, insider_drop_requires_points, insider_drop_requires_status, insider_drop_teaser_text,
           categories(name,color_hex),
           neighborhoods!items_neighborhood_id_fkey(name,metro_id,state)
         `)
@@ -728,6 +885,13 @@ export default function AdminScreen() {
       maps_query:         editItem.maps_query || null,
       neighborhood_id:    editItem.is_universal ? null : (editItem.neighborhood_id || null),
       partner_id:         editItem.partner_id || null,
+      allows_personal_note:  editItem.allows_personal_note ?? false,
+      personal_prompt_label: editItem.allows_personal_note ? (editItem.personal_prompt_label || null) : null,
+      personal_place_label:  editItem.allows_personal_note ? (editItem.personal_place_label || null) : null,
+      is_insider_drop:                editItem.is_insider_drop ?? false,
+      insider_drop_requires_points:   editItem.is_insider_drop ? (editItem.insider_drop_requires_points ?? null) : null,
+      insider_drop_requires_status:   editItem.is_insider_drop ? (editItem.insider_drop_requires_status || null) : null,
+      insider_drop_teaser_text:       editItem.is_insider_drop ? (editItem.insider_drop_teaser_text || null) : null,
     }
 
     if (updates.is_secret) {
@@ -822,22 +986,22 @@ export default function AdminScreen() {
         is_active:          true,
         is_approved:        true,
         partner_id:         newItem.partner_id || null,
+        allows_personal_note:  newItem.allows_personal_note ?? false,
+        personal_prompt_label: newItem.allows_personal_note ? (newItem.personal_prompt_label || null) : null,
+        personal_place_label:  newItem.allows_personal_note ? (newItem.personal_place_label || null) : null,
+        is_insider_drop:                newItem.is_insider_drop ?? false,
+        insider_drop_requires_points:   newItem.is_insider_drop ? (newItem.insider_drop_requires_points ?? null) : null,
+        insider_drop_requires_status:   newItem.is_insider_drop ? (newItem.insider_drop_requires_status || null) : null,
+        insider_drop_teaser_text:       newItem.is_insider_drop ? (newItem.insider_drop_teaser_text || null) : null,
       })
       .select(`
-        id,
-        body,
-        is_active,
-        is_universal,
-        checkin_type,
-        ring_weight,
-        season_tag,
-        is_recurring,
-        active_from,
-        active_until,
-        website_url,
-        maps_query,
-        neighborhood_id,
-        category_id,
+        id, body, is_active, is_universal, checkin_type,
+        ring_weight, difficulty, photo_required, is_secret,
+        secret_reveal_text, maps_lat, maps_lng, geo_radius_m,
+        season_tag, is_recurring, active_from, active_until,
+        website_url, maps_query, partner_id, neighborhood_id, category_id,
+        allows_personal_note, personal_prompt_label, personal_place_label,
+        is_insider_drop, insider_drop_requires_points, insider_drop_requires_status, insider_drop_teaser_text,
         categories(name,color_hex),
         neighborhoods!items_neighborhood_id_fkey(name,metro_id,state)
       `)
@@ -855,53 +1019,183 @@ export default function AdminScreen() {
     setShowAdd(false)
   }
 
-  async function loadSuggestions() {
-    setLoadingSuggestions(true)
+  // ── Metrics ──
+  async function loadMetrics() {
+    setLoadingMetrics(true)
+    try {
+      const now   = new Date()
+      const ago7  = new Date(now - 7  * 86400000).toISOString()
+      const ago30 = new Date(now - 30 * 86400000).toISOString()
+
+      const [
+        { count: totalUsers },
+        { count: newUsers7 },
+        { count: totalCheckins },
+        { count: checkins7 },
+        { count: activeItems },
+        { data: topItems },
+        { data: recentSignups },
+      ] = await Promise.all([
+        supabase.from('users').select('*', { count: 'exact', head: true }),
+        supabase.from('users').select('*', { count: 'exact', head: true }).gte('created_at', ago7),
+        supabase.from('check_ins').select('*', { count: 'exact', head: true }),
+        supabase.from('check_ins').select('*', { count: 'exact', head: true }).gte('checked_at', ago7),
+        supabase.from('items').select('*', { count: 'exact', head: true }).eq('is_active', true),
+        supabase.from('check_ins').select('item_id, items(body)').gte('checked_at', ago30).limit(500),
+        supabase.from('users').select('id, created_at, email').order('created_at', { ascending: false }).limit(8),
+      ])
+
+      // tally top items from check_ins
+      const tally = {}
+      ;(topItems ?? []).forEach(ci => {
+        const key = ci.item_id
+        if (!tally[key]) tally[key] = { body: ci.items?.body ?? ci.item_id, count: 0 }
+        tally[key].count++
+      })
+      const top10 = Object.values(tally).sort((a, b) => b.count - a.count).slice(0, 10)
+
+      setMetrics({ totalUsers, newUsers7, totalCheckins, checkins7, activeItems, top10, recentSignups: recentSignups ?? [], ago30Label: '30d' })
+    } catch (e) {
+      Alert.alert('Metrics error', e.message)
+    }
+    setLoadingMetrics(false)
+  }
+
+  // ── Home Screen ──
+  async function loadHomeData() {
+    setLoadingHome(true)
+    try {
+      const [
+        { data: exps },
+        { data: metroList },
+        { data: next10 },
+      ] = await Promise.all([
+        supabase.from('featured_experiences').select('id, title, active, display_order, image_url').order('display_order'),
+        supabase.from('metro_areas').select('id, name, is_active').order('name'),
+        supabase.from('curated_lists').select('id, title, is_active').eq('audience_group', 'the-next-10').limit(1),
+      ])
+      setHomeData({ exps: exps ?? [], metros: metroList ?? [], next10: next10?.[0] ?? null })
+      setFeaturedExps(exps ?? [])
+    } catch (e) {
+      Alert.alert('Error', e.message)
+    }
+    setLoadingHome(false)
+  }
+
+  async function toggleMetroActive(id, current) {
+    const { error } = await supabase.from('metro_areas').update({ is_active: !current }).eq('id', id)
+    if (error) { Alert.alert('Error', error.message); return }
+    setHomeData(prev => prev ? { ...prev, metros: prev.metros.map(m => m.id === id ? { ...m, is_active: !current } : m) } : prev)
+  }
+
+  async function toggleExpActive(id, current) {
+    const { error } = await supabase.from('featured_experiences').update({ active: !current }).eq('id', id)
+    if (error) { Alert.alert('Error', error.message); return }
+    setHomeData(prev => prev ? { ...prev, exps: prev.exps.map(e => e.id === id ? { ...e, active: !current } : e) } : prev)
+  }
+
+  async function toggleNext10(id, current) {
+    const { error } = await supabase.from('curated_lists').update({ is_active: !current }).eq('id', id)
+    if (error) { Alert.alert('Error', error.message); return }
+    setHomeData(prev => prev ? { ...prev, next10: prev.next10 ? { ...prev.next10, is_active: !current } : null } : prev)
+  }
+
+  // ── New List ──
+  async function saveNewList() {
+    if (!newListForm.title.trim()) { Alert.alert('Title required'); return }
+    setSavingList(true)
     const { data, error } = await supabase
-      .from('user_suggestions')
-      .select('id, place_name, experience_body, website_url, status, created_at, metro_id, metro_areas(name)')
-      .order('created_at', { ascending: false })
-    if (error) {
-      Alert.alert('Error loading suggestions', error.message)
-    } else {
-      setSuggestions(data ?? [])
-    }
-    setLoadingSuggestions(false)
+      .from('curated_lists')
+      .insert({
+        title:     newListForm.title.trim(),
+        city_slug: newListForm.city_slug.trim() || null,
+        season:    newListForm.season || null,
+        is_active: newListForm.is_active,
+      })
+      .select('id, title, season, year, city_slug, audience_group_id, is_active')
+      .single()
+    setSavingList(false)
+    if (error) { Alert.alert('Error', error.message); return }
+    setCuratedLists(prev => [data, ...prev])
+    setShowNewList(false)
+    setNewListForm({ title: '', city_slug: '', season: '', is_active: true })
   }
 
-  function promptStatusChange(suggestion) {
-    const STATUS_OPTIONS = [
-      { label: 'New',              value: 'new' },
-      { label: 'Reviewed',         value: 'reviewed' },
-      { label: 'Add to pipeline',  value: 'added_to_pipeline' },
-      { label: 'Add as item',      value: 'added_as_item' },
-      { label: 'Reject',           value: 'rejected' },
-    ]
-    Alert.alert(
-      suggestion.place_name,
-      'Update status',
-      [
-        ...STATUS_OPTIONS
-          .filter(o => o.value !== suggestion.status)
-          .map(o => ({
-            text: o.label,
-            onPress: () => updateSuggestionStatus(suggestion.id, o.value),
-          })),
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    )
+  // ── Image upload helpers ──
+  async function pickAndUploadImage(path, onSuccess) {
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (!perm.granted) { Alert.alert('Permission needed', 'Allow photo library access in Settings.'); return }
+    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ImagePicker.MediaTypeOptions.Images, quality: 0.85 })
+    if (result.canceled) return
+    const asset = result.assets[0]
+    const ext = asset.uri.split('.').pop() ?? 'jpg'
+    const uploadPath = `${path}/${Date.now()}.${ext}`
+    setUploadingImg(true)
+    try {
+      const response = await fetch(asset.uri)
+      const blob = await response.blob()
+      const { error } = await supabase.storage.from('checkoff-images').upload(uploadPath, blob, { contentType: asset.mimeType ?? 'image/jpeg', upsert: false })
+      if (error) throw error
+      const { data: { publicUrl } } = supabase.storage.from('checkoff-images').getPublicUrl(uploadPath)
+      await onSuccess(publicUrl)
+    } catch (e) {
+      Alert.alert('Upload failed', e.message)
+    }
+    setUploadingImg(false)
   }
 
-  async function updateSuggestionStatus(id, status) {
-    const { error } = await supabase
-      .from('user_suggestions')
-      .update({ status })
-      .eq('id', id)
-    if (error) {
-      Alert.alert('Error', error.message)
-      return
-    }
-    setSuggestions(prev => prev.map(s => s.id === id ? { ...s, status } : s))
+  async function uploadMetroHero() {
+    if (!imgMetroId) { Alert.alert('Select a city first'); return }
+    await pickAndUploadImage(`metro/${imgMetroId}`, async (publicUrl) => {
+      const { data: row } = await supabase.from('metro_areas').select('hero_images').eq('id', imgMetroId).single()
+      const imgs = row?.hero_images ?? []
+      await supabase.from('metro_areas').update({ hero_images: [...imgs, publicUrl] }).eq('id', imgMetroId)
+      setImgMetroUrls(prev => [...prev, publicUrl])
+      Alert.alert('Uploaded')
+    })
+  }
+
+  async function deleteMetroHero(url) {
+    const { data: row } = await supabase.from('metro_areas').select('hero_images').eq('id', imgMetroId).single()
+    const imgs = (row?.hero_images ?? []).filter(u => u !== url)
+    await supabase.from('metro_areas').update({ hero_images: imgs }).eq('id', imgMetroId)
+    setImgMetroUrls(imgs)
+  }
+
+  async function loadMetroImages(metroId) {
+    if (!metroId) { setImgMetroUrls([]); return }
+    const { data } = await supabase.from('metro_areas').select('hero_images').eq('id', metroId).single()
+    setImgMetroUrls(data?.hero_images ?? [])
+  }
+
+  async function uploadExpImage() {
+    if (!imgExpId) { Alert.alert('Select an experience first'); return }
+    await pickAndUploadImage(`experiences/${imgExpId}`, async (publicUrl) => {
+      await supabase.from('featured_experiences').update({ image_url: publicUrl }).eq('id', imgExpId)
+      setImgExpUrl(publicUrl)
+      Alert.alert('Uploaded')
+    })
+  }
+
+  async function loadExpImage(expId) {
+    if (!expId) { setImgExpUrl(null); return }
+    const { data } = await supabase.from('featured_experiences').select('image_url').eq('id', expId).single()
+    setImgExpUrl(data?.image_url ?? null)
+  }
+
+  async function uploadGroupImage() {
+    if (!imgGroupId) { Alert.alert('Select a group first'); return }
+    await pickAndUploadImage(`groups/${imgGroupId}`, async (publicUrl) => {
+      await supabase.from('audience_groups').update({ image_url: publicUrl }).eq('id', imgGroupId)
+      setImgGroupUrl(publicUrl)
+      Alert.alert('Uploaded')
+    })
+  }
+
+  async function loadGroupImage(groupId) {
+    if (!groupId) { setImgGroupUrl(null); return }
+    const { data } = await supabase.from('audience_groups').select('image_url').eq('id', groupId).single()
+    setImgGroupUrl(data?.image_url ?? null)
   }
 
   const geocodeAddress = useCallback(async (query, onResult) => {
@@ -1185,14 +1479,23 @@ export default function AdminScreen() {
               ? `${filtered.length} of ${items.length} items`
               : adminTab === 'partners'
                 ? `${partners.length} partners`
-                : adminTab === 'suggestions'
-                  ? `${suggestions.length} suggestions`
-                  : `${curatedLists.length} curated lists`}
+                : adminTab === 'lists'
+                  ? `${curatedLists.length} curated lists`
+                  : adminTab === 'metrics'
+                    ? 'App metrics'
+                    : adminTab === 'home'
+                      ? 'Home screen'
+                      : 'Image manager'}
           </Text>
         </View>
         {adminTab === 'items' && (
           <TouchableOpacity style={styles.addBtn} onPress={() => setShowAdd(true)}>
             <Text style={styles.addBtnText}>+ Add item</Text>
+          </TouchableOpacity>
+        )}
+        {adminTab === 'lists' && (
+          <TouchableOpacity style={styles.addBtn} onPress={() => setShowNewList(true)}>
+            <Text style={styles.addBtnText}>+ New list</Text>
           </TouchableOpacity>
         )}
         {adminTab === 'partners' && (
@@ -1206,21 +1509,22 @@ export default function AdminScreen() {
       </View>
 
       {/* TAB ROW */}
-      <View style={styles.tabRow}>
-        {[['items', 'Items'], ['lists', 'Curated Lists'], ['partners', 'Partners'], ['suggestions', 'Suggestions']].map(([k, l]) => (
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabRow} contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}>
+        {[['items', 'Items'], ['lists', 'Lists'], ['partners', 'Partners'], ['metrics', 'Metrics'], ['home', 'Home'], ['images', 'Images']].map(([k, l]) => (
           <TouchableOpacity
             key={k}
             style={[styles.tabPill, adminTab === k && styles.tabPillOn]}
             onPress={() => {
               setAdminTab(k)
               if (k === 'lists' && curatedLists.length === 0) loadCuratedLists()
-              if (k === 'suggestions') loadSuggestions()
+              if (k === 'metrics' && !metrics) loadMetrics()
+              if (k === 'home' && !homeData) loadHomeData()
             }}
           >
             <Text style={[styles.tabPillText, adminTab === k && styles.tabPillTextOn]}>{l}</Text>
           </TouchableOpacity>
         ))}
-      </View>
+      </ScrollView>
 
       {/* ════════════════════════════════ */}
       {/* ITEMS TAB                        */}
@@ -1671,88 +1975,335 @@ export default function AdminScreen() {
       )}
 
       {/* ════════════════════════════════ */}
-      {/* SUGGESTIONS TAB                  */}
+      {/* METRICS TAB                      */}
       {/* ════════════════════════════════ */}
-      {adminTab === 'suggestions' && (
-        loadingSuggestions ? (
-          <View style={styles.center}><ActivityIndicator color={AMBER} /></View>
+      {adminTab === 'metrics' && (
+        loadingMetrics ? (
+          <View style={styles.center}><ActivityIndicator color={AMBER} size="large" /></View>
+        ) : !metrics ? (
+          <View style={styles.center}>
+            <TouchableOpacity style={styles.addBtn} onPress={loadMetrics}>
+              <Text style={styles.addBtnText}>Load metrics</Text>
+            </TouchableOpacity>
+          </View>
         ) : (
-          <FlatList
-            data={suggestions}
-            keyExtractor={s => s.id}
-            contentContainerStyle={{ padding: 16, paddingBottom: 60 }}
-            ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
-            ListEmptyComponent={
-              <View style={styles.center}>
-                <Text style={{ fontSize: 28, marginBottom: 8 }}>📭</Text>
-                <Text style={styles.emptyText}>No suggestions yet</Text>
-                <Text style={[styles.emptyText, { marginTop: 4, fontSize: 12 }]}>
-                  They'll appear here when users submit places from any list.
-                </Text>
-              </View>
-            }
-            ListHeaderComponent={
-              suggestions.length > 0 ? (
-                <Text style={[styles.hint, { marginBottom: 12 }]}>
-                  Tap a card to update status · every submission is a warm partner lead
-                </Text>
-              ) : null
-            }
-            renderItem={({ item: s }) => {
-              const STATUS_COLOR = {
-                new:                AMBER,
-                reviewed:           BLUE,
-                added_to_pipeline:  GREEN,
-                added_as_item:      PURPLE,
-                rejected:           'rgba(255,255,255,0.25)',
-              }
-              const STATUS_LABEL = {
-                new:                'New',
-                reviewed:           'Reviewed',
-                added_to_pipeline:  'In pipeline',
-                added_as_item:      'Added as item',
-                rejected:           'Rejected',
-              }
-              const color = STATUS_COLOR[s.status] ?? AMBER
-              const date  = new Date(s.created_at).toLocaleDateString('en-US', {
-                month: 'short', day: 'numeric', year: 'numeric',
-              })
-              return (
-                <TouchableOpacity
-                  style={styles.suggCard}
-                  onPress={() => promptStatusChange(s)}
-                  activeOpacity={0.85}
-                >
-                  <View style={styles.suggCardTop}>
-                    <Text style={styles.suggCardName}>{s.place_name}</Text>
-                    <View style={[styles.suggStatusPill, { borderColor: color + '60', backgroundColor: color + '18' }]}>
-                      <Text style={[styles.suggStatusText, { color }]}>
-                        {STATUS_LABEL[s.status] ?? s.status}
-                      </Text>
-                    </View>
-                  </View>
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 60, gap: 16 }}>
+            {/* Stat cards */}
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+              {[
+                { label: 'Total Users',     value: metrics.totalUsers,    color: AMBER,  sub: `+${metrics.newUsers7} this week` },
+                { label: 'Total Check-ins', value: metrics.totalCheckins, color: GREEN,  sub: `+${metrics.checkins7} this week` },
+                { label: 'Active Items',    value: metrics.activeItems,   color: BLUE,   sub: 'currently live' },
+                { label: 'Avg / User',      value: metrics.totalUsers > 0 ? (metrics.totalCheckins / metrics.totalUsers).toFixed(1) : '—', color: '#BA7517', sub: 'check-ins per user' },
+              ].map(c => (
+                <View key={c.label} style={[styles.metricCard, { borderColor: c.color + '30' }]}>
+                  <Text style={[styles.metricValue, { color: c.color }]}>{c.value}</Text>
+                  <Text style={styles.metricLabel}>{c.label}</Text>
+                  <Text style={styles.metricSub}>{c.sub}</Text>
+                </View>
+              ))}
+            </View>
 
-                  <Text style={styles.suggCardExp} numberOfLines={3}>
-                    {s.experience_body}
-                  </Text>
+            {/* Top 10 items */}
+            <View style={styles.metricSection}>
+              <Text style={styles.metricSectionTitle}>Top items (last 30 days)</Text>
+              {metrics.top10.length === 0 ? (
+                <Text style={styles.emptyText}>No check-in data</Text>
+              ) : metrics.top10.map((item, i) => (
+                <View key={i} style={styles.metricRow}>
+                  <Text style={styles.metricRowNum}>{i + 1}</Text>
+                  <Text style={styles.metricRowBody} numberOfLines={1}>{item.body}</Text>
+                  <Text style={styles.metricRowCount}>{item.count}</Text>
+                </View>
+              ))}
+            </View>
 
-                  <View style={styles.suggCardMeta}>
-                    {s.metro_areas?.name && (
-                      <Text style={styles.suggMetaText}>📍 {s.metro_areas.name}</Text>
-                    )}
-                    {s.website_url ? (
-                      <Text style={styles.suggMetaLink} numberOfLines={1}>
-                        🔗 {s.website_url.replace(/^https?:\/\//, '')}
-                      </Text>
-                    ) : null}
-                    <Text style={styles.suggMetaText}>{date}</Text>
-                  </View>
-                </TouchableOpacity>
-              )
-            }}
-          />
+            {/* Recent signups */}
+            <View style={styles.metricSection}>
+              <Text style={styles.metricSectionTitle}>Recent signups</Text>
+              {metrics.recentSignups.map(u => (
+                <View key={u.id} style={styles.metricRow}>
+                  <Text style={styles.metricRowBody} numberOfLines={1}>{u.email ?? u.id}</Text>
+                  <Text style={styles.metricRowCount}>{new Date(u.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</Text>
+                </View>
+              ))}
+            </View>
+
+            <TouchableOpacity style={[styles.addBtn, { alignSelf: 'center' }]} onPress={loadMetrics}>
+              <Text style={styles.addBtnText}>↻ Refresh</Text>
+            </TouchableOpacity>
+          </ScrollView>
         )
       )}
+
+      {/* ════════════════════════════════ */}
+      {/* HOME TAB                         */}
+      {/* ════════════════════════════════ */}
+      {adminTab === 'home' && (
+        loadingHome ? (
+          <View style={styles.center}><ActivityIndicator color={AMBER} size="large" /></View>
+        ) : !homeData ? (
+          <View style={styles.center}>
+            <TouchableOpacity style={styles.addBtn} onPress={loadHomeData}>
+              <Text style={styles.addBtnText}>Load home data</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 60, gap: 16 }}>
+
+            {/* Next10 Banner */}
+            <View style={styles.homeSection}>
+              <Text style={styles.homeSectionTitle}>Next 10 Banner</Text>
+              <Text style={styles.homeSectionSub}>Curated list shown as the hero banner on Home.</Text>
+              {homeData.next10 ? (
+                <View style={styles.homeRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.homeRowLabel}>{homeData.next10.title}</Text>
+                    <Text style={styles.homeRowSub}>audience_group = the-next-10</Text>
+                  </View>
+                  <Switch
+                    value={homeData.next10.is_active}
+                    onValueChange={() => toggleNext10(homeData.next10.id, homeData.next10.is_active)}
+                    trackColor={{ false: 'rgba(255,255,255,0.1)', true: GREEN }}
+                    thumbColor="#fff"
+                  />
+                </View>
+              ) : (
+                <Text style={styles.homeSectionSub}>No list has audience_group = 'the-next-10' — banner is hidden.</Text>
+              )}
+            </View>
+
+            {/* Experiences Rail */}
+            <View style={styles.homeSection}>
+              <Text style={styles.homeSectionTitle}>Experiences Rail</Text>
+              <Text style={styles.homeSectionSub}>Horizontal cards shown on Home. Toggle to show/hide each.</Text>
+              {homeData.exps.length === 0 ? (
+                <Text style={styles.homeSectionSub}>No experiences configured.</Text>
+              ) : homeData.exps.map(exp => (
+                <View key={exp.id} style={styles.homeRow}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.homeRowLabel} numberOfLines={1}>{exp.title}</Text>
+                    <Text style={styles.homeRowSub}>order: {exp.display_order}</Text>
+                  </View>
+                  <Switch
+                    value={exp.active}
+                    onValueChange={() => toggleExpActive(exp.id, exp.active)}
+                    trackColor={{ false: 'rgba(255,255,255,0.1)', true: GREEN }}
+                    thumbColor="#fff"
+                  />
+                </View>
+              ))}
+            </View>
+
+            {/* Metro/City Pills */}
+            <View style={styles.homeSection}>
+              <Text style={styles.homeSectionTitle}>City Pills</Text>
+              <Text style={styles.homeSectionSub}>Cities shown in the home-screen city selector. Toggle to show/hide.</Text>
+              {homeData.metros.map(m => (
+                <View key={m.id} style={styles.homeRow}>
+                  <Text style={[styles.homeRowLabel, { flex: 1 }]}>{m.name}</Text>
+                  <Switch
+                    value={m.is_active}
+                    onValueChange={() => toggleMetroActive(m.id, m.is_active)}
+                    trackColor={{ false: 'rgba(255,255,255,0.1)', true: GREEN }}
+                    thumbColor="#fff"
+                  />
+                </View>
+              ))}
+            </View>
+
+            <TouchableOpacity style={[styles.addBtn, { alignSelf: 'center' }]} onPress={loadHomeData}>
+              <Text style={styles.addBtnText}>↻ Refresh</Text>
+            </TouchableOpacity>
+          </ScrollView>
+        )
+      )}
+
+      {/* ════════════════════════════════ */}
+      {/* IMAGES TAB                       */}
+      {/* ════════════════════════════════ */}
+      {adminTab === 'images' && (
+        <ScrollView contentContainerStyle={{ padding: 16, paddingBottom: 60, gap: 16 }}>
+
+          {/* Metro Hero Images */}
+          <View style={styles.homeSection}>
+            <Text style={styles.homeSectionTitle}>Metro Hero Images</Text>
+            <Text style={styles.homeSectionSub}>Photos shown behind the seasonal list card. Stored in checkoff-images/metro/.</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
+              <View style={{ flexDirection: 'row', gap: 8, paddingVertical: 4 }}>
+                {metros.map(m => (
+                  <TouchableOpacity
+                    key={m.id}
+                    style={[styles.pill, imgMetroId === m.id && styles.pillOn]}
+                    onPress={() => { setImgMetroId(m.id); loadMetroImages(m.id) }}
+                  >
+                    <Text style={[styles.pillText, imgMetroId === m.id && styles.pillTextOn]}>{m.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </ScrollView>
+            {imgMetroId ? (
+              <>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 10 }}>
+                  {imgMetroUrls.map(url => (
+                    <View key={url} style={{ position: 'relative' }}>
+                      <Image source={{ uri: url }} style={{ width: 90, height: 60, borderRadius: 6 }} />
+                      <TouchableOpacity
+                        style={styles.imgDeleteBtn}
+                        onPress={() => Alert.alert('Remove photo?', '', [
+                          { text: 'Cancel', style: 'cancel' },
+                          { text: 'Remove', style: 'destructive', onPress: () => deleteMetroHero(url) },
+                        ])}
+                      >
+                        <Text style={{ color: '#fff', fontSize: 10, fontWeight: '900' }}>✕</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+                <TouchableOpacity style={[styles.addBtn, uploadingImg && { opacity: 0.5 }]} onPress={uploadMetroHero} disabled={uploadingImg}>
+                  <Text style={styles.addBtnText}>{uploadingImg ? 'Uploading…' : '+ Upload photo'}</Text>
+                </TouchableOpacity>
+              </>
+            ) : (
+              <Text style={styles.homeSectionSub}>Select a city above to manage its hero images.</Text>
+            )}
+          </View>
+
+          {/* Experience Card Images */}
+          <View style={styles.homeSection}>
+            <Text style={styles.homeSectionTitle}>Experience Card Images</Text>
+            <Text style={styles.homeSectionSub}>Image shown on each experience chip in the Experiences Rail.</Text>
+            {featuredExps.length === 0 ? (
+              <Text style={[styles.homeSectionSub, { marginBottom: 8 }]}>
+                No experiences loaded — switch to Home tab first to load them.
+              </Text>
+            ) : (
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
+                <View style={{ flexDirection: 'row', gap: 8, paddingVertical: 4 }}>
+                  {featuredExps.map(e => (
+                    <TouchableOpacity
+                      key={e.id}
+                      style={[styles.pill, imgExpId === e.id && styles.pillOn]}
+                      onPress={() => { setImgExpId(e.id); loadExpImage(e.id) }}
+                    >
+                      <Text style={[styles.pillText, imgExpId === e.id && styles.pillTextOn]} numberOfLines={1}>{e.title}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </ScrollView>
+            )}
+            {imgExpId && (
+              <>
+                {imgExpUrl ? (
+                  <Image source={{ uri: imgExpUrl }} style={{ width: 120, height: 80, borderRadius: 8, marginBottom: 10 }} />
+                ) : (
+                  <Text style={[styles.homeSectionSub, { marginBottom: 10 }]}>No image set</Text>
+                )}
+                <TouchableOpacity style={[styles.addBtn, uploadingImg && { opacity: 0.5 }]} onPress={uploadExpImage} disabled={uploadingImg}>
+                  <Text style={styles.addBtnText}>{uploadingImg ? 'Uploading…' : imgExpUrl ? '↺ Replace image' : '+ Upload image'}</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+
+          {/* Curated Group Art */}
+          <View style={styles.homeSection}>
+            <Text style={styles.homeSectionTitle}>Curated Group Art</Text>
+            <Text style={styles.homeSectionSub}>Background image for each audience group chip in the template rail.</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 10 }}>
+              <View style={{ flexDirection: 'row', gap: 8, paddingVertical: 4 }}>
+                {audienceGroups.map(g => (
+                  <TouchableOpacity
+                    key={g.id}
+                    style={[styles.pill, imgGroupId === g.id && styles.pillOn]}
+                    onPress={() => { setImgGroupId(g.id); loadGroupImage(g.id) }}
+                  >
+                    <Text style={[styles.pillText, imgGroupId === g.id && styles.pillTextOn]}>{g.emoji ?? ''}{g.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </ScrollView>
+            {audienceGroups.length === 0 && (
+              <Text style={[styles.homeSectionSub, { marginBottom: 8 }]}>
+                No groups loaded — switch to Lists tab first to load audience groups.
+              </Text>
+            )}
+            {imgGroupId && (
+              <>
+                {imgGroupUrl ? (
+                  <Image source={{ uri: imgGroupUrl }} style={{ width: 80, height: 80, borderRadius: 8, marginBottom: 10 }} />
+                ) : (
+                  <Text style={[styles.homeSectionSub, { marginBottom: 10 }]}>No art set</Text>
+                )}
+                <TouchableOpacity style={[styles.addBtn, uploadingImg && { opacity: 0.5 }]} onPress={uploadGroupImage} disabled={uploadingImg}>
+                  <Text style={styles.addBtnText}>{uploadingImg ? 'Uploading…' : imgGroupUrl ? '↺ Replace art' : '+ Upload art'}</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </ScrollView>
+      )}
+
+      {/* NEW LIST MODAL */}
+      <Modal visible={showNewList} animationType="slide" presentationStyle="pageSheet">
+        <View style={[styles.modal, { paddingTop: insets.top + 16 }]}>
+          <View style={styles.modalHeader}>
+            <TouchableOpacity onPress={() => { setShowNewList(false); setNewListForm({ title: '', city_slug: '', season: '', is_active: true }) }}>
+              <Text style={styles.modalCancel}>Cancel</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>New List</Text>
+            <TouchableOpacity onPress={saveNewList} disabled={savingList}>
+              {savingList ? <ActivityIndicator color={AMBER} /> : <Text style={styles.modalSave}>Create</Text>}
+            </TouchableOpacity>
+          </View>
+          <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
+            <View>
+              <Text style={styles.fieldLabel}>Title *</Text>
+              <TextInput
+                style={styles.fieldInput}
+                value={newListForm.title}
+                onChangeText={v => setNewListForm(p => ({ ...p, title: v }))}
+                placeholder="e.g. Top Tucson Tacos"
+                placeholderTextColor="rgba(255,255,255,0.25)"
+              />
+            </View>
+            <View>
+              <Text style={styles.fieldLabel}>City slug</Text>
+              <TextInput
+                style={styles.fieldInput}
+                value={newListForm.city_slug}
+                onChangeText={v => setNewListForm(p => ({ ...p, city_slug: v }))}
+                placeholder="e.g. tucson (blank = universal)"
+                placeholderTextColor="rgba(255,255,255,0.25)"
+                autoCapitalize="none"
+              />
+            </View>
+            <View>
+              <Text style={styles.fieldLabel}>Season</Text>
+              <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                {SEASON_OPTIONS.map(s => (
+                  <TouchableOpacity
+                    key={s.value}
+                    style={[styles.pill, newListForm.season === s.value && styles.pillOn]}
+                    onPress={() => setNewListForm(p => ({ ...p, season: s.value }))}
+                  >
+                    <Text style={[styles.pillText, newListForm.season === s.value && styles.pillTextOn]}>{s.label}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Text style={styles.fieldLabel}>Active immediately</Text>
+              <Switch
+                value={newListForm.is_active}
+                onValueChange={v => setNewListForm(p => ({ ...p, is_active: v }))}
+                trackColor={{ false: 'rgba(255,255,255,0.1)', true: GREEN }}
+                thumbColor="#fff"
+              />
+            </View>
+          </ScrollView>
+        </View>
+      </Modal>
 
     </View>
   )
@@ -1770,7 +2321,7 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 18, fontWeight: '700', color: '#fff' },
   headerSub: { fontSize: 11, color: 'rgba(255,255,255,0.4)', marginTop: 2 },
 
-  tabRow: { flexDirection: 'row', paddingHorizontal: 16, gap: 8, marginBottom: 10 },
+  tabRow: { marginBottom: 10 },
   tabPill: {
     paddingHorizontal: 16, paddingVertical: 7, borderRadius: 999,
     borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.15)', backgroundColor: 'rgba(255,255,255,0.04)',
@@ -1934,61 +2485,42 @@ const styles = StyleSheet.create({
   sharePartnerBtnText: { fontSize: 13, fontWeight: '700', color: '#1A1A2E' },
   qrImage: { width: 100, height: 100, borderRadius: 8, flexShrink: 0 },
 
-  // ── Suggestions tab ──
-  suggCard: {
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderRadius: 14,
-    borderWidth: 0.5,
-    borderColor: 'rgba(255,255,255,0.1)',
-    padding: 14,
+  // ── Metrics tab ──
+  metricCard: {
+    flex: 1, minWidth: 140, backgroundColor: 'rgba(255,255,255,0.04)',
+    borderRadius: 14, borderWidth: 0.5, padding: 14,
   },
-  suggCardTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 10,
-    marginBottom: 8,
+  metricValue: { fontSize: 32, fontWeight: '800', lineHeight: 36 },
+  metricLabel: { fontSize: 12, fontWeight: '700', color: '#fff', marginTop: 6 },
+  metricSub:   { fontSize: 10, color: 'rgba(255,255,255,0.35)', marginTop: 2 },
+  metricSection: {
+    backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 14,
+    borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.08)', padding: 14, gap: 8,
   },
-  suggCardName: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#fff',
+  metricSectionTitle: { fontSize: 13, fontWeight: '700', color: AMBER, marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.6 },
+  metricRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4, borderBottomWidth: 0.5, borderBottomColor: 'rgba(255,255,255,0.05)' },
+  metricRowNum:   { fontSize: 11, color: 'rgba(255,255,255,0.25)', fontWeight: '700', minWidth: 18, textAlign: 'right' },
+  metricRowBody:  { flex: 1, fontSize: 13, color: '#fff' },
+  metricRowCount: { fontSize: 12, fontWeight: '700', color: AMBER },
+
+  // ── Home tab ──
+  homeSection: {
+    backgroundColor: 'rgba(255,255,255,0.04)', borderRadius: 14,
+    borderWidth: 0.5, borderColor: 'rgba(255,255,255,0.08)', padding: 14,
   },
-  suggStatusPill: {
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    borderRadius: 999,
-    borderWidth: 1,
-    flexShrink: 0,
+  homeSectionTitle: { fontSize: 14, fontWeight: '800', color: '#fff', marginBottom: 4 },
+  homeSectionSub:   { fontSize: 12, color: 'rgba(255,255,255,0.35)', marginBottom: 10, lineHeight: 17 },
+  homeRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingVertical: 10, borderBottomWidth: 0.5, borderBottomColor: 'rgba(255,255,255,0.06)',
   },
-  suggStatusText: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
-  suggCardExp: {
-    fontSize: 13,
-    color: 'rgba(255,255,255,0.55)',
-    lineHeight: 19,
-    marginBottom: 10,
-  },
-  suggCardMeta: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 10,
-    borderTopWidth: 0.5,
-    borderTopColor: 'rgba(255,255,255,0.07)',
-    paddingTop: 10,
-  },
-  suggMetaText: {
-    fontSize: 11,
-    color: 'rgba(255,255,255,0.3)',
-    fontWeight: '500',
-  },
-  suggMetaLink: {
-    fontSize: 11,
-    color: AMBER,
-    fontWeight: '600',
-    flex: 1,
+  homeRowLabel: { fontSize: 13, fontWeight: '600', color: '#fff' },
+  homeRowSub:   { fontSize: 11, color: 'rgba(255,255,255,0.3)', marginTop: 1 },
+
+  // ── Images tab ──
+  imgDeleteBtn: {
+    position: 'absolute', top: -6, right: -6,
+    width: 18, height: 18, borderRadius: 9,
+    backgroundColor: RED, alignItems: 'center', justifyContent: 'center',
   },
 })

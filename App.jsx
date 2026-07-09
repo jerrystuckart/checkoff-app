@@ -24,7 +24,9 @@ import { useAuth }             from './lib/useAuth'
 import { useOnboarding }      from './lib/useOnboarding'
 import { ThemeProvider }      from './lib/ThemeContext'
 import { useNotifications }   from './lib/useNotifications'
+import { useVersionCheck }    from './hooks/useVersionCheck'
 import ErrorBoundary          from './components/ErrorBoundary'
+import UpdatePromptModal      from './components/UpdatePromptModal'
 import OnboardingScreen       from './screens/OnboardingScreen'
 import ListSummaryScreen      from './screens/ListSummaryScreen'
 import HomeScreen              from './screens/HomeScreen'
@@ -48,6 +50,11 @@ import BrowseListsScreen       from './screens/BrowseListsScreen'
 import CuratedListPreviewScreen from './screens/CuratedListPreviewScreen'
 import DeepLinkListResolverScreen from './screens/DeepLinkListResolverScreen'
 import DeepLinkExperienceResolverScreen from './screens/DeepLinkExperienceResolverScreen'
+import CreatorProfileScreen        from './screens/CreatorProfileScreen'
+import CreatorListScreen           from './screens/CreatorListScreen'
+import DestinationsScreen          from './screens/DestinationsScreen'
+import LocalGuidesScreen           from './screens/LocalGuidesScreen'
+import DeepLinkCreatorResolverScreen from './screens/DeepLinkCreatorResolverScreen'
 import SavedCrewScreen          from './screens/SavedCrewScreen'
 import SecretRevealScreen       from './screens/SecretRevealScreen'
 import PastListsScreen          from './screens/PastListsScreen'
@@ -168,6 +175,31 @@ function HomeStack() {
       <Stack.Screen
         name="DeepLinkExperienceResolver"
         component={DeepLinkExperienceResolverScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="DeepLinkCreatorResolver"
+        component={DeepLinkCreatorResolverScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="CreatorProfile"
+        component={CreatorProfileScreen}
+        options={({ route }) => ({ title: route.params?.handle ? `@${route.params.handle}` : 'Creator' })}
+      />
+      <Stack.Screen
+        name="CreatorList"
+        component={CreatorListScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="Destinations"
+        component={DestinationsScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="LocalGuides"
+        component={LocalGuidesScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen
@@ -440,6 +472,7 @@ function MainTabs({ isSignedIn, isAdmin }) {
 function App() {
   const { loading, isSignedIn, isAdmin, userId } = useAuth()
   const { needsOnboarding, completeOnboarding, checkingOnboarding } = useOnboarding()
+  const { forceUpdate, softUpdate, updateConfig, dismissSoftUpdate } = useVersionCheck(userId)
   useNotifications(userId)
 
 
@@ -494,18 +527,24 @@ function App() {
                     screens: {
                       JoinList: 'join/:invite_code',
                       CuratedListPreview: 'next10',
-                DeepLinkListResolver: {
-                  path: 'list',
-                  parse: {
-                    id: (id) => id,
-                  },
-                },
-                DeepLinkExperienceResolver: {
-                  path: 'experience',
-                  parse: {
-                    tag: (tag) => tag,
-                  },
-                },
+                      DeepLinkListResolver: {
+                        path: 'list',
+                        parse: {
+                          id: (id) => id,
+                        },
+                      },
+                      DeepLinkExperienceResolver: {
+                        path: 'experience',
+                        parse: {
+                          tag: (tag) => tag,
+                        },
+                      },
+                      DeepLinkCreatorResolver: {
+                        path: 'c/:handle',
+                        parse: {
+                          handle: (h) => h,
+                        },
+                      },
                       ResetPassword: {
                         path: 'reset-password',
                         parse: {
@@ -523,6 +562,12 @@ function App() {
             }}
           >
             <MainTabs isSignedIn={isSignedIn} isAdmin={isAdmin} />
+          <UpdatePromptModal
+            visible={forceUpdate || softUpdate}
+            force={forceUpdate}
+            config={updateConfig}
+            onDismiss={dismissSoftUpdate}
+          />
           </NavigationContainer>
         )}
       </SafeAreaProvider>
