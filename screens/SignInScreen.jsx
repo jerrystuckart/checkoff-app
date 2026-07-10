@@ -79,6 +79,7 @@ export default function SignInScreen({ navigation, route }) {
       password: password.trim(),
       options: {
         data: { display_name: displayName.trim() },
+        emailRedirectTo: 'https://getcheckoff.com/auth/confirm',
       },
     })
 

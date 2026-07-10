@@ -42,6 +42,7 @@ import JoinListScreen          from './screens/JoinListScreen'
 import PartnerPreviewScreen    from './screens/PartnerPreviewScreen'
 import BadgesScreen            from './screens/BadgesScreen'
 import ResetPasswordScreen     from './screens/ResetPasswordScreen'
+import ConfirmEmailScreen      from './screens/ConfirmEmailScreen'
 import SplashScreen            from './screens/SplashScreen'
 import ProfileScreen           from './screens/ProfileScreen'
 import DareScreen              from './screens/DareScreen'
@@ -268,6 +269,11 @@ function HomeStack() {
         name="ResetPassword"
         component={ResetPasswordScreen}
         options={{ title: 'Reset password' }}
+      />
+      <Stack.Screen
+        name="ConfirmEmail"
+        component={ConfirmEmailScreen}
+        options={{ headerShown: false }}
       />
       <Stack.Screen
         name="PastLists"
@@ -552,6 +558,16 @@ function App() {
                           refresh_token: (v) => v,
                           token: (v) => v,
                           type: (v) => v,
+                        },
+                      },
+                      ConfirmEmail: {
+                        path: 'auth/confirm',
+                        parse: {
+                          access_token:  (v) => v,
+                          refresh_token: (v) => v,
+                          token:         (v) => v,
+                          type:          (v) => v,
+                          code:          (v) => v,
                         },
                       },
                       Home: '',
