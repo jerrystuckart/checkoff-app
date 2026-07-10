@@ -19,6 +19,15 @@ import * as Sentry from '@sentry/react-native'
 const PURPLE = '#7A4DB3'
 const LIST_ACCENT_COLORS = ['#F5A623', '#7A4DB3', '#2E7D8C', '#2E6B3E', '#C0674A', '#378ADD']
 
+function haversineMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000
+  const dLat = (lat2 - lat1) * Math.PI / 180
+  const dLng = (lng2 - lng1) * Math.PI / 180
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets()
   const { colors, isDark, toggleTheme } = useTheme()
@@ -53,6 +62,8 @@ export default function HomeScreen({ navigation }) {
   const [heroImage, setHeroImage] = useState(null)
   const [recapModal, setRecapModal] = useState(null) // { count, pts, streak, weekStartIso }
   const [featuredCreators, setFeaturedCreators] = useState([])
+  const [nearbyZone, setNearbyZone] = useState(null)
+  const [zoneBannerDismissed, setZoneBannerDismissed] = useState(false)
 
   const { savedCrew } = useCrewInvite()
 
@@ -152,6 +163,24 @@ export default function HomeScreen({ navigation }) {
               ? metros.find(m => m.name.includes('Phoenix'))
               : metros.find(m => m.name.includes('Milwaukee'))
           }
+
+          // Check destination zones — only if GPS was already granted
+          try {
+            const { data: zones } = await supabase
+              .from('destination_zones')
+              .select('id, name, slug, banner_title, banner_subtitle, center_lat, center_lng, radius_km, list_id')
+              .eq('is_active', true)
+            const hit = (zones ?? []).find(z =>
+              haversineMeters(uLat, uLng, z.center_lat, z.center_lng) <= z.radius_km * 1000
+            )
+            if (hit) {
+              const dismissKey = `zone_banner_dismissed_${hit.id}`
+              const dismissed = await AsyncStorage.getItem(dismissKey)
+              if (dismissed !== 'true') setNearbyZone(hit)
+            }
+          } catch (e) {
+            /* zone check optional */
+          }
         }
       } catch (e) {
         /* GPS optional */
@@ -170,6 +199,23 @@ export default function HomeScreen({ navigation }) {
     } finally {
       setLoading(false)
     }
+  }
+
+  async function handleDestinationZoneTap(zone) {
+    if (!user) {
+      setShowSignInPrompt(true)
+      return
+    }
+    if (zone.list_id) {
+      // Auto-join the list
+      await supabase.from('list_members').upsert(
+        { list_id: zone.list_id, user_id: user.id, invite_source: 'destination_zone' },
+        { onConflict: 'list_id,user_id' }
+      )
+      navigation.navigate('List', { listId: zone.list_id })
+    }
+    setZoneBannerDismissed(true)
+    AsyncStorage.setItem(`zone_banner_dismissed_${zone.id}`, 'true')
   }
 
   async function loadForMetro(metroId, userId, citySlug) {
@@ -732,6 +778,33 @@ export default function HomeScreen({ navigation }) {
         )
       })()}
 
+      {nearbyZone && !zoneBannerDismissed && (
+        <TouchableOpacity
+          style={styles.zoneBanner}
+          onPress={() => handleDestinationZoneTap(nearbyZone)}
+          activeOpacity={0.88}
+        >
+          <TouchableOpacity
+            style={styles.zoneBannerDismiss}
+            onPress={() => {
+              setZoneBannerDismissed(true)
+              AsyncStorage.setItem(`zone_banner_dismissed_${nearbyZone.id}`, 'true')
+            }}
+            hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+          >
+            <Text style={styles.zoneBannerDismissText}>✕</Text>
+          </TouchableOpacity>
+          <Text style={styles.zoneBannerLabel}>YOU'RE HERE</Text>
+          <Text style={styles.zoneBannerTitle}>{nearbyZone.banner_title || nearbyZone.name}</Text>
+          {nearbyZone.banner_subtitle ? (
+            <Text style={styles.zoneBannerSub}>{nearbyZone.banner_subtitle}</Text>
+          ) : null}
+          <View style={styles.zoneBannerCTA}>
+            <Text style={styles.zoneBannerCTAText}>See the list →</Text>
+          </View>
+        </TouchableOpacity>
+      )}
+
       {homeOfficialLists.length > 0 && (
         <>
           <View style={styles.sectionHeaderBlock}>
@@ -1258,6 +1331,60 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   next10BannerCTAText: {
     color: NAVY,
     fontSize: 15,
+    fontWeight: '700',
+  },
+
+  // ── Destination Zone Banner ──
+  zoneBanner: {
+    backgroundColor: NAVY,
+    borderRadius: 16,
+    marginBottom: 12,
+    padding: 20,
+    borderLeftWidth: 3,
+    borderLeftColor: GREEN,
+  },
+  zoneBannerDismiss: {
+    position: 'absolute',
+    top: 14,
+    right: 14,
+    width: 28,
+    height: 28,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  zoneBannerDismissText: {
+    color: 'rgba(255,255,255,0.35)',
+    fontSize: 14,
+  },
+  zoneBannerLabel: {
+    color: GREEN,
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1.5,
+    marginBottom: 4,
+  },
+  zoneBannerTitle: {
+    color: '#FFFFFF',
+    fontSize: 20,
+    fontWeight: '700',
+    paddingRight: 28,
+  },
+  zoneBannerSub: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 14,
+    marginTop: 4,
+  },
+  zoneBannerCTA: {
+    marginTop: 14,
+    alignSelf: 'flex-start',
+    backgroundColor: GREEN,
+    borderRadius: 10,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+  },
+  zoneBannerCTAText: {
+    color: '#FFFFFF',
+    fontSize: 14,
     fontWeight: '700',
   },
 
