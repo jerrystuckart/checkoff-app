@@ -42,8 +42,7 @@ export default function SavedCrewScreen({ route, navigation }) {
 
   const filtered = savedCrew.filter(m =>
     !search.trim() ||
-    m.displayName.toLowerCase().includes(search.toLowerCase()) ||
-    (m.email ?? '').toLowerCase().includes(search.toLowerCase())
+    m.displayName.toLowerCase().includes(search.toLowerCase())
   )
 
   function toggleMember(id) {
@@ -93,9 +92,6 @@ export default function SavedCrewScreen({ route, navigation }) {
 
         <View style={styles.memberInfo}>
           <Text style={styles.memberName}>{member.displayName}</Text>
-          {member.email ? (
-            <Text style={styles.memberEmail} numberOfLines={1}>{member.email}</Text>
-          ) : null}
         </View>
 
         {canInvite && (
@@ -163,7 +159,7 @@ export default function SavedCrewScreen({ route, navigation }) {
       ) : filtered.length === 0 ? (
         <View style={styles.emptyWrap}>
           <Text style={styles.emptyTitle}>No results</Text>
-          <Text style={styles.emptySub}>Try a different name or email.</Text>
+          <Text style={styles.emptySub}>Try a different name.</Text>
         </View>
       ) : (
         <FlatList
@@ -273,7 +269,6 @@ const styles = StyleSheet.create({
 
   memberInfo:    { flex: 1 },
   memberName:    { fontSize: 15, color: TEXT, fontWeight: '700' },
-  memberEmail:   { fontSize: 12, color: MUTED, marginTop: 2 },
 
   checkCircle: {
     width: 24, height: 24, borderRadius: 12,

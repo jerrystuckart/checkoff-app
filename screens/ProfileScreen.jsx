@@ -80,7 +80,7 @@ export default function ProfileScreen({ navigation }) {
       sunday.setHours(23, 59, 59, 999)
 
       const [profileRes, badgesRes, checkinsRes, totalRes, weeklyRes] = await Promise.all([
-        supabase.from('users').select('id, display_name, email, current_streak, longest_streak, created_at, is_admin, pref_show_alcohol, notif_check_ins, notif_invites, notif_nudges, founding_number, lifetime_points, insider_tier').eq('id', uid).single(),
+        supabase.from('users').select('id, display_name, current_streak, longest_streak, created_at, is_admin, pref_show_alcohol, notif_check_ins, notif_invites, notif_nudges, founding_number, lifetime_points, insider_tier').eq('id', uid).single(),
         supabase.from('user_badges').select('badge_id, earned_at, badge_definitions(id, name, icon, description)').eq('user_id', uid).order('earned_at', { ascending: false }).limit(6),
         supabase.from('check_ins').select('id, checked_at, checkin_method, list_items(items(body, categories(name, color_hex)))').eq('user_id', uid).order('checked_at', { ascending: false }).limit(5),
         supabase.from('check_ins').select('id', { count: 'exact', head: true }).eq('user_id', uid),
@@ -204,7 +204,7 @@ export default function ProfileScreen({ navigation }) {
             // Step 2 — second confirmation, Apple requires explicit confirmation
             Alert.alert(
               'Are you absolutely sure?',
-              `Your account for ${profile?.email} will be permanently deleted. There is no way to recover it.`,
+              `Your account for ${user?.email} will be permanently deleted. There is no way to recover it.`,
               [
                 { text: 'Cancel', style: 'cancel' },
                 {
@@ -260,8 +260,8 @@ export default function ProfileScreen({ navigation }) {
   }
 
   // Detect Apple private relay gibberish names like "2rj2v78vyn"
-  function isGibberishName(p) {
-    if (!p?.email?.endsWith('@privaterelay.appleid.com')) return false
+  function isGibberishName(p, email) {
+    if (!email?.endsWith('@privaterelay.appleid.com')) return false
     const name = p?.display_name ?? ''
     // Real names contain spaces or mixed case. Relay IDs are long lowercase alphanumeric.
     return /^[a-z0-9]{8,}$/.test(name)
@@ -311,10 +311,10 @@ export default function ProfileScreen({ navigation }) {
     )
   }
 
-  const nameIsGibberish = isGibberishName(profile)
+  const nameIsGibberish = isGibberishName(profile, user?.email)
   const displayName = nameIsGibberish
     ? 'Tap to set your name'
-    : (profile?.display_name || profile?.email?.split('@')[0] || 'CheckOffer')
+    : (profile?.display_name || user?.email?.split('@')[0] || 'CheckOffer')
   const initials    = nameIsGibberish ? '?' : displayName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()
   const hasStreak   = (stats?.streak ?? 0) > 0
 
@@ -336,7 +336,7 @@ export default function ProfileScreen({ navigation }) {
             {displayName}
           </Text>
         </TouchableOpacity>
-        <Text style={styles.email}>{profile?.email}</Text>
+        <Text style={styles.email}>{user?.email}</Text>
         <Text style={styles.memberSince}>Member since {memberSince(profile?.created_at)}</Text>
         {profile?.founding_number != null && (
           <View style={styles.foundingBadge}>

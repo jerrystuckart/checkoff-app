@@ -33,7 +33,6 @@ import HomeScreen              from './screens/HomeScreen'
 import ListScreen              from './screens/ListScreen'
 import LeaderboardScreen       from './screens/LeaderboardScreen'
 import SignInScreen            from './screens/SignInScreen'
-import AdminScreen             from './screens/AdminScreen'
 import CreateListScreen        from './screens/CreateListScreen'
 import ItemDetailScreen        from './screens/ItemDetailScreen'
 import NearbyScreen            from './screens/NearbyScreen'
@@ -68,7 +67,7 @@ const Tab = createBottomTabNavigator()
 const AMBER = '#F5A623'
 
 function TabIcon({ label, focused }) {
-  const glyphs = { Home: '⌂', Nearby: '⌖', Create: '+', Admin: '⚙', Profile: '◉' }
+  const glyphs = { Home: '⌂', Nearby: '⌖', Create: '+', Profile: '◉' }
 
   return (
     <View style={tab.wrap}>
@@ -125,6 +124,11 @@ function NearbyStack() {
         name="Dare"
         component={DareScreen}
         options={{ title: 'Dares' }}
+      />
+      <Stack.Screen
+        name="PartnerPreview"
+        component={PartnerPreviewScreen}
+        options={{ title: 'Partner preview' }}
       />
       <Stack.Screen
         name="PhotoCheckIn"
@@ -236,6 +240,11 @@ function HomeStack() {
         options={{ title: 'Dares' }}
       />
       <Stack.Screen
+        name="PartnerPreview"
+        component={PartnerPreviewScreen}
+        options={{ title: 'Partner preview' }}
+      />
+      <Stack.Screen
         name="Badges"
         component={BadgesScreen}
         options={{ title: 'Your badges' }}
@@ -320,6 +329,11 @@ function CreateStack() {
         options={{ title: 'Dares' }}
       />
       <Stack.Screen
+        name="PartnerPreview"
+        component={PartnerPreviewScreen}
+        options={{ title: 'Partner preview' }}
+      />
+      <Stack.Screen
         name="PhotoCheckIn"
         component={PhotoCheckInScreen}
         options={{ title: 'Add photo' }}
@@ -385,24 +399,7 @@ function ProfileStack() {
   )
 }
 
-function AdminStack() {
-  return (
-    <Stack.Navigator screenOptions={stackOpts}>
-      <Stack.Screen
-        name="AdminItems"
-        component={AdminScreen}
-        options={{ title: 'Item manager' }}
-      />
-      <Stack.Screen
-        name="PartnerPreview"
-        component={PartnerPreviewScreen}
-        options={{ title: 'Partner preview' }}
-      />
-    </Stack.Navigator>
-  )
-}
-
-function MainTabs({ isSignedIn, isAdmin }) {
+function MainTabs({ isSignedIn }) {
   return (
     <Tab.Navigator
       screenOptions={{
@@ -456,27 +453,12 @@ function MainTabs({ isSignedIn, isAdmin }) {
           ),
         }}
       />
-      <Tab.Screen
-        name="AdminTab"
-        component={AdminStack}
-        options={{
-          // Always register the screen so React Navigation v7 doesn't drop it
-          // when isAdmin resolves true after the initial render.
-          // Hide the tab button entirely for non-admins instead of conditionally
-          // mounting the Tab.Screen, which causes the navigator to silently lose it.
-          tabBarButton: isAdmin ? undefined : () => null,
-          tabBarItemStyle: isAdmin ? undefined : { display: 'none' },
-          tabBarIcon: ({ focused }) => (
-            <TabIcon label="Admin" focused={focused} />
-          ),
-        }}
-      />
     </Tab.Navigator>
   )
 }
 
 function App() {
-  const { loading, isSignedIn, isAdmin, userId } = useAuth()
+  const { loading, isSignedIn, userId } = useAuth()
   const { needsOnboarding, completeOnboarding, checkingOnboarding } = useOnboarding()
   const { forceUpdate, softUpdate, updateConfig, dismissSoftUpdate } = useVersionCheck(userId)
   useNotifications(userId)
@@ -577,7 +559,7 @@ function App() {
               },
             }}
           >
-            <MainTabs isSignedIn={isSignedIn} isAdmin={isAdmin} />
+            <MainTabs isSignedIn={isSignedIn} />
           <UpdatePromptModal
             visible={forceUpdate || softUpdate}
             force={forceUpdate}
