@@ -21,7 +21,7 @@
     "expo-apple-authentication": "~55.0.13",
     "expo-camera": "~55.0.18",
     "expo-crypto": "~55.0.14",
-    "expo-dev-client": "~55.0.32",
+    "expo-dev-client": "~55.0.36",
     "expo-haptics": "~55.0.14",
     "expo-image-picker": "~55.0.20",
     "expo-linear-gradient": "~55.0.13",

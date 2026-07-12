@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet, TextInput,
   ActivityIndicator, Animated, Platform, Linking, ScrollView,
+  KeyboardAvoidingView, Keyboard,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
@@ -413,6 +414,7 @@ export default function DiscoverScreen({ navigation, route }) {
 
   // ── Navigation ───────────────────────────────────────────────────────────
   function openItem(item) {
+    Keyboard.dismiss()
     if (item.is_secret) {
       navigation.navigate('SecretReveal', { item, listItemId: null })
       return
@@ -524,50 +526,56 @@ export default function DiscoverScreen({ navigation, route }) {
 
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
-      <FlatList
-        data={displayItems}
-        keyExtractor={item => String(item.id)}
-        renderItem={renderItem}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
-        keyboardShouldPersistTaps="handled"
-        ItemSeparatorComponent={() => <View style={styles.sep} />}
-        ListHeaderComponent={
-          <ListHeader
-            styles={styles}
-            searchText={searchText}
-            setSearchText={setSearchText}
-            suggestions={suggestions}
-            activeTags={activeTags}
-            selectTag={selectTag}
-            removeTag={removeTag}
-            categories={categories}
-            activeCategoryName={activeCategoryName}
-            toggleCategory={toggleCategory}
-            displayCount={displayItems.length}
-            hasActiveSearch={hasActiveSearch}
-            loadingSearch={loadingSearch}
-            location={location}
-            bannerVisible={bannerVisible}
-            dismissBanner={dismissBanner}
-            pulseAnim={pulseAnim}
-            clearSearch={clearSearch}
-          />
-        }
-        ListEmptyComponent={
-          !nearbyLoading ? (
-            <View style={styles.empty}>
-              <Text style={styles.emptyTitle}>Nothing found</Text>
-              <Text style={styles.emptySub}>{emptyReason}</Text>
-              {hasActiveSearch && (
-                <TouchableOpacity style={styles.clearBtn} onPress={clearSearch}>
-                  <Text style={styles.clearBtnText}>Clear filters</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          ) : null
-        }
-      />
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top : 0}
+      >
+        <FlatList
+          data={displayItems}
+          keyExtractor={item => String(item.id)}
+          renderItem={renderItem}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
+          keyboardShouldPersistTaps="handled"
+          ItemSeparatorComponent={() => <View style={styles.sep} />}
+          ListHeaderComponent={
+            <ListHeader
+              styles={styles}
+              searchText={searchText}
+              setSearchText={setSearchText}
+              suggestions={suggestions}
+              activeTags={activeTags}
+              selectTag={selectTag}
+              removeTag={removeTag}
+              categories={categories}
+              activeCategoryName={activeCategoryName}
+              toggleCategory={toggleCategory}
+              displayCount={displayItems.length}
+              hasActiveSearch={hasActiveSearch}
+              loadingSearch={loadingSearch}
+              location={location}
+              bannerVisible={bannerVisible}
+              dismissBanner={dismissBanner}
+              pulseAnim={pulseAnim}
+              clearSearch={clearSearch}
+            />
+          }
+          ListEmptyComponent={
+            !nearbyLoading ? (
+              <View style={styles.empty}>
+                <Text style={styles.emptyTitle}>Nothing found</Text>
+                <Text style={styles.emptySub}>{emptyReason}</Text>
+                {hasActiveSearch && (
+                  <TouchableOpacity style={styles.clearBtn} onPress={clearSearch}>
+                    <Text style={styles.clearBtnText}>Clear filters</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            ) : null
+          }
+        />
+      </KeyboardAvoidingView>
     </View>
   )
 }
@@ -581,6 +589,7 @@ function ListHeader({
 }) {
   const { colors } = useTheme()
   const { TEXT, MUTED } = colors
+  const [searchFocused, setSearchFocused] = useState(false)
 
   return (
     <>
@@ -609,8 +618,20 @@ function ListHeader({
           autoCapitalize="none"
           returnKeyType="search"
           clearButtonMode="while-editing"
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => setSearchFocused(false)}
+          onSubmitEditing={() => Keyboard.dismiss()}
         />
         {loadingSearch && <ActivityIndicator size="small" color={MUTED} style={{ marginRight: 8 }} />}
+        {searchFocused && (
+          <TouchableOpacity
+            style={styles.searchDoneBtn}
+            onPress={() => Keyboard.dismiss()}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={styles.searchDoneText}>Done</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Tag autocomplete suggestions */}
@@ -683,6 +704,8 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT_2 }) {
     searchWrap:  { flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginTop: 8, marginBottom: 8, backgroundColor: CARD, borderRadius: 14, borderWidth: 1, borderColor: BORDER, paddingHorizontal: 12, height: 44 },
     searchIcon:  { fontSize: 18, color: MUTED, marginRight: 8 },
     searchInput: { flex: 1, fontSize: 14, fontWeight: '600', height: 44 },
+    searchDoneBtn:  { paddingLeft: 8 },
+    searchDoneText: { fontSize: 14, color: AMBER, fontWeight: '800' },
 
     suggestRow:     { flexGrow: 0, marginBottom: 4 },
     suggestContent: { paddingHorizontal: 16, gap: 8, paddingVertical: 4 },

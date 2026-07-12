@@ -18,6 +18,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
+  Keyboard,
 } from 'react-native'
 import * as Haptics from 'expo-haptics'
 import { LinearGradient } from 'expo-linear-gradient'
@@ -98,9 +99,22 @@ export default function ListScreen({ route, navigation }) {
   const styles = useMemo(() => createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, ENDED_BG, ENDED_BORDER, ENDED_TEXT }),
     [BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, ENDED_BG, ENDED_BORDER, ENDED_TEXT])
   const headerHeight = useHeaderHeight()
+  // Measured (not assumed) distance from the true top of the screen to the
+  // KeyboardAvoidingView below. headerHeight is only a correct proxy for this
+  // when the nav header is opaque and reserves its own space — but this screen
+  // switches to headerTransparent when heroImage is set (see effect below),
+  // at which point the header floats over the content and reserves no space,
+  // so the real offset is ~0. Measuring it directly keeps this correct in both
+  // cases (and any future header change) instead of hardcoding either value.
+  const [kbOffset, setKbOffset] = useState(headerHeight)
+  const kbMeasureRef = useRef(null)
+  const measureKbOffset = useCallback(() => {
+    kbMeasureRef.current?.measureInWindow((x, y) => setKbOffset(y))
+  }, [])
 
   const [filter, setFilter] = useState('All')
   const [search, setSearch] = useState('')
+  const [searchFocused, setSearchFocused] = useState(false)
   const [showChecked, setShowChecked] = useState(true)
   const [listMeta, setListMeta] = useState(null)
   const [metaLoading, setMetaLoading] = useState(false)
@@ -760,6 +774,7 @@ export default function ListScreen({ route, navigation }) {
   }
 
   const handleCheckOff = useCallback(async (listItemId) => {
+    Keyboard.dismiss()
     if (ended || metaLoading) return  // also block while meta is loading
 
     const item = localItems.find(i => i.listItemId === listItemId)
@@ -1147,6 +1162,7 @@ export default function ListScreen({ route, navigation }) {
         <TouchableOpacity
           style={[styles.rowCard, item.checked && styles.rowCardChecked]}
           onPress={() => {
+            Keyboard.dismiss()
             if (item.checked) {
               openDetailModal(item)
               return
@@ -1262,7 +1278,7 @@ export default function ListScreen({ route, navigation }) {
             </Text>
           ) : null}
 
-          {!item.checked && !ended && listId ? (
+          {!ended && listId ? (
             <TouchableOpacity
               style={styles.dareBtn}
               onPress={() => navigation.navigate('Dare', { item, listId })}
@@ -1349,8 +1365,19 @@ export default function ListScreen({ route, navigation }) {
           value={search}
           onChangeText={setSearch}
           returnKeyType="search"
+          onSubmitEditing={() => Keyboard.dismiss()}
+          onFocus={() => setSearchFocused(true)}
+          onBlur={() => setSearchFocused(false)}
         />
-        {listId && (
+        {searchFocused ? (
+          <TouchableOpacity
+            style={styles.searchDoneBtn}
+            onPress={() => Keyboard.dismiss()}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
+            <Text style={styles.searchDoneBtnText}>Done</Text>
+          </TouchableOpacity>
+        ) : listId && (
           <TouchableOpacity
             style={[styles.crewBtn, ended && styles.crewBtnEnded]}
             onPress={() => navigation.navigate('Leaderboard', { listId, title })}
@@ -1407,6 +1434,7 @@ export default function ListScreen({ route, navigation }) {
     derivedTotalCount,
     derivedPct,
     search,
+    searchFocused,
     filter,
     showChecked,
     filtered.length,
@@ -1498,31 +1526,43 @@ export default function ListScreen({ route, navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      {isLoading ? (
-        <View style={styles.center}>
-          <ActivityIndicator color={ACCENT} />
-        </View>
-      ) : (
-        <FlatList
-          data={sortedFiltered}
-          keyExtractor={item => String(item.listItemId)}
-          renderItem={renderItem}
-          ListHeaderComponent={headerEl}
-          ListFooterComponent={suggestionsFooter}
-          keyboardShouldPersistTaps="handled"
-          contentContainerStyle={styles.listContent}
-          ItemSeparatorComponent={() => <View style={styles.sep} />}
-          ListEmptyComponent={
-            <View style={styles.empty}>
-              <Text style={styles.emptyTitle}>Nothing here yet</Text>
-              <Text style={styles.emptyText}>
-                {search ? 'Try a different keyword or category.' : 'No items in this category yet.'}
-              </Text>
+      <View
+        ref={kbMeasureRef}
+        style={styles.container}
+        onLayout={measureKbOffset}
+      >
+        <KeyboardAvoidingView
+          style={styles.container}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? kbOffset : 0}
+        >
+          {isLoading ? (
+            <View style={styles.center}>
+              <ActivityIndicator color={ACCENT} />
             </View>
-          }
-          showsVerticalScrollIndicator={false}
-        />
-      )}
+          ) : (
+            <FlatList
+              data={sortedFiltered}
+              keyExtractor={item => String(item.listItemId)}
+              renderItem={renderItem}
+              ListHeaderComponent={headerEl}
+              ListFooterComponent={suggestionsFooter}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.listContent}
+              ItemSeparatorComponent={() => <View style={styles.sep} />}
+              ListEmptyComponent={
+                <View style={styles.empty}>
+                  <Text style={styles.emptyTitle}>Nothing here yet</Text>
+                  <Text style={styles.emptyText}>
+                    {search ? 'Try a different keyword or category.' : 'No items in this category yet.'}
+                  </Text>
+                </View>
+              }
+              showsVerticalScrollIndicator={false}
+            />
+          )}
+        </KeyboardAvoidingView>
+      </View>
 
       <SuggestPlaceSheet
         visible={showSuggestSheet}
@@ -2041,6 +2081,20 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, EN
 
   crewBtnTextEnded: {
     color: ENDED_TEXT,
+  },
+
+  searchDoneBtn: {
+    backgroundColor: ACCENT,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 13,
+    justifyContent: 'center',
+  },
+
+  searchDoneBtnText: {
+    fontSize: 14,
+    color: '#fff',
+    fontWeight: '700',
   },
 
   filtersSection: {

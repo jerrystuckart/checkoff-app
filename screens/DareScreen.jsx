@@ -80,13 +80,36 @@ export default function DareScreen({ route, navigation }) {
       supabase.from('users').select('display_name').eq('id', uid).single()
         .then(({ data: p }) => { if (p?.display_name) setUserDisplayName(p.display_name) })
       if (item && listId) {
-        const { data: members } = await supabase
+        // Only show people who share at least one non-official custom list with
+        // the current user — being on the same seasonal/official list with
+        // hundreds of strangers doesn't make someone a "friend" to dare.
+        const { data: myPrivateLists } = await supabase
           .from('list_members')
-          .select('user_id, users(id, display_name, email)')
-          .eq('list_id', listId)
-          .neq('user_id', uid)
+          .select('list_id, lists!inner(is_official)')
+          .eq('user_id', uid)
+          .eq('lists.is_official', false)
 
-        setListMembers((members ?? []).map(m => m.users).filter(Boolean))
+        const myPrivateListIds = (myPrivateLists ?? []).map(r => r.list_id)
+
+        if (myPrivateListIds.length) {
+          const { data: members } = await supabase
+            .from('list_members')
+            .select('user_id, users(id, display_name, email)')
+            .in('list_id', myPrivateListIds)
+            .neq('user_id', uid)
+
+          const seen = new Set()
+          const friends = []
+          for (const m of members ?? []) {
+            if (m.users && !seen.has(m.users.id)) {
+              seen.add(m.users.id)
+              friends.push(m.users)
+            }
+          }
+          setListMembers(friends)
+        } else {
+          setListMembers([])
+        }
       }
 
       const [received, sent] = await Promise.all([

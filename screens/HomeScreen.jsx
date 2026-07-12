@@ -164,19 +164,31 @@ export default function HomeScreen({ navigation }) {
               : metros.find(m => m.name.includes('Milwaukee'))
           }
 
-          // Check destination zones — only if GPS was already granted
+          // Check destination zones — only if GPS was already granted.
+          // In dev/simulator builds, skip the is_active filter so inactive
+          // zones can be tested before going live — production builds
+          // (__DEV__ === false) always get real is_active = true zones only.
           try {
-            const { data: zones } = await supabase
+            let zoneQuery = supabase
               .from('destination_zones')
-              .select('id, name, slug, banner_title, banner_subtitle, center_lat, center_lng, radius_km, list_id')
-              .eq('is_active', true)
+              .select('id, name, slug, banner_title, banner_subtitle, center_lat, center_lng, radius_km, list_id, is_active')
+            if (!__DEV__) {
+              zoneQuery = zoneQuery.eq('is_active', true)
+            }
+            const { data: zones } = await zoneQuery
+
             const hit = (zones ?? []).find(z =>
               haversineMeters(uLat, uLng, z.center_lat, z.center_lng) <= z.radius_km * 1000
             )
+
             if (hit) {
-              const dismissKey = `zone_banner_dismissed_${hit.id}`
-              const dismissed = await AsyncStorage.getItem(dismissKey)
-              if (dismissed !== 'true') setNearbyZone(hit)
+              // Dismissal is session-only (zoneBannerDismissed local state) —
+              // no persisted flag to check here, so the banner always shows
+              // on a fresh cold launch while the user is still in range.
+              if (__DEV__ && !hit.is_active) {
+                console.log('[DEBUG] destination zone bypass — showing INACTIVE zone in dev build:', hit.name, hit.id)
+              }
+              setNearbyZone(hit)
             }
           } catch (e) {
             /* zone check optional */
@@ -214,8 +226,8 @@ export default function HomeScreen({ navigation }) {
       )
       navigation.navigate('List', { listId: zone.list_id })
     }
-    setZoneBannerDismissed(true)
-    AsyncStorage.setItem(`zone_banner_dismissed_${zone.id}`, 'true')
+    // Intentionally does not dismiss the banner — the user should still see
+    // it on the next cold launch while they remain inside the zone's radius.
   }
 
   async function loadForMetro(metroId, userId, citySlug) {
@@ -427,7 +439,22 @@ export default function HomeScreen({ navigation }) {
               .eq('creator_id', user?.id)
 
             if (error) {
-              Alert.alert('Could not delete', error.message)
+              // 23503 = foreign_key_violation. Give a friendly, specific message
+              // for the known destination_zones case; any other FK violation
+              // (or any other error) still surfaces the generic message as-is.
+              if (error.code === '23503' && error.message?.includes('destination_zones_list_id_fkey')) {
+                const { data: zone } = await supabase
+                  .from('destination_zones')
+                  .select('name')
+                  .eq('list_id', list.id)
+                  .maybeSingle()
+                Alert.alert(
+                  'Could not delete',
+                  `This list can't be deleted because it's linked to a destination zone banner (${zone?.name ?? 'a destination zone'}). Remove or reassign the zone link first, then try again.`
+                )
+              } else {
+                Alert.alert('Could not delete', error.message)
+              }
             } else {
               setLists(prev => prev.filter(l => l.id !== list.id))
             }
@@ -786,14 +813,14 @@ export default function HomeScreen({ navigation }) {
         >
           <TouchableOpacity
             style={styles.zoneBannerDismiss}
-            onPress={() => {
-              setZoneBannerDismissed(true)
-              AsyncStorage.setItem(`zone_banner_dismissed_${nearbyZone.id}`, 'true')
-            }}
+            onPress={() => setZoneBannerDismissed(true)}
             hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
           >
             <Text style={styles.zoneBannerDismissText}>✕</Text>
           </TouchableOpacity>
+          {__DEV__ && !nearbyZone.is_active && (
+            <Text style={styles.zoneBannerDebugBadge}>DEBUG: showing inactive zone</Text>
+          )}
           <Text style={styles.zoneBannerLabel}>YOU'RE HERE</Text>
           <Text style={styles.zoneBannerTitle}>{nearbyZone.banner_title || nearbyZone.name}</Text>
           {nearbyZone.banner_subtitle ? (
@@ -1355,6 +1382,14 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   zoneBannerDismissText: {
     color: 'rgba(255,255,255,0.35)',
     fontSize: 14,
+  },
+  zoneBannerDebugBadge: {
+    color: '#D85A30',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginBottom: 6,
+    textTransform: 'uppercase',
   },
   zoneBannerLabel: {
     color: GREEN,
