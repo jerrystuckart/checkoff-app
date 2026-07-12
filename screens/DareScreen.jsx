@@ -2,8 +2,10 @@ import React, { useState, useEffect, useMemo } from 'react'
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet,
   ScrollView, ActivityIndicator, Alert, FlatList,
+  KeyboardAvoidingView, Platform,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { useHeaderHeight } from '@react-navigation/elements'
 import { supabase } from '../lib/supabase'
 import { useTheme } from '../lib/ThemeContext'
 
@@ -47,6 +49,7 @@ const LILAC_TEXT = '#7C3AED'
 export default function DareScreen({ route, navigation }) {
   const { item, listId } = route?.params ?? {}
   const insets = useSafeAreaInsets()
+  const headerHeight = useHeaderHeight()
   const { colors } = useTheme()
   const { BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2 } = colors
   const styles = useMemo(() => createDareStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2 }),
@@ -80,28 +83,41 @@ export default function DareScreen({ route, navigation }) {
       supabase.from('users').select('display_name').eq('id', uid).single()
         .then(({ data: p }) => { if (p?.display_name) setUserDisplayName(p.display_name) })
       if (item && listId) {
-        // Only show people who share at least one non-official custom list with
-        // the current user — being on the same seasonal/official list with
-        // hundreds of strangers doesn't make someone a "friend" to dare.
-        const { data: myPrivateLists } = await supabase
-          .from('list_members')
-          .select('list_id, lists!inner(is_official)')
-          .eq('user_id', uid)
-          .eq('lists.is_official', false)
+        // A dare recipient must satisfy BOTH:
+        //  (a) share a non-official custom list with the current user —
+        //      being on the same seasonal/official list with hundreds of
+        //      strangers doesn't make someone a "friend" to dare, and
+        //  (b) actually be a member of THIS list — otherwise they have no
+        //      way to see or check off the dared item at all (list_items
+        //      RLS requires list membership; a non-member would just see
+        //      a blank list after accepting).
+        const [{ data: myPrivateLists }, { data: currentListMembers }] = await Promise.all([
+          supabase
+            .from('list_members')
+            .select('list_id, lists!inner(is_official)')
+            .eq('user_id', uid)
+            .eq('lists.is_official', false),
+          supabase
+            .from('list_members')
+            .select('user_id')
+            .eq('list_id', listId)
+            .neq('user_id', uid),
+        ])
 
         const myPrivateListIds = (myPrivateLists ?? []).map(r => r.list_id)
+        const currentListMemberIds = new Set((currentListMembers ?? []).map(m => m.user_id))
 
-        if (myPrivateListIds.length) {
+        if (myPrivateListIds.length && currentListMemberIds.size) {
           const { data: members } = await supabase
             .from('list_members')
-            .select('user_id, users(id, display_name, email)')
+            .select('user_id, users(id, display_name)')
             .in('list_id', myPrivateListIds)
             .neq('user_id', uid)
 
           const seen = new Set()
           const friends = []
           for (const m of members ?? []) {
-            if (m.users && !seen.has(m.users.id)) {
+            if (m.users && currentListMemberIds.has(m.users.id) && !seen.has(m.users.id)) {
               seen.add(m.users.id)
               friends.push(m.users)
             }
@@ -223,10 +239,16 @@ export default function DareScreen({ route, navigation }) {
   // ── Issue a dare ──
   if (mode === 'issue' && item) {
     return (
+      <KeyboardAvoidingView
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? headerHeight : 0}
+      >
       <ScrollView
         style={styles.container}
         contentContainerStyle={[styles.content, { paddingTop: insets.top + 12 }]}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         <View style={styles.heroCard}>
           <View style={styles.heroBadge}>
@@ -259,12 +281,12 @@ export default function DareScreen({ route, navigation }) {
             >
               <View style={[styles.memberAvatar, selectedFriend?.id === member.id && styles.memberAvatarOn]}>
                 <Text style={[styles.memberAvatarText, selectedFriend?.id === member.id && styles.memberAvatarTextOn]}>
-                  {(member.display_name || member.email || '?')[0].toUpperCase()}
+                  {(member.display_name || '?')[0].toUpperCase()}
                 </Text>
               </View>
 
               <View style={styles.memberTextWrap}>
-                <Text style={styles.memberName}>{member.display_name || member.email}</Text>
+                <Text style={styles.memberName}>{member.display_name || 'Someone'}</Text>
                 <Text style={styles.memberSub}>Challenge them to complete this first</Text>
               </View>
 
@@ -305,6 +327,7 @@ export default function DareScreen({ route, navigation }) {
           <Text style={styles.inboxBtnText}>View dare inbox →</Text>
         </TouchableOpacity>
       </ScrollView>
+      </KeyboardAvoidingView>
     )
   }
 

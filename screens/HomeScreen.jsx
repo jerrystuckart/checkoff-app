@@ -813,7 +813,10 @@ export default function HomeScreen({ navigation }) {
         >
           <TouchableOpacity
             style={styles.zoneBannerDismiss}
-            onPress={() => setZoneBannerDismissed(true)}
+            onPress={(e) => {
+              e.stopPropagation()
+              setZoneBannerDismissed(true)
+            }}
             hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
           >
             <Text style={styles.zoneBannerDismissText}>✕</Text>
