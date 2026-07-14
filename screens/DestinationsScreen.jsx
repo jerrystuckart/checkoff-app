@@ -16,6 +16,36 @@ const DISTANCE_COLORS = {
   'weekend':  '#378ADD',
 }
 
+// Distance label for Day-Trips cards, derived from metro_destinations —
+// same logic as the ExperiencesRail port; doesn't say "from <metro>"
+// since that needs a display name, not just the slug/id available here.
+function formatDayTripDistanceLabel(driveTimeMinutes) {
+  if (driveTimeMinutes == null) return null
+  if (driveTimeMinutes < 60) return `${Math.round(driveTimeMinutes)} min away`
+  const hours = Math.round((driveTimeMinutes / 60) * 2) / 2
+  return `${hours} hr${hours !== 1 ? 's' : ''} away`
+}
+
+// Maps a metro_destination_lists row into the same card shape
+// DestinationCard already renders from featured_experiences.
+// destinationId is the marker handlePress uses to route to the Hub
+// instead of the curated_lists/deep_link paths below.
+function mapDayTripToCard(row) {
+  const dest = row.metro_destinations?.destinations
+  const list = row.destination_lists?.lists
+  return {
+    id:             `mdl-${row.id}`,
+    title:          list?.title ?? 'Untitled trip',
+    subtitle:       null,
+    image_url:      dest?.hero_image_url ?? null,
+    city:           dest?.name ?? null,
+    distance_type:  null,
+    distance_label: formatDayTripDistanceLabel(row.metro_destinations?.drive_time_minutes),
+    vibes:          null,
+    destinationId:  row.destination_lists?.destination_id ?? null,
+  }
+}
+
 export default function DestinationsScreen({ navigation, route }) {
   const { metro } = route.params ?? {}
   const insets = useSafeAreaInsets()
@@ -46,7 +76,42 @@ export default function DestinationsScreen({ navigation, route }) {
       }
 
       const { data } = await query
-      setDestinations(data ?? [])
+      const featuredCards = data ?? []
+
+      // Day-Trips cards — same source/shape as the ExperiencesRail port,
+      // appended after the existing featured_experiences cards, no
+      // interleaving. metro.id is already available here (the full
+      // metro_areas row is passed in via route.params), so unlike
+      // ExperiencesRail this doesn't need a separate slug->id lookup.
+      // Wrapped in its own try/catch so a failure here degrades to "no
+      // Day-Trips cards" rather than blanking the whole screen.
+      let dayTripCards = []
+      if (metro?.id) {
+        try {
+          const { data: mdlRows } = await supabase
+            .from('metro_destination_lists')
+            .select(`
+              id, sort_order,
+              metro_destinations!inner (
+                distance_miles, drive_time_minutes, metro_id,
+                destinations ( id, name, hero_image_url )
+              ),
+              destination_lists!inner (
+                destination_id,
+                lists!destination_lists_list_id_fkey ( id, title )
+              )
+            `)
+            .eq('is_active', true)
+            .eq('metro_destinations.metro_id', metro.id)
+            .order('sort_order', { ascending: true })
+
+          dayTripCards = (mdlRows ?? []).map(mapDayTripToCard)
+        } catch (e) {
+          /* Day-Trips cards optional */
+        }
+      }
+
+      setDestinations([...featuredCards, ...dayTripCards])
     } catch (e) {
       // silent
     } finally {
@@ -55,6 +120,13 @@ export default function DestinationsScreen({ navigation, route }) {
   }
 
   function handlePress(item) {
+    // Day-Trips cards: full Hub discovery, not funneled into one list —
+    // same deliberate choice made for the ExperiencesRail port.
+    if (item.destinationId) {
+      navigation.navigate('Hub', { destinationId: item.destinationId })
+      return
+    }
+
     const imageUrl = item.image_url
 
     if (item.list_id) {

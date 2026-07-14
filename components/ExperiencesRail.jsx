@@ -37,6 +37,43 @@ function getGradientColors(deepLink) {
   return match ? GRADIENT_MAP[match] : GRADIENT_MAP.fallback
 }
 
+// Distance label for Day-Trips cards, derived from metro_destinations —
+// deliberately doesn't say "from <metro>" (this component only has a
+// slug, not a display name) — closest existing convention is the
+// no-metro-name featured_experiences labels like "~2 hrs".
+function formatDayTripDistanceLabel(driveTimeMinutes) {
+  if (driveTimeMinutes == null) return null
+  if (driveTimeMinutes < 60) return `${Math.round(driveTimeMinutes)} min away`
+  const hours = Math.round((driveTimeMinutes / 60) * 2) / 2
+  return `${hours} hr${hours !== 1 ? 's' : ''} away`
+}
+
+// Maps a metro_destination_lists row (joined through metro_destinations
+// and destination_lists) into the same card shape ExperienceCard already
+// renders from featured_experiences — see the investigation note in the
+// PR/commit message: ExperienceCard only reads generic display fields,
+// so a synthetic item works as-is with no changes to that component.
+// destinationId is the one field with no featured_experiences analog —
+// it's the marker handlePress uses to route these cards to the Hub
+// instead of the curated_lists/deep_link paths below.
+function mapDayTripToCard(row) {
+  const dest = row.metro_destinations?.destinations
+  const list = row.destination_lists?.lists
+  return {
+    id:              `mdl-${row.id}`,
+    title:           list?.title ?? 'Untitled trip',
+    subtitle:        null,
+    image_url:       dest?.hero_image_url ?? null,
+    city:            dest?.name ?? null,
+    distance_type:   null,
+    distance_label:  formatDayTripDistanceLabel(row.metro_destinations?.drive_time_minutes),
+    vibes:           null,
+    deep_link:       null,
+    list_id:         null,
+    destinationId:   row.destination_lists?.destination_id ?? null,
+  }
+}
+
 export default function ExperiencesRail({ citySlug }) {
   const navigation = useNavigation()
   const { colors } = useTheme()
@@ -61,14 +98,51 @@ export default function ExperiencesRail({ citySlug }) {
         }
 
         const { data, error } = await query
-
         if (cancelled) return
 
-        if (error || !data || data.length === 0) {
-          setExperiences([])
-        } else {
-          setExperiences(data)
+        const featuredCards = (!error && data) ? data : []
+
+        // Day-Trips cards — appended after the featured_experiences cards,
+        // not interleaved by sort order (deliberately simple for now).
+        // Wrapped in its own try/catch so a failure here (e.g. no metro
+        // match, RLS gap) degrades to "no Day-Trips cards" rather than
+        // blanking the whole rail — these two sources are independent.
+        let dayTripCards = []
+        if (citySlug) {
+          try {
+            const { data: metro } = await supabase
+              .from('metro_areas')
+              .select('id')
+              .eq('slug', citySlug)
+              .maybeSingle()
+
+            if (metro?.id) {
+              const { data: mdlRows } = await supabase
+                .from('metro_destination_lists')
+                .select(`
+                  id, sort_order,
+                  metro_destinations!inner (
+                    distance_miles, drive_time_minutes, metro_id,
+                    destinations ( id, name, hero_image_url )
+                  ),
+                  destination_lists!inner (
+                    destination_id,
+                    lists!destination_lists_list_id_fkey ( id, title )
+                  )
+                `)
+                .eq('is_active', true)
+                .eq('metro_destinations.metro_id', metro.id)
+                .order('sort_order', { ascending: true })
+
+              dayTripCards = (mdlRows ?? []).map(mapDayTripToCard)
+            }
+          } catch (e) {
+            /* Day-Trips cards optional */
+          }
         }
+
+        if (cancelled) return
+        setExperiences([...featuredCards, ...dayTripCards])
       } catch (e) {
         if (!cancelled) setExperiences([])
       } finally {
@@ -81,6 +155,16 @@ export default function ExperiencesRail({ citySlug }) {
   }, [citySlug])
 
   const handlePress = useCallback((item) => {
+    // ── Day-Trips cards: full Hub discovery, not funneled into one list ──────
+    // Deliberate choice — surfaces the destination's whole Hub (all its
+    // lists/spotlights), not just this one card's list. Flagging this
+    // explicitly since it's an easy thing to reconsider later if a more
+    // direct "open this exact list" behavior turns out to be wanted instead.
+    if (item.destinationId) {
+      navigation.navigate('Hub', { destinationId: item.destinationId })
+      return
+    }
+
     const deepLink = item.deep_link
     const imageUrl = item.image_url
 
