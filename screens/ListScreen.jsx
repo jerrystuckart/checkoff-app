@@ -119,6 +119,8 @@ export default function ListScreen({ route, navigation }) {
   const [listMeta, setListMeta] = useState(null)
   const [metaLoading, setMetaLoading] = useState(false)
   const [listDeleted, setListDeleted] = useState(false)
+  const [hubDestinationId, setHubDestinationId] = useState(null)
+  const [destListIsActive, setDestListIsActive] = useState(null)
 
   const {
     items,
@@ -272,6 +274,32 @@ export default function ListScreen({ route, navigation }) {
     }
   }, [listId])
 
+  // Independent of how this screen was reached — resolves the destination
+  // this list is linked to, for both the "View Destination Hub" button and
+  // check-in freezing below. Personal copies (created via the Hub) carry
+  // source_destination_list_id and are matched through that; the original
+  // shared list itself (pre-existing joiners from before the personal-copy
+  // model shipped) has no such pointer and is matched directly by list_id
+  // instead. Waits for listMeta to resolve first so this only runs once,
+  // against whichever match actually applies. RLS on destination_lists
+  // (is_active + visibility window) already hides rows that shouldn't be
+  // surfaced, so this naturally stays correct without extra filtering.
+  useEffect(() => {
+    if (!listId || metaLoading) return
+    let cancelled = false
+    const sourceId = listMeta?.source_destination_list_id ?? null
+    const query = sourceId
+      ? supabase.from('destination_lists').select('destination_id, is_active').eq('id', sourceId)
+      : supabase.from('destination_lists').select('destination_id, is_active').eq('list_id', listId)
+
+    query.then(({ data }) => {
+      if (cancelled) return
+      setHubDestinationId(data?.[0]?.destination_id ?? null)
+      setDestListIsActive(data?.[0]?.is_active ?? null)
+    })
+    return () => { cancelled = true }
+  }, [listId, metaLoading, listMeta?.source_destination_list_id])
+
   const loadSuggestions = useCallback(async () => {
     if (!listId) return
     const { data } = await supabase
@@ -307,7 +335,7 @@ export default function ListScreen({ route, navigation }) {
 
     const { data, error } = await supabase
       .from('lists')
-      .select('id, title, starts_at, ends_at, is_official')
+      .select('id, title, starts_at, ends_at, is_official, source_destination_list_id')
       .eq('id', listId)
       .maybeSingle()
 
@@ -571,6 +599,10 @@ export default function ListScreen({ route, navigation }) {
   }
 
   const ended = isEnded()
+  // True only once we've positively confirmed the linked destination_lists
+  // row is inactive (partner cancelled) — null (not yet resolved, or no
+  // destination link at all) never blocks anything.
+  const destListInactive = destListIsActive === false
   const displayItems = listId ? localItems : cityItems
   // refreshingChecks intentionally excluded — it runs silently in background
   // without replacing the FlatList, preserving scroll position
@@ -1183,11 +1215,11 @@ export default function ListScreen({ route, navigation }) {
           style={[
             styles.checkbox,
             item.checked && styles.checkboxDone,
-            ended && !item.checked && styles.checkboxDisabled,
+            (ended || destListInactive) && !item.checked && styles.checkboxDisabled,
             item.photoRequired && !item.checked && styles.checkboxCamera,
           ]}
           onPress={() => handleCheckOff(item.listItemId)}
-          disabled={ended}
+          disabled={ended || destListInactive}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
           {item.checked
@@ -1291,7 +1323,7 @@ export default function ListScreen({ route, navigation }) {
       </TouchableOpacity>
       </View>
     )
-  }, [navigation, route.params, listId, ended, handleCheckOff, celebratingId, flashAnim, userLifetimePts, userInsiderTier])
+  }, [navigation, route.params, listId, ended, destListInactive, handleCheckOff, celebratingId, flashAnim, userLifetimePts, userInsiderTier])
 
   const headerEl = useMemo(() => (
     <View style={[styles.headerBlock, heroImage && { paddingTop: headerHeight }]}>
@@ -1331,10 +1363,29 @@ export default function ListScreen({ route, navigation }) {
         </View>
       )}
 
+      {!ended && destListInactive && (
+        <View style={styles.partnershipEndedBanner}>
+          <Text style={styles.partnershipEndedBannerTitle}>🤝 Partnership ended</Text>
+          <Text style={styles.partnershipEndedBannerText}>
+            This partnership has ended — new check-ins are disabled. Items you've already checked off stay exactly as they are.
+          </Text>
+        </View>
+      )}
+
       {listId && !ended && listMeta?.ends_at && (
         <View style={styles.endsAtRow}>
           <Text style={styles.endsAtText}>{formatEndLabel(listMeta.ends_at)}</Text>
         </View>
+      )}
+
+      {hubDestinationId && (
+        <TouchableOpacity
+          style={styles.hubLinkBtn}
+          onPress={() => navigation.navigate('Hub', { destinationId: hubDestinationId })}
+          activeOpacity={0.85}
+        >
+          <Text style={styles.hubLinkBtnText}>🎯 View Destination Hub →</Text>
+        </TouchableOpacity>
       )}
 
       {listId && (
@@ -1442,6 +1493,8 @@ export default function ListScreen({ route, navigation }) {
     tick,
     heroImage,
     headerHeight,
+    hubDestinationId,
+    destListInactive,
     BG,
   ])
 
@@ -1964,6 +2017,29 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, EN
     marginBottom: 12,
   },
 
+  partnershipEndedBanner: {
+    backgroundColor: ENDED_BG,
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: ENDED_BORDER,
+  },
+
+  partnershipEndedBannerTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: ENDED_TEXT,
+    marginBottom: 6,
+  },
+
+  partnershipEndedBannerText: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: TEXT,
+    fontWeight: '600',
+  },
+
   resultsBtn: {
     alignSelf: 'flex-start',
     backgroundColor: CARD,
@@ -1978,6 +2054,23 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, EN
     fontSize: 13,
     fontWeight: '800',
     color: ENDED_TEXT,
+  },
+
+  hubLinkBtn: {
+    alignSelf: 'flex-start',
+    backgroundColor: CARD,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderWidth: 1,
+    borderColor: AMBER,
+    marginBottom: 10,
+  },
+
+  hubLinkBtnText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: AMBER,
   },
 
   endsAtRow: {

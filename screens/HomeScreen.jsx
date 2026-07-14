@@ -171,7 +171,7 @@ export default function HomeScreen({ navigation }) {
           try {
             let zoneQuery = supabase
               .from('destination_zones')
-              .select('id, name, slug, banner_title, banner_subtitle, center_lat, center_lng, radius_km, list_id, is_active')
+              .select('id, name, slug, banner_title, banner_subtitle, center_lat, center_lng, radius_km, destination_id, is_active')
             if (!__DEV__) {
               zoneQuery = zoneQuery.eq('is_active', true)
             }
@@ -213,19 +213,11 @@ export default function HomeScreen({ navigation }) {
     }
   }
 
-  async function handleDestinationZoneTap(zone) {
-    if (!user) {
-      setShowSignInPrompt(true)
-      return
-    }
-    if (zone.list_id) {
-      // Auto-join the list
-      await supabase.from('list_members').upsert(
-        { list_id: zone.list_id, user_id: user.id, invite_source: 'destination_zone' },
-        { onConflict: 'list_id,user_id' }
-      )
-      navigation.navigate('List', { listId: zone.list_id })
-    }
+  function handleDestinationZoneTap(zone) {
+    // Just opens the Hub — no join/upsert happens here anymore. That now
+    // fires from HubScreen, only when the user taps a specific list, so
+    // browsing the Hub itself never requires being signed in.
+    navigation.navigate('Hub', { destinationId: zone.destination_id })
     // Intentionally does not dismiss the banner — the user should still see
     // it on the next cold launch while they remain inside the zone's radius.
   }
@@ -440,17 +432,17 @@ export default function HomeScreen({ navigation }) {
 
             if (error) {
               // 23503 = foreign_key_violation. Give a friendly, specific message
-              // for the known destination_zones case; any other FK violation
+              // for the known destination_lists case; any other FK violation
               // (or any other error) still surfaces the generic message as-is.
-              if (error.code === '23503' && error.message?.includes('destination_zones_list_id_fkey')) {
-                const { data: zone } = await supabase
-                  .from('destination_zones')
-                  .select('name')
+              if (error.code === '23503' && error.message?.includes('destination_lists_list_id_fkey')) {
+                const { data: destList } = await supabase
+                  .from('destination_lists')
+                  .select('destinations ( name )')
                   .eq('list_id', list.id)
                   .maybeSingle()
                 Alert.alert(
                   'Could not delete',
-                  `This list can't be deleted because it's linked to a destination zone banner (${zone?.name ?? 'a destination zone'}). Remove or reassign the zone link first, then try again.`
+                  `This list can't be deleted because it's linked to a destination banner (${destList?.destinations?.name ?? 'a destination'}). Remove or reassign the destination link first, then try again.`
                 )
               } else {
                 Alert.alert('Could not delete', error.message)

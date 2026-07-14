@@ -53,6 +53,7 @@ import DeepLinkExperienceResolverScreen from './screens/DeepLinkExperienceResolv
 import CreatorProfileScreen        from './screens/CreatorProfileScreen'
 import CreatorListScreen           from './screens/CreatorListScreen'
 import DestinationsScreen          from './screens/DestinationsScreen'
+import HubScreen                   from './screens/HubScreen'
 import LocalGuidesScreen           from './screens/LocalGuidesScreen'
 import DeepLinkCreatorResolverScreen from './screens/DeepLinkCreatorResolverScreen'
 import SavedCrewScreen          from './screens/SavedCrewScreen'
@@ -200,6 +201,11 @@ function HomeStack() {
       <Stack.Screen
         name="Destinations"
         component={DestinationsScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="Hub"
+        component={HubScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen
