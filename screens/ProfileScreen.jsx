@@ -82,9 +82,12 @@ export default function ProfileScreen({ navigation }) {
       const [profileRes, badgesRes, checkinsRes, totalRes, weeklyRes] = await Promise.all([
         supabase.from('users').select('id, display_name, current_streak, longest_streak, created_at, is_admin, pref_show_alcohol, notif_check_ins, notif_invites, notif_nudges, founding_number, lifetime_points, insider_tier').eq('id', uid).single(),
         supabase.from('user_badges').select('badge_id, earned_at, badge_definitions(id, name, icon, description)').eq('user_id', uid).order('earned_at', { ascending: false }).limit(6),
-        supabase.from('check_ins').select('id, checked_at, checkin_method, list_items(items(body, categories(name, color_hex)))').eq('user_id', uid).order('checked_at', { ascending: false }).limit(5),
+        // item_id is the canonical, always-available path to a check-in's
+        // item — it survives list deletion. list_items is list-context
+        // only from here on and may be null once its list is gone.
+        supabase.from('check_ins').select('id, checked_at, checkin_method, item_id, items(body, categories(name, color_hex))').eq('user_id', uid).order('checked_at', { ascending: false }).limit(5),
         supabase.from('check_ins').select('id', { count: 'exact', head: true }).eq('user_id', uid),
-        supabase.from('check_ins').select('id, points_awarded, list_items!inner(point_multiplier, items!inner(difficulty))')
+        supabase.from('check_ins').select('id, points_awarded, item_id, items(difficulty), list_items(point_multiplier)')
           .eq('user_id', uid)
           .gte('checked_at', monday.toISOString())
           .lte('checked_at', sunday.toISOString()),
@@ -104,7 +107,7 @@ export default function ProfileScreen({ navigation }) {
       const weeklyRows = weeklyRes.data ?? []
       const weeklyPts = weeklyRows.reduce((sum, ci) => {
         const pts = ci.points_awarded ?? (() => {
-          const d = ci.list_items?.items?.difficulty ?? null
+          const d = ci.items?.difficulty ?? null
           const m = ci.list_items?.point_multiplier ?? 1
           return d != null ? Math.round(d * m) : 0
         })()
@@ -522,7 +525,7 @@ export default function ProfileScreen({ navigation }) {
         {recentCheckins.length === 0 ? (
           <Text style={[styles.emptyText, { textAlign: 'left' }]}>Nothing checked off yet — get out there!</Text>
         ) : recentCheckins.map((ci, idx) => {
-          const item = ci.list_items?.items
+          const item = ci.items
           if (!item) return null
           return (
             <View key={ci.id} style={[styles.ciRow, idx < recentCheckins.length - 1 && styles.ciRowBorder]}>

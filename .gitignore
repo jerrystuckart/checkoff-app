@@ -48,6 +48,9 @@ yarn-error.*
 .env
 .env.*
 *.pem
+
+# Supabase CLI local session cache
+supabase/.temp/
 *.p8
 
 # Local admin / secret-bearing tools

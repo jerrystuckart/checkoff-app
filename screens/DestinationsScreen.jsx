@@ -134,6 +134,7 @@ export default function DestinationsScreen({ navigation, route }) {
         curatedListId: item.list_id,
         groupImageUrl: imageUrl ?? undefined,
         citySlug:      item.metro_slug ?? undefined,
+        userCitySlug:  metro?.slug ?? undefined,
       })
       return
     }

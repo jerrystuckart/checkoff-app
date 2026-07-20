@@ -37,6 +37,7 @@ export default function CreateListScreen({ navigation, route }) {
     groupEmoji     = null,
     curatedCityId  = null,
     curatedMetroId = null,
+    userCitySlug   = null,
   } = route?.params ?? {}
 
   const isCuratedMode  = !!curatedListId
@@ -130,7 +131,7 @@ export default function CreateListScreen({ navigation, route }) {
   // because we guard the clear with !isCuratedMode below.
   useEffect(() => {
     if (!curatedListId) return
-    fetchCuratedListItems(curatedListId).then(({ data }) => {
+    fetchCuratedListItems(curatedListId, userCitySlug).then(({ data }) => {
       const ids = new Set((data ?? []).map(li => li.items?.id).filter(Boolean))
       templateItemIdsRef.current = ids
       setSelected(new Set(ids))

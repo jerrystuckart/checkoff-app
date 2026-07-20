@@ -36,6 +36,7 @@ import TierUpgradeCelebrationModal from '../components/TierUpgradeCelebrationMod
 import { checkTierCrossingForUser } from '../lib/points'
 import { useTheme } from '../lib/ThemeContext'
 import * as Location from 'expo-location'
+import { trackEvent } from '../lib/trackEvent'
 
 const ACCENT = '#FFB84D'
 const ACCENT_DARK = '#7A4B00'
@@ -139,6 +140,10 @@ export default function ListScreen({ route, navigation }) {
   const [pendingSortIds, setPendingSortIds] = useState(() => new Set())
   // Item to navigate to Discover after memory modal closes (Fix 5)
   const [pendingDiscoverItem, setPendingDiscoverItem] = useState(null)
+
+  useEffect(() => {
+    if (listId) trackEvent('list_view', { listId })
+  }, [listId])
 
   // Transparent nav bar when hero image is present so photo fills behind the header
   useEffect(() => {
@@ -1313,7 +1318,10 @@ export default function ListScreen({ route, navigation }) {
           {!ended && listId ? (
             <TouchableOpacity
               style={styles.dareBtn}
-              onPress={() => navigation.navigate('Dare', { item, listId })}
+              onPress={() => {
+                trackEvent('dare_click', { itemId: item.id })
+                navigation.navigate('Dare', { item, listId })
+              }}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
               <Text style={styles.dareBtnText}>😈</Text>

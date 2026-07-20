@@ -21,6 +21,11 @@ const { height: SCREEN_H } = Dimensions.get('window')
 // Each badge type knows how to fetch the items that triggered it.
 // Returns { items: [{body, date}], summary: string }
 
+// check_ins.item_id is the canonical, always-available path to a
+// check-in's item throughout this function — it survives list
+// deletion. list_items is list-context only from here on and may be
+// null once its list is gone (embedded directly off check_ins where
+// still needed, never through list_items(items(...))).
 async function fetchBadgeDetail(badgeId, userId, earnedAt) {
   if (!userId) return null
 
@@ -32,11 +37,11 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
       case 'first_checkin': {
         const { data } = await supabase
           .from('check_ins')
-          .select('checked_at, list_items(items(body))')
+          .select('checked_at, item_id, items(body)')
           .eq('user_id', userId)
           .order('checked_at', { ascending: true })
           .limit(1)
-        const item = data?.[0]?.list_items?.items
+        const item = data?.[0]?.items
         return {
           summary: 'Your very first check-off. Everyone starts somewhere.',
           items: item ? [{ body: item.body, date: data[0].checked_at }] : [],
@@ -52,12 +57,12 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
         // Get the Nth check-in (the one that triggered the badge)
         const { data } = await supabase
           .from('check_ins')
-          .select('checked_at, list_items(items(body))')
+          .select('checked_at, item_id, items(body)')
           .eq('user_id', userId)
           .order('checked_at', { ascending: true })
           .range(n - 5, n - 1)  // last 5 leading up to milestone
         const formatted = (data ?? []).map(ci => ({
-          body: ci.list_items?.items?.body ?? 'Unknown item',
+          body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
         return {
@@ -70,13 +75,13 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
         // 3+ check-ins in one day — find the day when this was first achieved
         const { data } = await supabase
           .from('check_ins')
-          .select('checked_at, list_items(items(body))')
+          .select('checked_at, item_id, items(body)')
           .eq('user_id', userId)
           .gte('checked_at', new Date(earnedDate.getTime() - 24 * 60 * 60 * 1000).toISOString())
           .lte('checked_at', new Date(earnedDate.getTime() + 24 * 60 * 60 * 1000).toISOString())
           .order('checked_at', { ascending: true })
         const formatted = (data ?? []).map(ci => ({
-          body: ci.list_items?.items?.body ?? 'Unknown item',
+          body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
         return {
@@ -95,13 +100,13 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
 
         const { data } = await supabase
           .from('check_ins')
-          .select('checked_at, list_items(items(body))')
+          .select('checked_at, item_id, items(body)')
           .eq('user_id', userId)
           .gte('checked_at', weekStart.toISOString())
           .lt('checked_at', weekEnd.toISOString())
           .order('checked_at', { ascending: true })
         const formatted = (data ?? []).map(ci => ({
-          body: ci.list_items?.items?.body ?? 'Unknown item',
+          body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
         return {
@@ -114,7 +119,7 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
         // Check-in after 10pm — find it
         const { data } = await supabase
           .from('check_ins')
-          .select('checked_at, list_items(items(body))')
+          .select('checked_at, item_id, items(body)')
           .eq('user_id', userId)
           .order('checked_at', { ascending: false })
           .limit(50)
@@ -124,7 +129,7 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
           return hour >= 22 || hour < 3
         })
         const formatted = lateNight.slice(0, 5).map(ci => ({
-          body: ci.list_items?.items?.body ?? 'Unknown item',
+          body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
         return {
@@ -141,14 +146,14 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
         cutoff.setDate(cutoff.getDate() - weeks * 7)
         const { data } = await supabase
           .from('check_ins')
-          .select('checked_at, list_items(items(body))')
+          .select('checked_at, item_id, items(body)')
           .eq('user_id', userId)
           .gte('checked_at', cutoff.toISOString())
           .lte('checked_at', earnedDate.toISOString())
           .order('checked_at', { ascending: false })
           .limit(10)
         const formatted = (data ?? []).map(ci => ({
-          body: ci.list_items?.items?.body ?? 'Unknown item',
+          body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
         return {
@@ -165,14 +170,14 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
         cutoff.setDate(cutoff.getDate() - weeks * 7)
         const { data } = await supabase
           .from('check_ins')
-          .select('checked_at, list_items(items(body))')
+          .select('checked_at, item_id, items(body)')
           .eq('user_id', userId)
           .gte('checked_at', cutoff.toISOString())
           .lte('checked_at', earnedDate.toISOString())
           .order('checked_at', { ascending: false })
           .limit(10)
         const formatted = (data ?? []).map(ci => ({
-          body: ci.list_items?.items?.body ?? 'Unknown item',
+          body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
         return {
@@ -191,12 +196,12 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
         // Show the check-ins that pushed the user over this threshold
         const { data } = await supabase
           .from('check_ins')
-          .select('checked_at, points_awarded, list_items(items(body))')
+          .select('checked_at, points_awarded, item_id, items(body)')
           .eq('user_id', userId)
           .order('checked_at', { ascending: false })
           .limit(5)
         const formatted = (data ?? []).map(ci => ({
-          body: ci.list_items?.items?.body ?? 'Unknown item',
+          body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
         return {
@@ -208,15 +213,15 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
       case 'neighborhood_sweep': {
         const { data } = await supabase
           .from('check_ins')
-          .select('checked_at, list_items(items(body, neighborhoods!items_neighborhood_id_fkey(name)))')
+          .select('checked_at, item_id, items(body, neighborhoods!items_neighborhood_id_fkey(name))')
           .eq('user_id', userId)
           .order('checked_at', { ascending: false })
           .limit(20)
         const formatted = (data ?? [])
-          .filter(ci => ci.list_items?.items?.neighborhoods)
+          .filter(ci => ci.items?.neighborhoods)
           .slice(0, 8)
           .map(ci => ({
-            body: ci.list_items?.items?.body ?? 'Unknown item',
+            body: ci.items?.body ?? 'Unknown item',
             date: ci.checked_at,
           }))
         return {
@@ -271,12 +276,12 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
       case 'seasonal_sweep': {
         const { data } = await supabase
           .from('check_ins')
-          .select('checked_at, list_items(items(body))')
+          .select('checked_at, item_id, items(body)')
           .eq('user_id', userId)
           .order('checked_at', { ascending: false })
           .limit(10)
         const formatted = (data ?? []).map(ci => ({
-          body: ci.list_items?.items?.body ?? 'Unknown item',
+          body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
         return {

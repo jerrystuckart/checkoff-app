@@ -174,6 +174,7 @@ export default function ExperiencesRail({ citySlug }) {
         curatedListId: item.list_id,
         groupImageUrl: imageUrl ?? undefined,
         citySlug:      item.metro_slug ?? undefined,
+        userCitySlug:  citySlug ?? undefined,   // this component's own prop — the viewer's metro
       })
       return
     }

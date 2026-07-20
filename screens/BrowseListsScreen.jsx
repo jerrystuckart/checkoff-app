@@ -104,6 +104,7 @@ export default function BrowseListsScreen({ navigation, route }) {
           groupImageUrl: group.image_url ?? undefined,
           citySlug,
           metroName,
+          userCitySlug: citySlug,   // this screen's citySlug is the viewer's own metro
         }
         const cardInner = (
           <>

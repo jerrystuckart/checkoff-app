@@ -25,6 +25,7 @@ import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
 import { updateUserLifetimePoints, getUserLifetimePoints, checkTierCrossingForUser } from '../lib/points'
 import TierUpgradeCelebrationModal from '../components/TierUpgradeCelebrationModal'
 import { useTheme } from '../lib/ThemeContext'
+import { trackEvent } from '../lib/trackEvent'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
@@ -198,6 +199,10 @@ export default function ItemDetailScreen({ route, navigation }) {
   useEffect(() => {
     loadUser()
   }, [])
+
+  useEffect(() => {
+    if (item?.id) trackEvent('item_view', { itemId: item.id, listId })
+  }, [item?.id, listId])
 
   // Fire tier upgrade (then discover) after memory modal is dismissed
   useEffect(() => {
@@ -776,6 +781,7 @@ export default function ItemDetailScreen({ route, navigation }) {
 
   function openDirections() {
     if (!item) return
+    trackEvent('directions_click', { itemId: item.id })
     // Support both snake_case (useNearby) and camelCase (useItems) field names
     const lat = item.maps_lat ?? item.mapsLat
     const lng = item.maps_lng ?? item.mapsLng
@@ -794,7 +800,9 @@ export default function ItemDetailScreen({ route, navigation }) {
   }
 
   function openWebsite() {
-    if (item?.website_url) Linking.openURL(item.website_url).catch(() => {})
+    if (!item?.website_url) return
+    trackEvent('url_click', { itemId: item.id })
+    Linking.openURL(item.website_url).catch(() => {})
   }
 
   async function shareVia(channelKey) {
@@ -1056,7 +1064,10 @@ export default function ItemDetailScreen({ route, navigation }) {
         <View style={styles.quickRow}>
           <TouchableOpacity
             style={styles.quickBtn}
-            onPress={() => navigation.navigate('Dare', { item, listId })}
+            onPress={() => {
+              trackEvent('dare_click', { itemId: item.id })
+              navigation.navigate('Dare', { item, listId })
+            }}
           >
             <Text style={styles.quickBtnIcon}>😈</Text>
             <Text style={styles.quickBtnText}>Dare a friend</Text>

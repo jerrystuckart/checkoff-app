@@ -1,0 +1,449 @@
+-- ============================================================
+-- Curated overlay Phase 3 — merge the 15 Phoenix/Milwaukee duplicate pairs
+-- 2026-07-17
+--
+-- For each pair: tag the canonical list's own items with a city_slug
+-- (NULL stays universal via is_universal=true; metro-resolved via
+-- neighborhood_id -> metro_areas.slug; the one approved ambiguous
+-- item -- 'Drive out to the desert and stop to see the stars' in
+-- Suburban Triathletes -- forced to 'phoenix'). Then insert the
+-- duplicate copy's items into the canonical list with the same
+-- classification, continuing display_order after the canonical's
+-- max, ON CONFLICT DO NOTHING. Then soft-deactivate the duplicate.
+--
+-- No curated_list_metros rows for these lists (Decision 3: fully
+-- universal regardless of universal-item count).
+--
+-- No hard deletes anywhere. curated_list_items rows for the 15
+-- deactivated duplicates are left in place for history.
+-- ============================================================
+
+BEGIN;
+
+
+-- ==== I Don't Live Here...Yet · Summer 2026  (canonical=phoenix a1000000-0000-0000-0000-000000000002, deactivating 6f92b567-4a11-49fa-b21a-bb483b7b79d9) ====
+UPDATE curated_list_items SET city_slug = 'phoenix' WHERE id IN ('40f067c4-78f5-4c5d-b48d-31112be9ca09','cd179685-949b-4f5b-a053-e961f5dedda5','4639f7d1-c7ab-4d39-825b-267048057c23','efa0fcd0-afaf-4caa-a122-1a8f81e53f4e','7e05ca96-82ca-4a08-89d1-d45c4ab97dbc','77d3ae19-d106-42b4-83e0-157549f94f14','bc2d4c97-423f-4cc9-82c1-ec4b792a3612','1e293a53-b2d3-45a1-970e-c41ef14fcec8','33eae576-52bf-4881-824c-68fc49d30da6','a005f946-f5f2-438a-9bff-0ffd4f594c88','6e767354-5b87-4713-b8f0-24147bed2fa1','82364d93-76f1-4c8b-b863-5deda7122501','9de11e9c-abf2-4d95-98c0-2c05eff1933e','68f83100-bc57-4c7d-9d7f-2d3c8190268c','9ace6526-160e-49d6-a372-1958521af4cf','9537ae14-c082-4c24-af0f-8ea93b94ff64','1c2d9a8c-d06a-4cf1-8b12-5881fb8d6790','a37406c2-d042-4292-9e2e-d0932253370f','08790c5a-57d1-4f6a-ac0b-76e1c45137bc','028293e8-4b15-4711-a485-00ad5627224e','15f38964-3249-460c-a1d9-b92e84ea371d','f7eb0906-6c6a-430b-be96-6605176bd629','4a779744-de0c-46cb-9404-1f7bea189c28','15fa9b7e-3a3b-4631-8567-cbd78bfb0ae3','f8c8a309-ed03-402f-9d5b-333bab1f2b66','a742a43f-4c06-456b-9466-9606255f8c9f','c61828f3-2db8-4582-b80c-944dd159002c');
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('a1000000-0000-0000-0000-000000000002', '9f350ae5-5c46-4cff-8a85-1b3590aed797', 28, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', 'ff3a65cc-89ae-40d3-962c-d793546dd303', 29, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', 'd6b1fab6-836a-4906-ba78-13f893266d95', 30, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', 'fa30a438-f676-4baa-b72b-cc92b9da33b9', 31, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', '899c499a-4d93-4495-a3ac-27dbafa6e126', 32, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', 'd34ed7be-a910-4b34-81e9-74e8ce1801b2', 33, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', '46f4dad8-760b-4751-b0c6-491af91f8b07', 34, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', 'f84ce9c8-52a4-4425-96bf-adbbdaed4640', 35, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', 'a23707d9-6675-459c-a88c-3e141cba8624', 36, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', 'cef23d54-8781-42b9-8052-5ed9060a02b6', 37, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', 'eee6ab6a-1555-4b59-a751-310580fd6ceb', 38, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', 'ed44fcf1-d160-4dca-8b07-7a030b97dd4a', 39, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', '094f3873-9fe5-4c0b-9af5-0de7052fc1d5', 40, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', '62978386-4404-417a-a74c-4563f0c3ea8b', 41, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', '3001386b-3b51-4a7e-aeca-4970ad7f8e5d', 42, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', '0426f1d9-b01c-4102-b532-afed3d155075', 43, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', '88ed3173-ea59-4dfc-9872-3b46c7604b3f', 44, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', '1579eca1-330a-4e3d-a94e-6a75a6363fc1', 45, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', '4ebb8092-b6ee-4c97-b537-f5e35b909801', 46, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', 'c25730a7-bb08-41f0-b647-f2cc9395e9e0', 47, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', '92b28bdb-a674-4fc4-bd78-5b8a82906fe3', 48, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', '1387e6f2-d96b-4976-978f-8dcec2427697', 49, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', '19735aa7-c202-41ae-81d2-369628510378', 50, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000002', '464f979e-f348-4dfc-a452-1a7bcac57a8b', 51, 1.0, 'milwaukee')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = '6f92b567-4a11-49fa-b21a-bb483b7b79d9';
+
+-- ==== Little League Parents on Parole · Summer 2026  (canonical=phoenix a1000000-0000-0000-0000-000000000005, deactivating 13ac242e-789c-418e-a054-ab7953211b02) ====
+UPDATE curated_list_items SET city_slug = 'phoenix' WHERE id IN ('b23b1837-4fcc-4612-a58c-bbcdab5e4dde','c5663313-41df-4d9c-b6d7-7306c595ceb4','70f7fd90-44c1-4311-aed0-b56d345294f8','14310fb0-0350-4634-9104-f05db26d77a6','08f399e8-7e1c-4cc0-9051-4cb6434065f4','afa5507b-dc93-42b6-927b-6ac430263920','73d3d69b-35b7-44a0-8127-70c77a994974','720525d9-7e71-4d17-a44b-c6594e5d96c6','599e7f3a-97ad-4730-afd8-62b8004a7a0d','08ea737f-003b-4c7e-9068-e6e3013c6d69','bd04aec1-5c1f-4084-b67e-917d4c1b9164','e9aab7ba-0baf-4abb-b630-0fb108bf2953','b357f7b7-371f-4b76-85dd-6e7ec2ec0e9d','15efdbc2-bdb8-4802-a09e-924cb2a1a3d0','9dfe5b43-ac6b-4341-ac26-dd2688aa30a9','b3f3b0b0-4cc6-47ad-adf0-e12ae36b5d81');
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('a1000000-0000-0000-0000-000000000005', '894f9f40-2bae-4f97-9ada-f5c235f333e9', 21, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', '46f4dad8-760b-4751-b0c6-491af91f8b07', 22, 1.25, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', 'c043396c-9e69-4909-9607-a13bf7949103', 23, 1.25, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', '0e3b816e-fd07-4d1d-906c-5d85913bce0d', 24, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', '1fe8e093-ca7a-49c7-8d22-602c7bd54310', 25, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', 'd34ed7be-a910-4b34-81e9-74e8ce1801b2', 26, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', 'b4c053a5-5fb5-4e9a-a8cc-46ced786a9ed', 27, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', 'e8612a75-c045-4178-b274-95c23d1db114', 28, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', '92b28bdb-a674-4fc4-bd78-5b8a82906fe3', 29, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', '88ed3173-ea59-4dfc-9872-3b46c7604b3f', 30, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', '4ebb8092-b6ee-4c97-b537-f5e35b909801', 31, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', '1579eca1-330a-4e3d-a94e-6a75a6363fc1', 32, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', 'd6b1fab6-836a-4906-ba78-13f893266d95', 33, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', '625fec4d-f9c0-4f5a-8222-9a46129eaeee', 34, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', 'bfdb9965-b3cc-4109-850d-9ab6ae11c8aa', 35, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', 'b5e21c21-b46c-45a4-b6a1-20419112ba57', 36, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', '60cbcb13-0d77-489b-bc09-3c257fde013d', 37, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', 'af45d6ec-27db-4344-a14d-84243a05114a', 38, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', 'f5c59a44-75ab-418b-ad95-51422736379c', 39, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', 'f84ce9c8-52a4-4425-96bf-adbbdaed4640', 40, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', '0426f1d9-b01c-4102-b532-afed3d155075', 41, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000005', 'fa30a438-f676-4baa-b72b-cc92b9da33b9', 42, 1.0, 'milwaukee')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = '13ac242e-789c-418e-a054-ab7953211b02';
+
+-- ==== Remote and Restless · Summer 2026  (canonical=phoenix a1000000-0000-0000-0000-000000000010, deactivating 9e02d4c1-b013-4829-8c5e-daf3e91f5361) ====
+UPDATE curated_list_items SET city_slug = 'phoenix' WHERE id IN ('e30040ae-9814-4d9d-bc2d-b2ca40eeab5c','fa7dd67a-b81e-4d26-a49f-69f0a25c9b77','2f1898bf-8f49-4967-8867-fd2e6674de77','96ceb4fa-ce8e-4536-85d5-5ba0809fe2ab','ff75628f-cf0e-4dbd-addd-74348ef53ac1','621508a1-c992-44a9-ae69-6894a296946c','ce427cb9-4504-4d3e-91c3-da1354dc4207','4794941d-1245-4b12-b044-e9c1fd999c4f','1be8e78c-4507-4dc9-b816-9f7c01cbb1d6','a7501fd9-dd6b-492c-be8a-f985e5287e27','2414115b-fbf8-4d3a-80bb-9f35febcb111','6a002b81-e23e-410a-965d-448ab45d2f18','21ddbba1-dfa3-4706-9227-a2e12372e798','c8d26121-c9a9-49b1-81a3-d8d8a9b62cd9','1d73e598-593e-47a5-ab18-32519ab203dd','3f296992-16f9-4c36-8d27-8ca6f11e6dca','8ce20052-660d-48c3-8ee5-b06a9d62b354');
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('a1000000-0000-0000-0000-000000000010', 'fa30a438-f676-4baa-b72b-cc92b9da33b9', 26, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', 'eee6ab6a-1555-4b59-a751-310580fd6ceb', 27, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', 'ed44fcf1-d160-4dca-8b07-7a030b97dd4a', 28, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', 'b59c4639-98a2-4376-8f9e-7709dc667e0b', 29, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', '094f3873-9fe5-4c0b-9af5-0de7052fc1d5', 30, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', '899c499a-4d93-4495-a3ac-27dbafa6e126', 31, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', '9f350ae5-5c46-4cff-8a85-1b3590aed797', 32, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', 'd34ed7be-a910-4b34-81e9-74e8ce1801b2', 33, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', '46f4dad8-760b-4751-b0c6-491af91f8b07', 34, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', '3001386b-3b51-4a7e-aeca-4970ad7f8e5d', 35, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', '60cbcb13-0d77-489b-bc09-3c257fde013d', 36, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', '4ebb8092-b6ee-4c97-b537-f5e35b909801', 37, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', '1579eca1-330a-4e3d-a94e-6a75a6363fc1', 38, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', 'c25730a7-bb08-41f0-b647-f2cc9395e9e0', 39, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', '0426f1d9-b01c-4102-b532-afed3d155075', 40, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', 'ff3a65cc-89ae-40d3-962c-d793546dd303', 41, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', 'b5e21c21-b46c-45a4-b6a1-20419112ba57', 42, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', 'b4c053a5-5fb5-4e9a-a8cc-46ced786a9ed', 43, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', 'f84ce9c8-52a4-4425-96bf-adbbdaed4640', 44, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', 'e4aa2f0f-9e31-4c28-9d4e-5681479ebdf6', 45, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000010', '894f9f40-2bae-4f97-9ada-f5c235f333e9', 46, 1.0, 'milwaukee')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = '9e02d4c1-b013-4829-8c5e-daf3e91f5361';
+
+-- ==== Retired and Reckless · Summer 2026  (canonical=phoenix a1000000-0000-0000-0000-000000000008, deactivating 9dd28b7a-b0d9-44c5-83e2-27b9a8c15b28) ====
+UPDATE curated_list_items SET city_slug = 'phoenix' WHERE id IN ('16bc98c5-4052-4c2f-a6d0-eca25ff4bc25','194661e7-4d60-40c4-87e7-cbe8e7bacca0','13c4ea0e-d300-46c6-8e07-b197b29182c3','13d498d1-6e96-4838-89c4-329c6cd74835','2b5e5243-a608-4829-ac53-ac00d3a288ba','0f9c8e1f-0ee2-48b3-a0d3-a4ed55592a6b','b8c5d0f3-40ca-4d6a-8747-6e1d397fa256','67a69524-ebdc-4906-a324-4efd4bc1895d','b9d72692-b59f-4587-86b1-db38731c542e','0f7ac204-c80e-4630-84a9-f9db9f75812b','35a1922b-0254-4dbe-852c-d302bbfc5c4e','d74b8f90-5908-4b9b-833b-78eec4f8d122','120df089-90d7-4fa5-8138-706a63ca9e89','574ff853-4635-4973-ad1f-6eff50134447','c38895f6-7a63-4e20-a144-d0fb0686632d','a05dd2cd-fa86-4683-a8d0-5577d5b07771','73f25647-e15d-46fd-bdde-a583b4da4d5f','890313eb-fd80-48c6-999b-6eefff1f82b5','300e7af2-ad17-4e8e-b932-0040e6a5de4e','e6ca64cc-ea13-45e6-88d4-fc9e041fc69b');
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('a1000000-0000-0000-0000-000000000008', '32856819-2a3d-4b9e-a07a-2d4011a4042a', 31, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', 'ff3a65cc-89ae-40d3-962c-d793546dd303', 32, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '9f350ae5-5c46-4cff-8a85-1b3590aed797', 33, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', 'd6b1fab6-836a-4906-ba78-13f893266d95', 34, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '899c499a-4d93-4495-a3ac-27dbafa6e126', 35, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', 'fa30a438-f676-4baa-b72b-cc92b9da33b9', 36, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '625fec4d-f9c0-4f5a-8222-9a46129eaeee', 37, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', 'd34ed7be-a910-4b34-81e9-74e8ce1801b2', 38, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '46f4dad8-760b-4751-b0c6-491af91f8b07', 39, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', 'c043396c-9e69-4909-9607-a13bf7949103', 40, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '1579eca1-330a-4e3d-a94e-6a75a6363fc1', 41, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '88ed3173-ea59-4dfc-9872-3b46c7604b3f', 42, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '0426f1d9-b01c-4102-b532-afed3d155075', 43, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '1da3b789-59cf-446b-b836-6405a8aca57f', 44, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', 'dc726ba7-b3d4-4cd2-b6cf-0de3984242b7', 45, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '64661075-c9c5-4001-bce8-d107d95618a5', 46, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '1387e6f2-d96b-4976-978f-8dcec2427697', 47, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '19735aa7-c202-41ae-81d2-369628510378', 48, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '464f979e-f348-4dfc-a452-1a7bcac57a8b', 49, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', 'd1cc546d-28fc-4f4d-90aa-22c983145093', 50, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', 'd8a2c599-d05d-4829-9120-e555654a1b35', 51, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '7ca7b56b-3aff-4c89-97fb-afb3f817e794', 52, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '0ac44cf8-af30-4793-a972-e2e47b6ff1e2', 53, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', 'b5e21c21-b46c-45a4-b6a1-20419112ba57', 54, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000008', '894f9f40-2bae-4f97-9ada-f5c235f333e9', 55, 1.0, 'milwaukee')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = '9dd28b7a-b0d9-44c5-83e2-27b9a8c15b28';
+
+-- ==== Suburban Triathletes · Summer 2026  (canonical=phoenix a1000000-0000-0000-0000-000000000001, deactivating 51a8dae1-d10a-4f8d-8eb3-6241b26b8a86) ====
+UPDATE curated_list_items SET city_slug = 'phoenix' WHERE id IN ('e3b8e7b4-72be-4089-bc08-4666e1784c08','92a707f7-d615-4853-a39a-5048da0a1c80','e5321927-4ff7-4cf1-ad9e-59b612a85eef','1722cc45-a4d6-462e-950f-8d20c42c944d','f25ee3f9-c54b-4bba-9169-73bd74dabb87','4f16b8ed-d9e5-4c5f-a250-47ddf4f441d8','1b54709b-a290-4abb-af36-ba522cd03c9b','3c414880-82ea-4290-8013-50c16e1d0e0d','f7b1a8a5-71b7-4342-8ec0-fa55bcc3531d','c2a620c2-8ab6-46ee-8b9b-57df1571fae5','16ce6171-5d2b-4192-9def-71019df6742b','74174b1b-8d2a-495d-9f60-148884e271f8','e9aed88b-9962-4092-ad99-7911fe814a95','1a1e3647-1448-48c6-b531-b183f83e86db','86104fcd-a02e-4153-9ebc-0565a4940301','05de68b8-2bce-4aff-896c-ad488305f42d','a0ec9324-e068-4e4c-b28c-8e85f6ba18f8','0a7540e5-3b68-4158-9d6d-5408d51ffce6','f2b5bcbf-53ec-4374-abcd-80daf3856b9b');
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('a1000000-0000-0000-0000-000000000001', 'dc726ba7-b3d4-4cd2-b6cf-0de3984242b7', 31, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', '64661075-c9c5-4001-bce8-d107d95618a5', 32, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', '5c3fc86b-af27-4749-ad06-c0ee3cb3728a', 33, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', '1da3b789-59cf-446b-b836-6405a8aca57f', 34, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', 'b59c4639-98a2-4376-8f9e-7709dc667e0b', 35, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', 'ed44fcf1-d160-4dca-8b07-7a030b97dd4a', 36, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', '32856819-2a3d-4b9e-a07a-2d4011a4042a', 37, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', '494e561d-398d-4360-8221-029a82c6505c', 38, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', 'd6b1fab6-836a-4906-ba78-13f893266d95', 39, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', 'ff3a65cc-89ae-40d3-962c-d793546dd303', 40, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', 'b5e21c21-b46c-45a4-b6a1-20419112ba57', 41, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', '4d90372b-c9e1-44d8-99d3-2ce02a315cb1', 42, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', '094f3873-9fe5-4c0b-9af5-0de7052fc1d5', 43, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', 'dd8bf3b9-8f24-4ad4-a09a-c82fd6bda8be', 44, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', 'bfdb9965-b3cc-4109-850d-9ab6ae11c8aa', 45, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', '0ac44cf8-af30-4793-a972-e2e47b6ff1e2', 46, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', '464f979e-f348-4dfc-a452-1a7bcac57a8b', 47, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', '92b28bdb-a674-4fc4-bd78-5b8a82906fe3', 48, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', '0426f1d9-b01c-4102-b532-afed3d155075', 49, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', '899c499a-4d93-4495-a3ac-27dbafa6e126', 50, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', '1387e6f2-d96b-4976-978f-8dcec2427697', 51, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000001', 'f84ce9c8-52a4-4425-96bf-adbbdaed4640', 52, 1.0, 'milwaukee')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = '51a8dae1-d10a-4f8d-8eb3-6241b26b8a86';
+
+-- ==== Sundown Crew · Summer 2026  (canonical=phoenix a1000000-0000-0000-0000-000000000003, deactivating 28ae264d-6aa5-4c46-9ac4-5fb4a3569798) ====
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('a1000000-0000-0000-0000-000000000003', '46f4dad8-760b-4751-b0c6-491af91f8b07', 21, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', 'c043396c-9e69-4909-9607-a13bf7949103', 22, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', 'd34ed7be-a910-4b34-81e9-74e8ce1801b2', 23, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', 'b4c053a5-5fb5-4e9a-a8cc-46ced786a9ed', 24, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', 'cdbe6522-e7c1-4add-bcd8-433239e2381f', 25, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', 'f84ce9c8-52a4-4425-96bf-adbbdaed4640', 26, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', '894f9f40-2bae-4f97-9ada-f5c235f333e9', 27, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', '5186363a-9e6d-41c6-86bf-bbe3d4339f44', 28, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', 'f5c59a44-75ab-418b-ad95-51422736379c', 29, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', 'af45d6ec-27db-4344-a14d-84243a05114a', 30, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', '60cbcb13-0d77-489b-bc09-3c257fde013d', 31, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', 'eb637660-7357-4ee5-933f-c010ee4d86a7', 32, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', '625fec4d-f9c0-4f5a-8222-9a46129eaeee', 33, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', '92b28bdb-a674-4fc4-bd78-5b8a82906fe3', 34, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', '1579eca1-330a-4e3d-a94e-6a75a6363fc1', 35, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', '4ebb8092-b6ee-4c97-b537-f5e35b909801', 36, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', 'c25730a7-bb08-41f0-b647-f2cc9395e9e0', 37, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', 'e4aa2f0f-9e31-4c28-9d4e-5681479ebdf6', 38, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', '62978386-4404-417a-a74c-4563f0c3ea8b', 39, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000003', '3001386b-3b51-4a7e-aeca-4970ad7f8e5d', 40, 1.0, 'milwaukee')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = '28ae264d-6aa5-4c46-9ac4-5fb4a3569798';
+
+-- ==== The Brunch Bloc · Summer 2026  (canonical=phoenix a1000000-0000-0000-0000-000000000007, deactivating e60a5a72-8363-4365-baa4-150fb078d31c) ====
+UPDATE curated_list_items SET city_slug = 'phoenix' WHERE id IN ('0886dbb0-3f32-4c8a-a06c-6dba85c27913','dae1c91f-1456-4220-a0b0-e4746227c58d','12d3c791-cc40-4f32-b682-8756223ed204','3c658952-862b-4a52-a352-44591fe55b9c','1e65d9f5-05a8-4df1-b8c6-fd9d8f1b1b07','6e41750e-53e8-4a2a-8af4-fcc26ab7ea33','dd611c42-2044-41d4-956f-96245d25e1b0','53012f5c-8453-4901-8bcf-2da699d8fa46','12d71bcd-36be-494c-b5ec-dd4ea2afa30c','ac2c8c2d-cc48-4980-bbaa-eaeea88b7542','0174e7ca-8d52-4e85-af97-998d20c7cd3a','418fce2a-5c7e-4105-9baf-41d39268c352','26657ad2-282f-43a7-8e6e-6e99204a8893','382c2f6d-e103-4d09-8547-d7ef1f616e19','ca37e8c6-3d76-4420-b829-cc8c33bba95f');
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('a1000000-0000-0000-0000-000000000007', 'c25730a7-bb08-41f0-b647-f2cc9395e9e0', 21, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', '0426f1d9-b01c-4102-b532-afed3d155075', 22, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', '1fe8e093-ca7a-49c7-8d22-602c7bd54310', 23, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', '0e3b816e-fd07-4d1d-906c-5d85913bce0d', 24, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', '88ed3173-ea59-4dfc-9872-3b46c7604b3f', 25, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', '1579eca1-330a-4e3d-a94e-6a75a6363fc1', 26, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', '4ebb8092-b6ee-4c97-b537-f5e35b909801', 27, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', '92b28bdb-a674-4fc4-bd78-5b8a82906fe3', 28, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', 'c043396c-9e69-4909-9607-a13bf7949103', 29, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', '46f4dad8-760b-4751-b0c6-491af91f8b07', 30, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', '4d90372b-c9e1-44d8-99d3-2ce02a315cb1', 31, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', 'b5e21c21-b46c-45a4-b6a1-20419112ba57', 32, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', 'bfdb9965-b3cc-4109-850d-9ab6ae11c8aa', 33, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', '22b3868e-4768-46e4-8e0c-db4725989902', 34, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', '60cbcb13-0d77-489b-bc09-3c257fde013d', 35, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', 'ed44fcf1-d160-4dca-8b07-7a030b97dd4a', 36, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', '1387e6f2-d96b-4976-978f-8dcec2427697', 37, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', 'f84ce9c8-52a4-4425-96bf-adbbdaed4640', 38, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', 'a23707d9-6675-459c-a88c-3e141cba8624', 39, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000007', 'cef23d54-8781-42b9-8052-5ed9060a02b6', 40, 1.0, 'milwaukee')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = 'e60a5a72-8363-4365-baa4-150fb078d31c';
+
+-- ==== The College Dropout · Summer 2026  (canonical=phoenix a1000000-0000-0000-0000-000000000009, deactivating 43384430-6888-4424-ad1b-f3df870ba33a) ====
+UPDATE curated_list_items SET city_slug = 'phoenix' WHERE id IN ('443220d3-e961-418a-a573-f0fd25798034','1e5c69e9-f047-4f57-ae5b-bafcd1616862','5cd4c011-4af7-46b0-8d55-f52392b4c481','fe097822-31d4-4fcd-ad90-9058de1437e9','6fad1f4f-736a-4b21-92bb-51c03dadb340','4a6ccdc2-d3ca-4c20-b967-03f5eaac194a','e63d681c-a604-4488-8409-b0fca84d2b97','4cadf39c-b08a-45a9-a832-34d05dce3f84','baa44bbf-5934-401b-9d45-aa8b6e8a49bc','621468c9-56f1-43d9-b5dd-647319f62cb0','34c3f7b1-de47-4037-bf76-35edf3781346','18278fe3-cc6f-4672-9970-18ad416c9677','b5f0cb64-94db-4f59-8827-b3a9e98f5073','a8afb3fa-75e9-49d0-88ee-b047701a5050','c497d7a2-59a7-48fd-a8ea-df065d0b2e05','8d27103e-29c2-4e72-b17c-91a775c9812b','4e246a84-c676-4ec9-b25e-c23b68eef15c');
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('a1000000-0000-0000-0000-000000000009', 'ed44fcf1-d160-4dca-8b07-7a030b97dd4a', 26, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', 'b59c4639-98a2-4376-8f9e-7709dc667e0b', 27, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', 'dc726ba7-b3d4-4cd2-b6cf-0de3984242b7', 28, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', '64661075-c9c5-4001-bce8-d107d95618a5', 29, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', '5c3fc86b-af27-4749-ad06-c0ee3cb3728a', 30, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', '1da3b789-59cf-446b-b836-6405a8aca57f', 31, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', 'd34ed7be-a910-4b34-81e9-74e8ce1801b2', 32, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', 'b4c053a5-5fb5-4e9a-a8cc-46ced786a9ed', 33, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', 'cdbe6522-e7c1-4add-bcd8-433239e2381f', 34, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', 'f5c59a44-75ab-418b-ad95-51422736379c', 35, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', '4ebb8092-b6ee-4c97-b537-f5e35b909801', 36, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', '1579eca1-330a-4e3d-a94e-6a75a6363fc1', 37, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', 'c25730a7-bb08-41f0-b647-f2cc9395e9e0', 38, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', '0426f1d9-b01c-4102-b532-afed3d155075', 39, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', '88ed3173-ea59-4dfc-9872-3b46c7604b3f', 40, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', 'ff3a65cc-89ae-40d3-962c-d793546dd303', 41, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', '92b28bdb-a674-4fc4-bd78-5b8a82906fe3', 42, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', '1387e6f2-d96b-4976-978f-8dcec2427697', 43, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', '464f979e-f348-4dfc-a452-1a7bcac57a8b', 44, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', 'd1cc546d-28fc-4f4d-90aa-22c983145093', 45, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', '625fec4d-f9c0-4f5a-8222-9a46129eaeee', 46, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', '30165cb2-7e58-4d0d-b07d-8797d138d603', 47, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', '3001386b-3b51-4a7e-aeca-4970ad7f8e5d', 48, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000009', 'f84ce9c8-52a4-4425-96bf-adbbdaed4640', 49, 1.0, 'milwaukee')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = '43384430-6888-4424-ad1b-f3df870ba33a';
+
+-- ==== The New Kids on the Block · Summer 2026  (canonical=phoenix a1000000-0000-0000-0000-000000000006, deactivating 33558fd4-c2cb-4b16-87ab-ad66bce41a5f) ====
+UPDATE curated_list_items SET city_slug = 'phoenix' WHERE id IN ('15a1f622-3014-4b52-bda8-24a9a75b6b8d','1a11fb0a-c19b-427d-a469-b5da91ffa530','0fd1653a-1226-4d84-9b8e-de57bf84f405','99e91892-5448-42ac-a051-ff0976c10cb1','a8448818-2826-4bf8-a615-4e46e06de19e','101f917e-4126-4d8a-9756-5abb80d6cd3d','026c9220-8faa-43d6-b4d1-6511a3cfd0ab','fb017a13-85ba-4b87-9e0f-96dae4cf5b7e','7145659d-4f02-4d18-906d-5af619fbf17b','351bb9e8-266f-422e-a12e-2d62645f7bce','bf149091-6aa1-4d38-90f2-737720675391','7036bd12-a89b-4d79-b240-16fa0a2e5087','18346b48-e6d7-4e73-a0c3-6222f4c371fd','adb06b2d-fa49-404a-a546-0bddd958cc76','459dee3e-7393-4887-9951-09c29dfb15c8');
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('a1000000-0000-0000-0000-000000000006', 'ff3a65cc-89ae-40d3-962c-d793546dd303', 21, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', '9f350ae5-5c46-4cff-8a85-1b3590aed797', 22, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', 'd6b1fab6-836a-4906-ba78-13f893266d95', 23, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', 'fa30a438-f676-4baa-b72b-cc92b9da33b9', 24, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', '899c499a-4d93-4495-a3ac-27dbafa6e126', 25, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', 'd34ed7be-a910-4b34-81e9-74e8ce1801b2', 26, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', '46f4dad8-760b-4751-b0c6-491af91f8b07', 27, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', '0426f1d9-b01c-4102-b532-afed3d155075', 28, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', '4ebb8092-b6ee-4c97-b537-f5e35b909801', 29, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', '1579eca1-330a-4e3d-a94e-6a75a6363fc1', 30, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', '88ed3173-ea59-4dfc-9872-3b46c7604b3f', 31, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', 'eee6ab6a-1555-4b59-a751-310580fd6ceb', 32, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', 'ed44fcf1-d160-4dca-8b07-7a030b97dd4a', 33, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', 'f84ce9c8-52a4-4425-96bf-adbbdaed4640', 34, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', 'a23707d9-6675-459c-a88c-3e141cba8624', 35, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', '1387e6f2-d96b-4976-978f-8dcec2427697', 36, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', '094f3873-9fe5-4c0b-9af5-0de7052fc1d5', 37, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', 'b4c053a5-5fb5-4e9a-a8cc-46ced786a9ed', 38, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', 'cdbe6522-e7c1-4add-bcd8-433239e2381f', 39, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', '625fec4d-f9c0-4f5a-8222-9a46129eaeee', 40, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', '92b28bdb-a674-4fc4-bd78-5b8a82906fe3', 41, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000006', '62978386-4404-417a-a74c-4563f0c3ea8b', 42, 1.0, 'milwaukee')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = '33558fd4-c2cb-4b16-87ab-ad66bce41a5f';
+
+-- ==== The Ungoogleable City · Summer 2026  (canonical=phoenix a1000000-0000-0000-0000-000000000004, deactivating 1717207a-2efc-48ac-a2dc-a1d7e0faf2c8) ====
+UPDATE curated_list_items SET city_slug = 'phoenix' WHERE id IN ('6d8c2673-3d4e-4e71-ad58-7ca9a24d3ae6','803871b9-b02b-4512-a0f9-ffff8a28ab4a','a71703e8-aaf8-4e70-afd0-35f858d6f991','9f80c233-061d-4cb0-85aa-90fd82b1b7ac','3b0faca4-a745-493b-8af0-a498d8b20207','2812e095-df3c-4333-a6e1-28cca7441f81','dd74abf1-5c43-477e-b65b-3af6e80f931b','a8d02712-e76e-4566-abfc-190c0e374cc0','4b980be7-756a-4c91-a7c9-44481e4f6069','4cc8b3f1-cc82-4497-a8c6-d2c6949c90fc','e10bd61d-c16a-4608-8356-77ae3f849e23','72628bfb-291d-47dc-b9bb-8bbe5c0c3fc7','a3311082-4f2a-47f4-aa8f-738b0d7323db','3b677e8d-c544-47f9-9999-7600233845ec','300798bf-62dc-4d55-8027-f23b7d81b2da','a5221389-fd3c-483c-a297-a4e7c76c0bed','cfb93d83-6092-4c94-bab9-d7ba766c8b3d','9c077c9c-9041-4ca8-83b9-0b5c47fd3229','20710aac-52af-4174-bf94-5e0a8edb17fd','8c599fef-10a0-49ba-a3e5-8acfc8d10ef3','6dba3d32-8831-426d-b871-2a84f24be8ef','d6085019-983d-49bb-95e0-7da64dafedd9','715ebb6e-e056-4d08-afd1-9594bafbaf31');
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('a1000000-0000-0000-0000-000000000004', 'd34ed7be-a910-4b34-81e9-74e8ce1801b2', 26, 1.5, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', '62978386-4404-417a-a74c-4563f0c3ea8b', 27, 1.25, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', '85895164-7c86-4f4b-a124-26066d2d0a97', 28, 1.25, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', '5186363a-9e6d-41c6-86bf-bbe3d4339f44', 29, 1.25, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', '1579eca1-330a-4e3d-a94e-6a75a6363fc1', 30, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', '88ed3173-ea59-4dfc-9872-3b46c7604b3f', 31, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', 'c25730a7-bb08-41f0-b647-f2cc9395e9e0', 32, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', '46f4dad8-760b-4751-b0c6-491af91f8b07', 33, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', '16b4dc45-0101-4407-b21b-581127ec9a20', 34, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', '973cb95a-97a7-43f1-b512-6dac544f37d0', 35, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', '7ca7b56b-3aff-4c89-97fb-afb3f817e794', 36, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', '0ac44cf8-af30-4793-a972-e2e47b6ff1e2', 37, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', 'e8612a75-c045-4178-b274-95c23d1db114', 38, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', 'dc726ba7-b3d4-4cd2-b6cf-0de3984242b7', 39, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', '1da3b789-59cf-446b-b836-6405a8aca57f', 40, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', 'd6cf5198-bf65-47da-81f0-094db65fbec6', 41, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', '3001386b-3b51-4a7e-aeca-4970ad7f8e5d', 42, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', '30165cb2-7e58-4d0d-b07d-8797d138d603', 43, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', 'f87cb523-e532-4f15-a9ca-74ddb276be0c', 44, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', '1387e6f2-d96b-4976-978f-8dcec2427697', 45, 1.0, 'milwaukee'),
+  ('a1000000-0000-0000-0000-000000000004', 'fa30a438-f676-4baa-b72b-cc92b9da33b9', 46, 1.0, 'milwaukee')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = '1717207a-2efc-48ac-a2dc-a1d7e0faf2c8';
+
+-- ==== 🏋️ Main Character Cardio · Summer 2026  (canonical=phoenix f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca, deactivating 57f78756-d866-48d3-8be4-5dd601e71f39) ====
+UPDATE curated_list_items SET city_slug = 'phoenix' WHERE id IN ('44812d76-0093-455e-b211-f900dde454a9','4ff269f0-0b17-4b82-a10f-fd3d63bc0940','2ef1e5e9-ca5a-4232-b0d9-222d1e350610','436f56ca-a798-42af-b8cd-570f3b8a68b9','a3f2a45e-7e01-4dee-8b01-4982a54e4948','403b03ae-dae0-421b-8355-7f9a702dcd6e','c738f0d8-e410-472f-b770-0788005ef276','ef5e8f4f-34d9-4713-8d61-a676e3e5dfae','39251f3a-7390-4c57-b097-8deb10556154','a46da86f-1329-4eb6-9028-806d030dbaa6','a273312b-27fc-4e2b-860c-8d3763d8712e','fc5acb6a-2a63-44eb-99cd-0d8943028a45','2a26ad8a-2d71-4128-93cf-55292b5a865c','71ceef40-c02b-4ba9-9288-c72ddeb95c4b','e5252222-e904-4db1-8357-501960033748','5d234830-3132-458f-840b-87f6b571e3e5','a7ecbc04-a265-44a1-8c3d-e0011becbe74','5192347f-9f66-4eff-b964-9230d94935a4','29b511e0-c85f-4687-a558-151e0d0085e2','dd9d38f5-0802-45fd-b22b-3d0f84efce2f','890f8f5a-93bd-4799-be8d-1f0c4e7944dd','284af5fe-5e0e-47d2-9c27-758f6310d6f1','4f4b7ab9-1f35-4ea1-9adb-6f00bdc250ee','0aa1698a-ef80-43ef-ab89-46fe536603ea','ff71fc86-91ff-49f0-ae11-0cf6b527ba20','eb3ff586-6f74-4b66-9a21-b90ea653760f');
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', 'dc726ba7-b3d4-4cd2-b6cf-0de3984242b7', 27, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', '64661075-c9c5-4001-bce8-d107d95618a5', 28, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', '5c3fc86b-af27-4749-ad06-c0ee3cb3728a', 29, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', '1da3b789-59cf-446b-b836-6405a8aca57f', 30, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', 'b59c4639-98a2-4376-8f9e-7709dc667e0b', 31, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', 'ed44fcf1-d160-4dca-8b07-7a030b97dd4a', 32, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', '494e561d-398d-4360-8221-029a82c6505c', 33, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', '0ac44cf8-af30-4793-a972-e2e47b6ff1e2', 34, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', '32856819-2a3d-4b9e-a07a-2d4011a4042a', 35, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', 'dd8bf3b9-8f24-4ad4-a09a-c82fd6bda8be', 36, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', 'bfdb9965-b3cc-4109-850d-9ab6ae11c8aa', 37, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', '22b3868e-4768-46e4-8e0c-db4725989902', 38, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', 'd6b1fab6-836a-4906-ba78-13f893266d95', 39, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', 'ff3a65cc-89ae-40d3-962c-d793546dd303', 40, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', 'b5e21c21-b46c-45a4-b6a1-20419112ba57', 41, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', '4d90372b-c9e1-44d8-99d3-2ce02a315cb1', 42, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', '0426f1d9-b01c-4102-b532-afed3d155075', 43, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', '4ebb8092-b6ee-4c97-b537-f5e35b909801', 44, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', 'f84ce9c8-52a4-4425-96bf-adbbdaed4640', 45, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', '1387e6f2-d96b-4976-978f-8dcec2427697', 46, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', 'fff4a01d-46e3-40f0-b6e8-b48bc1b596ae', 47, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', '036fa7bd-851f-4765-b3c3-f1e4c2096532', 48, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', '6d11a242-da35-4d17-b9e7-897f6e1c8308', 49, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', 'd48efbff-e4dc-422b-ae8d-1268f84acb8e', 50, 1.0, 'milwaukee'),
+  ('f0fbfaa3-b39f-4e17-bfc6-22ab37ddc6ca', '6ffee44f-5aad-4076-bfa2-37abd9c2b2ae', 51, 1.0, 'milwaukee')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = '57f78756-d866-48d3-8be4-5dd601e71f39';
+
+-- ==== 💅 Ferda Girls · Summer 2026  (canonical=phoenix a9fc990b-eb46-4035-b948-d80b5b5e5ca6, deactivating 1b74942a-8ce4-470c-ad87-9241926f4f57) ====
+UPDATE curated_list_items SET city_slug = 'phoenix' WHERE id IN ('356bd739-9f28-4fa9-9bfe-652ba4c0a8c7','ff66e1ba-5ff6-48f6-8b6f-7bc14cbe5d35','0675833e-cae3-49f8-8c1b-638bf493c546','ed4fd9d9-8965-43eb-8546-a379a77b42ff','7be3acc2-099a-49c6-843a-5eaea9355890','5191d130-31b9-414f-a93f-13a8fd1692e0','a9b9797b-6df1-40d7-8ca5-be8f25b998e0','0d43e59b-ed15-437e-825d-479d19b8f455','898966e8-22e2-4780-b5f4-2d7cecec9e77','55bfa987-5fcd-4382-8928-bccc5c554b40','6ea94893-7b5b-4fc1-90b8-8e6a7656a3e0','850ba78f-8f17-4603-8cd5-7438e89e5ad6','6bedef1a-b31f-4fb2-b362-fb68f8c3f619','c32b39af-e1ea-4abe-9a99-ec24c77748ec','e9f4b817-8654-4197-84a7-6a792b3d6149','9d099942-bde7-45ff-a061-c21ad5064543','78a8993a-b4ce-4e1c-9886-72e417281076','9a232034-a4f5-4f8a-baf4-f7791708af5f','30afd39b-0558-4eba-93b4-19bc393c9235','a72cee1f-10f3-47b7-9589-ee5313a613bb','a934b7a9-1d9d-4f10-ad49-32e9dbe5c3b1','d20e9017-0920-4fcd-bd8e-f4a5e75f46e3','ac8ac375-2944-4819-b377-c93fc13ab49d','a86d7584-8a14-4abc-a307-f647cdc6a6df','dbcc627b-0fe7-48fa-8213-5bd3ce8d0640','4d10bd26-1203-4349-be09-8e9c9ac84204','01bb9cde-075e-4f3a-90c6-e3db797c730e','4373f332-7682-486a-9d4d-42c132a9a58a');
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', 'fff4a01d-46e3-40f0-b6e8-b48bc1b596ae', 29, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', '036fa7bd-851f-4765-b3c3-f1e4c2096532', 30, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', '6d11a242-da35-4d17-b9e7-897f6e1c8308', 31, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', 'd48efbff-e4dc-422b-ae8d-1268f84acb8e', 32, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', '6ffee44f-5aad-4076-bfa2-37abd9c2b2ae', 33, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', 'c25730a7-bb08-41f0-b647-f2cc9395e9e0', 34, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', '0426f1d9-b01c-4102-b532-afed3d155075', 35, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', '1fe8e093-ca7a-49c7-8d22-602c7bd54310', 36, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', '0e3b816e-fd07-4d1d-906c-5d85913bce0d', 37, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', '88ed3173-ea59-4dfc-9872-3b46c7604b3f', 38, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', '1579eca1-330a-4e3d-a94e-6a75a6363fc1', 39, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', '4ebb8092-b6ee-4c97-b537-f5e35b909801', 40, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', '92b28bdb-a674-4fc4-bd78-5b8a82906fe3', 41, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', 'c043396c-9e69-4909-9607-a13bf7949103', 42, 1.25, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', 'd34ed7be-a910-4b34-81e9-74e8ce1801b2', 43, 1.25, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', '894f9f40-2bae-4f97-9ada-f5c235f333e9', 44, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', 'b4c053a5-5fb5-4e9a-a8cc-46ced786a9ed', 45, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', 'f84ce9c8-52a4-4425-96bf-adbbdaed4640', 46, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', 'a23707d9-6675-459c-a88c-3e141cba8624', 47, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', 'cef23d54-8781-42b9-8052-5ed9060a02b6', 48, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', 'eee6ab6a-1555-4b59-a751-310580fd6ceb', 49, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', 'bfdb9965-b3cc-4109-850d-9ab6ae11c8aa', 50, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', '22b3868e-4768-46e4-8e0c-db4725989902', 51, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', 'ed44fcf1-d160-4dca-8b07-7a030b97dd4a', 52, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', 'fa30a438-f676-4baa-b72b-cc92b9da33b9', 53, 1.0, 'milwaukee'),
+  ('a9fc990b-eb46-4035-b948-d80b5b5e5ca6', '4d90372b-c9e1-44d8-99d3-2ce02a315cb1', 54, 1.0, 'milwaukee')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = '1b74942a-8ce4-470c-ad87-9241926f4f57';
+
+-- ==== 🥾 Trail Mix Crew · Summer 2026  (canonical=phoenix 2e189a9c-a06f-47fc-8327-acee9a3a42d4, deactivating 8393d482-225a-4c90-b600-2b530df7a72a) ====
+UPDATE curated_list_items SET city_slug = 'phoenix' WHERE id IN ('1213bc9f-9d89-463c-9d14-43309587f6f5','31e70ff5-79cc-4a15-ad05-3cc0a4f5d3e7','27ce9652-a56c-4a13-84c5-9fae89f4ed1b','5da26108-d3c2-42bf-ad72-79a4f9cd7c47','6a5ad57f-f83e-40f6-8abb-f72cc62901c3','2e0cc21b-a8a5-4d5f-81dc-3c5bf71fa438','df0bec89-abb7-48ee-8566-5c2209a95a5d','52608903-48cf-4353-91e5-4272df9b3095','f4b0ae22-76bc-45a3-b709-bf6adfc61c4e','144c4c39-a22e-4afd-98c0-5131107644c1','7dcfeaae-f9d3-4d79-b69d-0b7cb34fd811','f734bf86-d1fc-4a42-9e7c-dae3cd78f91d','8122b696-142d-4ede-81ca-cb899632c52a','eba4951a-5869-4dd8-8db0-6f6b63c6034a','ecada407-a115-420d-9fc8-05540f5a78fc','bea878c3-9a38-4fae-b73d-1375f26a5e3c','a6849293-d605-4f1b-8c7c-e261e48d1afe','1b903f9c-2c32-4af7-86fc-004921b8400b','d87dc104-8b02-4597-9d04-e10bb9c2e64c','a5d6cfea-0db4-4636-8189-083a9a1725af','010fa64d-7cc9-46cf-b9d5-0c3e2f19db5d');
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', 'ed44fcf1-d160-4dca-8b07-7a030b97dd4a', 22, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', 'b59c4639-98a2-4376-8f9e-7709dc667e0b', 23, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', '094f3873-9fe5-4c0b-9af5-0de7052fc1d5', 24, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', 'e4aa2f0f-9e31-4c28-9d4e-5681479ebdf6', 25, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', 'fa30a438-f676-4baa-b72b-cc92b9da33b9', 26, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', '0ac44cf8-af30-4793-a972-e2e47b6ff1e2', 27, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', '32856819-2a3d-4b9e-a07a-2d4011a4042a', 28, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', '973cb95a-97a7-43f1-b512-6dac544f37d0', 29, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', '494e561d-398d-4360-8221-029a82c6505c', 30, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', '19735aa7-c202-41ae-81d2-369628510378', 31, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', '464f979e-f348-4dfc-a452-1a7bcac57a8b', 32, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', '1387e6f2-d96b-4976-978f-8dcec2427697', 33, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', '899c499a-4d93-4495-a3ac-27dbafa6e126', 34, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', '9f350ae5-5c46-4cff-8a85-1b3590aed797', 35, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', 'f84ce9c8-52a4-4425-96bf-adbbdaed4640', 36, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', 'a23707d9-6675-459c-a88c-3e141cba8624', 37, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', 'cef23d54-8781-42b9-8052-5ed9060a02b6', 38, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', '0426f1d9-b01c-4102-b532-afed3d155075', 39, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', 'b5e21c21-b46c-45a4-b6a1-20419112ba57', 40, 1.0, 'milwaukee'),
+  ('2e189a9c-a06f-47fc-8327-acee9a3a42d4', '4d90372b-c9e1-44d8-99d3-2ce02a315cb1', 41, 1.0, 'milwaukee')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = '8393d482-225a-4c90-b600-2b530df7a72a';
+
+-- ==== 💘 Soft Launch Season · Summer 2026  (canonical=milwaukee 673e5ac6-871f-4969-ac39-7b73dbe650bf, deactivating a7962339-379d-4860-a3ff-ba558222981e) ====
+UPDATE curated_list_items SET city_slug = 'milwaukee' WHERE id IN ('34e1fc66-eaff-462d-9729-cc855be58001','07637a72-a230-4e5a-8933-2130bba569e7','401bc4dd-6882-4263-8b36-07b25db91762','bbfecc18-edf8-4a11-a9dd-b9fb4072b5ee','9d96efb8-200c-437e-bb3d-afd6f70d93b8','6545c7aa-076d-4426-8ccb-dc89260875c4','83f09943-fcef-439c-beb0-7ed30ddf61ee','9104393a-bd20-4031-8bda-3b9d6dd40608','d76d5155-a8ed-4c70-a59a-a2893f8f596b','e63e3c81-d1eb-4b3a-88b6-f76ff249a971','aa2498ff-d837-4c2f-843d-3ee99d3027d6','9c9fe88b-204d-4918-9dab-bcfcde28039f','aa184030-3881-4e0f-b73e-6173692f3942','46ed9cf4-3cce-479b-961a-85d10767ea5f','841fdd46-9575-41f6-942c-f909baea41fb','5fd2f3eb-e29c-4978-8b38-220baee3fcd7','5c332596-e894-43ca-ac78-071bf0b2d71b','7a5389c1-16a2-484e-bdea-a7c346b9be76','9ce27e05-f373-4ab0-8c4c-7c30de994c8e','63950da9-c425-44b8-a26e-5af18617b1ab','a018cb81-c80b-4d67-b9e6-239fc0770a06','81baec07-1098-44bf-822f-51a2f784c4e0','2a6b0abd-61a5-4598-aec0-f2402bdf0a07','8c23a838-61e1-4812-92f7-7e67ab537d93','5a22c40d-388f-4daf-be5a-0ae957dde75e','c0019b7b-8e71-4267-b729-00be038f7fe8','165d0fc7-7d5a-43bd-ad00-8727ef2ce612','ed13f6ff-1215-487d-9458-3176866bb772','e3472c98-38ca-4640-8c1d-73276c852993');
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '25336f06-f7df-42be-958f-cc3b240b4db5', 30, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '0c3c7f89-d5fb-4cf1-beb3-5cfb69f48665', 31, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '831ce5fb-4495-41b2-94e2-a982285a33dd', 32, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', 'dae9f08c-df7c-447a-8be5-67d6565e5673', 33, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '9a4f309e-5e9e-4ad4-9281-22213e2da8b4', 34, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', 'debc3ad2-93d8-4d9f-bb43-a905c36479b4', 35, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '0ea7cc38-700b-49be-9330-b7584c7d12b6', 36, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '3e30d26a-a865-402f-8801-17d62469b37a', 37, 1.25, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', 'e4b41e93-9375-4973-abe4-41a91e7bf286', 38, 1.25, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', 'd40903f0-c17b-4ffb-a07e-ea28a1c53415', 39, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '7cd251c2-5c17-4e92-b1ad-bbdde2f24fbb', 40, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '5a6c1a24-1848-474f-a95e-388ada738dde', 41, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', 'c97e3587-2dba-4d97-ad7f-998bedb0c391', 42, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '79c668cd-e03d-4d67-a855-339f6483a7ed', 43, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '74372016-34e7-45cf-8464-ad752e306567', 44, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', 'b662dde4-41b8-4534-9bbe-93c48e80346e', 45, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '4ec1aa83-0a5c-49c6-8620-2c07897121c1', 46, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '3916999c-574c-4717-b47f-c951513c9f4b', 47, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '9c7b9fa0-0c97-486b-b6c8-29395d229c46', 48, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', 'f0f52bd5-3e08-47e0-b906-40592f65a8fa', 49, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', 'b1bd1b2a-0046-41b6-b88a-5d24995683b2', 50, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '19bb1df3-1c98-4026-b5c3-04258b5d862a', 51, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', 'bacb2577-da33-4cdd-8c00-358493d305d7', 52, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', 'e38a5211-8f17-4f8c-aed2-b0194669955f', 53, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '612087b5-1693-4c6a-abed-9c5482174ec8', 54, 1.0, 'phoenix'),
+  ('673e5ac6-871f-4969-ac39-7b73dbe650bf', '0e962119-2273-4ec7-b83c-5dd4e4982317', 55, 1.0, 'phoenix')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = 'a7962339-379d-4860-a3ff-ba558222981e';
+
+-- ==== 🧃 Snack Pack Survivors · Summer 2026  (canonical=milwaukee 8517053f-71cb-44fb-8175-bc77c8fa504d, deactivating e99c92c0-0a7b-43dc-9fb6-8d0686c7c62e) ====
+UPDATE curated_list_items SET city_slug = 'milwaukee' WHERE id IN ('66a3a745-9438-4d4a-9e8e-e069fb595c20','f198b36e-1141-4b23-893d-323614764b7b','90325459-112d-468e-80f6-41e61d934b95','db4ac656-2aea-4764-ab11-71756c688177','a2bf29d8-7c6d-4fb1-b1dd-db59afe01ae6','deb842f2-a02a-4f9d-82ae-41ad75ccf713','2c6550bd-1720-4d28-8978-ba036361f8c8','06fae87e-e746-4112-8d6b-ae9dbf833557','029b7cd3-0493-4da7-98a2-3cbbc405c2e4','d33332ef-1924-4d98-bb77-101cea4c8c76','45300090-a493-4bc4-98e7-bed0960c8c76','7c318edd-4ca8-446e-a6c4-f25c8923373c','b3b9d8be-86be-43ec-b196-8310d7855a44','5c2db2ba-8a16-40cd-ac5d-2dd1b4925a3c','396895e8-47f5-4c34-9f2d-6990e8564c29','4ade8fe8-3c6f-4bdd-bf06-b2395580ce99','5131a365-e024-46ac-b83d-6d34d1cd247f','e515891b-c8f6-4a9a-b9e1-7b08aed91e41','0fc580be-82aa-4b79-af3d-d46dbee21fae','7fab125b-7800-4a3f-abdd-0f87740fef94','3ba33e73-cd82-4869-9875-ca3d4d095e36');
+INSERT INTO curated_list_items (curated_list_id, item_id, display_order, point_multiplier, city_slug) VALUES
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', 'e2ff32d1-b7e4-49af-8d63-b9736bdd593d', 23, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', 'f0f52bd5-3e08-47e0-b906-40592f65a8fa', 24, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', '9c7b9fa0-0c97-486b-b6c8-29395d229c46', 25, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', 'b1bd1b2a-0046-41b6-b88a-5d24995683b2', 26, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', '9f398762-4ec1-463a-9abb-bc9dc1784699', 27, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', 'bc53d01f-e358-418d-a781-de6d0a46d9e4', 28, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', '9737e1a3-6be0-4b6a-af37-aa477e3429f0', 29, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', 'cefdfd05-ae2a-469d-909b-5f0b2e66af3d', 30, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', '0e962119-2273-4ec7-b83c-5dd4e4982317', 31, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', '612087b5-1693-4c6a-abed-9c5482174ec8', 32, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', '08072bd3-f314-47b3-96ec-d05fbb3e505c', 33, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', '31cc8039-6ba7-421d-920c-c95a9dd0e223', 34, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', 'c8b07405-6d63-48f4-ad01-590d3c7261fb', 35, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', '9a4f309e-5e9e-4ad4-9281-22213e2da8b4', 36, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', '0ea7cc38-700b-49be-9330-b7584c7d12b6', 37, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', 'debc3ad2-93d8-4d9f-bb43-a905c36479b4', 38, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', '4db5d2c4-cbae-4c48-b89b-5ce47c2d3870', 39, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', 'dae9f08c-df7c-447a-8be5-67d6565e5673', 40, 1.0, 'phoenix'),
+  ('8517053f-71cb-44fb-8175-bc77c8fa504d', '3916999c-574c-4717-b47f-c951513c9f4b', 41, 1.0, 'phoenix')
+ON CONFLICT (curated_list_id, item_id) DO NOTHING;
+UPDATE curated_lists SET is_active = false WHERE id = 'e99c92c0-0a7b-43dc-9fb6-8d0686c7c62e';
+COMMIT;

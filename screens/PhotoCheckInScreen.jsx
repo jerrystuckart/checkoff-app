@@ -131,9 +131,12 @@ export default function PhotoCheckInScreen({ route, navigation }) {
       // context). Skip the single insert — the fan-out below covers all lists.
       let ciData = null
       if (listItemId) {
+        // item_id is the canonical, always-available path to this check-in's
+        // item — it survives list deletion (list_item_id goes null then).
         const payload = {
           user_id: user.id,
           list_item_id: listItemId,
+          item_id: item?.id ?? null,
           checkin_method: photoUrl ? 'photo' : 'tap',
           photo_url: photoUrl,
           photo_width: photo?.width ?? null,
@@ -215,6 +218,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
               .map(li => ({
                 user_id:        user.id,
                 list_item_id:   li.id,
+                item_id:        item.id, // every li here is a list_items row for this same item
                 checkin_method: 'photo',
                 photo_url:      photoUrl,
               }))

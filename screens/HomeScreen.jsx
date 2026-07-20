@@ -536,19 +536,28 @@ export default function HomeScreen({ navigation }) {
         // Check for check-ins last week
         const { data: lastWeekCIs } = await supabase
           .from('check_ins')
-          .select('id, list_items!inner(point_multiplier, items!inner(difficulty))')
+          .select('id, points_awarded, item_id, items(difficulty), list_items(point_multiplier)')
           .eq('user_id', uid)
           .gte('checked_at', lastMonday.toISOString())
           .lte('checked_at', lastSunday.toISOString())
         if (!lastWeekCIs?.length) return
 
-        // Compute summary stats
+        // Compute summary stats — points_awarded is the source of truth
+        // (matches ProfileScreen's weekly recap); the items/list_items
+        // embeds are only a fallback for the rare legacy row where
+        // points_awarded is null. item_id is the canonical,
+        // always-available path to a check-in's item (survives list
+        // deletion); list_items is list-context only and may be null
+        // once its list is gone.
         let pts = null
         try {
           pts = lastWeekCIs.reduce((sum, ci) => {
-            const d = ci.list_items?.items?.difficulty ?? null
-            const m = ci.list_items?.point_multiplier ?? 1
-            return d != null ? sum + Math.round(d * m) : sum
+            const p = ci.points_awarded ?? (() => {
+              const d = ci.items?.difficulty ?? null
+              const m = ci.list_items?.point_multiplier ?? 1
+              return d != null ? Math.round(d * m) : 0
+            })()
+            return sum + p
           }, 0)
         } catch { pts = null }
 

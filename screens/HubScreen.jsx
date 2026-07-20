@@ -1,14 +1,30 @@
 import React, { useState, useEffect, useMemo } from 'react'
 import {
-  View, Text, ScrollView, TouchableOpacity, Image,
+  View, Text, ScrollView, TouchableOpacity, Image, ImageBackground,
   StyleSheet, ActivityIndicator, Linking, Alert,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { LinearGradient } from 'expo-linear-gradient'
 import { supabase } from '../lib/supabase'
 import { adoptDestinationList } from '../lib/useItems'
 import { useTheme } from '../lib/ThemeContext'
 
 const AMBER = '#F5A623'
+
+// "Oct 17–18" for a range, "Oct 17" for a single day, null if unset.
+// event_ends_at alone with no event_starts_at renders nothing — a
+// range needs a start.
+function formatSpotlightDateRange(startsAt, endsAt) {
+  if (!startsAt) return null
+  const start = new Date(`${startsAt}T12:00:00`)
+  const startLabel = start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  if (!endsAt || endsAt === startsAt) return startLabel
+  const end = new Date(`${endsAt}T12:00:00`)
+  const endLabel = start.getMonth() === end.getMonth()
+    ? end.toLocaleDateString('en-US', { day: 'numeric' })
+    : end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+  return `${startLabel}–${endLabel}`
+}
 
 export default function HubScreen({ navigation, route }) {
   const { destinationId } = route.params ?? {}
@@ -187,21 +203,22 @@ export default function HubScreen({ navigation, route }) {
         </View>
 
         {/* Spotlights — RLS already filters to active/visible rows, so an
-            empty array here means genuinely nothing to show. No placeholder. */}
+            empty array here means genuinely nothing to show. No placeholder.
+            Full-width banner cards, stacked (not a horizontal carousel) —
+            these are meant to pop, not compete for space in a small tile. */}
         {spotlights.length > 0 && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>✨ Spotlight</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.spotlightRow}>
-              {spotlights.map(s => (
-                <SpotlightCard
-                  key={s.id}
-                  spotlight={s}
-                  partnerName={s.show_partner_credit && s.owner_partner_id ? partnerNames[s.owner_partner_id] : null}
-                  onPress={() => handleSpotlightTap(s)}
-                  styles={styles}
-                />
-              ))}
-            </ScrollView>
+            {spotlights.map(s => (
+              <SpotlightCard
+                key={s.id}
+                spotlight={s}
+                partnerName={s.show_partner_credit && s.owner_partner_id ? partnerNames[s.owner_partner_id] : null}
+                onPress={() => handleSpotlightTap(s)}
+                styles={styles}
+                colors={colors}
+              />
+            ))}
           </View>
         )}
 
@@ -228,8 +245,46 @@ export default function HubScreen({ navigation, route }) {
   )
 }
 
-function SpotlightCard({ spotlight, partnerName, onPress, styles }) {
+function SpotlightCard({ spotlight, partnerName, onPress, styles, colors }) {
   const tappable = !!spotlight.external_url
+  const hasImage = !!spotlight.image_url
+  const dateLabel = formatSpotlightDateRange(spotlight.event_starts_at, spotlight.event_ends_at)
+
+  const cardInner = (
+    <View style={[styles.spotlightBody, hasImage && styles.spotlightBodyOnImage]}>
+      <View style={styles.spotlightBadgeRow}>
+        <View style={styles.spotlightBadge}>
+          <Text style={styles.spotlightBadgeText}>FEATURED</Text>
+        </View>
+        {!!dateLabel && (
+          <Text
+            style={[styles.spotlightDateText, !hasImage && { color: colors?.TEXT }]}
+            numberOfLines={1}
+          >
+            {dateLabel}
+          </Text>
+        )}
+      </View>
+      <Text
+        style={[styles.spotlightTitle, !hasImage && { color: colors?.TEXT }]}
+        numberOfLines={2}
+      >
+        {spotlight.title}
+      </Text>
+      {!!spotlight.subtitle && (
+        <Text
+          style={[styles.spotlightSubtitle, !hasImage && { color: colors?.MUTED }]}
+          numberOfLines={3}
+        >
+          {spotlight.subtitle}
+        </Text>
+      )}
+      {!!partnerName && (
+        <Text style={styles.creditText}>Presented by {partnerName}</Text>
+      )}
+    </View>
+  )
+
   return (
     <TouchableOpacity
       style={styles.spotlightCard}
@@ -237,18 +292,20 @@ function SpotlightCard({ spotlight, partnerName, onPress, styles }) {
       onPress={tappable ? onPress : undefined}
       disabled={!tappable}
     >
-      {!!spotlight.image_url && (
-        <Image source={{ uri: spotlight.image_url }} style={styles.spotlightImage} resizeMode="cover" />
+      {hasImage ? (
+        <ImageBackground source={{ uri: spotlight.image_url }} style={styles.spotlightImageBg} resizeMode="cover">
+          <LinearGradient
+            colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.2)', 'rgba(0,0,0,0.88)']}
+            locations={[0, 0.45, 1]}
+            style={StyleSheet.absoluteFillObject}
+          />
+          {cardInner}
+        </ImageBackground>
+      ) : (
+        <View style={styles.spotlightNoImage}>
+          {cardInner}
+        </View>
       )}
-      <View style={styles.spotlightBody}>
-        <Text style={styles.spotlightTitle} numberOfLines={2}>{spotlight.title}</Text>
-        {!!spotlight.subtitle && (
-          <Text style={styles.spotlightSubtitle} numberOfLines={2}>{spotlight.subtitle}</Text>
-        )}
-        {!!partnerName && (
-          <Text style={styles.creditText}>Presented by {partnerName}</Text>
-        )}
-      </View>
     </TouchableOpacity>
   )
 }
@@ -291,20 +348,73 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER }) {
     destDescription: { fontSize: 14, color: MUTED, marginTop: 6, lineHeight: 20 },
     section: { paddingHorizontal: 20, paddingTop: 20 },
     sectionTitle: { fontSize: 16, fontWeight: '800', color: TEXT, marginBottom: 12 },
-    spotlightRow: { gap: 12, paddingRight: 20 },
     spotlightCard: {
-      width: 240,
-      borderRadius: 16,
+      width: '100%',
+      borderRadius: 20,
       overflow: 'hidden',
+      marginBottom: 14,
+    },
+    spotlightImageBg: {
+      width: '100%',
+      minHeight: 260,
+      justifyContent: 'flex-end',
+    },
+    spotlightNoImage: {
+      width: '100%',
       backgroundColor: CARD,
       borderWidth: 1,
       borderColor: BORDER,
+      borderRadius: 20,
     },
-    spotlightImage: { width: '100%', height: 130 },
-    spotlightBody: { padding: 12, gap: 4 },
-    spotlightTitle: { fontSize: 14, fontWeight: '800', color: TEXT },
-    spotlightSubtitle: { fontSize: 12, color: MUTED, lineHeight: 16 },
-    creditText: { fontSize: 11, color: AMBER, fontWeight: '700', marginTop: 4 },
+    spotlightBody: { padding: 18, gap: 5 },
+    spotlightBodyOnImage: { paddingTop: 44 },
+    spotlightBadgeRow: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      marginBottom: 8,
+    },
+    spotlightBadge: {
+      alignSelf: 'flex-start',
+      backgroundColor: AMBER,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: 999,
+    },
+    spotlightDateText: {
+      fontSize: 13,
+      fontWeight: '800',
+      color: '#FFFFFF',
+      letterSpacing: 0.3,
+      textShadowColor: 'rgba(0,0,0,0.5)',
+      textShadowOffset: { width: 0, height: 1 },
+      textShadowRadius: 3,
+      marginLeft: 10,
+    },
+    spotlightBadgeText: {
+      fontSize: 10,
+      fontWeight: '800',
+      color: '#1A1A2E',
+      letterSpacing: 0.6,
+    },
+    spotlightTitle: {
+      fontSize: 24,
+      fontWeight: '800',
+      color: '#FFFFFF',
+      lineHeight: 29,
+      textShadowColor: 'rgba(0,0,0,0.5)',
+      textShadowOffset: { width: 0, height: 1 },
+      textShadowRadius: 4,
+    },
+    spotlightSubtitle: {
+      fontSize: 14,
+      lineHeight: 20,
+      color: 'rgba(255,255,255,0.92)',
+      textShadowColor: 'rgba(0,0,0,0.4)',
+      textShadowOffset: { width: 0, height: 1 },
+      textShadowRadius: 3,
+    },
+    creditText: { fontSize: 11, color: AMBER, fontWeight: '700', marginTop: 6 },
     listCard: {
       flexDirection: 'row',
       alignItems: 'center',

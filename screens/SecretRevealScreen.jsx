@@ -8,6 +8,7 @@ import * as Location from 'expo-location'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as Haptics from 'expo-haptics'
 import { supabase } from '../lib/supabase'
+import { trackEvent } from '../lib/trackEvent'
 
 const AMBER  = '#F5A623'
 const NAVY   = '#1A1A2E'
@@ -160,6 +161,7 @@ export default function SecretRevealScreen({ route, navigation }) {
   }
 
   function openDirections() {
+    if (item?.id) trackEvent('directions_click', { itemId: item.id })
     if (itemLat && itemLng) {
       const url = `maps://?daddr=${itemLat},${itemLng}&dirflg=d`
       Linking.canOpenURL(url).then(ok =>

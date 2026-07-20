@@ -42,6 +42,9 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
     citySlug:      paramCitySlug,
     metroName:     paramMetroName,
     variants,
+    userCitySlug,                    // viewing user's metro — distinct from citySlug above,
+                                      // which is the LIST's own home metro (display/adopt-time
+                                      // city_id resolution), not who's looking at it
   } = route.params ?? {}
 
   // next10 mode: either a listId was passed (banner), or nothing was passed (deep link)
@@ -179,7 +182,7 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
 
   async function loadPreview(id) {
     setLoadingPreview(true)
-    const { data, error } = await fetchCuratedListItems(id)
+    const { data, error } = await fetchCuratedListItems(id, userCitySlug)
     if (!error) {
       setTotalCount(data.length)
       setPreviewItems(data.slice(0, 5))
@@ -342,6 +345,7 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
         groupEmoji:     groupEmoji ?? '🔟',
         curatedCityId:  cityRow?.id  ?? null,
         curatedMetroId: metroRow?.id ?? null,
+        userCitySlug,
       })
     } catch (e) {
       Alert.alert('Something went wrong', e.message)
