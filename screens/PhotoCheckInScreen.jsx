@@ -17,6 +17,7 @@ import { completeDare } from '../lib/completeDare'
 import * as Haptics from 'expo-haptics'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
 import { setPendingCheckIn } from '../lib/checkInResult'
+import { fanOutCheckIn } from '../lib/checkInFanOut'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
@@ -174,62 +175,20 @@ export default function PhotoCheckInScreen({ route, navigation }) {
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
 
-      // Secret items: mark checked on ALL active lists the user is in.
-      // - From a list: listItemId is set, primary insert above handled one list,
-      //   fan-out marks the rest.
-      // - From Nearby: listItemId is null, fan-out handles all lists at once.
-      // Both camelCase (useItems) and snake_case (useNearby) field names checked.
-      if ((item?.is_secret || item?.isSecret) && item?.id) {
-        try {
-          const today = new Date().toISOString().split('T')[0]
-
-          // Fetch all list_items for this item, with list dates so we can
-          // filter to active lists only — expired lists trigger a DB error
-          // that rolls back the entire upsert batch.
-          const { data: allListItems } = await supabase
-            .from('list_items')
-            .select('id, list_id, lists!inner(id, starts_at, ends_at)')
-            .eq('item_id', item.id)
-
-          const activeListItems = (allListItems ?? []).filter(li => {
-            const l = li.lists
-            if (!l) return false
-            if (l.starts_at && l.starts_at > today) return false
-            if (l.ends_at   && l.ends_at   < today) return false
-            return true
-          })
-
-          const remaining = listItemId
-            ? activeListItems.filter(li => li.id !== listItemId)
-            : activeListItems
-
-          if (remaining.length) {
-            const remainingListIds = remaining.map(li => li.list_id)
-
-            const { data: memberships } = await supabase
-              .from('list_members')
-              .select('list_id')
-              .eq('user_id', user.id)
-              .in('list_id', remainingListIds)
-
-            const memberListIds = new Set((memberships ?? []).map(m => m.list_id))
-            const toInsert = remaining
-              .filter(li => memberListIds.has(li.list_id))
-              .map(li => ({
-                user_id:        user.id,
-                list_item_id:   li.id,
-                item_id:        item.id, // every li here is a list_items row for this same item
-                checkin_method: 'photo',
-                photo_url:      photoUrl,
-              }))
-
-            if (toInsert.length) {
-              await supabase.from('check_ins').upsert(toInsert, { onConflict: 'user_id,list_item_id', ignoreDuplicates: true })
-            }
-          }
-        } catch {
-          // Non-critical — primary check-in already succeeded
-        }
+      // Mirror this check-off into every other active list containing the
+      // same item — fire and forget, non-critical. Was previously secret-item
+      // only (secrets needed cross-list reveal); generalized to all items —
+      // a check-off is a fact about the user and the item, not the list they
+      // were viewing. From Nearby, listItemId is null and this fans out to
+      // every list at once.
+      if (item?.id) {
+        fanOutCheckIn({
+          userId: user.id,
+          itemId: item.id,
+          excludeListItemId: listItemId,
+          checkinMethod: photoUrl ? 'photo' : 'tap',
+          photoUrl,
+        }).catch(() => {})
       }
 
       // Update streak — fire and forget, non-critical

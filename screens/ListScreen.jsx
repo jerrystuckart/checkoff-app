@@ -485,18 +485,23 @@ export default function ListScreen({ route, navigation }) {
 
       if (userErr || !user) return
 
-      const listItemIds = items.map(item => item.listItemId).filter(Boolean)
+      // Keyed by item_id, not list_item_id — a check-off made from a
+      // different list containing this same item must still show as
+      // checked here (and must NOT get reverted back to unchecked the
+      // next time this runs, which is exactly what a list_item_id-scoped
+      // lookup would do to a legitimately cross-list-checked item).
+      const itemIds = items.map(item => item.id).filter(Boolean)
 
-      if (!listItemIds.length) {
+      if (!itemIds.length) {
         setLocalItems(items)
         return
       }
 
       const { data: checkIns, error: checkErr } = await supabase
         .from('check_ins')
-        .select('list_item_id, checked_at, personal_place, personal_note')
+        .select('item_id, checked_at, personal_place, personal_note')
         .eq('user_id', user.id)
-        .in('list_item_id', listItemIds)
+        .in('item_id', itemIds)
 
       if (checkErr) throw checkErr
 
@@ -504,7 +509,7 @@ export default function ListScreen({ route, navigation }) {
       if (checkOffInFlight.current) return
 
       const checkedMap = new Map(
-        (checkIns ?? []).map(ci => [String(ci.list_item_id), ci])
+        (checkIns ?? []).map(ci => [String(ci.item_id), ci])
       )
 
       // Use localItems as base to preserve any optimistic state not yet in DB
@@ -512,8 +517,8 @@ export default function ListScreen({ route, navigation }) {
         const base = prev.length > 0 ? prev : items
         return base.map(item => {
           // If DB confirms this item is checked, always trust DB
-          if (checkedMap.has(String(item.listItemId))) {
-            const ci = checkedMap.get(String(item.listItemId))
+          if (checkedMap.has(String(item.id))) {
+            const ci = checkedMap.get(String(item.id))
             return {
               ...item,
               checked:       true,
@@ -981,6 +986,7 @@ export default function ListScreen({ route, navigation }) {
           setMemoryError(null)
           setMemoryModal({
             listItemId: listItemId,
+            itemId:      item?.id ?? null,
             placeLabel:  item.personalPlaceLabel  ?? 'Place or location',
             noteLabel:   item.personalPromptLabel ?? 'Any notes?',
             itemBody:    item.body    ?? '',
@@ -1138,14 +1144,18 @@ export default function ListScreen({ route, navigation }) {
     setMemoryError(null)
     try {
       const { data: { user } } = await supabase.auth.getUser()
-      const { data: updatedCI, error } = await supabase
+      // Fanned out by item_id — every sibling check-in row for this user+item
+      // gets the same note, not just the one for the list being viewed.
+      // Otherwise viewing the same check-off's memory from a different list
+      // would show it missing, the same trust break this task exists to fix.
+      const { data: updatedRows, error } = await supabase
         .from('check_ins')
         .update({ personal_place: place || null, personal_note: note || null })
         .eq('user_id', user.id)
-        .eq('list_item_id', memoryModal.listItemId)
-        .select('id')
-        .single()
+        .eq('item_id', memoryModal.itemId)
+        .select('id, list_item_id')
       if (error) throw error
+      const updatedCI = (updatedRows ?? []).find(r => r.list_item_id === memoryModal.listItemId) ?? updatedRows?.[0] ?? null
       // Optimistic update so the note displays immediately
       setLocalItems(prev => prev.map(i =>
         i.listItemId === memoryModal.listItemId
@@ -1186,17 +1196,23 @@ export default function ListScreen({ route, navigation }) {
     if (!currentUserId) return
     setDetailLoading(true)
     try {
+      // Keyed by item_id, not list_item_id — a check-off made from a
+      // different list containing this same item still surfaces its photo
+      // and date here. Prefer the row belonging to the list being viewed
+      // (most likely to have a personal note attached via saveMemory), else
+      // fall back to the most recent row for this item.
       const { data, error } = await supabase
         .from('check_ins')
-        .select('id, checked_at, photo_url, personal_place, personal_note')
-        .eq('list_item_id', item.listItemId)
+        .select('id, list_item_id, checked_at, photo_url, personal_place, personal_note')
+        .eq('item_id', item.id)
         .eq('user_id', currentUserId)
-        .maybeSingle()
+        .order('checked_at', { ascending: false })
       if (error) {
         console.error('openDetailModal: check_ins query failed:', error.message)
       }
 
-      const ciData = data ?? null
+      const rows = data ?? []
+      const ciData = rows.find(r => r.list_item_id === item.listItemId) ?? rows[0] ?? null
       console.log('[view memory] photo_url raw:', ciData?.photo_url ?? null)
       setDetailCI(ciData)
     } catch (e) {
@@ -1961,6 +1977,7 @@ export default function ListScreen({ route, navigation }) {
                     setMemoryError(null)
                     setMemoryModal({
                       listItemId: item?.listItemId,
+                      itemId:     item?.id ?? null,
                       placeLabel: item?.personalPlaceLabel ?? 'Place or location',
                       noteLabel:  item?.personalPromptLabel ?? 'Any notes?',
                     })

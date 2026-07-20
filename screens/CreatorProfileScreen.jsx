@@ -135,20 +135,24 @@ export default function CreatorProfileScreen({ route, navigation }) {
         setFollowStateMap(fMap)
       }
 
-      // 6. Load checked IDs for all lists in one query.
+      // 6. Load checked state for all lists in one query — keyed by item_id,
+      // not list_item_id, so an item checked off via a DIFFERENT list still
+      // shows checked here. cMap still stores list_item ids per list (that's
+      // what the render below looks up by), just populated via an item_id
+      // match rather than a list_item_id match.
       if (user && lists.length > 0) {
-        const allItemIds = itemResults.flatMap(r => (r.data ?? []).map(li => li.id))
+        const allItemIds = itemResults.flatMap(r => (r.data ?? []).map(li => li.items?.id).filter(Boolean))
         if (allItemIds.length > 0) {
           const { data: checkins } = await supabase
             .from('check_ins')
-            .select('list_item_id')
+            .select('item_id')
             .eq('user_id', user.id)
-            .in('list_item_id', allItemIds)
-          const checkedSet = new Set((checkins ?? []).map(c => c.list_item_id))
+            .in('item_id', allItemIds)
+          const checkedItemIdSet = new Set((checkins ?? []).map(c => c.item_id))
           const cMap = {}
           itemResults.forEach((r, i) => {
             const lid = lists[i].id
-            cMap[lid] = new Set((r.data ?? []).filter(li => checkedSet.has(li.id)).map(li => li.id))
+            cMap[lid] = new Set((r.data ?? []).filter(li => checkedItemIdSet.has(li.items?.id)).map(li => li.id))
           })
           setCheckedIdsMap(cMap)
         }

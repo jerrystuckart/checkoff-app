@@ -27,6 +27,7 @@ import TierUpgradeCelebrationModal from '../components/TierUpgradeCelebrationMod
 import { useTheme } from '../lib/ThemeContext'
 import { trackEvent } from '../lib/trackEvent'
 import { haversineMeters } from '../lib/distance'
+import { fanOutCheckIn } from '../lib/checkInFanOut'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
@@ -306,25 +307,16 @@ export default function ItemDetailScreen({ route, navigation }) {
       const { data: authData } = await supabase.auth.getUser()
       uid = authData?.user?.id ?? null
     }
-    if (!uid || !item) return
+    if (!uid || !item?.id) return
 
     try {
-      let listItemId = item?.listItemId
-
-      if (!listItemId && item?.id) {
-        listItemId = await getOrCreateListItemId(item.id, uid)
-      }
-
-      if (!listItemId) {
-        setChecked(false)
-        return
-      }
-
+      // Keyed by item_id, not list_item_id — a check-off made from a
+      // different list containing this same item still shows as checked.
       const { data, error } = await supabase
         .from('check_ins')
         .select('id')
         .eq('user_id', uid)
-        .eq('list_item_id', listItemId)
+        .eq('item_id', item.id)
         .limit(1)
 
       if (error) throw error
@@ -494,20 +486,25 @@ export default function ItemDetailScreen({ route, navigation }) {
       }
 
       if (checked) {
+        // Global by item_id, not just this list's row — a check-off is a
+        // fact about the user and the item, so unchecking must be too.
         const { error } = await supabase
           .from('check_ins')
           .delete()
           .eq('user_id', userId)
-          .eq('list_item_id', listItemId)
+          .eq('item_id', item?.id ?? null)
 
         if (error) throw error
         setChecked(false)
       } else {
+        // item_id is the canonical, always-available path to this check-in's
+        // item — it survives list deletion (list_item_id goes null then).
         const { error } = await supabase
           .from('check_ins')
           .insert({
             user_id: userId,
             list_item_id: listItemId,
+            item_id: item?.id ?? null,
             checkin_method: 'tap',
           })
 
@@ -541,6 +538,17 @@ export default function ItemDetailScreen({ route, navigation }) {
         await updateUserLifetimePoints(userId).catch(() => {})
         if (item?.id) completeDare(userId, item.id).catch(() => {})
 
+        // Mirror this check-off into every other active list containing
+        // the same item — fire and forget, non-critical.
+        if (item?.id) {
+          fanOutCheckIn({
+            userId,
+            itemId: item.id,
+            excludeListItemId: listItemId,
+            checkinMethod: 'tap',
+          }).catch(() => {})
+        }
+
         const difficulty = item?.difficulty ?? 0
         if (item?.allowsPersonalNote) {
           setMemoryPlace('')
@@ -548,6 +556,7 @@ export default function ItemDetailScreen({ route, navigation }) {
           setMemoryError(null)
           setMemoryModal({
             listItemId: listItemId,
+            itemId:      item?.id ?? null,
             placeLabel:  item.personalPlaceLabel  ?? 'Place or location',
             noteLabel:   item.personalPromptLabel ?? 'Any notes?',
             itemBody:    item.body ?? '',
@@ -673,17 +682,21 @@ export default function ItemDetailScreen({ route, navigation }) {
     setSaving(true)
     try {
       if (checked) {
+        // Global by item_id, not just this list's row — a check-off is a
+        // fact about the user and the item, so unchecking must be too.
         const { error } = await supabase
           .from('check_ins')
           .delete()
           .eq('user_id', userId)
-          .eq('list_item_id', itemOnListId)
+          .eq('item_id', item?.id ?? null)
         if (error) throw error
         setChecked(false)
       } else {
+        // item_id is the canonical, always-available path to this check-in's
+        // item — it survives list deletion (list_item_id goes null then).
         const { error } = await supabase
           .from('check_ins')
-          .insert({ user_id: userId, list_item_id: itemOnListId, checkin_method: 'tap' })
+          .insert({ user_id: userId, list_item_id: itemOnListId, item_id: item?.id ?? null, checkin_method: 'tap' })
         if (error && error.code !== '23505') throw error
         setChecked(true)
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
@@ -693,6 +706,17 @@ export default function ItemDetailScreen({ route, navigation }) {
         updateUserLifetimePoints(userId).catch(() => {})
         if (item?.id) completeDare(userId, item.id).catch(() => {})
 
+        // Mirror this check-off into every other active list containing
+        // the same item — fire and forget, non-critical.
+        if (item?.id) {
+          fanOutCheckIn({
+            userId,
+            itemId: item.id,
+            excludeListItemId: itemOnListId,
+            checkinMethod: 'tap',
+          }).catch(() => {})
+        }
+
         const difficulty = item?.difficulty ?? 0
         if (item?.allowsPersonalNote) {
           setMemoryPlace('')
@@ -700,6 +724,7 @@ export default function ItemDetailScreen({ route, navigation }) {
           setMemoryError(null)
           setMemoryModal({
             listItemId: itemOnListId,
+            itemId:      item?.id ?? null,
             placeLabel:  item.personalPlaceLabel  ?? 'Place or location',
             noteLabel:   item.personalPromptLabel ?? 'Any notes?',
             itemBody:    item.body ?? '',
@@ -857,14 +882,18 @@ export default function ItemDetailScreen({ route, navigation }) {
     setMemorySaving(true)
     setMemoryError(null)
     try {
-      const { data: updatedCI, error } = await supabase
+      // Fanned out by item_id — every sibling check-in row for this user+item
+      // gets the same note, not just the one for the list being viewed.
+      // Otherwise viewing the same check-off's memory from a different list
+      // would show it missing, the same trust break this task exists to fix.
+      const { data: updatedRows, error } = await supabase
         .from('check_ins')
         .update({ personal_place: place || null, personal_note: note || null })
         .eq('user_id', userId)
-        .eq('list_item_id', memoryModal.listItemId)
-        .select('id')
-        .single()
+        .eq('item_id', memoryModal.itemId)
+        .select('id, list_item_id')
       if (error) throw error
+      const updatedCI = (updatedRows ?? []).find(r => r.list_item_id === memoryModal.listItemId) ?? updatedRows?.[0] ?? null
       if ((memoryModal.difficulty ?? 0) >= 5) {
         notifyCrewCheckIn({
           listItemId: memoryModal.listItemId,
