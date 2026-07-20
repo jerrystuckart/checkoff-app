@@ -15,18 +15,10 @@ import { getTierByName, getNextTier, getTierProgress } from '../lib/tiers'
 import { useTheme } from '../lib/ThemeContext'
 import ExperiencesRail from '../components/ExperiencesRail'
 import * as Sentry from '@sentry/react-native'
+import { haversineMeters } from '../lib/distance'
 
 const PURPLE = '#7A4DB3'
 const LIST_ACCENT_COLORS = ['#F5A623', '#7A4DB3', '#2E7D8C', '#2E6B3E', '#C0674A', '#378ADD']
-
-function haversineMeters(lat1, lng1, lat2, lng2) {
-  const R = 6371000
-  const dLat = (lat2 - lat1) * Math.PI / 180
-  const dLng = (lng2 - lng1) * Math.PI / 180
-  const a = Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLng / 2) ** 2
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-}
 
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets()

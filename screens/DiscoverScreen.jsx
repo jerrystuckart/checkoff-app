@@ -9,6 +9,7 @@ import { useFocusEffect } from '@react-navigation/native'
 import { useNearby } from '../lib/useNearby'
 import { useTheme } from '../lib/ThemeContext'
 import { supabase } from '../lib/supabase'
+import { haversineMeters } from '../lib/distance'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
@@ -22,15 +23,6 @@ const RINGS = [
   { weight: 2, label: 'Metro',       color: '#BA7517' },
   { weight: 3, label: 'Destination', color: '#D85A30' },
 ]
-
-function distMeters(lat1, lng1, lat2, lng2) {
-  const R    = 6371000
-  const dLat = (lat2 - lat1) * Math.PI / 180
-  const dLon = (lng2 - lng1) * Math.PI / 180
-  const a    = Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
-}
 
 function distLabel(m) {
   if (m < 160)  return 'Right here'
@@ -54,7 +46,7 @@ function augmentWithDistance(rawItems, userCoords) {
     let dist = null
     let ring = 3  // default to Destination ring when no location
     if (item.maps_lat && item.maps_lng && userCoords) {
-      dist = distMeters(userCoords.latitude, userCoords.longitude, item.maps_lat, item.maps_lng)
+      dist = haversineMeters(userCoords.latitude, userCoords.longitude, item.maps_lat, item.maps_lng)
       const r = ringForDist(dist)
       ring = r < 0 ? 3 : r  // cap beyond-max items at Destination, don't exclude
     }
@@ -383,7 +375,7 @@ export default function DiscoverScreen({ navigation, route }) {
       if (tagResultItems === null) {
         base = base.map(item => {
           if (!item.maps_lat || !item.maps_lng) return item
-          const d    = distMeters(postCheckin.lat, postCheckin.lng, item.maps_lat, item.maps_lng)
+          const d    = haversineMeters(postCheckin.lat, postCheckin.lng, item.maps_lat, item.maps_lng)
           const ring = ringForDist(d)
           return { ...item, dist_m: d, dist_label: distLabel(d), ring_weight: ring < 0 ? 3 : ring }
         }).filter(i => i.ring_weight !== -1)

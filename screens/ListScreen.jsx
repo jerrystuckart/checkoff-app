@@ -37,11 +37,38 @@ import { checkTierCrossingForUser } from '../lib/points'
 import { useTheme } from '../lib/ThemeContext'
 import * as Location from 'expo-location'
 import { trackEvent } from '../lib/trackEvent'
+import { haversineMeters } from '../lib/distance'
+import { proximitySort, formatDistanceLabel } from '../lib/proximity'
+import { getSessionDensityTier } from '../lib/densityTier'
 
 const ACCENT = '#FFB84D'
 const ACCENT_DARK = '#7A4B00'
 const TIER_ORDER = ['Starter', 'Explorer', 'Local', 'Insider', 'Legend']
 // Colors now come from ThemeContext — see useTheme() inside the component
+
+// Sort-mode preference — module-level so it survives navigating between
+// lists within the same app session, but resets to the default on every
+// fresh cold start (no AsyncStorage — this is intentionally session-only).
+let sessionSortMode = 'nearest'
+
+// Sorts every item in a group by the active sort mode — checked items rank
+// on distance/A-Z exactly like unchecked ones (their "done" styling in
+// renderItem communicates checked state, not their position). This isn't
+// sort-to-bottom (Fix 4, ListScreen.jsx:640 originally): a checked item's
+// coordinates don't change when it's checked, so its distance — and
+// therefore its rank — doesn't change either. Nothing pins or demotes it.
+function sortGroupBySortMode(group, sortMode, userLocation, tier) {
+  if (sortMode === 'az') {
+    return [...group].sort((a, b) => (a.body ?? '').localeCompare(b.body ?? ''))
+  }
+  const loc = userLocation ? { latitude: userLocation.latitude, longitude: userLocation.longitude } : null
+  return proximitySort(group, loc, {
+    includeUniversal: true,
+    maxDistance: null,
+    interleave: true,
+    tier,
+  }).items
+}
 // ENDED_BG, ENDED_BORDER, ENDED_TEXT now come from ThemeContext (light/dark aware)
 
 function computeInsiderUnlocked(item, userLifetimePts, userInsiderTier) {
@@ -122,6 +149,14 @@ export default function ListScreen({ route, navigation }) {
   const [listDeleted, setListDeleted] = useState(false)
   const [hubDestinationId, setHubDestinationId] = useState(null)
   const [destListIsActive, setDestListIsActive] = useState(null)
+
+  const [sortMode, setSortModeState] = useState(sessionSortMode)
+  const setSortMode = useCallback((mode) => {
+    sessionSortMode = mode
+    setSortModeState(mode)
+  }, [])
+  const [userLocation, setUserLocation] = useState(null)
+  const [sessionTier, setSessionTier] = useState(null)
 
   const {
     items,
@@ -278,6 +313,41 @@ export default function ListScreen({ route, navigation }) {
       loadListMeta()
     }
   }, [listId])
+
+  // Request location once per list open so items can render distance-sorted
+  // (Nearest default). Denial/failure leaves userLocation null — proximitySort's
+  // own no-location fallback (universal-first, no distances, no error) handles
+  // that case, so nothing else needs to branch on it here.
+  useEffect(() => {
+    if (!listId) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync()
+        if (status !== 'granted') return
+        const pos = await Promise.race([
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 6000)),
+        ]).catch(() => Location.getLastKnownPositionAsync({}))
+        if (!cancelled && pos?.coords) setUserLocation(pos.coords)
+      } catch {
+        // location unavailable — proximitySort's no-location fallback handles this
+      }
+    })()
+    return () => { cancelled = true }
+  }, [listId])
+
+  // Density tier reflects the user's surroundings, not this one list's item
+  // count — fetched (and cached) once per session by getSessionDensityTier,
+  // not derived from `items` here. See lib/densityTier.js.
+  useEffect(() => {
+    if (!userLocation) return
+    let cancelled = false
+    getSessionDensityTier(userLocation).then(result => {
+      if (!cancelled && result) setSessionTier(result)
+    })
+    return () => { cancelled = true }
+  }, [userLocation])
 
   // Independent of how this screen was reached — resolves the destination
   // this list is linked to, for both the "View Destination Hub" button and
@@ -637,14 +707,30 @@ export default function ListScreen({ route, navigation }) {
 
   const sortedFiltered = useMemo(() => {
     const getGroup = (item) => {
-      // Checked items stay in their original position (Fix 4 — no sort-to-bottom)
       const unlocked = computeInsiderUnlocked(item, userLifetimePts, userInsiderTier)
       if (item.isInsiderDrop && !unlocked) return 0
       if (item.isInsiderDrop && unlocked)  return 1
       return 2
     }
-    return [...filtered].sort((a, b) => getGroup(a) - getGroup(b))
-  }, [filtered, userLifetimePts, userInsiderTier])
+
+    // Stable-partition into the three insider-lock groups — unchanged.
+    const groups = [[], [], []]
+    filtered.forEach(item => groups[getGroup(item)].push(item))
+
+    if (!listId) {
+      // City-browse fallback (no single list in view) — out of scope for
+      // the Nearest/A-Z sort; keep prior stable group-order behavior.
+      return groups.flat()
+    }
+
+    // Within each group, every item — checked or not — ranks by the active
+    // sort mode. See sortGroupBySortMode above for why this doesn't
+    // reintroduce sort-to-bottom.
+    const tier = sessionTier?.tier ?? null
+    return groups
+      .map(group => sortGroupBySortMode(group, sortMode, userLocation, tier))
+      .flat()
+  }, [filtered, userLifetimePts, userInsiderTier, listId, sortMode, userLocation, sessionTier])
 
   // Runs a flash animation on the checked item row for Rare/Legend/Partner
   const triggerCelebration = useCallback((listItemId, difficulty) => {
@@ -708,13 +794,7 @@ export default function ListScreen({ route, navigation }) {
       return
     }
 
-    const toRad = d => (d * Math.PI) / 180
-    const R = 6371000
-    const dLat = toRad(lat - userLat)
-    const dLng = toRad(lng - userLng)
-    const a = Math.sin(dLat / 2) ** 2 +
-      Math.cos(toRad(userLat)) * Math.cos(toRad(lat)) * Math.sin(dLng / 2) ** 2
-    const distM = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+    const distM = haversineMeters(userLat, userLng, lat, lng)
 
     if (distM > 8047) {
       if (__DEV__) console.log('postCheckin skip: user too far from item', Math.round(distM) + 'm')
@@ -796,11 +876,7 @@ export default function ListScreen({ route, navigation }) {
       return false
     }
 
-    const R = 6371000, toRad = d => d * Math.PI / 180
-    const dLat = toRad(itemLat - userLat), dLng = toRad(itemLng - userLng)
-    const a = Math.sin(dLat / 2) ** 2 +
-      Math.cos(toRad(userLat)) * Math.cos(toRad(itemLat)) * Math.sin(dLng / 2) ** 2
-    const distM = R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+    const distM = haversineMeters(userLat, userLng, itemLat, itemLng)
 
     const thresholdM = item?.geo_radius_m ?? 500
     if (distM > thresholdM) {
@@ -1286,6 +1362,12 @@ export default function ListScreen({ route, navigation }) {
               </View>
             )}
 
+            {sortMode === 'nearest' && item.distM != null && (
+              <View style={styles.tagDistance}>
+                <Text style={styles.tagDistanceText}>{formatDistanceLabel(item.distM)}</Text>
+              </View>
+            )}
+
             {ended && (
               <View style={styles.tagEnded}>
                 <Text style={styles.tagEndedText}>Ended</Text>
@@ -1331,7 +1413,7 @@ export default function ListScreen({ route, navigation }) {
       </TouchableOpacity>
       </View>
     )
-  }, [navigation, route.params, listId, ended, destListInactive, handleCheckOff, celebratingId, flashAnim, userLifetimePts, userInsiderTier])
+  }, [navigation, route.params, listId, ended, destListInactive, handleCheckOff, celebratingId, flashAnim, userLifetimePts, userInsiderTier, sortMode])
 
   const headerEl = useMemo(() => (
     <View style={[styles.headerBlock, heroImage && { paddingTop: headerHeight }]}>
@@ -1469,6 +1551,27 @@ export default function ListScreen({ route, navigation }) {
         </ScrollView>
       </View>
 
+      {listId && (
+        <View style={styles.sortToggleRow}>
+          <TouchableOpacity
+            style={[styles.filterPill, sortMode === 'nearest' && styles.filterPillActive]}
+            onPress={() => setSortMode('nearest')}
+          >
+            <Text style={[styles.filterText, sortMode === 'nearest' && styles.filterTextActive]}>
+              Nearest
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterPill, sortMode === 'az' && styles.filterPillActive]}
+            onPress={() => setSortMode('az')}
+          >
+            <Text style={[styles.filterText, sortMode === 'az' && styles.filterTextActive]}>
+              A–Z
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       <TouchableOpacity
         style={styles.toggleRow}
         onPress={() => setShowChecked(v => !v)}
@@ -1496,6 +1599,7 @@ export default function ListScreen({ route, navigation }) {
     searchFocused,
     filter,
     showChecked,
+    sortMode,
     filtered.length,
     navigation,
     tick,
@@ -2233,6 +2337,11 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, EN
     fontWeight: '800',
   },
 
+  sortToggleRow: {
+    flexDirection: 'row',
+    marginBottom: 10,
+  },
+
   toggleRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2459,6 +2568,21 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, EN
   tagCityText: {
     fontSize: 11,
     color: '#295EA8',
+    fontWeight: '700',
+  },
+
+  tagDistance: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: '#EAF8F2',
+    borderWidth: 1,
+    borderColor: '#BFE7D7',
+  },
+
+  tagDistanceText: {
+    fontSize: 11,
+    color: '#1D6A50',
     fontWeight: '700',
   },
 

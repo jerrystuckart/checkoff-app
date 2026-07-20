@@ -9,6 +9,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as Haptics from 'expo-haptics'
 import { supabase } from '../lib/supabase'
 import { trackEvent } from '../lib/trackEvent'
+import { haversineMeters } from '../lib/distance'
 
 const AMBER  = '#F5A623'
 const NAVY   = '#1A1A2E'
@@ -126,7 +127,7 @@ export default function SecretRevealScreen({ route, navigation }) {
 
   function handlePosition(coords) {
     if (revealedRef.current) return
-    const dist = haversineDistance(coords.latitude, coords.longitude, itemLat, itemLng)
+    const dist = haversineMeters(coords.latitude, coords.longitude, itemLat, itemLng)
     setDistance(Math.round(dist))
     if (dist <= requiredRadius) {
       revealedRef.current = true
@@ -343,16 +344,6 @@ export default function SecretRevealScreen({ route, navigation }) {
       </ScrollView>
     </View>
   )
-}
-
-function haversineDistance(lat1, lon1, lat2, lon2) {
-  const R    = 6371000
-  const phi1 = lat1 * Math.PI / 180
-  const phi2 = lat2 * Math.PI / 180
-  const dPhi = (lat2 - lat1) * Math.PI / 180
-  const dLam = (lon2 - lon1) * Math.PI / 180
-  const a    = Math.sin(dPhi/2)**2 + Math.cos(phi1)*Math.cos(phi2)*Math.sin(dLam/2)**2
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
 }
 
 const styles = StyleSheet.create({

@@ -6,9 +6,12 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { CommonActions } from '@react-navigation/native'
 import { useHeaderHeight } from '@react-navigation/elements'
+import * as Location from 'expo-location'
 import { supabase } from '../lib/supabase'
 import { fetchCuratedListItems } from '../lib/useItems'
 import { useTheme } from '../lib/ThemeContext'
+import { proximitySort } from '../lib/proximity'
+import { getSessionDensityTier } from '../lib/densityTier'
 
 const AMBER  = '#F5A623'
 const NAVY   = '#1A1A2E'
@@ -62,7 +65,7 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
 
   // ── Core list state ──
   const [selectedId, setSelectedId]         = useState(listId ?? curatedListId ?? null)
-  const [previewItems, setPreviewItems]     = useState([])
+  const [rawPreviewItems, setRawPreviewItems] = useState([]) // full fetched set, unsliced
   const [totalCount, setTotalCount]         = useState(0)
   const [loadingPreview, setLoadingPreview] = useState(true)
   const [adopting, setAdopting]             = useState(false)
@@ -71,6 +74,12 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
   const [user, setUser]                     = useState(null)
   const [fetchError, setFetchError]         = useState(null) // null | 'no_list' | 'fetch_failed'
   const [next10EndsAt, setNext10EndsAt]     = useState(null)
+
+  // Location for nearest-5 sort — no toggle on this screen, this is a
+  // preview, not a browse surface. Denial/failure just leaves userLocation
+  // null, which falls back to the original display_order slice below.
+  const [userLocation, setUserLocation]     = useState(null)
+  const [sessionTier, setSessionTier]       = useState(null)
 
   // Transparent header when group image is present
   useEffect(() => {
@@ -87,6 +96,38 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data?.user ?? null))
   }, [])
+
+  // One-shot location fetch for the nearest-5 sort. Denial/failure/timeout
+  // leaves userLocation null — the derived previewItems memo below falls
+  // back to the original display_order slice in that case, no error state.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync()
+        if (status !== 'granted') return
+        const pos = await Promise.race([
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 6000)),
+        ]).catch(() => Location.getLastKnownPositionAsync({}))
+        if (!cancelled && pos?.coords) setUserLocation(pos.coords)
+      } catch {
+        // location unavailable — falls back to display_order slice
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  // Density tier reflects the user's surroundings, not this one preview's
+  // item count — fetched (and session-cached) by getSessionDensityTier.
+  useEffect(() => {
+    if (!userLocation) return
+    let cancelled = false
+    getSessionDensityTier(userLocation).then(result => {
+      if (!cancelled && result) setSessionTier(result)
+    })
+    return () => { cancelled = true }
+  }, [userLocation])
 
   // next10 mode: fetch list metadata + metro
   useEffect(() => {
@@ -185,10 +226,24 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
     const { data, error } = await fetchCuratedListItems(id, userCitySlug)
     if (!error) {
       setTotalCount(data.length)
-      setPreviewItems(data.slice(0, 5))
+      setRawPreviewItems(data)
     }
     setLoadingPreview(false)
   }
+
+  // Nearest-5 sort — recomputed (no re-fetch) whenever location or the
+  // session density tier resolves, so a late GPS fix still re-sorts the
+  // already-loaded preview instead of being stuck with the first-load order.
+  const previewItems = useMemo(() => {
+    if (!userLocation) return rawPreviewItems.slice(0, 5)
+    const sorted = proximitySort(rawPreviewItems, userLocation, {
+      includeUniversal: true,
+      maxDistance: null,
+      interleave: true,
+      tier: sessionTier?.tier ?? null,
+    }).items
+    return sorted.slice(0, 5)
+  }, [rawPreviewItems, userLocation, sessionTier])
 
 
   async function handleNext10Join() {
