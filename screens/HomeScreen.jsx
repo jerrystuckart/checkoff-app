@@ -11,11 +11,14 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { supabase } from '../lib/supabase'
 import { fetchCuratedLists } from '../lib/useItems'
 import { useCrewInvite } from '../lib/useCrewInvite'
+import { useLeaderboard } from '../lib/useLeaderboard'
 import { getTierByName, getNextTier, getTierProgress } from '../lib/tiers'
 import { useTheme } from '../lib/ThemeContext'
 import ExperiencesRail from '../components/ExperiencesRail'
 import * as Sentry from '@sentry/react-native'
 import { haversineMeters } from '../lib/distance'
+import { proximitySort, formatDistanceLabel } from '../lib/proximity'
+import { getSessionDensityTier } from '../lib/densityTier'
 
 const PURPLE = '#7A4DB3'
 const LIST_ACCENT_COLORS = ['#F5A623', '#7A4DB3', '#2E7D8C', '#2E6B3E', '#C0674A', '#378ADD']
@@ -56,6 +59,16 @@ export default function HomeScreen({ navigation }) {
   const [featuredCreators, setFeaturedCreators] = useState([])
   const [nearbyZone, setNearbyZone] = useState(null)
   const [zoneBannerDismissed, setZoneBannerDismissed] = useState(false)
+
+  // "Near you right now" rail — B1. userLocation is the same one-shot fix
+  // already used for metro auto-select + zone detection above, reused here
+  // rather than requesting location a second time.
+  const [userLocation, setUserLocation] = useState(null)
+  const [sessionTier, setSessionTier] = useState(null)
+  const [rawNearbyItems, setRawNearbyItems] = useState([]) // unsorted candidate pool
+  const [checkedItemIds, setCheckedItemIds] = useState(new Set())
+  const [nearbyLoading, setNearbyLoading] = useState(false)
+  const [seasonalCounts, setSeasonalCounts] = useState({ checked: 0, total: 0 })
 
   const { savedCrew } = useCrewInvite()
 
@@ -138,6 +151,8 @@ export default function HomeScreen({ navigation }) {
 
         if (locationResult !== null) {
           const { latitude: uLat, longitude: uLng } = locationResult
+          // Reused by the "Near you right now" rail below instead of a second GPS fetch.
+          setUserLocation(locationResult)
           const metros = metroData ?? []
           // Pick the metro whose center_lat/center_lng is closest to the user.
           // Falls back to name-match if center coords are missing (e.g. during migration).
@@ -221,6 +236,10 @@ export default function HomeScreen({ navigation }) {
     ?? selectedMetro?.slug
     ?? selectedMetro?.name?.toLowerCase().replace(/\s+metro/i, '').trim()
     ?? 'phoenix'
+  // Fire and forget — non-critical dressing, shouldn't delay the rest of
+  // Home's render. Populates rawNearbyItems/checkedItemIds whenever ready.
+  loadNearbyRail(metroId, userId)
+
   try {
     const today = new Date().toISOString().split('T')[0]
 
@@ -350,6 +369,72 @@ export default function HomeScreen({ navigation }) {
     }
   } catch (e) {
     // ← Silent fail
+  }
+}
+
+// Candidate item pool for the "Near you right now" rail — mirrors
+// useNearby.js's precedent (is_active/is_approved items are the general
+// discoverability boundary, independent of list membership) but, unlike
+// Nearby, includes universal items and applies no ring/distance cap —
+// proximitySort's Home config handles interleaving. Fetching neighborhood
+// ids first (rather than an inner-joined embed filter) keeps this to
+// plain, proven top-level column filters.
+async function loadNearbyRail(metroId, userId) {
+  setNearbyLoading(true)
+  try {
+    const { data: hoods } = await supabase
+      .from('neighborhoods')
+      .select('id')
+      .eq('metro_id', metroId)
+    const neighborhoodIds = (hoods ?? []).map(h => h.id)
+
+    const itemCols = `
+      id, body, checkin_type, is_universal, difficulty, photo_required,
+      maps_lat, maps_lng, geo_radius_m, is_secret,
+      categories(name, color_hex)
+    `
+
+    const queries = [
+      supabase
+        .from('items')
+        .select(itemCols)
+        .eq('is_active', true)
+        .eq('is_approved', true)
+        .eq('is_universal', true),
+    ]
+    if (neighborhoodIds.length > 0) {
+      queries.push(
+        supabase
+          .from('items')
+          .select(itemCols)
+          .eq('is_active', true)
+          .eq('is_approved', true)
+          .eq('is_universal', false)
+          .not('maps_lat', 'is', null)
+          .not('maps_lng', 'is', null)
+          .in('neighborhood_id', neighborhoodIds)
+      )
+    }
+
+    const results = await Promise.all(queries)
+    const rawItems = results.flatMap(r => r.data ?? [])
+    setRawNearbyItems(rawItems)
+
+    if (userId && rawItems.length > 0) {
+      const itemIds = rawItems.map(i => i.id)
+      const { data: checkins } = await supabase
+        .from('check_ins')
+        .select('item_id')
+        .eq('user_id', userId)
+        .in('item_id', itemIds)
+      setCheckedItemIds(new Set((checkins ?? []).map(c => c.item_id)))
+    } else {
+      setCheckedItemIds(new Set())
+    }
+  } catch (e) {
+    console.warn('loadNearbyRail error:', e.message)
+  } finally {
+    setNearbyLoading(false)
   }
 }
 
@@ -494,6 +579,40 @@ export default function HomeScreen({ navigation }) {
     const id = setInterval(() => setTick(t => t + 1), 60000)
     return () => clearInterval(id)
   }, [])
+
+  // Density tier for the "Near you right now" rail — session-cached by
+  // getSessionDensityTier, computed against the full item candidate set
+  // (not just what this rail happens to show). See lib/densityTier.js.
+  useEffect(() => {
+    if (!userLocation) return
+    let cancelled = false
+    getSessionDensityTier(userLocation).then(result => {
+      if (!cancelled && result) setSessionTier(result)
+    })
+    return () => { cancelled = true }
+  }, [userLocation])
+
+  // Nearest 5 unchecked items — recomputed (no re-fetch) whenever location or
+  // the session tier resolves, so a late GPS fix or tier still re-sorts the
+  // already-loaded candidate pool. Home config: universal included, no
+  // distance cap, interleaved by density tier.
+  const nearbyRailItems = useMemo(() => {
+    const { items: sorted } = proximitySort(rawNearbyItems, userLocation, {
+      includeUniversal: true,
+      maxDistance: null,
+      interleave: true,
+      tier: sessionTier?.tier ?? null,
+    })
+    return sorted.filter(item => !checkedItemIds.has(item.id)).slice(0, 5)
+  }, [rawNearbyItems, userLocation, sessionTier, checkedItemIds])
+
+  // Location denied/unavailable, or genuinely nothing nearby (empty tier) —
+  // both read as "do these anywhere" rather than a failure state. Suppressed
+  // when the user is inside a recognized Destination Hub zone: the zone
+  // banner already tells them they're somewhere specific, so the rail
+  // shouldn't contradict it with "nothing around here" copy even if the
+  // coarse item-density heuristic says this area is sparse.
+  const railShowsAnywhereCopy = !nearbyZone && (!userLocation || sessionTier?.tier === 'empty')
 
   // Monday recap trigger — fires once on mount, entirely fire-and-forget
   useEffect(() => {
@@ -665,6 +784,48 @@ export default function HomeScreen({ navigation }) {
   const endedLists      = lists.filter(l => isEnded(l.ends_at))
   const totalPastCount  = endedLists.length + pastOfficialLists.length
 
+  // Seasonal card progress ("N of M") — new lightweight count query; Home
+  // has never fetched item-level data before B1. Skipped for an
+  // already-ended currentOnHome since that variant renders via the
+  // separate endedOfficialCard branch, not the progress/CTA hero card.
+  useEffect(() => {
+    const listId = currentOnHome?.id
+    if (!listId || isEnded(currentOnHome?.ends_at)) { setSeasonalCounts({ checked: 0, total: 0 }); return }
+    let cancelled = false
+    ;(async () => {
+      const { data: liRows } = await supabase
+        .from('list_items')
+        .select('item_id')
+        .eq('list_id', listId)
+      const total = liRows?.length ?? 0
+      let checked = 0
+      if (user?.id && total > 0) {
+        const itemIds = liRows.map(li => li.item_id).filter(Boolean)
+        const { data: checkins } = await supabase
+          .from('check_ins')
+          .select('item_id')
+          .eq('user_id', user.id)
+          .in('item_id', itemIds)
+        checked = new Set((checkins ?? []).map(c => c.item_id)).size
+      }
+      if (!cancelled) setSeasonalCounts({ checked, total })
+    })()
+    return () => { cancelled = true }
+  }, [currentOnHome?.id, currentOnHome?.ends_at, user?.id])
+
+  // Seasonal card rank — reuses useLeaderboard as-is (not modifying it, per
+  // instruction). NOTE: this mounts useLeaderboard's Realtime check_ins
+  // subscription for this list onto Home — the most-opened screen in the
+  // app, which carried no such subscription before B1. Accepted since the
+  // hook is the only interface to rank; flagging here so it's findable if
+  // connection churn or battery use ever becomes a question.
+  const { entries: seasonalLbEntries } = useLeaderboard(currentOnHome?.id ?? null)
+  const seasonalRank = (() => {
+    if (!user?.id) return null
+    const idx = seasonalLbEntries.findIndex(e => e.userId === user.id)
+    return idx >= 0 ? idx + 1 : null
+  })()
+
   if (loading) {
     return (
       <View style={styles.center}>
@@ -828,6 +989,44 @@ export default function HomeScreen({ navigation }) {
         </TouchableOpacity>
       )}
 
+      {/* ── "Near you right now" rail — B1 ──
+          Ordering note: this section sits right after the zone banner
+          above and right before the seasonal card below. When nearbyZone
+          is set, that banner already rendered above, giving Hub → rail →
+          seasonal. When it isn't, the banner simply doesn't render, giving
+          rail → seasonal directly — no separate conditional needed here. */}
+      {nearbyRailItems.length > 0 && (
+        <>
+          <View style={styles.sectionHeaderBlock}>
+            <Text style={styles.sectionLabel}>Near you right now</Text>
+            <Text style={styles.sectionSub}>
+              {railShowsAnywhereCopy ? 'Do these anywhere' : 'The 5 closest things to check off'}
+            </Text>
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.nearbyRailContent}
+          >
+            {nearbyRailItems.map(item => (
+              <TouchableOpacity
+                key={item.id}
+                style={styles.nearbyCard}
+                activeOpacity={0.88}
+                onPress={() => navigation.navigate('ItemDetail', { item })}
+              >
+                <Text style={styles.nearbyCardBody} numberOfLines={3}>{item.body}</Text>
+                <View style={styles.nearbyCardTag}>
+                  <Text style={styles.nearbyCardTagText}>
+                    {item.is_universal ? 'Anywhere' : (formatDistanceLabel(item.distM) ?? '')}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </>
+      )}
+
       {homeOfficialLists.length > 0 && (
         <>
           <View style={styles.sectionHeaderBlock}>
@@ -893,10 +1092,13 @@ export default function HomeScreen({ navigation }) {
               <TouchableOpacity
                 key={list.id}
                 style={styles.heroCard}
-                onPress={() => joined
-                  ? navigation.navigate('List', { listId: list.id, title: list.title, heroImage: heroImage ?? undefined })
-                  : joinOfficialList(list)
-                }
+                // Always navigate, never auto-join — a non-joined tap must
+                // stay read-only (join gate belongs at first check-off
+                // attempt, not here; auto-inserting list_members on tap
+                // also pollutes membership data used for activation
+                // measurement). joinOfficialList() is still used by the
+                // upcoming-list card variant above, untouched.
+                onPress={() => navigation.navigate('List', { listId: list.id, title: list.title, heroImage: heroImage ?? undefined })}
                 activeOpacity={0.92}
               >
                 {heroImage ? (
@@ -944,7 +1146,15 @@ export default function HomeScreen({ navigation }) {
                 )}
 
                 <View style={styles.heroCardCTA}>
-                  <Text style={styles.heroCardCTAText}>{joined ? 'Open List →' : 'Join Free →'}</Text>
+                  <Text style={styles.heroCardCTAText}>
+                    {joined
+                      ? [
+                          `${seasonalCounts.checked} of ${seasonalCounts.total}`,
+                          timeLeft(list.ends_at),
+                          seasonalRank ? `#${seasonalRank} in ${metroDisplayName}` : null,
+                        ].filter(Boolean).join(' · ')
+                      : 'See the list →'}
+                  </Text>
                 </View>
               </TouchableOpacity>
             )
@@ -952,46 +1162,26 @@ export default function HomeScreen({ navigation }) {
         </>
       )}
 
-      <View style={styles.sectionRow}>
-        <View>
-          <Text style={styles.sectionLabel}>Your lists</Text>
-          <Text style={styles.sectionSubSmall}>Custom lists for your crew, dates, and plans</Text>
-        </View>
+      {activeLists.length > 0 && (
+        <>
+          <View style={styles.sectionRow}>
+            <View>
+              <Text style={styles.sectionLabel}>Your lists</Text>
+              <Text style={styles.sectionSubSmall}>Custom lists for your crew, dates, and plans</Text>
+            </View>
 
-        {user && (
-          <TouchableOpacity
-            style={styles.createNewBtn}
-            onPress={() => navigation.navigate('CreateTab')}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.createNewBtnText}>+ New list</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {activeLists.length === 0 ? (
-        <TouchableOpacity
-          style={styles.emptyListCard}
-          onPress={() => {
-            if (!user) {
-              setShowSignInPrompt(true)
-            } else {
-              navigation.navigate('CreateList')
-            }
-          }}
-          activeOpacity={0.88}
-        >
-          <Text style={styles.emptyListEmoji}>📋</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.emptyListTitle}>Start your first list</Text>
-            <Text style={styles.emptyListSub}>
-              Pick items, invite your crew, and see who checks off the most.
-            </Text>
+            {user && (
+              <TouchableOpacity
+                style={styles.createNewBtn}
+                onPress={() => navigation.navigate('CreateTab')}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.createNewBtnText}>+ New list</Text>
+              </TouchableOpacity>
+            )}
           </View>
-          <Text style={styles.emptyListArrow}>→</Text>
-        </TouchableOpacity>
-      ) : (
-        activeLists.map(list => {
+
+          {activeLists.map(list => {
           const crewMembers = listMemberMap[list.id] ?? []
           // A list can be a creator list without being promoted — only featured-eligible
           // creator lists get the amber accent + byline; followed-but-unfeatured lists
@@ -1053,11 +1243,10 @@ export default function HomeScreen({ navigation }) {
             </View>
           </TouchableOpacity>
           )
-        })
-      )}
+          })}
 
-      {activeLists.length > 0 && (
-        <Text style={styles.deleteHint}>Long-press a list to delete or leave it</Text>
+          <Text style={styles.deleteHint}>Long-press a list to delete or leave it</Text>
+        </>
       )}
 
       {/* ── 2×2 navigation grid (always 2×2, bottom-right swaps on creator availability) ── */}
@@ -1130,6 +1319,50 @@ export default function HomeScreen({ navigation }) {
           )}
         </View>
       </View>
+
+      {/* Demoted below Destinations/Local Guides — B1. Still present, just
+          no longer the first thing an empty-state user sees. */}
+      {activeLists.length === 0 && (
+        <>
+          <View style={styles.sectionRow}>
+            <View>
+              <Text style={styles.sectionLabel}>Your lists</Text>
+              <Text style={styles.sectionSubSmall}>Custom lists for your crew, dates, and plans</Text>
+            </View>
+
+            {user && (
+              <TouchableOpacity
+                style={styles.createNewBtn}
+                onPress={() => navigation.navigate('CreateTab')}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.createNewBtnText}>+ New list</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          <TouchableOpacity
+            style={styles.emptyListCard}
+            onPress={() => {
+              if (!user) {
+                setShowSignInPrompt(true)
+              } else {
+                navigation.navigate('CreateList')
+              }
+            }}
+            activeOpacity={0.88}
+          >
+            <Text style={styles.emptyListEmoji}>📋</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.emptyListTitle}>Start your first list</Text>
+              <Text style={styles.emptyListSub}>
+                Pick items, invite your crew, and see who checks off the most.
+              </Text>
+            </View>
+            <Text style={styles.emptyListArrow}>→</Text>
+          </TouchableOpacity>
+        </>
+      )}
 
       {/* ── Featured editorial card ── */}
       {currentOnHome && (
@@ -1547,6 +1780,49 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     fontSize: 13,
     color: MUTED,
     marginTop: -2,
+  },
+
+  // ── "Near you right now" rail — B1 ──
+  nearbyRailContent: {
+    paddingRight: 8,
+    paddingBottom: 4,
+    marginBottom: 22,
+  },
+
+  nearbyCard: {
+    width: 160,
+    minHeight: 108,
+    backgroundColor: CARD,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: BORDER,
+    padding: 14,
+    marginRight: 10,
+    justifyContent: 'space-between',
+  },
+
+  nearbyCardBody: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: TEXT,
+    lineHeight: 19,
+  },
+
+  nearbyCardTag: {
+    alignSelf: 'flex-start',
+    backgroundColor: SOFT,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    marginTop: 10,
+    borderWidth: 1,
+    borderColor: '#E8C98E',
+  },
+
+  nearbyCardTagText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#A16A00',
   },
 
   sectionRow: {
