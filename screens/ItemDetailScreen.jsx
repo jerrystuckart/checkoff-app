@@ -202,6 +202,20 @@ export default function ItemDetailScreen({ route, navigation }) {
     loadUser()
   }, [])
 
+  // Centralized secret-reveal guard — the ONLY place this decision lives.
+  // Previously duplicated as a caller-side check in ListScreen.jsx and
+  // DiscoverScreen.jsx (removed); any future entry point gets this for
+  // free instead of needing its own copy. Paired with the render-time
+  // early return below (spinner instead of full item content) so this
+  // doesn't flash the wrong UI before navigating away — mirrors the
+  // resolve-then-replace pattern already used by the DeepLink*Resolver
+  // screens in this codebase.
+  useEffect(() => {
+    if ((item?.is_secret || item?.isSecret) && !checked) {
+      navigation.replace('SecretReveal', { item, listItemId: item?.listItemId ?? null })
+    }
+  }, [item, checked])
+
   useEffect(() => {
     if (item?.id) trackEvent('item_view', { itemId: item.id, listId })
   }, [item?.id, listId])
@@ -465,6 +479,25 @@ export default function ItemDetailScreen({ route, navigation }) {
       return
     }
 
+    let listItemId = item?.listItemId
+
+    if (!listItemId) {
+      listItemId = await getOrCreateListItemId(item?.id, userId)
+    }
+
+    if (!listItemId) {
+      Alert.alert('Join a list first', 'Go to Home and join a seasonal list to start checking off items.')
+      return
+    }
+
+    // Photo-required items go to PhotoCheckInScreen — no tap shortcut,
+    // matches the existing rule at ListScreen.jsx:902. Only applies when
+    // checking ON; unchecking an already-checked item needs no photo.
+    if (item?.photoRequired && !checked) {
+      navigation.navigate('PhotoCheckIn', { item, listItemId })
+      return
+    }
+
     if (!await enforceGpsCheckin()) return
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
@@ -474,17 +507,6 @@ export default function ItemDetailScreen({ route, navigation }) {
     const pointsBeforePromise = getUserLifetimePoints(userId)
 
     try {
-      let listItemId = item?.listItemId
-
-      if (!listItemId) {
-        listItemId = await getOrCreateListItemId(item?.id, userId)
-      }
-
-      if (!listItemId) {
-        Alert.alert('Join a list first', 'Go to Home and join a seasonal list to start checking off items.')
-        return
-      }
-
       if (checked) {
         // Global by item_id, not just this list's row — a check-off is a
         // fact about the user and the item, so unchecking must be too.
@@ -684,6 +706,14 @@ export default function ItemDetailScreen({ route, navigation }) {
       } else {
         setShowListPicker(true)
       }
+      return
+    }
+
+    // Photo-required items go to PhotoCheckInScreen — no tap shortcut,
+    // matches the existing rule at ListScreen.jsx:902. Only applies when
+    // checking ON; unchecking an already-checked item needs no photo.
+    if (item?.photoRequired && !checked) {
+      navigation.navigate('PhotoCheckIn', { item, listItemId: itemOnListId })
       return
     }
 
@@ -953,6 +983,18 @@ export default function ItemDetailScreen({ route, navigation }) {
     )
   }
 
+  // Paired with the redirect effect above — renders a spinner instead of
+  // the full item content while navigation.replace('SecretReveal', ...)
+  // is in flight, so this screen's real UI (check-off buttons, quick
+  // actions) never has a chance to paint for a secret, unrevealed item.
+  if ((item.is_secret || item.isSecret) && !checked) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator color={AMBER} />
+      </View>
+    )
+  }
+
   const ring = item.ring_weight ?? 0
   const ringColor = RING_COLORS[ring] ?? RING_COLORS[0]
   const hasLoc = item.maps_query || ((item.maps_lat ?? item.mapsLat) && (item.maps_lng ?? item.mapsLng))
@@ -1092,13 +1134,38 @@ export default function ItemDetailScreen({ route, navigation }) {
         </>
       )}
 
-      {userId && listId && (
+      {userId && (
         <View style={styles.quickRow}>
           <TouchableOpacity
             style={styles.quickBtn}
-            onPress={() => {
+            onPress={async () => {
+              // Resolved effective list context, not the raw listId param —
+              // works whether opened from a list, Nearby, or the Home rail.
+              // DareScreen's own business rule (recipient must share and be
+              // a member of the same non-official list) is unchanged; this
+              // just makes sure it's always handed a real listId instead of
+              // sometimes null.
+              let dareListId = listId ?? Object.keys(itemOnListIds)[0] ?? null
+
+              if (!dareListId) {
+                const resolvedListItemId = await getOrCreateListItemId(item?.id, userId)
+                if (resolvedListItemId) {
+                  const { data } = await supabase
+                    .from('list_items')
+                    .select('list_id')
+                    .eq('id', resolvedListItemId)
+                    .maybeSingle()
+                  dareListId = data?.list_id ?? null
+                }
+              }
+
+              if (!dareListId) {
+                Alert.alert('Join a list first', 'Go to Home and join a seasonal list to start checking off items.')
+                return
+              }
+
               trackEvent('dare_click', { itemId: item.id })
-              navigation.navigate('Dare', { item, listId })
+              navigation.navigate('Dare', { item, listId: dareListId })
             }}
           >
             <Text style={styles.quickBtnIcon}>😈</Text>
@@ -1109,7 +1176,7 @@ export default function ItemDetailScreen({ route, navigation }) {
           <TouchableOpacity
             style={styles.quickBtn}
             onPress={async () => {
-              let listItemId = item?.listItemId
+              let listItemId = item?.listItemId ?? itemOnListId
 
               if (!listItemId) {
                 listItemId = await getOrCreateListItemId(item?.id, userId)

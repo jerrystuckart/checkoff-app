@@ -391,13 +391,57 @@ export default function HomeScreen({ navigation }) {
 // enough to fetch in full; no bounding-box prefilter needed) and lets
 // proximitySort do the actual distance sorting/interleaving against the
 // user's real coordinates.
+// Flattens a raw items-table row into the same shape ItemDetailScreen
+// reads from every other entry point (useItems.js / DiscoverScreen.jsx's
+// augmentWithDistance) — camelCase fields ItemDetailScreen reads directly
+// (categoryName, photoRequired, isSecret, allowsPersonalNote, ...), not
+// just the raw snake_case columns. Rail items must be shape-complete
+// before reaching the detail screen, not just column-complete — several
+// of ItemDetailScreen's reads have no snake_case fallback.
+function mapRailItem(item) {
+  return {
+    id:                  item.id,
+    body:                item.body,
+    checkin_type:        item.checkin_type,
+    checkinType:         item.checkin_type,
+    is_universal:        item.is_universal ?? false,
+    isUniversal:         item.is_universal ?? false,
+    difficulty:          item.difficulty ?? 1,
+    photo_required:      item.photo_required ?? false,
+    photoRequired:       item.photo_required ?? false,
+    maps_lat:            item.maps_lat ?? null,
+    maps_lng:            item.maps_lng ?? null,
+    geo_radius_m:        item.geo_radius_m ?? null,
+    is_secret:           item.is_secret ?? false,
+    isSecret:            item.is_secret ?? false,
+    secret_reveal_text:  item.secret_reveal_text ?? null,
+    website_url:         item.website_url ?? null,
+    maps_query:          item.maps_query ?? null,
+    partner_id:          item.partner_id ?? null,
+    partnerName:         item.partners?.business_name ?? null,
+    has_alcohol:         item.has_alcohol ?? false,
+    season_tag:          item.season_tag ?? null,
+    allowsPersonalNote:  item.allows_personal_note ?? false,
+    personalPromptLabel: item.personal_prompt_label ?? null,
+    personalPlaceLabel:  item.personal_place_label ?? null,
+    categoryName:        item.categories?.name ?? 'Misc',
+    categoryColor:       item.categories?.color_hex ?? '#888780',
+    neighborhoodId:      item.neighborhoods?.id ?? null,
+    neighborhoodName:    item.neighborhoods?.name ?? null,
+  }
+}
+
 async function loadNearbyRail(userId) {
   setNearbyLoading(true)
   try {
     const itemCols = `
       id, body, checkin_type, is_universal, difficulty, photo_required,
-      maps_lat, maps_lng, geo_radius_m, is_secret,
-      categories(name, color_hex)
+      maps_lat, maps_lng, geo_radius_m, is_secret, secret_reveal_text,
+      website_url, maps_query, partner_id, has_alcohol, season_tag,
+      allows_personal_note, personal_prompt_label, personal_place_label,
+      categories(name, color_hex),
+      neighborhoods!items_neighborhood_id_fkey(id, name),
+      partners!items_partner_id_fkey(business_name)
     `
 
     const [{ data: universalItems }, { data: locatedItems }] = await Promise.all([
@@ -417,7 +461,7 @@ async function loadNearbyRail(userId) {
         .not('maps_lng', 'is', null),
     ])
 
-    const rawItems = [...(universalItems ?? []), ...(locatedItems ?? [])]
+    const rawItems = [...(universalItems ?? []), ...(locatedItems ?? [])].map(mapRailItem)
     setRawNearbyItems(rawItems)
 
     if (userId && rawItems.length > 0) {

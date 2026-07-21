@@ -1296,10 +1296,8 @@ export default function ListScreen({ route, navigation }) {
               openDetailModal(item)
               return
             }
-            if (item.is_secret || item.isSecret) {
-              navigation.navigate('SecretReveal', { item, listItemId: item.listItemId })
-              return
-            }
+            // Secret-reveal redirect is centralized in ItemDetailScreen
+            // itself (mount-time guard) — not decided here anymore.
             navigation.navigate('ItemDetail', {
               item,
               listId,

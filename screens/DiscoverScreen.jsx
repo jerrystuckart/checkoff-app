@@ -407,10 +407,8 @@ export default function DiscoverScreen({ navigation, route }) {
   // ── Navigation ───────────────────────────────────────────────────────────
   function openItem(item) {
     Keyboard.dismiss()
-    if (item.is_secret) {
-      navigation.navigate('SecretReveal', { item, listItemId: null })
-      return
-    }
+    // Secret-reveal redirect is centralized in ItemDetailScreen itself
+    // (mount-time guard) — not decided here anymore.
     navigation.navigate('ItemDetail', { item, listId: null, listTitle: 'Discover' })
   }
 
