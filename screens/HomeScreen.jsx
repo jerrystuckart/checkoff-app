@@ -151,8 +151,6 @@ export default function HomeScreen({ navigation }) {
 
         if (locationResult !== null) {
           const { latitude: uLat, longitude: uLng } = locationResult
-          // Reused by the "Near you right now" rail below instead of a second GPS fetch.
-          setUserLocation(locationResult)
           const metros = metroData ?? []
           // Pick the metro whose center_lat/center_lng is closest to the user.
           // Falls back to name-match if center coords are missing (e.g. during migration).
@@ -578,6 +576,41 @@ async function loadNearbyRail(metroId, userId) {
   useEffect(() => {
     const id = setInterval(() => setTick(t => t + 1), 60000)
     return () => clearInterval(id)
+  }, [])
+
+  // Dedicated, patient location fetch for the "Near you right now" rail —
+  // BUG FIX: this used to reuse init()'s location result, which comes from
+  // a 3-second race (Accuracy.Low, no getLastKnownPositionAsync fallback)
+  // built for fast-but-best-effort metro auto-selection. On a real device,
+  // a cold GPS fix very often takes longer than 3s, so userLocation stayed
+  // null far more often than the user's actual location-permission state
+  // would suggest — and with 289 universal items in the DB (far more than
+  // the rail's slice of 5), proximitySort's correct, spec'd no-location
+  // fallback (universal items first) meant the rail's .slice(0, 5) never
+  // reached the real, correctly-fetched located items, regardless of
+  // metro. This effect gives the rail its own fetch matching the pattern
+  // already used in ListScreen.jsx/CuratedListPreviewScreen.jsx: a longer
+  // 6s race plus a getLastKnownPositionAsync fallback. init()'s original
+  // 3s race is untouched — still used only for metro auto-selection and
+  // zone-banner detection, which have their own reasons to stay fast.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync()
+        if (status !== 'granted') return
+        const pos = await Promise.race([
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 6000)),
+        ]).catch(() => Location.getLastKnownPositionAsync({}))
+        if (!cancelled && pos?.coords) {
+          setUserLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude })
+        }
+      } catch {
+        // location unavailable — proximitySort's no-location fallback handles this
+      }
+    })()
+    return () => { cancelled = true }
   }, [])
 
   // Density tier for the "Near you right now" rail — session-cached by

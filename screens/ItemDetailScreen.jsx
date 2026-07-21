@@ -633,6 +633,18 @@ export default function ItemDetailScreen({ route, navigation }) {
       setItemOnListId(newItem.id)
       setItemOnListIds(prev => ({ ...prev, [targetListId]: newItem.id }))
       setShowListPicker(false)
+
+      // Refresh `checked` before the alert shows. Check-off is now global
+      // by item_id (this item may already be checked via a different
+      // list) — without this, `checked` can still be showing its stale
+      // pre-add value when the user taps "I've done this" next, and
+      // handleNearbyDone()'s checked-based toggle would then run the
+      // DELETE branch instead of INSERT, wiping every check-in for this
+      // item (not just this list's). Refreshing here means the button
+      // correctly reads "✓ Done this!" already if that's true, instead of
+      // silently toggling it off on the next tap.
+      await loadCheckedState(userId)
+
       Alert.alert(
         'Added to list ✓',
         `"${item.body}" has been added to "${targetListTitle}". Go check it off!`,
