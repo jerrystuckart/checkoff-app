@@ -236,7 +236,11 @@ export default function HomeScreen({ navigation }) {
     ?? 'phoenix'
   // Fire and forget — non-critical dressing, shouldn't delay the rest of
   // Home's render. Populates rawNearbyItems/checkedItemIds whenever ready.
-  loadNearbyRail(metroId, userId)
+  // Deliberately not passed metroId — see loadNearbyRail's own comment;
+  // it's metro-independent by design, called here only to keep the same
+  // refresh cadence (mount, focus, pull-to-refresh, metro switch) so
+  // checkedItemIds stays current, not because the results vary by metro.
+  loadNearbyRail(userId)
 
   try {
     const today = new Date().toISOString().split('T')[0]
@@ -374,48 +378,46 @@ export default function HomeScreen({ navigation }) {
 // useNearby.js's precedent (is_active/is_approved items are the general
 // discoverability boundary, independent of list membership) but, unlike
 // Nearby, includes universal items and applies no ring/distance cap —
-// proximitySort's Home config handles interleaving. Fetching neighborhood
-// ids first (rather than an inner-joined embed filter) keeps this to
-// plain, proven top-level column filters.
-async function loadNearbyRail(metroId, userId) {
+// proximitySort's Home config handles interleaving.
+//
+// Deliberately NOT scoped to the selected metro. The metro selector is a
+// browse control for the seasonal card and curated lists below it — it
+// must not affect a proximity rail, which has to answer "what's near the
+// user right now" regardless of what they happen to have picked in a
+// dropdown. Confirmed on device: with the metro set to Milwaukee while
+// physically in Arizona, a metro-scoped rail returned Milwaukee items at
+// 1,300+ miles under "Near you right now." Fetches every qualifying
+// located item system-wide (519 rows total as of this writing — small
+// enough to fetch in full; no bounding-box prefilter needed) and lets
+// proximitySort do the actual distance sorting/interleaving against the
+// user's real coordinates.
+async function loadNearbyRail(userId) {
   setNearbyLoading(true)
   try {
-    const { data: hoods } = await supabase
-      .from('neighborhoods')
-      .select('id')
-      .eq('metro_id', metroId)
-    const neighborhoodIds = (hoods ?? []).map(h => h.id)
-
     const itemCols = `
       id, body, checkin_type, is_universal, difficulty, photo_required,
       maps_lat, maps_lng, geo_radius_m, is_secret,
       categories(name, color_hex)
     `
 
-    const queries = [
+    const [{ data: universalItems }, { data: locatedItems }] = await Promise.all([
       supabase
         .from('items')
         .select(itemCols)
         .eq('is_active', true)
         .eq('is_approved', true)
         .eq('is_universal', true),
-    ]
-    if (neighborhoodIds.length > 0) {
-      queries.push(
-        supabase
-          .from('items')
-          .select(itemCols)
-          .eq('is_active', true)
-          .eq('is_approved', true)
-          .eq('is_universal', false)
-          .not('maps_lat', 'is', null)
-          .not('maps_lng', 'is', null)
-          .in('neighborhood_id', neighborhoodIds)
-      )
-    }
+      supabase
+        .from('items')
+        .select(itemCols)
+        .eq('is_active', true)
+        .eq('is_approved', true)
+        .eq('is_universal', false)
+        .not('maps_lat', 'is', null)
+        .not('maps_lng', 'is', null),
+    ])
 
-    const results = await Promise.all(queries)
-    const rawItems = results.flatMap(r => r.data ?? [])
+    const rawItems = [...(universalItems ?? []), ...(locatedItems ?? [])]
     setRawNearbyItems(rawItems)
 
     if (userId && rawItems.length > 0) {
