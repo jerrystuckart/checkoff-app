@@ -34,6 +34,7 @@ import ListScreen              from './screens/ListScreen'
 import LeaderboardScreen       from './screens/LeaderboardScreen'
 import SignInScreen            from './screens/SignInScreen'
 import CreateListScreen        from './screens/CreateListScreen'
+import ListsScreen             from './screens/ListsScreen'
 import ItemDetailScreen        from './screens/ItemDetailScreen'
 import NearbyScreen            from './screens/NearbyScreen'
 import DiscoverScreen          from './screens/DiscoverScreen'
@@ -68,7 +69,7 @@ const Tab = createBottomTabNavigator()
 const AMBER = '#F5A623'
 
 function TabIcon({ label, focused }) {
-  const glyphs = { Home: '⌂', Nearby: '⌖', Create: '+', Profile: '◉' }
+  const glyphs = { Home: '⌂', Nearby: '⌖', Lists: '☰', Profile: '◉' }
 
   return (
     <View style={tab.wrap}>
@@ -304,9 +305,19 @@ function HomeStack() {
   )
 }
 
-function CreateStack() {
+function ListsStack() {
   return (
     <Stack.Navigator screenOptions={stackOpts}>
+      <Stack.Screen
+        name="Lists"
+        component={ListsScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="SignIn"
+        component={SignInScreen}
+        options={{ headerShown: false }}
+      />
       <Stack.Screen
         name="CreateList"
         component={CreateListScreen}
@@ -440,13 +451,13 @@ function MainTabs({ isSignedIn }) {
         }}
       />
       <Tab.Screen
-        name="CreateTab"
-        component={CreateStack}
+        name="ListsTab"
+        component={ListsStack}
         options={{
           tabBarButton: isSignedIn ? undefined : () => null,
           tabBarItemStyle: isSignedIn ? undefined : { display: 'none' },
           tabBarIcon: ({ focused }) => (
-            <TabIcon label="Create" focused={focused} />
+            <TabIcon label="Lists" focused={focused} />
           ),
         }}
       />

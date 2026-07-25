@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react'
+import React, { useState, useRef, useEffect } from 'react'
 import {
   View,
   Text,
@@ -16,8 +16,10 @@ import { supabase } from '../lib/supabase'
 import { completeDare } from '../lib/completeDare'
 import * as Haptics from 'expo-haptics'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
-import { setPendingCheckIn } from '../lib/checkInResult'
 import { fanOutCheckIn } from '../lib/checkInFanOut'
+import { checkGeoFence, presentGeoFenceFailure } from '../lib/geoFence'
+import { updateUserLifetimePoints } from '../lib/points'
+import PostCheckoffSheet from '../components/PostCheckoffSheet'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
@@ -35,13 +37,33 @@ export default function PhotoCheckInScreen({ route, navigation }) {
   const { item, listItemId } = route?.params ?? {}
   const insets = useSafeAreaInsets()
   const photoRequired     = item?.photoRequired    ?? false
-  const returnDifficulty  = route?.params?.returnDifficulty ?? (item?.difficulty ?? 1)
 
   const [permission, requestPermission] = useCameraPermissions()
   const [photo, setPhoto] = useState(null)
   const [mode, setMode] = useState('choose') // 'choose' | 'camera' | 'preview'
   const [uploading, setUploading] = useState(false)
+  const [fenceOk, setFenceOk] = useState(false)
+  const [postCheckoffData, setPostCheckoffData] = useState(null)
   const cameraRef = useRef(null)
+
+  // Gate on entry, before the camera or library ever opens — reached from
+  // five different navigation call sites (ItemDetailScreen x3, ListScreen,
+  // SecretRevealScreen), so a single check here beats duplicating it at
+  // every call site. Also closes the confirmed-on-device bypass where the
+  // "Photo check-in" quick action jumps straight here for an unrevealed
+  // secret item, skipping SecretRevealScreen's own proximity gate entirely.
+  useEffect(() => {
+    let cancelled = false
+    checkGeoFence(item).then(result => {
+      if (cancelled) return
+      if (result.ok) {
+        setFenceOk(true)
+      } else {
+        presentGeoFenceFailure(result, { onDismiss: () => navigation.goBack() })
+      }
+    })
+    return () => { cancelled = true }
+  }, [])
 
   async function takePicture() {
     if (!cameraRef.current) return
@@ -97,6 +119,12 @@ export default function PhotoCheckInScreen({ route, navigation }) {
       if (userErr) throw userErr
       if (!user) throw new Error('Sign in first')
 
+      // Post-checkoff sheet fires as soon as we know who's checking in,
+      // rather than waiting for the upload/insert to confirm, so its
+      // proximity/rank queries run in parallel with the write. Reconciled
+      // back to null below if the check-in ultimately fails.
+      setPostCheckoffData({ itemId: item?.id, listItemId, userId: user.id, item })
+
       let photoUrl = null
 
       if (photo?.uri) {
@@ -118,6 +146,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
           })
 
         if (uploadErr) {
+          setPostCheckoffData(null)
           throw new Error(`Upload failed: ${uploadErr.message}`)
         }
 
@@ -132,6 +161,16 @@ export default function PhotoCheckInScreen({ route, navigation }) {
       // context). Skip the single insert — the fan-out below covers all lists.
       let ciData = null
       if (listItemId) {
+        // points_awarded on the primary row — same difficulty * point_multiplier
+        // formula as lib/useItems.js checkOff. Fan-out (lib/checkInFanOut.js)
+        // deliberately leaves secondary rows at 0 to avoid double-counting.
+        const { data: liRow } = await supabase
+          .from('list_items')
+          .select('point_multiplier')
+          .eq('id', listItemId)
+          .maybeSingle()
+        const pointsAwarded = Math.round((item?.difficulty ?? 1) * (liRow?.point_multiplier ?? 1.0))
+
         // item_id is the canonical, always-available path to this check-in's
         // item — it survives list deletion (list_item_id goes null then).
         const payload = {
@@ -142,6 +181,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
           photo_url: photoUrl,
           photo_width: photo?.width ?? null,
           photo_height: photo?.height ?? null,
+          points_awarded: pointsAwarded,
         }
 
         const { data: insertData, error: ciErr } = await supabase
@@ -153,12 +193,12 @@ export default function PhotoCheckInScreen({ route, navigation }) {
           // Duplicate row = already checked in, treat as success
           if (ciErr.code === '23505') {
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
-            navigation.goBack()
             return
           }
 
           // List has ended — show friendly message and go back, no console error
           if (ciErr.code === 'P0001' || ciErr.message?.includes('list has ended')) {
+            setPostCheckoffData(null)
             Alert.alert(
               'List is closed',
               'This list has ended and check-ins are no longer accepted.',
@@ -167,6 +207,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
             return
           }
 
+          setPostCheckoffData(null)
           throw new Error(`Check-in failed: ${ciErr.message}`)
         }
 
@@ -196,6 +237,11 @@ export default function PhotoCheckInScreen({ route, navigation }) {
         body: { user_id: user.id },
       }).catch(() => {/* non-critical */})
 
+      // Recompute and persist lifetime points — this screen previously
+      // never called this at all, so a photo check-in never moved the
+      // cached users.lifetime_points value regardless of points_awarded.
+      updateUserLifetimePoints(user.id).catch(() => {})
+
       // Complete any active dares for this item — fire and forget
       if (item?.id) completeDare(user.id, item.id).catch(() => {})
 
@@ -210,17 +256,22 @@ export default function PhotoCheckInScreen({ route, navigation }) {
         }).catch(() => {/* non-critical */})
       }
 
-      // Navigate back and signal ListScreen to trigger celebration
-      // via shared module store (navigation params don't carry listId safely)
-      if (returnDifficulty >= 5) {
-        setPendingCheckIn(listItemId, returnDifficulty)
-      }
-      navigation.goBack()
     } catch (e) {
+      setPostCheckoffData(null)
       Alert.alert('Something went wrong', e.message)
     } finally {
       setUploading(false)
     }
+  }
+
+  // ── Confirming location before anything else can open ──
+  if (!fenceOk) {
+    return (
+      <View style={[styles.container, styles.center]}>
+        <ActivityIndicator color={AMBER} />
+        <Text style={styles.checkingText}>Confirming your location…</Text>
+      </View>
+    )
   }
 
   // ── Choose mode ──
@@ -275,6 +326,12 @@ export default function PhotoCheckInScreen({ route, navigation }) {
             <Text style={styles.skipBtnText}>Skip photo — just check off</Text>
           </TouchableOpacity>
         )}
+
+        <PostCheckoffSheet
+          data={postCheckoffData}
+          onDismiss={() => { setPostCheckoffData(null); navigation.goBack() }}
+          navigation={navigation}
+        />
       </View>
     )
   }
@@ -337,6 +394,12 @@ export default function PhotoCheckInScreen({ route, navigation }) {
           <Text style={styles.retakeBtnText}>Retake photo</Text>
         </TouchableOpacity>
       </View>
+
+      <PostCheckoffSheet
+        data={postCheckoffData}
+        onDismiss={() => { setPostCheckoffData(null); navigation.goBack() }}
+        navigation={navigation}
+      />
     </ScrollView>
   )
 }
@@ -345,6 +408,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#0F0F1E',
+  },
+
+  center: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  checkingText: {
+    fontSize: 14,
+    color: 'rgba(255,255,255,0.5)',
+    marginTop: 16,
   },
 
   itemCard: {

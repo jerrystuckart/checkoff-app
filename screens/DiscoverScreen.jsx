@@ -10,6 +10,7 @@ import { useNearby } from '../lib/useNearby'
 import { useTheme } from '../lib/ThemeContext'
 import { supabase } from '../lib/supabase'
 import { haversineMeters } from '../lib/distance'
+import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
@@ -105,6 +106,7 @@ export default function DiscoverScreen({ navigation, route }) {
   const [tagMatchData, setTagMatchData]     = useState({ counts: {} })
   const [bodyMatchIds, setBodyMatchIds]     = useState(null)  // Set<string>|null — body fallback
   const [loadingSearch, setLoadingSearch]   = useState(false)
+  const [discoverUserId, setDiscoverUserId] = useState(null)
 
   // Post-checkin mode
   const [postCheckin, setPostCheckin]     = useState(null)
@@ -112,6 +114,12 @@ export default function DiscoverScreen({ navigation, route }) {
   const pulseAnim       = useRef(new Animated.Value(1)).current
   const appliedParamsRef = useRef(null)
   const debounceRef     = useRef(null)
+
+  // ── Resolve current user — needed only to unmask a Bonus Drop the user
+  // has already checked off (see lib/bonusDrops.js) ─────────────────────
+  useEffect(() => {
+    supabase.auth.getUser().then(({ data }) => setDiscoverUserId(data?.user?.id ?? null))
+  }, [])
 
   // ── Load categories ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -257,7 +265,10 @@ export default function DiscoverScreen({ navigation, route }) {
             .eq('is_approved', true)
           console.log('[tag search] items query result:', rawItems?.length ?? 0, 'items', itemErr)
 
-          const augmented = augmentWithDistance(rawItems, locationRef.current ?? location)
+          // Locked Bonus Drops must not leak into search results — they only
+          // exist inside their own list until unlocked or already checked.
+          const maskedItems = await filterMaskedBonusDrops(rawItems ?? [], discoverUserId)
+          const augmented = augmentWithDistance(maskedItems, locationRef.current ?? location)
           setTagResultItems(augmented)
           console.log('[tag search] displayItems after merge:', augmented.length)
         }
@@ -324,7 +335,10 @@ export default function DiscoverScreen({ navigation, route }) {
         .eq('is_approved', true)
       if (__DEV__ && itemErr) console.log('items fetch error:', itemErr?.message)
 
-      const augmented = augmentWithDistance(rawItems, locationRef.current ?? location)
+      // Locked Bonus Drops must not leak into search results — they only
+      // exist inside their own list until unlocked or already checked.
+      const maskedItems = await filterMaskedBonusDrops(rawItems ?? [], discoverUserId)
+      const augmented = augmentWithDistance(maskedItems, locationRef.current ?? location)
       setTagResultItems(augmented)
     } catch (e) {
       if (__DEV__) console.log('fetchTagResultItems error:', e?.message)

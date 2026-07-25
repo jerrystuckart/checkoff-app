@@ -16,7 +16,6 @@ import {
 } from 'react-native'
 import Clipboard from '@react-native-clipboard/clipboard'
 import * as Haptics from 'expo-haptics'
-import * as Location from 'expo-location'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
@@ -26,8 +25,10 @@ import { updateUserLifetimePoints, getUserLifetimePoints, checkTierCrossingForUs
 import TierUpgradeCelebrationModal from '../components/TierUpgradeCelebrationModal'
 import { useTheme } from '../lib/ThemeContext'
 import { trackEvent } from '../lib/trackEvent'
-import { haversineMeters } from '../lib/distance'
 import { fanOutCheckIn } from '../lib/checkInFanOut'
+import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
+import { checkGeoFence, presentGeoFenceFailure } from '../lib/geoFence'
+import PostCheckoffSheet from '../components/PostCheckoffSheet'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
@@ -184,10 +185,11 @@ export default function ItemDetailScreen({ route, navigation }) {
   const [memoryNote,   setMemoryNote]   = useState('')
   const [memoryError,  setMemoryError]  = useState(null)
   const [memorySaving, setMemorySaving] = useState(false)
-  // Deferred flag: fire triggerPostCheckinDiscover after memory modal closes (Fix 5)
-  const [pendingDiscover, setPendingDiscover] = useState(false)
-  const [tierUpgrade, setTierUpgrade] = useState(null)          // { tier, newPoints, triggerDiscoverOnDismiss? }
+  const [tierUpgrade, setTierUpgrade] = useState(null)          // { tier, newPoints }
+  // Deferred until the memory modal closes, so the tier-upgrade celebration
+  // doesn't compete with the personal-note input for the user's attention.
   const [pendingTierUpgrade, setPendingTierUpgrade] = useState(null)
+  const [postCheckoffData, setPostCheckoffData] = useState(null)
 
   // Nearby mode — shown when no listId, item came from Nearby tab
   const isNearbyMode = !listId
@@ -220,18 +222,13 @@ export default function ItemDetailScreen({ route, navigation }) {
     if (item?.id) trackEvent('item_view', { itemId: item.id, listId })
   }, [item?.id, listId])
 
-  // Fire tier upgrade (then discover) after memory modal is dismissed
+  // Promote a tier upgrade held during the memory modal once it closes
   useEffect(() => {
-    if (!memoryModal && pendingDiscover) {
-      setPendingDiscover(false)
-      if (pendingTierUpgrade) {
-        setTierUpgrade({ ...pendingTierUpgrade, triggerDiscoverOnDismiss: true })
-        setPendingTierUpgrade(null)
-      } else {
-        triggerPostCheckinDiscover()
-      }
+    if (!memoryModal && pendingTierUpgrade) {
+      setTierUpgrade(pendingTierUpgrade)
+      setPendingTierUpgrade(null)
     }
-  }, [memoryModal, pendingDiscover, pendingTierUpgrade])
+  }, [memoryModal, pendingTierUpgrade])
 
   useFocusEffect(
     useCallback(() => {
@@ -326,16 +323,29 @@ export default function ItemDetailScreen({ route, navigation }) {
     try {
       // Keyed by item_id, not list_item_id — a check-off made from a
       // different list containing this same item still shows as checked.
-      const { data, error } = await supabase
-        .from('check_ins')
-        .select('id')
-        .eq('user_id', uid)
-        .eq('item_id', item.id)
-        .limit(1)
+      // But it only counts if it happened inside the relevant season
+      // window: this list's own dates when opened from a list, or the
+      // current season when opened from the Nearby rail (isNearbyMode) —
+      // same window the rail itself uses, so tapping into an item's detail
+      // from the rail can't show checked when the rail just showed unchecked.
+      const [{ data, error }, windowDates] = await Promise.all([
+        supabase
+          .from('check_ins')
+          .select('checked_at')
+          .eq('user_id', uid)
+          .eq('item_id', item.id),
+        listId
+          ? supabase.from('lists').select('starts_at, ends_at').eq('id', listId).maybeSingle()
+              .then(({ data: l }) => ({ starts_at: l?.starts_at ?? null, ends_at: l?.ends_at ?? null }))
+          : getCurrentSeasonWindow(),
+      ])
 
       if (error) throw error
 
-      setChecked(!!data?.length)
+      const inWindow = (data ?? []).some(ci =>
+        isWithinWindow(ci.checked_at, windowDates.starts_at, windowDates.ends_at)
+      )
+      setChecked(inWindow)
     } catch (e) {
       console.warn('loadCheckedState:', e.message)
     }
@@ -350,124 +360,6 @@ export default function ItemDetailScreen({ route, navigation }) {
       ? `Want to do it together? Download CheckOff and join my list: ${joinUrl}`
       : `Want to do it together? Download CheckOff: ${joinUrl}`
     return `Hey! I'm trying to check off "${item?.body}"${listPart}. ${callToAction}`
-  }
-
-  async function triggerPostCheckinDiscover() {
-    const itemLat = item?.maps_lat ?? item?.mapsLat ?? null
-    const itemLng = item?.maps_lng ?? item?.mapsLng ?? null
-    const neighborhoodId = item?.neighborhoodId ?? null
-
-    // Gate 1 — item must have coordinates and a neighborhood
-    if (!itemLat || !itemLng || !neighborhoodId) {
-      console.log('[postCheckin] skip: missing coords or neighborhood', { itemLat, itemLng, neighborhoodId })
-      return
-    }
-
-    // Gate 1 — Distance: user must be within 5 miles (8047 m) of the item
-    let userLat = null
-    let userLng = null
-    try {
-      const pos = await Location.getLastKnownPositionAsync({})
-      userLat = pos?.coords?.latitude  ?? null
-      userLng = pos?.coords?.longitude ?? null
-    } catch { /* location unavailable */ }
-
-    if (!userLat || !userLng) {
-      console.log('[postCheckin] skip: user location unavailable')
-      return
-    }
-
-    const distM = haversineMeters(userLat, userLng, itemLat, itemLng)
-    console.log('[postCheckin] distance to item:', Math.round(distM) + 'm')
-
-    if (distM > 8047) {
-      console.log('[postCheckin] skip: user too far from item')
-      return
-    }
-
-    // Gate 2 — Item density: neighborhood must have > 25 active approved items
-    const { count, error: countErr } = await supabase
-      .from('items')
-      .select('id', { count: 'exact', head: true })
-      .eq('neighborhood_id', neighborhoodId)
-      .eq('is_active', true)
-      .eq('is_approved', true)
-
-    if (countErr || count == null || count <= 25) {
-      console.log('[postCheckin] skip: low item density', count)
-      return
-    }
-
-    // Both gates passed — fetch tags and navigate
-    supabase
-      .from('item_tags')
-      .select('tag_id, tags!inner(name)')
-      .eq('item_id', item.id)
-      .limit(10)
-      .then(({ data, error }) => {
-        if (error) {
-          console.log('[postCheckin] tags fetch failed:', error.message)
-          return
-        }
-        const checkinTags = (data ?? []).map(r => r.tags?.name).filter(Boolean)
-        console.log('[postCheckin] fired for item:', item.id, 'tags:', checkinTags)
-        navigation.navigate('NearbyTab', {
-          screen: 'Nearby',
-          params: { mode: 'post_checkin', checkinLat: itemLat, checkinLng: itemLng, checkinItemId: item.id, checkinTags },
-        })
-      })
-      .catch(e => {
-        console.log('[postCheckin] skip: exception', e?.message)
-      })
-  }
-
-  // Returns true if the GPS gate passes (or is not applicable).
-  // Returns false and shows an alert if the user is too far or location is unavailable.
-  async function enforceGpsCheckin() {
-    const checkinType = item?.checkin_type ?? item?.checkinType
-    if (checkinType !== 'gps') return true
-
-    const itemLat = item?.maps_lat ?? item?.mapsLat ?? null
-    const itemLng = item?.maps_lng ?? item?.mapsLng ?? null
-
-    if (!itemLat || !itemLng) return true // no coords on item — let it through
-
-    let userLat = null
-    let userLng = null
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync()
-      if (status !== 'granted') {
-        Alert.alert('Location required', 'Location access is needed to check off this item.')
-        return false
-      }
-      // Try a fresh fix first; fall back to last-known if it times out
-      const pos = await Promise.race([
-        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 6000)),
-      ]).catch(() => Location.getLastKnownPositionAsync({}))
-      userLat = pos?.coords?.latitude  ?? null
-      userLng = pos?.coords?.longitude ?? null
-    } catch {
-      // permission denied or device error
-    }
-
-    if (!userLat || !userLng) {
-      Alert.alert('Location unavailable', 'Location access is needed to check off this item.')
-      return false
-    }
-
-    const thresholdM = item?.geo_radius_m ?? 500
-    const distM = haversineMeters(userLat, userLng, itemLat, itemLng)
-
-    if (distM > thresholdM) {
-      Alert.alert(
-        'Not there yet',
-        `You need to be at this location to check it off (${Math.round(distM)}m away).`
-      )
-      return false
-    }
-
-    return true
   }
 
   async function handleCheckOff() {
@@ -498,13 +390,21 @@ export default function ItemDetailScreen({ route, navigation }) {
       return
     }
 
-    if (!await enforceGpsCheckin()) return
+    const fenceResult = await checkGeoFence(item)
+    if (!fenceResult.ok) { presentGeoFenceFailure(fenceResult); return }
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
     setSaving(true)
 
     // Capture points before the insert so tier crossing can be detected after
     const pointsBeforePromise = getUserLifetimePoints(userId)
+
+    // Post-checkoff sheet fires on tap, not after the insert confirms, so
+    // its proximity/rank queries run in parallel with the write. Reconciled
+    // back to null below if the insert fails.
+    if (!checked) {
+      setPostCheckoffData({ itemId: item?.id, listItemId, userId, item })
+    }
 
     try {
       if (checked) {
@@ -519,6 +419,16 @@ export default function ItemDetailScreen({ route, navigation }) {
         if (error) throw error
         setChecked(false)
       } else {
+        // points_awarded on the primary row — same difficulty * point_multiplier
+        // formula as lib/useItems.js checkOff. Fan-out (lib/checkInFanOut.js)
+        // deliberately leaves secondary rows at 0 to avoid double-counting.
+        const { data: liRow } = await supabase
+          .from('list_items')
+          .select('point_multiplier')
+          .eq('id', listItemId)
+          .maybeSingle()
+        const pointsAwarded = Math.round((item?.difficulty ?? 1) * (liRow?.point_multiplier ?? 1.0))
+
         // item_id is the canonical, always-available path to this check-in's
         // item — it survives list deletion (list_item_id goes null then).
         const { error } = await supabase
@@ -528,6 +438,7 @@ export default function ItemDetailScreen({ route, navigation }) {
             list_item_id: listItemId,
             item_id: item?.id ?? null,
             checkin_method: 'tap',
+            points_awarded: pointsAwarded,
           })
 
         if (error) {
@@ -539,6 +450,7 @@ export default function ItemDetailScreen({ route, navigation }) {
           // Catch here so the raw Postgres message (with padded month names)
           // doesn't reach the user.
           if (error.code === 'P0001') {
+            setPostCheckoffData(null)
             const msg = error.message ?? ''
             if (msg.includes('started')) {
               Alert.alert('List not active yet', 'This list hasn\'t started yet. Check back when it opens.')
@@ -584,32 +496,27 @@ export default function ItemDetailScreen({ route, navigation }) {
             itemBody:    item.body ?? '',
             difficulty,
           })
-          // Defer discover until modal is dismissed
-          setPendingDiscover(true)
         } else {
           if (difficulty >= 5) {
             notifyCrewCheckIn({ listItemId, itemBody: item?.body ?? '', difficulty, checkInId: null }).catch(() => {})
           }
         }
 
-        // Check tier crossing after points have been updated.
-        // For non-memory items: discover fires here (deferred until we know if tier crossed).
-        // For memory items: pendingTierUpgrade + pendingDiscover useEffect handles sequencing.
+        // Check tier crossing after points have been updated. Deferred until
+        // the memory modal closes for memory-eligible items so it doesn't
+        // compete with the note input.
         checkTierCrossingForUser(userId, pointsBefore).then(({ crossedTier, newPoints }) => {
           if (crossedTier) {
             if (item?.allowsPersonalNote) {
               setPendingTierUpgrade({ tier: crossedTier, newPoints })
             } else {
-              setTierUpgrade({ tier: crossedTier, newPoints, triggerDiscoverOnDismiss: true })
+              setTierUpgrade({ tier: crossedTier, newPoints })
             }
-          } else if (!item?.allowsPersonalNote) {
-            triggerPostCheckinDiscover()
           }
-        }).catch(() => {
-          if (!item?.allowsPersonalNote) triggerPostCheckinDiscover()
-        })
+        }).catch(() => {})
       }
     } catch (e) {
+      setPostCheckoffData(null)
       Alert.alert('Could not check off', e.message)
     } finally {
       setSaving(false)
@@ -718,10 +625,16 @@ export default function ItemDetailScreen({ route, navigation }) {
     }
 
     // Item is on a list — check it off there
-    if (!await enforceGpsCheckin()) return
+    const fenceResult = await checkGeoFence(item)
+    if (!fenceResult.ok) { presentGeoFenceFailure(fenceResult); return }
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
     setSaving(true)
+
+    if (!checked) {
+      setPostCheckoffData({ itemId: item?.id, listItemId: itemOnListId, userId, item })
+    }
+
     try {
       if (checked) {
         // Global by item_id, not just this list's row — a check-off is a
@@ -734,12 +647,25 @@ export default function ItemDetailScreen({ route, navigation }) {
         if (error) throw error
         setChecked(false)
       } else {
+        // points_awarded on the primary row — same difficulty * point_multiplier
+        // formula as lib/useItems.js checkOff. Fan-out (lib/checkInFanOut.js)
+        // deliberately leaves secondary rows at 0 to avoid double-counting.
+        const { data: liRow } = await supabase
+          .from('list_items')
+          .select('point_multiplier')
+          .eq('id', itemOnListId)
+          .maybeSingle()
+        const pointsAwarded = Math.round((item?.difficulty ?? 1) * (liRow?.point_multiplier ?? 1.0))
+
         // item_id is the canonical, always-available path to this check-in's
         // item — it survives list deletion (list_item_id goes null then).
         const { error } = await supabase
           .from('check_ins')
-          .insert({ user_id: userId, list_item_id: itemOnListId, item_id: item?.id ?? null, checkin_method: 'tap' })
-        if (error && error.code !== '23505') throw error
+          .insert({ user_id: userId, list_item_id: itemOnListId, item_id: item?.id ?? null, checkin_method: 'tap', points_awarded: pointsAwarded })
+        if (error && error.code !== '23505') {
+          setPostCheckoffData(null)
+          throw error
+        }
         setChecked(true)
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
         supabase.functions.invoke('update-streak', {
@@ -772,15 +698,14 @@ export default function ItemDetailScreen({ route, navigation }) {
             itemBody:    item.body ?? '',
             difficulty,
           })
-          setPendingDiscover(true)
         } else {
           if (difficulty >= 5) {
             notifyCrewCheckIn({ listItemId: itemOnListId, itemBody: item?.body ?? '', difficulty, checkInId: null }).catch(() => {})
           }
-          triggerPostCheckinDiscover()
         }
       }
     } catch (e) {
+      setPostCheckoffData(null)
       Alert.alert('Could not check off', e.message)
     } finally {
       setSaving(false)
@@ -1525,17 +1450,19 @@ export default function ItemDetailScreen({ route, navigation }) {
         <TierUpgradeCelebrationModal
           tier={tierUpgrade.tier}
           newPoints={tierUpgrade.newPoints}
-          onDismiss={() => {
-            const shouldDiscover = tierUpgrade?.triggerDiscoverOnDismiss
-            setTierUpgrade(null)
-            if (shouldDiscover) triggerPostCheckinDiscover()
-          }}
+          onDismiss={() => setTierUpgrade(null)}
           onExploreInsider={() => {
             setTierUpgrade(null)
             navigation.navigate('ProfileTab', { screen: 'InsiderAccess' })
           }}
         />
       )}
+
+      <PostCheckoffSheet
+        data={postCheckoffData}
+        onDismiss={() => setPostCheckoffData(null)}
+        navigation={navigation}
+      />
     </View>
   )
 }

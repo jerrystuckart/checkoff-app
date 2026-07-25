@@ -90,7 +90,7 @@ export default function WeeklyRecapScreen({ navigation, route }) {
           .eq('user_id', uid)
           .gte('checked_at', weekStart.toISOString())
           .lte('checked_at', weekEnd.toISOString())
-          .order('checked_at', { ascending: false }),
+          .order('checked_at', { ascending: true }),
 
         supabase
           .from('users')
@@ -101,16 +101,19 @@ export default function WeeklyRecapScreen({ navigation, route }) {
 
       const rawCheckIns = checkInsRes.data ?? []
 
-      // Flatten — use points_awarded as source of truth; fall back to inline
-      // calculation only if points_awarded is null on a given row
+      // Flatten — points_awarded is the sole source of truth, matching
+      // lib/points.js getUserLifetimePoints/getWeeklyPoints exactly. A
+      // difficulty*multiplier fallback here would double-count: every
+      // fan-out row (lib/checkInFanOut.js) deliberately carries a null/zero
+      // points_awarded to avoid inflating the total, and recomputing from
+      // difficulty for those rows undoes that safeguard.
       const flat = rawCheckIns.map(ci => {
         const li = ci.list_items
         const item = li?.items
-        const difficulty = item?.difficulty ?? null
-        const multiplier = li?.point_multiplier ?? 1.0
-        const pts = ci.points_awarded ?? (difficulty != null ? Math.round(difficulty * multiplier) : null)
+        const pts = ci.points_awarded ?? 0
         return {
           id:            ci.id,
+          itemId:        item?.id ?? null,
           checkedAt:     ci.checked_at,
           photoUrl:      ci.photo_url ?? null,
           personalPlace: ci.personal_place ?? null,
@@ -121,9 +124,32 @@ export default function WeeklyRecapScreen({ navigation, route }) {
         }
       })
 
+      // Points are correct as-is — checkInFanOut.js only awards points_awarded
+      // on the primary row, so summing every row (including fan-out mirrors)
+      // is already right. But fan-out means the SAME item can appear as
+      // multiple rows (one per list containing it), so a user-facing
+      // "check-ins" count or list must dedupe by item_id — one entry per
+      // item, earliest checked_at, merging in whichever row actually carries
+      // the photo/note/points (rows queried oldest-first above).
       setTotalPts(flat.reduce((sum, ci) => sum + (ci.pts ?? 0), 0))
 
-      setCheckIns(flat)
+      const byItem = new Map()
+      for (const ci of flat) {
+        const key = ci.itemId ?? ci.id
+        const existing = byItem.get(key)
+        if (!existing) {
+          byItem.set(key, { ...ci })
+        } else {
+          if (!existing.photoUrl && ci.photoUrl) existing.photoUrl = ci.photoUrl
+          if (!existing.personalPlace && ci.personalPlace) existing.personalPlace = ci.personalPlace
+          if (!existing.personalNote && ci.personalNote) existing.personalNote = ci.personalNote
+          if (!existing.pts && ci.pts) existing.pts = ci.pts
+        }
+      }
+      const deduped = Array.from(byItem.values())
+        .sort((a, b) => new Date(b.checkedAt) - new Date(a.checkedAt))
+
+      setCheckIns(deduped)
       setStreak(streakRes.data?.current_streak ?? 0)
     } catch (e) {
       console.error('WeeklyRecapScreen load error:', e.message)

@@ -85,9 +85,14 @@ export default function ProfileScreen({ navigation }) {
         // item_id is the canonical, always-available path to a check-in's
         // item — it survives list deletion. list_items is list-context
         // only from here on and may be null once its list is gone.
-        supabase.from('check_ins').select('id, checked_at, checkin_method, item_id, items(body, categories(name, color_hex))').eq('user_id', uid).order('checked_at', { ascending: false }).limit(5),
-        supabase.from('check_ins').select('id', { count: 'exact', head: true }).eq('user_id', uid),
-        supabase.from('check_ins').select('id, points_awarded, item_id, items(difficulty), list_items(point_multiplier)')
+        // Fan-out (lib/checkInFanOut.js) creates one row per list containing
+        // the item, so the same item can appear multiple times here — fetch
+        // more than the display limit so deduping below still leaves 5.
+        supabase.from('check_ins').select('id, checked_at, checkin_method, item_id, items(body, categories(name, color_hex))').eq('user_id', uid).order('checked_at', { ascending: false }).limit(30),
+        // Fan-out rows mean row count != distinct items checked — fetch
+        // item_id only (no head) and dedupe client-side for the true count.
+        supabase.from('check_ins').select('item_id').eq('user_id', uid),
+        supabase.from('check_ins').select('id, points_awarded, item_id')
           .eq('user_id', uid)
           .gte('checked_at', monday.toISOString())
           .lte('checked_at', sunday.toISOString()),
@@ -99,21 +104,31 @@ export default function ProfileScreen({ navigation }) {
       setNotifInvites(profileRes.data?.notif_invites !== false)
       setNotifNudges(profileRes.data?.notif_nudges !== false)
       setBadges((badgesRes.data ?? []).map(b => ({ ...b.badge_definitions, earned_at: b.earned_at })).filter(Boolean))
-      setRecentCheckins(checkinsRes.data ?? [])
-      setStats({ total: totalRes.count ?? 0, streak: profileRes.data?.current_streak ?? 0, longest: profileRes.data?.longest_streak ?? 0 })
 
-      // Weekly summary for recap card — use points_awarded as source of truth;
-      // fall back to inline calculation only if points_awarded is null on a row
+      // Dedupe by item_id — a check-in "count" or list means distinct items
+      // checked off, not check_ins rows (fan-out inflates the latter).
+      const seenRecent = new Set()
+      const dedupedRecent = []
+      for (const ci of checkinsRes.data ?? []) {
+        if (ci.item_id != null && seenRecent.has(ci.item_id)) continue
+        if (ci.item_id != null) seenRecent.add(ci.item_id)
+        dedupedRecent.push(ci)
+        if (dedupedRecent.length === 5) break
+      }
+      setRecentCheckins(dedupedRecent)
+
+      const distinctItemIds = new Set((totalRes.data ?? []).map(r => r.item_id).filter(id => id != null))
+      setStats({ total: distinctItemIds.size, streak: profileRes.data?.current_streak ?? 0, longest: profileRes.data?.longest_streak ?? 0 })
+
+      // Weekly summary for recap card — points_awarded is the sole source of
+      // truth, matching lib/points.js getUserLifetimePoints/getWeeklyPoints
+      // exactly. A difficulty*multiplier fallback here double-counts: every
+      // fan-out row (lib/checkInFanOut.js) deliberately carries a null/zero
+      // points_awarded to avoid inflating the total.
       const weeklyRows = weeklyRes.data ?? []
-      const weeklyPts = weeklyRows.reduce((sum, ci) => {
-        const pts = ci.points_awarded ?? (() => {
-          const d = ci.items?.difficulty ?? null
-          const m = ci.list_items?.point_multiplier ?? 1
-          return d != null ? Math.round(d * m) : 0
-        })()
-        return sum + pts
-      }, 0)
-      setWeeklySummary({ count: weeklyRows.length, pts: weeklyPts })
+      const weeklyPts = weeklyRows.reduce((sum, ci) => sum + (ci.points_awarded ?? 0), 0)
+      const weeklyDistinctCount = new Set(weeklyRows.map(ci => ci.item_id).filter(id => id != null)).size
+      setWeeklySummary({ count: weeklyDistinctCount, pts: weeklyPts })
 
       const { count: refCount } = await supabase
         .from('invite_referrals')

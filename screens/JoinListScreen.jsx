@@ -96,11 +96,13 @@ export default function JoinListScreen({ route, navigation }) {
       .eq('list_id', listData.id)
     setMemberCount(mCount ?? 0)
 
-    // Load item count
+    // Load item count — excludes Bonus Drops so this agrees with the
+    // denominator shown once inside the list (ListScreen's derivedTotalCount).
     const { count: iCount } = await supabase
       .from('list_items')
       .select('id', { count: 'exact', head: true })
       .eq('list_id', listData.id)
+      .eq('is_bonus_drop', false)
     setItemCount(iCount ?? 0)
 
     // Check if already a member

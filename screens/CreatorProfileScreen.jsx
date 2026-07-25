@@ -7,6 +7,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { useTheme } from '../lib/ThemeContext'
+import { isWithinWindow } from '../lib/seasonWindow'
 
 const AMBER = '#F5A623'
 const NAVY  = '#0F0F1E'
@@ -81,7 +82,7 @@ export default function CreatorProfileScreen({ route, navigation }) {
       //    Everyone else only sees published lists.
       let listsQuery = supabase
         .from('lists')
-        .select('id, title, goes_public_at, metro_id')
+        .select('id, title, goes_public_at, metro_id, starts_at, ends_at')
         .eq('checkoff_creator_id', creatorRow.id)
         .eq('is_creator_list', true)
         .order('goes_public_at', { ascending: true, nullsFirst: true })
@@ -99,7 +100,15 @@ export default function CreatorProfileScreen({ route, navigation }) {
         lists.map(l =>
           supabase
             .from('list_items')
-            .select('id, sort_order, is_partner_item, items(id, body, difficulty, neighborhoods!items_neighborhood_id_fkey(name))')
+            .select(`
+              id, sort_order, is_partner_item,
+              items (
+                id, body, difficulty, is_secret, secret_reveal_text,
+                maps_lat, maps_lng, geo_radius_m, is_universal,
+                checkin_type, photo_required,
+                neighborhoods!items_neighborhood_id_fkey(name)
+              )
+            `)
             .eq('list_id', l.id)
             .order('sort_order')
         )
@@ -139,20 +148,28 @@ export default function CreatorProfileScreen({ route, navigation }) {
       // not list_item_id, so an item checked off via a DIFFERENT list still
       // shows checked here. cMap still stores list_item ids per list (that's
       // what the render below looks up by), just populated via an item_id
-      // match rather than a list_item_id match.
+      // match rather than a list_item_id match. Each list can carry its own
+      // season window (starts_at/ends_at, null = all-time), so a single
+      // shared "checked item" set isn't enough once two of a creator's
+      // lists have different windows — the window check is applied per
+      // list against the one shared check_ins fetch below.
       if (user && lists.length > 0) {
         const allItemIds = itemResults.flatMap(r => (r.data ?? []).map(li => li.items?.id).filter(Boolean))
         if (allItemIds.length > 0) {
           const { data: checkins } = await supabase
             .from('check_ins')
-            .select('item_id')
+            .select('item_id, checked_at')
             .eq('user_id', user.id)
             .in('item_id', allItemIds)
-          const checkedItemIdSet = new Set((checkins ?? []).map(c => c.item_id))
           const cMap = {}
           itemResults.forEach((r, i) => {
-            const lid = lists[i].id
-            cMap[lid] = new Set((r.data ?? []).filter(li => checkedItemIdSet.has(li.items?.id)).map(li => li.id))
+            const list = lists[i]
+            const checkedItemIdSet = new Set(
+              (checkins ?? [])
+                .filter(c => isWithinWindow(c.checked_at, list.starts_at, list.ends_at))
+                .map(c => c.item_id)
+            )
+            cMap[list.id] = new Set((r.data ?? []).filter(li => checkedItemIdSet.has(li.items?.id)).map(li => li.id))
           })
           setCheckedIdsMap(cMap)
         }
@@ -331,6 +348,10 @@ export default function CreatorProfileScreen({ route, navigation }) {
               >
                 <View style={{ flex: 1 }}>
                   <Text style={styles.listTitle}>{list.title}</Text>
+                  {/* KNOWN GAP: does not exclude Bonus Drops (list_items.is_bonus_drop)
+                      from this count. Not fixed — creator lists can't have drops yet
+                      (official-lists-only for the Fall 2026 launch). Fix this before
+                      that changes, same as ListScreen's derivedTotalCount. */}
                   <Text style={styles.listItemCount}>{list.items.length} {list.items.length === 1 ? 'place' : 'places'}</Text>
                 </View>
                 <Text style={styles.listChevron}>{expandedListIds.has(list.id) ? '▾' : '▸'}</Text>
@@ -368,6 +389,13 @@ export default function CreatorProfileScreen({ route, navigation }) {
                 </TouchableOpacity>
               )}
 
+              {/* KNOWN GAP: unlike ListScreen's renderItem, this has no locked-teaser
+                  branch for a bonus-drop list_items row — every row here navigates
+                  straight to ItemDetail, which would fully reveal a locked drop's
+                  body/hook. Not fixed — creator lists can't have drops yet
+                  (official-lists-only for the Fall 2026 launch). Needs the same
+                  treatment as ListScreen's computeBonusDropUnlocked branch before
+                  that changes. */}
               {expandedListIds.has(list.id) && list.items.map(li => {
                 const item      = li.items
                 const checked   = checkedIds.has(li.id)
@@ -386,6 +414,18 @@ export default function CreatorProfileScreen({ route, navigation }) {
                         difficulty:       item.difficulty,
                         neighborhoodName: item.neighborhoods?.name ?? null,
                         checked,
+                        // Without these, ItemDetailScreen's secret-reveal
+                        // redirect and the check-off geofence both silently
+                        // no-op — is_secret undefined skips the redirect,
+                        // missing coordinates read as "no fence."
+                        is_secret:          item.is_secret          ?? false,
+                        secretRevealText:   item.secret_reveal_text ?? null,
+                        maps_lat:           item.maps_lat           ?? null,
+                        maps_lng:           item.maps_lng           ?? null,
+                        geo_radius_m:       item.geo_radius_m       ?? null,
+                        is_universal:       item.is_universal       ?? false,
+                        checkin_type:       item.checkin_type       ?? 'tap',
+                        photoRequired:      item.photo_required     ?? false,
                       },
                       listId: list.id,
                       listTitle: list.title,

@@ -19,20 +19,49 @@ import * as Sentry from '@sentry/react-native'
 import { haversineMeters } from '../lib/distance'
 import { proximitySort, formatDistanceLabel } from '../lib/proximity'
 import { getSessionDensityTier } from '../lib/densityTier'
+import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
+import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 
 const PURPLE = '#7A4DB3'
-const LIST_ACCENT_COLORS = ['#F5A623', '#7A4DB3', '#2E7D8C', '#2E6B3E', '#C0674A', '#378ADD']
+
+// Per-list ACCENT COLOR (not a gradient) for the "More [Metro] lists" rail
+// — used only when a list has no hero_image_url set. A photo + the shared
+// dark scrim is the primary look (matches the seasonal hero); this is
+// strictly the no-photo fallback, so it stays a single flat color rather
+// than a second competing color language. Matched by title so it survives
+// across metros/seasons without depending on a specific list id. Falls
+// back to a stable hash-based pick from FALLBACK_ACCENTS for anything not
+// named here (a future themed list, another metro's list, before its photo
+// is uploaded) so a card never looks unstyled.
+const THEMED_LIST_ACCENTS = {
+  'patio season':          '#D97B29',
+  'hidden bars':           '#3D2B56',
+  'kid-friendly weekends': '#2E9BD6',
+  'first date spots':      '#E0588F',
+  'roosevelt row':         '#1D9E75',
+  'worth the splurge':     '#D4AF37',
+  'tucson hidden bars':    '#3D2B56',
+  'mercado district':      '#C4520A',
+}
+const FALLBACK_ACCENTS = ['#378ADD', '#7A4DB3', '#D85A30', '#E8A020']
+function themedListAccent(title, id) {
+  const key = (title ?? '').toLowerCase().trim()
+  if (THEMED_LIST_ACCENTS[key]) return THEMED_LIST_ACCENTS[key]
+  let hash = 0
+  for (const c of id ?? '') hash = (hash * 31 + c.charCodeAt(0)) >>> 0
+  return FALLBACK_ACCENTS[hash % FALLBACK_ACCENTS.length]
+}
 
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets()
   const { colors, isDark, toggleTheme } = useTheme()
-  const { BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, RED,
+  const { BG, CARD, TEXT, MUTED, LABEL, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, RED,
           SUCCESS_BG, SUCCESS_BORDER, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT, STATUS_BAR } = colors
 
   const styles = useMemo(() => createStyles({
-    BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN,
+    BG, CARD, TEXT, MUTED, LABEL, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN,
     SUCCESS_BG, SUCCESS_BORDER, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT,
-  }), [BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN,
+  }), [BG, CARD, TEXT, MUTED, LABEL, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN,
        SUCCESS_BG, SUCCESS_BORDER, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT])
 
   const [metros, setMetros] = useState([])
@@ -51,7 +80,6 @@ export default function HomeScreen({ navigation }) {
   const [userStreak, setUserStreak] = useState(0)
   const [userLifetimePts, setUserLifetimePts] = useState(0)
   const [userInsiderTier, setUserInsiderTier] = useState('Starter')
-  const [showSignInPrompt, setShowSignInPrompt] = useState(false)
   const [nextTenList, setNextTenList] = useState(null)
   const [nextTenDismissed, setNextTenDismissed] = useState(false)
   const [heroImage, setHeroImage] = useState(null)
@@ -69,6 +97,8 @@ export default function HomeScreen({ navigation }) {
   const [checkedItemIds, setCheckedItemIds] = useState(new Set())
   const [nearbyLoading, setNearbyLoading] = useState(false)
   const [seasonalCounts, setSeasonalCounts] = useState({ checked: 0, total: 0 })
+  const [crewListId, setCrewListId] = useState(null)
+  const [themedLists, setThemedLists] = useState([])
 
   const { savedCrew } = useCrewInvite()
 
@@ -265,7 +295,7 @@ export default function HomeScreen({ navigation }) {
 
     const { data: offLists } = await supabase
       .from('lists')
-      .select('id, title, starts_at, ends_at, cover_emoji, metro_id')
+      .select('id, title, starts_at, ends_at, cover_emoji, metro_id, hero_image_url')
       .eq('is_official', true)
       .eq('is_public', true)
       .eq('metro_id', metroId)
@@ -461,17 +491,34 @@ async function loadNearbyRail(userId) {
         .not('maps_lng', 'is', null),
     ])
 
-    const rawItems = [...(universalItems ?? []), ...(locatedItems ?? [])].map(mapRailItem)
+    const allRawItems = [...(universalItems ?? []), ...(locatedItems ?? [])].map(mapRailItem)
+    // Locked Bonus Drops must not leak here — they only exist inside their
+    // own list until unlocked. Masked unconditionally unless this user has
+    // already checked the item off, at which point it's a normal item.
+    const rawItems = await filterMaskedBonusDrops(allRawItems, userId)
     setRawNearbyItems(rawItems)
 
     if (userId && rawItems.length > 0) {
       const itemIds = rawItems.map(i => i.id)
-      const { data: checkins } = await supabase
-        .from('check_ins')
-        .select('item_id')
-        .eq('user_id', userId)
-        .in('item_id', itemIds)
-      setCheckedItemIds(new Set((checkins ?? []).map(c => c.item_id)))
+      // Season-scoped, not all-time: the rail is about resurfacing things to
+      // do, so a check-off from a prior season must not permanently suppress
+      // an item here. Queried independently rather than reading the `season`
+      // state var — this fires before loadForMetro's own season fetch
+      // resolves, so relying on that state would race. No metro filter: the
+      // seasons table is a single global calendar (no metro/city column),
+      // same as the theming lookup below.
+      const [{ data: checkins }, seasonWindow] = await Promise.all([
+        supabase
+          .from('check_ins')
+          .select('item_id, checked_at')
+          .eq('user_id', userId)
+          .in('item_id', itemIds),
+        getCurrentSeasonWindow(),
+      ])
+      const inWindow = (checkins ?? []).filter(c =>
+        isWithinWindow(c.checked_at, seasonWindow.starts_at, seasonWindow.ends_at)
+      )
+      setCheckedItemIds(new Set(inWindow.map(c => c.item_id)))
     } else {
       setCheckedItemIds(new Set())
     }
@@ -481,129 +528,6 @@ async function loadNearbyRail(userId) {
     setNearbyLoading(false)
   }
 }
-
-  async function joinOfficialList(list) {
-  if (!user) {
-    Alert.alert('Sign in first', 'You need an account to join a list.', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Sign in', onPress: () => navigation.navigate('SignIn') },
-    ])
-    return
-  }
-
-  // Check if already a member before inserting
-  const { data: existing } = await supabase
-    .from('list_members')
-    .select('id')
-    .eq('list_id', list.id)
-    .eq('user_id', user.id)
-    .maybeSingle()
-
-  if (existing) {
-    // Already a member — just navigate to the list
-    navigation.navigate('List', { listId: list.id, title: list.title, heroImage: heroImage ?? undefined })
-    return
-  }
-
-  const { error } = await supabase
-    .from('list_members')
-    .insert({
-      list_id:      list.id,
-      user_id:      user.id,
-      invite_source: 'direct',
-    })
-
-  if (error) {
-    Alert.alert('Could not join', error.message)
-    return
-  }
-
-  Alert.alert(
-    '🎯 Quick tip',
-    "CheckOff is about going places — not counting places you've already been. Pick a few items you haven't done yet and go make it happen.",
-    [{ text: "Let's go →", onPress: () => navigation.navigate('List', { listId: list.id, title: list.title, heroImage: heroImage ?? undefined }) }]
-  )
-}
-
-  async function deleteList(list) {
-    const { count } = await supabase
-      .from('list_members')
-      .select('*', { count: 'exact', head: true })
-      .eq('list_id', list.id)
-
-    const memberCount = count ?? 1
-    const message = memberCount > 1
-      ? `Delete this list? This will remove it for all ${memberCount} members and cannot be undone.`
-      : 'Delete this list? This cannot be undone.'
-
-    Alert.alert(
-      'Delete list?',
-      message,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            const { error } = await supabase
-              .from('lists')
-              .delete()
-              .eq('id', list.id)
-              .eq('creator_id', user?.id)
-
-            if (error) {
-              // 23503 = foreign_key_violation. Give a friendly, specific message
-              // for the known destination_lists case; any other FK violation
-              // (or any other error) still surfaces the generic message as-is.
-              if (error.code === '23503' && error.message?.includes('destination_lists_list_id_fkey')) {
-                const { data: destList } = await supabase
-                  .from('destination_lists')
-                  .select('destinations ( name )')
-                  .eq('list_id', list.id)
-                  .maybeSingle()
-                Alert.alert(
-                  'Could not delete',
-                  `This list can't be deleted because it's linked to a destination banner (${destList?.destinations?.name ?? 'a destination'}). Remove or reassign the destination link first, then try again.`
-                )
-              } else {
-                Alert.alert('Could not delete', error.message)
-              }
-            } else {
-              setLists(prev => prev.filter(l => l.id !== list.id))
-            }
-          },
-        },
-      ]
-    )
-  }
-
-  async function leaveList(list) {
-    if (!user?.id) return
-    Alert.alert(
-      'Leave list?',
-      'You can rejoin using the original invite link.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Leave',
-          style: 'destructive',
-          onPress: async () => {
-            const { error } = await supabase
-              .from('list_members')
-              .delete()
-              .eq('list_id', list.id)
-              .eq('user_id', user.id)
-
-            if (error) {
-              Alert.alert('Could not leave', error.message)
-            } else {
-              setLists(prev => prev.filter(l => l.id !== list.id))
-            }
-          },
-        },
-      ]
-    )
-  }
 
   async function switchMetro(metro) {
     setSelectedMetro(metro)
@@ -726,30 +650,18 @@ async function loadNearbyRail(userId) {
         // Check for check-ins last week
         const { data: lastWeekCIs } = await supabase
           .from('check_ins')
-          .select('id, points_awarded, item_id, items(difficulty), list_items(point_multiplier)')
+          .select('id, points_awarded, item_id')
           .eq('user_id', uid)
           .gte('checked_at', lastMonday.toISOString())
           .lte('checked_at', lastSunday.toISOString())
         if (!lastWeekCIs?.length) return
 
-        // Compute summary stats — points_awarded is the source of truth
-        // (matches ProfileScreen's weekly recap); the items/list_items
-        // embeds are only a fallback for the rare legacy row where
-        // points_awarded is null. item_id is the canonical,
-        // always-available path to a check-in's item (survives list
-        // deletion); list_items is list-context only and may be null
-        // once its list is gone.
-        let pts = null
-        try {
-          pts = lastWeekCIs.reduce((sum, ci) => {
-            const p = ci.points_awarded ?? (() => {
-              const d = ci.items?.difficulty ?? null
-              const m = ci.list_items?.point_multiplier ?? 1
-              return d != null ? Math.round(d * m) : 0
-            })()
-            return sum + p
-          }, 0)
-        } catch { pts = null }
+        // points_awarded is the sole source of truth, matching lib/points.js
+        // getUserLifetimePoints/getWeeklyPoints exactly (and ProfileScreen's
+        // weekly recap). A difficulty*multiplier fallback here double-counts:
+        // every fan-out row (lib/checkInFanOut.js) deliberately carries a
+        // null/zero points_awarded to avoid inflating the total.
+        const pts = lastWeekCIs.reduce((sum, ci) => sum + (ci.points_awarded ?? 0), 0)
 
         const { data: streakRow } = await supabase
           .from('users')
@@ -765,10 +677,14 @@ async function loadNearbyRail(userId) {
           viewed_at:         new Date().toISOString(),
         })
 
-        // Show modal after short delay so home screen renders first
+        // Show modal after short delay so home screen renders first.
+        // count is distinct items checked, not rows — fan-out
+        // (lib/checkInFanOut.js) mirrors one check-in into every other
+        // active list containing the item, inflating raw row count.
+        const distinctCount = new Set(lastWeekCIs.map(ci => ci.item_id).filter(id => id != null)).size
         setTimeout(() => {
           setRecapModal({
-            count:        lastWeekCIs.length,
+            count:        distinctCount,
             pts,
             streak:       streakVal,
             weekStartIso: lastMonday.toISOString(),
@@ -872,25 +788,35 @@ async function loadNearbyRail(userId) {
     if (!listId || isEnded(currentOnHome?.ends_at)) { setSeasonalCounts({ checked: 0, total: 0 }); return }
     let cancelled = false
     ;(async () => {
+      // Bonus Drops are excluded from this count entirely — a 30-item list
+      // with 2 drops always reads "X of 30", never "of 31"/"of 32".
       const { data: liRows } = await supabase
         .from('list_items')
-        .select('item_id')
+        .select('item_id, is_bonus_drop')
         .eq('list_id', listId)
-      const total = liRows?.length ?? 0
+      const nonDropRows = (liRows ?? []).filter(li => !li.is_bonus_drop)
+      const total = nonDropRows.length
       let checked = 0
       if (user?.id && total > 0) {
-        const itemIds = liRows.map(li => li.item_id).filter(Boolean)
+        const itemIds = nonDropRows.map(li => li.item_id).filter(Boolean)
+        // Season-scoped to THIS list's own window (currentOnHome.starts_at/
+        // ends_at, already fetched above) — without this, Fall's card would
+        // count every item already checked off during Summer, inflating "N
+        // of M" and potentially exceeding the list's own item count.
         const { data: checkins } = await supabase
           .from('check_ins')
-          .select('item_id')
+          .select('item_id, checked_at')
           .eq('user_id', user.id)
           .in('item_id', itemIds)
-        checked = new Set((checkins ?? []).map(c => c.item_id)).size
+        const inWindow = (checkins ?? []).filter(c =>
+          isWithinWindow(c.checked_at, currentOnHome?.starts_at, currentOnHome?.ends_at)
+        )
+        checked = new Set(inWindow.map(c => c.item_id)).size
       }
       if (!cancelled) setSeasonalCounts({ checked, total })
     })()
     return () => { cancelled = true }
-  }, [currentOnHome?.id, currentOnHome?.ends_at, user?.id])
+  }, [currentOnHome?.id, currentOnHome?.starts_at, currentOnHome?.ends_at, user?.id])
 
   // Seasonal card rank — reuses useLeaderboard as-is (not modifying it, per
   // instruction). NOTE: this mounts useLeaderboard's Realtime check_ins
@@ -904,6 +830,143 @@ async function loadNearbyRail(userId) {
     const idx = seasonalLbEntries.findIndex(e => e.userId === user.id)
     return idx >= 0 ? idx + 1 : null
   })()
+
+  // ── Crew line — the one personal/crew list with other members, picked by
+  // member count first (a bigger crew is a stronger rivalry signal than one
+  // where the user is nearly alone), then most-recent check-in activity as
+  // a tiebreaker among lists sharing the top member count. Solo lists
+  // (memberCount === 1) and joined official lists never qualify — rivalry
+  // only reads as real when it's people you actually invited. ─────────────
+  useEffect(() => {
+    const candidates = activeLists.filter(l => l.memberCount > 1)
+    if (!candidates.length) { setCrewListId(null); return }
+
+    const maxMembers  = Math.max(...candidates.map(l => l.memberCount))
+    const topByMembers = candidates.filter(l => l.memberCount === maxMembers)
+    if (topByMembers.length === 1) { setCrewListId(topByMembers[0].id); return }
+
+    let cancelled = false
+    ;(async () => {
+      const ids = topByMembers.map(l => l.id)
+      const { data } = await supabase
+        .from('check_ins')
+        .select('checked_at, list_items!inner(list_id)')
+        .in('list_items.list_id', ids)
+        .order('checked_at', { ascending: false })
+        .limit(1)
+      if (cancelled) return
+      setCrewListId(data?.[0]?.list_items?.list_id ?? topByMembers[0].id)
+    })()
+    return () => { cancelled = true }
+  }, [activeLists])
+
+  const crewList = lists.find(l => l.id === crewListId) ?? null
+  const { entries: crewEntries } = useLeaderboard(crewListId)
+
+  // Every branch here is a genuine rivalry status, never a title+countdown
+  // repeat of the Lists tab. Rank #1 and a tie both used to fall through to
+  // null (hiding the whole card) — but those are exactly the states a
+  // brand-new or lightly-used crew list sits in most of the time, so that
+  // hid the card for legitimately good crew lists, not just the redundant-
+  // countdown case it was meant to catch. Only returns null when there's
+  // truly no one to compare against yet (entries haven't loaded).
+  function crewRivalryLine(list) {
+    if (!list || !crewEntries.length) return null
+
+    if (crewEntries.every(e => (e.score ?? 0) === 0)) {
+      return 'Be the first to check something off'
+    }
+
+    const idx = crewEntries.findIndex(e => e.userId === user?.id)
+    if (idx < 0) return null
+    if (idx === 0) return "You're in the lead"
+
+    const ahead = crewEntries[idx - 1]
+    const aheadName = (ahead?.displayName ?? '').split(' ')[0] || ahead?.displayName || 'them'
+    const gap = (ahead?.score ?? 0) - (crewEntries[idx]?.score ?? 0)
+    return gap > 0 ? `You're ${gap} behind ${aheadName}` : `Tied with ${aheadName}`
+  }
+  const crewRivalryText = crewRivalryLine(crewList)
+
+  // ── "More [Metro] lists" — the metro's other live official lists, minus
+  // whatever's already shown as the seasonal hero/upcoming card above.
+  // Batch item-count + season-window-aware progress in one pass each,
+  // same pattern as CreatorProfileScreen's checked-state query. ───────────
+  useEffect(() => {
+    const currentId  = currentOnHome?.id ?? null
+    const upcomingId = upcomingOnHome?.id ?? null
+    // Not gated on starts_at — a themed list that hasn't started yet still
+    // belongs here (marked "Starts {date}"), same as the hero card's own
+    // upcoming state. Excluding not-yet-started lists meant every one of
+    // Phoenix's Fall lists — all sharing the same start date as Fall
+    // itself — was invisible right up until the day it went live,
+    // regardless of whether it already had items.
+    const candidates = officialLists.filter(l =>
+      l.id !== currentId && l.id !== upcomingId && !isEnded(l.ends_at)
+    )
+    if (!candidates.length) { setThemedLists([]); return }
+    let cancelled = false
+    ;(async () => {
+      const ids = candidates.map(l => l.id)
+      // Bonus Drops excluded from every count/rank below — "X of M" for a
+      // themed list must match what the list itself shows once opened.
+      const { data: allLiRows } = await supabase.from('list_items').select('list_id, item_id, is_bonus_drop').in('list_id', ids)
+      const liRows = (allLiRows ?? []).filter(li => !li.is_bonus_drop)
+      const countMap = {}
+      liRows.forEach(li => { countMap[li.list_id] = (countMap[li.list_id] ?? 0) + 1 })
+
+      const checkedMap = {}
+      const rankMap = {}
+      if (user?.id) {
+        const itemIds = [...new Set(liRows.map(li => li.item_id).filter(Boolean))]
+        if (itemIds.length) {
+          // Rank is by raw check-in count, not the streak-bonus effective-
+          // points formula LeaderboardScreen/useLeaderboard use — computing
+          // the full formula for six lists in a batch would mean a second,
+          // parallel leaderboard engine outside that hook. Good enough for
+          // a secondary rail badge; can occasionally differ from the real
+          // leaderboard for the same list.
+          const [{ data: checkins }, { data: members }] = await Promise.all([
+            supabase.from('check_ins').select('user_id, item_id, checked_at').in('item_id', itemIds),
+            supabase.from('list_members').select('list_id, user_id').in('list_id', ids),
+          ])
+          candidates.forEach(l => {
+            const listItemIds = new Set(liRows.filter(li => li.list_id === l.id).map(li => li.item_id))
+            const inWindow = (checkins ?? []).filter(c => listItemIds.has(c.item_id) && isWithinWindow(c.checked_at, l.starts_at, l.ends_at))
+
+            const mine = new Set(inWindow.filter(c => c.user_id === user.id).map(c => c.item_id))
+            checkedMap[l.id] = mine.size
+
+            if (mine.size > 0) {
+              const memberIds = (members ?? []).filter(m => m.list_id === l.id).map(m => m.user_id)
+              // Count distinct items per user (matches "N of M" semantics,
+              // not raw check-in rows).
+              const itemsByUser = {}
+              inWindow.forEach(c => {
+                if (!itemsByUser[c.user_id]) itemsByUser[c.user_id] = new Set()
+                itemsByUser[c.user_id].add(c.item_id)
+              })
+              const myCount = itemsByUser[user.id]?.size ?? 0
+              const ahead = memberIds.filter(uid => uid !== user.id && (itemsByUser[uid]?.size ?? 0) > myCount).length
+              rankMap[l.id] = ahead + 1
+            }
+          })
+        }
+      }
+
+      if (cancelled) return
+      const today = new Date()
+      setThemedLists(candidates.map(l => ({
+        ...l,
+        itemCount: countMap[l.id] ?? 0,
+        joined:    joinedIds.has(l.id),
+        checked:   checkedMap[l.id] ?? 0,
+        rank:      rankMap[l.id] ?? null,
+        upcoming:  !!(l.starts_at && new Date(`${l.starts_at}T12:00:00`) > today),
+      })))
+    })()
+    return () => { cancelled = true }
+  }, [officialLists, currentOnHome?.id, upcomingOnHome?.id, user?.id, joinedIds])
 
   if (loading) {
     return (
@@ -1087,21 +1150,25 @@ async function loadNearbyRail(userId) {
             showsHorizontalScrollIndicator={false}
             contentContainerStyle={styles.nearbyRailContent}
           >
-            {nearbyRailItems.map(item => (
-              <TouchableOpacity
-                key={item.id}
-                style={styles.nearbyCard}
-                activeOpacity={0.88}
-                onPress={() => navigation.navigate('ItemDetail', { item })}
-              >
-                <Text style={styles.nearbyCardBody} numberOfLines={3}>{item.body}</Text>
-                <View style={styles.nearbyCardTag}>
-                  <Text style={styles.nearbyCardTagText}>
-                    {item.is_universal ? 'Anywhere' : (formatDistanceLabel(item.distM) ?? '')}
-                  </Text>
-                </View>
-              </TouchableOpacity>
-            ))}
+            {nearbyRailItems.map(item => {
+              const distLabel = item.is_universal ? 'Anywhere' : (formatDistanceLabel(item.distM) ?? '')
+              const isRightHere = distLabel === 'right here'
+              return (
+                <TouchableOpacity
+                  key={item.id}
+                  style={styles.nearbyCard}
+                  activeOpacity={0.88}
+                  onPress={() => navigation.navigate('ItemDetail', { item })}
+                >
+                  <Text style={styles.nearbyCardBody} numberOfLines={3}>{item.body}</Text>
+                  <View style={[styles.nearbyCardTag, isRightHere && styles.nearbyCardTagHere]}>
+                    <Text style={[styles.nearbyCardTagText, isRightHere && styles.nearbyCardTagTextHere]}>
+                      {distLabel}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              )
+            })}
           </ScrollView>
         </>
       )}
@@ -1110,7 +1177,6 @@ async function loadNearbyRail(userId) {
         <>
           <View style={styles.sectionHeaderBlock}>
             <Text style={styles.sectionLabel}>Seasonal lists</Text>
-            <Text style={styles.sectionSub}>Join free and start checking things off</Text>
           </View>
 
           {homeOfficialLists.map(list => {
@@ -1141,14 +1207,20 @@ async function loadNearbyRail(userId) {
             }
 
             if (upcoming) {
+              const startLabel = new Date(`${list.starts_at}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
               return (
                 <TouchableOpacity
                   key={list.id}
                   style={styles.upcomingOfficialCard}
-                  onPress={() => joined
-                    ? navigation.navigate('List', { listId: list.id, title: list.title })
-                    : joinOfficialList(list)
-                  }
+                  // Deliberately never joins or navigates in here — the old
+                  // behavior auto-joined a non-member and opened the full,
+                  // fully-revealed item list before the list had even
+                  // started. An upcoming list stays a preview until its own
+                  // start date; this is just an informative tap, not an entry.
+                  onPress={() => Alert.alert(
+                    list.title,
+                    `This list opens ${startLabel} — check back then!`
+                  )}
                   activeOpacity={0.88}
                 >
                   <View style={styles.upcomingOfficialLeft}>
@@ -1157,7 +1229,7 @@ async function loadNearbyRail(userId) {
                   <View style={styles.officialCardBody}>
                     <Text style={styles.officialTitle}>{list.title}</Text>
                     <Text style={styles.upcomingMeta}>
-                      Starts {new Date(`${list.starts_at}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      Starts {startLabel}
                     </Text>
                   </View>
                   <View style={styles.upcomingBadge}>
@@ -1175,8 +1247,7 @@ async function loadNearbyRail(userId) {
                 // stay read-only (join gate belongs at first check-off
                 // attempt, not here; auto-inserting list_members on tap
                 // also pollutes membership data used for activation
-                // measurement). joinOfficialList() is still used by the
-                // upcoming-list card variant above, untouched.
+                // measurement).
                 onPress={() => navigation.navigate('List', { listId: list.id, title: list.title, heroImage: heroImage ?? undefined })}
                 activeOpacity={0.92}
               >
@@ -1227,11 +1298,13 @@ async function loadNearbyRail(userId) {
                 <View style={styles.heroCardCTA}>
                   <Text style={styles.heroCardCTAText}>
                     {joined
-                      ? [
-                          `${seasonalCounts.checked} of ${seasonalCounts.total}`,
-                          timeLeft(list.ends_at),
-                          seasonalRank ? `#${seasonalRank} in ${metroDisplayName}` : null,
-                        ].filter(Boolean).join(' · ')
+                      ? (seasonalCounts.total > 0 && seasonalCounts.checked >= seasonalCounts.total)
+                        ? `${seasonalCounts.checked} of ${seasonalCounts.total} — you finished ${list.title.replace(/\s—\s.+$/, '')}`
+                        : [
+                            `${seasonalCounts.checked} of ${seasonalCounts.total}`,
+                            timeLeft(list.ends_at),
+                            seasonalRank ? `#${seasonalRank} in ${metroDisplayName}` : null,
+                          ].filter(Boolean).join(' · ')
                       : 'See the list →'}
                   </Text>
                 </View>
@@ -1241,90 +1314,114 @@ async function loadNearbyRail(userId) {
         </>
       )}
 
-      {activeLists.length > 0 && (
+      {/* ── Crew line — rivalry visible without navigating away. Only for a
+          list with other real members and only when there's an actual gap
+          to report; solo lists, joined official lists, and a rank-#1/tied
+          state all render nothing here (list management and plain
+          title+countdown both already live in the Lists tab). ── */}
+      {crewList && crewRivalryText && (
         <>
-          <View style={styles.sectionRow}>
-            <View>
-              <Text style={styles.sectionLabel}>Your lists</Text>
-              <Text style={styles.sectionSubSmall}>Custom lists for your crew, dates, and plans</Text>
-            </View>
-
-            {user && (
-              <TouchableOpacity
-                style={styles.createNewBtn}
-                onPress={() => navigation.navigate('CreateTab')}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.createNewBtnText}>+ New list</Text>
-              </TouchableOpacity>
-            )}
+          <View style={styles.sectionHeaderBlock}>
+            <Text style={styles.sectionLabel}>With your crew</Text>
           </View>
-
-          {activeLists.map(list => {
-          const crewMembers = listMemberMap[list.id] ?? []
-          // A list can be a creator list without being promoted — only featured-eligible
-          // creator lists get the amber accent + byline; followed-but-unfeatured lists
-          // still appear here, just without the visual promotion.
-          const isFeaturedCreatorList = !!list.creatorHandle && !!list.is_featured_eligible
-          const accent = isFeaturedCreatorList ? '#F5A623' : LIST_ACCENT_COLORS[list.id.charCodeAt(0) % 6]
-          return (
           <TouchableOpacity
-            key={list.id}
-            style={[styles.listCard, isUrgent(list.ends_at) && styles.listCardUrgent, isFeaturedCreatorList && styles.listCardCreator]}
-            onPress={() => navigation.navigate('List', { listId: list.id, title: list.title })}
-            onLongPress={() => {
-              if (list.creator_id === user?.id) {
-                deleteList(list)
-              } else {
-                leaveList(list)
-              }
-            }}
+            style={styles.crewLineCard}
+            onPress={() => navigation.navigate('List', { listId: crewList.id, title: crewList.title })}
             activeOpacity={0.85}
           >
-            <View style={[styles.listAccent, { backgroundColor: accent, borderColor: accent }]} />
-
+            <View style={styles.crewAvatarStack}>
+              {(listMemberMap[crewList.id] ?? []).slice(0, 4).map(m => (
+                <View key={m.id} style={styles.crewAvatarMini}>
+                  <Text style={styles.crewAvatarMiniText}>{m.initial}</Text>
+                </View>
+              ))}
+            </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.listTitle}>{list.title}</Text>
-              {isFeaturedCreatorList ? (
-                <Text style={styles.listCreatorByline}>by @{list.creatorHandle}</Text>
-              ) : null}
-              <View style={styles.listMetaRow}>
-                {list.ends_at ? (
-                  <Text style={[styles.listMeta, isUrgent(list.ends_at) && styles.listMetaUrgent]}>
-                    {timeLeft(list.ends_at)}
-                  </Text>
-                ) : (
-                  <Text style={styles.listMeta}>Open-ended</Text>
-                )}
-                {crewMembers.length > 0 && (
-                  <View style={styles.crewAvatarStack}>
-                    {crewMembers.map(m => (
-                      <View key={m.id} style={styles.crewAvatarMini}>
-                        <Text style={styles.crewAvatarMiniText}>{m.initial}</Text>
-                      </View>
-                    ))}
-                  </View>
-                )}
-              </View>
+              <Text style={styles.crewLineTitle} numberOfLines={1}>{crewList.title}</Text>
+              <Text style={styles.crewLineSub}>{crewRivalryText}</Text>
             </View>
-
-            <View style={styles.listCardRight}>
-              {list.memberCount > 1 && (
-                <TouchableOpacity
-                  style={styles.addCrewBtn}
-                  onPress={() => navigation.navigate('SavedCrew', { list })}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Text style={styles.addCrewBtnText}>+ Crew</Text>
-                </TouchableOpacity>
-              )}
-              <Text style={styles.listChevron}>→</Text>
-            </View>
+            <Text style={styles.listChevron}>→</Text>
           </TouchableOpacity>
-          )
-          })}
+        </>
+      )}
 
-          <Text style={styles.deleteHint}>Long-press a list to delete or leave it</Text>
+      {/* ── "More [Metro] lists" — the metro's other live official lists,
+          minus whatever's already the seasonal hero/upcoming card above.
+          Hidden entirely when the metro has none yet. ── */}
+      {themedLists.length > 0 && (
+        <>
+          <View style={styles.sectionHeaderBlock}>
+            <Text style={styles.sectionLabel}>More {metroDisplayName} lists</Text>
+            <Text style={styles.sectionSub}>Pick a smaller challenge</Text>
+          </View>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.themedRailContent}
+          >
+            {themedLists.map(list => {
+              const startLabel = list.starts_at
+                ? new Date(`${list.starts_at}T12:00:00`).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                : null
+              const footerText = list.joined
+                ? [
+                    `${list.checked} of ${list.itemCount}`,
+                    (list.checked > 0 && list.rank) ? `#${list.rank} in ${metroDisplayName}` : null,
+                  ].filter(Boolean).join(' · ')
+                : `${list.itemCount} item${list.itemCount === 1 ? '' : 's'}`
+
+              // hero_image_url isn't selected from `lists` yet (pending the
+              // schema/admin decision) — this is written defensively so it
+              // activates automatically once that column exists and is
+              // populated, with zero further code changes.
+              const cardBody = (
+                <>
+                  <View style={styles.themedCardTitleBlock}>
+                    <Text style={styles.themedCardTitle} numberOfLines={2}>{list.title}</Text>
+                  </View>
+                  <View style={styles.themedCardFooterRow}>
+                    {list.upcoming ? (
+                      <View style={styles.themedCardUpcomingBadge}>
+                        <Text style={styles.themedCardUpcomingBadgeText}>Starts {startLabel}</Text>
+                      </View>
+                    ) : (
+                      <Text style={styles.themedCardMeta} numberOfLines={1}>{footerText}</Text>
+                    )}
+                    <Text style={styles.themedCardChevron}>›</Text>
+                  </View>
+                </>
+              )
+
+              return (
+                <TouchableOpacity
+                  key={list.id}
+                  style={styles.themedCardWrap}
+                  activeOpacity={0.88}
+                  onPress={() => list.upcoming
+                    ? Alert.alert(list.title, `This list opens ${startLabel} — check back then!`)
+                    : navigation.navigate('List', { listId: list.id, title: list.title })
+                  }
+                >
+                  {list.hero_image_url ? (
+                    <ImageBackground source={{ uri: list.hero_image_url }} style={styles.themedCard}>
+                      <LinearGradient
+                        colors={['rgba(0,0,0,0.15)', 'rgba(0,0,0,0.72)']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 0, y: 1 }}
+                        style={styles.themedCardScrim}
+                      >
+                        {cardBody}
+                      </LinearGradient>
+                    </ImageBackground>
+                  ) : (
+                    <View style={[styles.themedCard, styles.themedCardScrim, { backgroundColor: themedListAccent(list.title, list.id) }]}>
+                      {cardBody}
+                    </View>
+                  )}
+                </TouchableOpacity>
+              )
+            })}
+          </ScrollView>
         </>
       )}
 
@@ -1334,53 +1431,50 @@ async function loadNearbyRail(userId) {
           <TouchableOpacity
             style={styles.navTileWrap}
             activeOpacity={0.85}
-            onPress={() => navigation.navigate('Destinations', { metro: selectedMetro })}
+            onPress={() => navigation.navigate('BrowseLists', { citySlug: metroSlug, metroName: metroDisplayName })}
           >
-            <LinearGradient colors={['#D85A30', '#8B2E2E']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.navTile}>
-              <Text style={styles.navTileGhostEmoji}>📍</Text>
-              <Text style={styles.navTileEmoji}>📍</Text>
-              <Text style={styles.navTileLabel}>Destinations</Text>
-              <Text style={styles.navTileChevron}>›</Text>
-            </LinearGradient>
+            <View style={styles.navTile}>
+              <View style={[styles.navTileIconWrap, { backgroundColor: '#378ADD' }]}>
+                <Text style={styles.navTileIconEmoji}>📋</Text>
+              </View>
+              <View style={styles.navTileFooterRow}>
+                <Text style={styles.navTileLabel} numberOfLines={1}>List Templates</Text>
+                <Text style={styles.navTileChevron}>›</Text>
+              </View>
+            </View>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.navTileWrap}
             activeOpacity={0.85}
-            onPress={() => navigation.navigate('LocalGuides', { metro: selectedMetro })}
+            onPress={() => navigation.navigate('Destinations', { metro: selectedMetro })}
           >
-            <LinearGradient colors={['#E8A020', '#C4520A']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.navTile}>
-              <Text style={styles.navTileGhostEmoji}>🏙️</Text>
-              <Text style={styles.navTileEmoji}>🏙️</Text>
-              <Text style={styles.navTileLabel}>Local Guides</Text>
-              <Text style={styles.navTileChevron}>›</Text>
-            </LinearGradient>
+            <View style={styles.navTile}>
+              <View style={[styles.navTileIconWrap, { backgroundColor: '#D85A30' }]}>
+                <Text style={styles.navTileIconEmoji}>📍</Text>
+              </View>
+              <View style={styles.navTileFooterRow}>
+                <Text style={styles.navTileLabel} numberOfLines={1}>Destinations</Text>
+                <Text style={styles.navTileChevron}>›</Text>
+              </View>
+            </View>
           </TouchableOpacity>
         </View>
         <View style={styles.navGridRow}>
-          <TouchableOpacity
-            style={styles.navTileWrap}
-            activeOpacity={0.85}
-            onPress={() => navigation.navigate('BrowseLists', { citySlug: metroSlug, metroName: metroDisplayName })}
-          >
-            <LinearGradient colors={['#378ADD', '#1D9E75']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.navTile}>
-              <Text style={styles.navTileGhostEmoji}>📋</Text>
-              <Text style={styles.navTileEmoji}>📋</Text>
-              <Text style={styles.navTileLabel}>Curated Lists</Text>
-              <Text style={styles.navTileChevron}>›</Text>
-            </LinearGradient>
-          </TouchableOpacity>
           {featuredCreators.length > 0 ? (
             <TouchableOpacity
               style={styles.navTileWrap}
               activeOpacity={0.85}
               onPress={() => navigation.navigate('CreatorList', { metro: selectedMetro })}
             >
-              <LinearGradient colors={['#7A4DB3', '#E0588F']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.navTile}>
-                <Text style={styles.navTileGhostEmoji}>✨</Text>
-                <Text style={styles.navTileEmoji}>✨</Text>
-                <Text style={styles.navTileLabel}>Creators</Text>
-                <Text style={styles.navTileChevron}>›</Text>
-              </LinearGradient>
+              <View style={styles.navTile}>
+                <View style={[styles.navTileIconWrap, { backgroundColor: '#7A4DB3' }]}>
+                  <Text style={styles.navTileIconEmoji}>✨</Text>
+                </View>
+                <View style={styles.navTileFooterRow}>
+                  <Text style={styles.navTileLabel} numberOfLines={1}>Creators</Text>
+                  <Text style={styles.navTileChevron}>›</Text>
+                </View>
+              </View>
             </TouchableOpacity>
           ) : (
             <TouchableOpacity
@@ -1388,60 +1482,34 @@ async function loadNearbyRail(userId) {
               activeOpacity={0.85}
               onPress={() => navigation.navigate('NearbyTab')}
             >
-              <LinearGradient colors={['#1A6B52', '#243045']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.navTile}>
-                <Text style={styles.navTileGhostEmoji}>🗺️</Text>
-                <Text style={styles.navTileEmoji}>🗺️</Text>
-                <Text style={styles.navTileLabel}>Explore Nearby</Text>
-                <Text style={styles.navTileChevron}>›</Text>
-              </LinearGradient>
+              <View style={styles.navTile}>
+                <View style={[styles.navTileIconWrap, { backgroundColor: '#1D9E75' }]}>
+                  <Text style={styles.navTileIconEmoji}>🗺️</Text>
+                </View>
+                <View style={styles.navTileFooterRow}>
+                  <Text style={styles.navTileLabel} numberOfLines={1}>Explore Nearby</Text>
+                  <Text style={styles.navTileChevron}>›</Text>
+                </View>
+              </View>
             </TouchableOpacity>
           )}
+          <TouchableOpacity
+            style={styles.navTileWrap}
+            activeOpacity={0.85}
+            onPress={() => navigation.navigate('LocalGuides', { metro: selectedMetro })}
+          >
+            <View style={styles.navTile}>
+              <View style={[styles.navTileIconWrap, { backgroundColor: '#E8A020' }]}>
+                <Text style={styles.navTileIconEmoji}>🏙️</Text>
+              </View>
+              <View style={styles.navTileFooterRow}>
+                <Text style={styles.navTileLabel} numberOfLines={1}>Local Guides</Text>
+                <Text style={styles.navTileChevron}>›</Text>
+              </View>
+            </View>
+          </TouchableOpacity>
         </View>
       </View>
-
-      {/* Demoted below Destinations/Local Guides — B1. Still present, just
-          no longer the first thing an empty-state user sees. */}
-      {activeLists.length === 0 && (
-        <>
-          <View style={styles.sectionRow}>
-            <View>
-              <Text style={styles.sectionLabel}>Your lists</Text>
-              <Text style={styles.sectionSubSmall}>Custom lists for your crew, dates, and plans</Text>
-            </View>
-
-            {user && (
-              <TouchableOpacity
-                style={styles.createNewBtn}
-                onPress={() => navigation.navigate('CreateTab')}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.createNewBtnText}>+ New list</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-
-          <TouchableOpacity
-            style={styles.emptyListCard}
-            onPress={() => {
-              if (!user) {
-                setShowSignInPrompt(true)
-              } else {
-                navigation.navigate('CreateList')
-              }
-            }}
-            activeOpacity={0.88}
-          >
-            <Text style={styles.emptyListEmoji}>📋</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.emptyListTitle}>Start your first list</Text>
-              <Text style={styles.emptyListSub}>
-                Pick items, invite your crew, and see who checks off the most.
-              </Text>
-            </View>
-            <Text style={styles.emptyListArrow}>→</Text>
-          </TouchableOpacity>
-        </>
-      )}
 
       {/* ── Featured editorial card ── */}
       {currentOnHome && (
@@ -1546,50 +1614,11 @@ async function loadNearbyRail(userId) {
         </TouchableOpacity>
       </Modal>
 
-      {/* Sign-in prompt modal — shown when unauthenticated user taps "Start your first list" */}
-      <Modal
-        visible={showSignInPrompt}
-        transparent
-        animationType="slide"
-        onRequestClose={() => setShowSignInPrompt(false)}
-      >
-        <TouchableOpacity
-          style={styles.signInModalOverlay}
-          activeOpacity={1}
-          onPress={() => setShowSignInPrompt(false)}
-        >
-          <View style={styles.signInModalCard}>
-            <Text style={styles.signInModalEmoji}>📋</Text>
-            <Text style={styles.signInModalTitle}>Sign in to create a list</Text>
-            <Text style={styles.signInModalSub}>
-              Creating a list saves your progress, lets you invite your crew, and tracks who checks off the most. It only takes a second.
-            </Text>
-
-            <TouchableOpacity
-              style={styles.signInModalBtn}
-              onPress={() => {
-                setShowSignInPrompt(false)
-                navigation.navigate('SignIn')
-              }}
-              activeOpacity={0.88}
-            >
-              <Text style={styles.signInModalBtnText}>Sign in or create account</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.signInModalDismiss}
-              onPress={() => setShowSignInPrompt(false)}
-            >
-              <Text style={styles.signInModalDismissText}>Maybe later</Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </Modal>
     </ScrollView>
   )
 }
 
-function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, SUCCESS_BG, SUCCESS_BORDER, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT }) {
+function createStyles({ BG, CARD, TEXT, MUTED, LABEL, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, SUCCESS_BG, SUCCESS_BORDER, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT }) {
  return StyleSheet.create({
   container: {
     flex: 1,
@@ -1844,7 +1873,7 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     fontSize: 12,
     fontWeight: '800',
     letterSpacing: 1.4,
-    color: MUTED,
+    color: LABEL,
     textTransform: 'uppercase',
     marginTop: 2,
     marginBottom: 6,
@@ -1855,12 +1884,6 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     color: MUTED,
   },
 
-  sectionSubSmall: {
-    fontSize: 13,
-    color: MUTED,
-    marginTop: -2,
-  },
-
   // ── "Near you right now" rail — B1 ──
   nearbyRailContent: {
     paddingRight: 8,
@@ -1868,8 +1891,12 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     marginBottom: 22,
   },
 
+  // Widened from 160 — at 160 the venue name (always the most important
+  // part, and always last in the sentence) was the thing that got cut off
+  // mid-word. More width per line beats a smaller font (hurts everyone's
+  // readability) or a 4th line (breaks the row's compact, uniform height).
   nearbyCard: {
-    width: 160,
+    width: 190,
     minHeight: 108,
     backgroundColor: CARD,
     borderRadius: 16,
@@ -1904,13 +1931,15 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     color: '#A16A00',
   },
 
-  sectionRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginTop: 10,
-    marginBottom: 12,
-    gap: 12,
+  // "right here" is the strongest signal on the rail — solid AMBER, same
+  // treatment as the hero's own primary CTA, instead of the muted pill
+  // every other distance gets.
+  nearbyCardTagHere: {
+    backgroundColor: AMBER,
+    borderColor: AMBER,
+  },
+  nearbyCardTagTextHere: {
+    color: NAVY,
   },
 
   metroStatusRow: {
@@ -2179,34 +2208,6 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     color: ENDED_TEXT,
   },
 
-  listCard: {
-    backgroundColor: CARD,
-    borderRadius: 18,
-    padding: 16,
-    marginBottom: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: BORDER,
-    gap: 12,
-  },
-
-  listCardUrgent: {
-    borderColor: 'rgba(245,166,35,0.5)',
-    backgroundColor: CARD_URGENT,
-  },
-  listCardCreator: {
-    borderColor: 'rgba(245,166,35,0.35)',
-  },
-
-  listMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginTop: 4,
-    flexWrap: 'wrap',
-  },
-
   crewAvatarStack: {
     flexDirection: 'row',
     gap: -6,
@@ -2224,33 +2225,113 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     fontSize: 9, fontWeight: '800', color: '#A16A00',
   },
 
-  listCardRight: {
+  crewLineCard: {
+    backgroundColor: CARD,
+    borderRadius: 18,
+    padding: 16,
+    marginBottom: 20,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    flexShrink: 0,
-  },
-
-  addCrewBtn: {
-    backgroundColor: SOFT,
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
     borderWidth: 1,
-    borderColor: '#E8C98E',
+    borderColor: BORDER,
+    gap: 12,
+  },
+  crewLineTitle: {
+    fontSize: 14,
+    color: TEXT,
+    fontWeight: '800',
+  },
+  crewLineSub: {
+    fontSize: 12,
+    color: AMBER,
+    fontWeight: '700',
+    marginTop: 2,
   },
 
-  addCrewBtnText: {
-    fontSize: 11, fontWeight: '800', color: '#A16A00',
+  themedRailContent: {
+    paddingRight: 8,
+    paddingTop: 2,
+    paddingBottom: 8,
+    marginBottom: 22,
   },
-
-  listAccent: {
-    width: 8,
-    alignSelf: 'stretch',
-    borderRadius: 999,
-    backgroundColor: SOFT,
+  // Wrap carries the border/shadow (matching navTileWrap's treatment) —
+  // the gradient itself lives one level in, on themedCard, so the shadow
+  // isn't clipped by the gradient's own overflow:hidden-by-necessity edges.
+  themedCardWrap: {
+    width: 148,
+    borderRadius: 16,
+    overflow: 'hidden',
+    marginRight: 10,
     borderWidth: 1,
-    borderColor: '#F0D29D',
+    borderColor: 'rgba(255,255,255,0.12)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  // No padding here — this is either the ImageBackground (needs to bleed
+  // full-edge so the scrim below covers the whole card, not just an inset
+  // rectangle) or, in the no-photo fallback, gets padding added inline
+  // alongside its accent backgroundColor.
+  themedCard: {
+    flex: 1,
+    minHeight: 132,
+  },
+  // Same stops as the seasonal hero's own scrim — this is what makes six
+  // different photos read as one system instead of six different apps.
+  // Never tuned per-card.
+  themedCardScrim: {
+    flex: 1,
+    padding: 14,
+  },
+  // Fixed height regardless of a 1-line vs 2-line title, so the footer
+  // below always sits the same distance down — "Patio Season" and
+  // "Kid-Friendly Weekends" no longer wrap the card content differently.
+  themedCardTitleBlock: {
+    minHeight: 38,
+    justifyContent: 'flex-start',
+  },
+  themedCardTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    lineHeight: 19,
+    textShadowColor: 'rgba(0,0,0,0.35)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 4,
+  },
+  themedCardFooterRow: {
+    marginTop: 'auto',
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  themedCardMeta: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.85)',
+    flexShrink: 1,
+  },
+  themedCardChevron: {
+    fontSize: 18,
+    color: 'rgba(255,255,255,0.85)',
+    fontWeight: '700',
+  },
+  themedCardUpcomingBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.32)',
+  },
+  themedCardUpcomingBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#FFFFFF',
   },
 
   pastListsBtn: {
@@ -2297,8 +2378,12 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     fontWeight: '700',
   },
 
+  // Deliberately neutral, not INFO_* blue — a not-yet-open list shouldn't
+  // out-compete the active season's own amber CTA directly above it. The
+  // active hero is the one colorful element on the page; this recedes like
+  // everything else.
   upcomingOfficialCard: {
-    backgroundColor: '#F0F7FF',
+    backgroundColor: CARD,
     borderRadius: 20,
     padding: 14,
     marginBottom: 10,
@@ -2306,39 +2391,39 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     alignItems: 'center',
     gap: 12,
     borderWidth: 1,
-    borderColor: '#C8DDF5',
+    borderColor: BORDER,
   },
 
   upcomingOfficialLeft: {
     width: 48,
     height: 48,
     borderRadius: 24,
-    backgroundColor: '#DFF0FF',
+    backgroundColor: SOFT_2,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: '#C8DDF5',
+    borderColor: BORDER,
   },
 
   upcomingMeta: {
     fontSize: 12,
-    color: '#378ADD',
+    color: MUTED,
     fontWeight: '700',
     marginTop: 2,
   },
 
   upcomingBadge: {
-    backgroundColor: '#DFF0FF',
+    backgroundColor: SOFT_2,
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderWidth: 1,
-    borderColor: '#C8DDF5',
+    borderColor: BORDER,
   },
 
   upcomingBadgeText: {
     fontSize: 11,
-    color: '#378ADD',
+    color: MUTED,
     fontWeight: '800',
   },
 
@@ -2378,45 +2463,10 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     fontWeight: '800',
   },
 
-  listTitle: {
-    fontSize: 15,
-    color: TEXT,
-    fontWeight: '800',
-    flex: 1,
-  },
-  listCreatorByline: {
-    fontSize: 12,
-    color: '#F5A623',
-    fontWeight: '600',
-    marginTop: 2,
-    marginBottom: 2,
-  },
-
-  listMeta: {
-    fontSize: 12,
-    color: MUTED,
-    marginTop: 4,
-    fontWeight: '600',
-  },
-
-  listMetaUrgent: {
-    color: AMBER,
-    fontWeight: '800',
-  },
-
   listChevron: {
     fontSize: 17,
     color: MUTED,
     fontWeight: '700',
-  },
-
-  deleteHint: {
-    fontSize: 12,
-    color: MUTED,
-    textAlign: 'center',
-    marginTop: 6,
-    marginBottom: 8,
-    fontWeight: '600',
   },
 
   emptyCard: {
@@ -2427,23 +2477,6 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     borderWidth: 1,
     borderColor: BORDER,
   },
-
-  emptyListCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: CARD,
-    borderRadius: 20,
-    padding: 18,
-    marginBottom: 20,
-    borderWidth: 1.5,
-    borderColor: AMBER,
-    backgroundColor: SOFT,
-  },
-  emptyListEmoji:  { fontSize: 28 },
-  emptyListTitle:  { fontSize: 15, fontWeight: '800', color: TEXT, marginBottom: 3 },
-  emptyListSub:    { fontSize: 12, color: MUTED, lineHeight: 17, fontWeight: '500' },
-  emptyListArrow:  { fontSize: 18, color: AMBER, fontWeight: '800' },
 
   emptyTitle: {
     fontSize: 16,
@@ -2456,21 +2489,6 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     fontSize: 14,
     color: MUTED,
     lineHeight: 20,
-  },
-
-  createNewBtn: {
-    backgroundColor: SOFT,
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: '#E8C98E',
-  },
-
-  createNewBtnText: {
-    fontSize: 14,
-    color: '#A16A00',
-    fontWeight: '800',
   },
 
   signInBanner: {
@@ -2501,21 +2519,6 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
   },
-  signInModalCard: {
-    backgroundColor: CARD,
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    padding: 28,
-    paddingBottom: 40,
-    alignItems: 'center',
-  },
-  signInModalEmoji:       { fontSize: 40, marginBottom: 16 },
-  signInModalTitle:       { fontSize: 22, fontWeight: '800', color: TEXT, marginBottom: 10, textAlign: 'center' },
-  signInModalSub:         { fontSize: 14, color: MUTED, lineHeight: 21, textAlign: 'center', marginBottom: 28, paddingHorizontal: 8 },
-  signInModalBtn:         { backgroundColor: AMBER, borderRadius: 16, paddingVertical: 17, paddingHorizontal: 32, alignItems: 'center', width: '100%', marginBottom: 12 },
-  signInModalBtnText:     { fontSize: 15, fontWeight: '800', color: NAVY },
-  signInModalDismiss:     { paddingVertical: 10 },
-  signInModalDismissText: { fontSize: 14, color: MUTED, fontWeight: '600' },
 
   recapModalCard: {
     backgroundColor: '#FFFFFF',
@@ -2544,55 +2547,69 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
     gap: 10,
   },
 
+  // Dark cards matching CARD, same family as every other surface on the
+  // page — these are browse categories, not content, and shouldn't compete
+  // with the hero for attention. Border/shadow kept (not gradient-strength)
+  // so they still read as tappable, just quiet.
   navTileWrap: {
     flex: 1,
     borderRadius: 18,
     overflow: 'hidden',
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.12)',
+    borderColor: BORDER,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.22,
-    shadowRadius: 14,
-    elevation: 4,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 2,
   },
 
+  // space-between (icon top, label+chevron bottom) instead of flex-end —
+  // flex-end left a big block of empty CARD space above the content, which
+  // read fine when that space was filled with a colorful gradient but just
+  // looked unfinished on a flat dark card.
   navTile: {
     flex: 1,
-    padding: 20,
-    minHeight: 110,
-    justifyContent: 'flex-end',
+    backgroundColor: CARD,
+    padding: 16,
+    minHeight: 104,
+    justifyContent: 'space-between',
   },
 
-  navTileGhostEmoji: {
-    position: 'absolute',
-    top: 8,
-    right: 10,
-    fontSize: 52,
-    opacity: 0.10,
+  // Small tinted circle behind the emoji — keeps a hint of each category's
+  // original color identity in a contained way, rather than either the old
+  // full-bleed gradient or a completely colorless card.
+  navTileIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
 
-  navTileEmoji: {
-    fontSize: 30,
-    marginBottom: 10,
+  navTileIconEmoji: {
+    fontSize: 20,
+  },
+
+  navTileFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 6,
   },
 
   navTileLabel: {
-    fontSize: 18,
+    fontSize: 15,
     fontWeight: '800',
-    color: '#FFFFFF',
-    marginBottom: 10,
-    lineHeight: 22,
-    textShadowColor: 'rgba(0,0,0,0.35)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 4,
+    color: TEXT,
+    lineHeight: 19,
+    flexShrink: 1,
   },
 
   navTileChevron: {
-    fontSize: 24,
-    color: 'rgba(255,255,255,0.85)',
+    fontSize: 20,
+    color: MUTED,
     fontWeight: '700',
-    alignSelf: 'flex-end',
   },
 
   editorialCard: {

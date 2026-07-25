@@ -27,17 +27,18 @@ import { useLeaderboard } from '../lib/useLeaderboard'
 import { supabase } from '../lib/supabase'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
-import { consumePendingCheckIn } from '../lib/checkInResult'
 import { pollForNewBadges } from '../lib/badges'
 import { handleFirstCheckinReferralBonus } from '../lib/referral'
 import SuggestPlaceSheet from './SuggestPlaceSheet'
 import BadgeCelebrationModal from '../components/BadgeCelebrationModal'
 import TierUpgradeCelebrationModal from '../components/TierUpgradeCelebrationModal'
+import PostCheckoffSheet from '../components/PostCheckoffSheet'
 import { checkTierCrossingForUser } from '../lib/points'
 import { useTheme } from '../lib/ThemeContext'
 import * as Location from 'expo-location'
 import { trackEvent } from '../lib/trackEvent'
-import { haversineMeters } from '../lib/distance'
+import { isWithinWindow } from '../lib/seasonWindow'
+import { checkGeoFence, presentGeoFenceFailure } from '../lib/geoFence'
 import { proximitySort, formatDistanceLabel } from '../lib/proximity'
 import { getSessionDensityTier } from '../lib/densityTier'
 
@@ -84,6 +85,15 @@ function computeInsiderUnlocked(item, userLifetimePts, userInsiderTier) {
     if (reqIdx >= 0 && userIdx >= reqIdx) unlocked = true
   }
   return unlocked
+}
+
+// Bonus Drop unlock — a pure derivation from data useItems.js already loads
+// (season-scoped checked state per lib/seasonWindow.js), not a separate
+// query. Distinct from Insider Drop above: gates on THIS list's own count
+// of checked non-bonus items, not lifetime user status.
+function computeBonusDropUnlocked(item, nonBonusCheckedCount) {
+  if (!item.isBonusDrop) return true
+  return nonBonusCheckedCount >= (item.unlockThreshold ?? Infinity)
 }
 
 // Difficulty tier config — mirrors admin DIFFICULTY_TIERS
@@ -173,8 +183,6 @@ export default function ListScreen({ route, navigation }) {
   // IDs of items checked in the last 600ms — kept in current sort position
   // during this window so the UI shows the in-place check before reordering.
   const [pendingSortIds, setPendingSortIds] = useState(() => new Set())
-  // Item to navigate to Discover after memory modal closes (Fix 5)
-  const [pendingDiscoverItem, setPendingDiscoverItem] = useState(null)
 
   useEffect(() => {
     if (listId) trackEvent('list_view', { listId })
@@ -217,9 +225,8 @@ export default function ListScreen({ route, navigation }) {
   const [suggestions, setSuggestions] = useState([])
   const [showSuggestSheet, setShowSuggestSheet] = useState(false)
 
-  // Celebration flash — tracks which listItemId is currently celebrating
-  const [celebratingId, setCelebratingId] = useState(null)
-  const flashAnim = useRef(new Animated.Value(0)).current
+  // Post-checkoff sheet — replaces the old row-flash celebration
+  const [postCheckoffData, setPostCheckoffData] = useState(null)
 
   // Badge celebration modal
   const [celebrationBadges, setCelebrationBadges] = useState([])
@@ -489,7 +496,12 @@ export default function ListScreen({ route, navigation }) {
       // different list containing this same item must still show as
       // checked here (and must NOT get reverted back to unchecked the
       // next time this runs, which is exactly what a list_item_id-scoped
-      // lookup would do to a legitimately cross-list-checked item).
+      // lookup would do to a legitimately cross-list-checked item). But it
+      // only counts if it happened inside THIS list's own season window
+      // (listMeta.starts_at/ends_at) — a Summer check-off must not show
+      // checked on the Fall list for the same item. Viewing an ended list
+      // under Past Lists uses this same window, so its own historical
+      // check-ins (which happened while it was current) still show checked.
       const itemIds = items.map(item => item.id).filter(Boolean)
 
       if (!itemIds.length) {
@@ -508,8 +520,11 @@ export default function ListScreen({ route, navigation }) {
       // Skip applying if a check-off started while we were waiting for DB
       if (checkOffInFlight.current) return
 
+      const inWindow = (checkIns ?? []).filter(ci =>
+        isWithinWindow(ci.checked_at, listMeta?.starts_at, listMeta?.ends_at)
+      )
       const checkedMap = new Map(
-        (checkIns ?? []).map(ci => [String(ci.item_id), ci])
+        inWindow.map(ci => [String(ci.item_id), ci])
       )
 
       // Use localItems as base to preserve any optimistic state not yet in DB
@@ -537,7 +552,7 @@ export default function ListScreen({ route, navigation }) {
     } finally {
       setRefreshingChecks(false)
     }
-  }, [listId, items])
+  }, [listId, items, listMeta])
 
 
   useFocusEffect(
@@ -545,17 +560,10 @@ export default function ListScreen({ route, navigation }) {
       if (listId) {
         refreshCheckedState()
         loadSuggestions()
-
-        // If returning from PhotoCheckInScreen with a completed check-in,
-        // trigger the celebration for that item
-        const pending = consumePendingCheckIn()
-        if (pending && pending.difficulty >= 5) {
-          setTimeout(() => triggerCelebration(pending.listItemId, pending.difficulty), 300)
-        }
       } else if (cityId) {
         loadCityItems()
       }
-    }, [listId, cityId, refreshCheckedState, loadSuggestions, loadCityItems, triggerCelebration])
+    }, [listId, cityId, refreshCheckedState, loadSuggestions, loadCityItems])
   )
 
   // Promote pending partner suggestion once memory modal is fully dismissed
@@ -565,14 +573,6 @@ export default function ListScreen({ route, navigation }) {
       setPendingSuggestionStack(null)
     }
   }, [memoryModal, pendingSuggestionStack])
-
-  // Fire post-checkin discover after memory modal is dismissed (Fix 5)
-  useEffect(() => {
-    if (!memoryModal && pendingDiscoverItem) {
-      triggerPostCheckinDiscover(pendingDiscoverItem)
-      setPendingDiscoverItem(null)
-    }
-  }, [memoryModal, pendingDiscoverItem])
 
   // Slide card in when a suggestion stack becomes active
   useEffect(() => {
@@ -688,16 +688,29 @@ export default function ListScreen({ route, navigation }) {
   // without replacing the FlatList, preserving scroll position
   const isLoading = listId ? loading || metaLoading : cityLoading
 
+  // Bonus Drops are excluded from every progress count — a 30-item list
+  // with 2 drops always reads "X of 30", never "of 31"/"of 32", and
+  // checking off a drop doesn't move this number either. Computed from
+  // displayItems (not the filtered/sorted view) so a category filter or
+  // search never changes the true denominator or unlock math below.
   const derivedCheckedCount = listId
-    ? displayItems.filter(item => item.checked).length
+    ? displayItems.filter(item => !item.isBonusDrop && item.checked).length
     : 0
 
-  const derivedTotalCount = listId ? displayItems.length : 0
+  const derivedTotalCount = listId
+    ? displayItems.filter(item => !item.isBonusDrop).length
+    : 0
 
   const derivedPct =
     listId && derivedTotalCount > 0
       ? Math.round((derivedCheckedCount / derivedTotalCount) * 100)
       : 0
+
+  // Unlock gate for this list's Bonus Drops — same value as
+  // derivedCheckedCount today, but kept separate since the two ideas
+  // (progress display vs. unlock threshold) are only coincidentally equal
+  // and shouldn't be conflated in the code that reads them.
+  const nonBonusCheckedCount = derivedCheckedCount
 
   const filtered = useMemo(() => {
     return displayItems.filter(item => {
@@ -732,163 +745,34 @@ export default function ListScreen({ route, navigation }) {
     // sort mode. See sortGroupBySortMode above for why this doesn't
     // reintroduce sort-to-bottom.
     const tier = sessionTier?.tier ?? null
-    return groups
+    let result = groups
       .map(group => sortGroupBySortMode(group, sortMode, userLocation, tier))
       .flat()
+
+    // Bonus Drops keep the spaced position their list_items.sort_order gives
+    // them — "roughly 11th of 30" has to mean something even under Nearest/
+    // A-Z sort, which otherwise scatters everything by distance or name and
+    // would ignore sort_order entirely. `filtered` is still in sort_order
+    // (the query orders by it and nothing above touches that order), so its
+    // index is exactly the spaced position the admin configured — reinsert
+    // each drop there instead of wherever the resort happened to put it.
+    const dropItems = result.filter(i => i.isBonusDrop)
+    if (dropItems.length) {
+      result = result.filter(i => !i.isBonusDrop)
+      dropItems
+        .map(drop => ({ drop, targetIdx: filtered.findIndex(i => i.listItemId === drop.listItemId) }))
+        .sort((a, b) => a.targetIdx - b.targetIdx)
+        .forEach(({ drop, targetIdx }) => {
+          result.splice(Math.min(targetIdx, result.length), 0, drop)
+        })
+    }
+
+    return result
   }, [filtered, userLifetimePts, userInsiderTier, listId, sortMode, userLocation, sessionTier])
-
-  // Runs a flash animation on the checked item row for Rare/Legend/Partner
-  const triggerCelebration = useCallback((listItemId, difficulty) => {
-    setCelebratingId(listItemId)
-    flashAnim.setValue(0)
-
-    // Partner: single pulse. Rare: double pulse. Legend: triple pulse + strong haptic.
-    const pulseCount = difficulty === 25 ? 3 : difficulty === 10 ? 2 : 1
-    const pulses = []
-    for (let i = 0; i < pulseCount; i++) {
-      pulses.push(
-        Animated.sequence([
-          Animated.timing(flashAnim, { toValue: 1, duration: 180, useNativeDriver: true }),
-          Animated.timing(flashAnim, { toValue: 0, duration: 220, useNativeDriver: true }),
-        ])
-      )
-    }
-
-    Animated.sequence(pulses).start(() => setCelebratingId(null))
-
-    if (difficulty === 25) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
-    } else {
-      Haptics.impactAsync(
-        difficulty === 10
-          ? Haptics.ImpactFeedbackStyle.Medium
-          : Haptics.ImpactFeedbackStyle.Light
-      )
-    }
-  }, [flashAnim])
 
   // Called by badge-polling logic after a check-in awards one or more badges
   function showBadgeCelebration(badges) {
     setCelebrationBadges(badges)
-  }
-
-  // Fire-and-forget: opens Discover screen in post-checkin mode if the item
-  // has coordinates and tags. Never throws — skips silently on any missing data.
-  async function triggerPostCheckinDiscover(item) {
-    const lat = item?.mapsLat ?? item?.maps_lat ?? null
-    const lng = item?.mapsLng ?? item?.maps_lng ?? null
-    const neighborhoodId = item?.neighborhoodId ?? null
-
-    // Gate 1 — item must have coordinates and a neighborhood
-    if (!lat || !lng || !neighborhoodId) {
-      if (__DEV__) console.log('postCheckin skip: missing coords or neighborhood', { lat, lng, neighborhoodId })
-      return
-    }
-
-    // Gate 1 — Distance: user must be within 5 miles (8047 m) of the item
-    let userLat = null
-    let userLng = null
-    try {
-      const pos = await Location.getLastKnownPositionAsync({})
-      userLat = pos?.coords?.latitude  ?? null
-      userLng = pos?.coords?.longitude ?? null
-    } catch { /* location unavailable */ }
-
-    if (!userLat || !userLng) {
-      if (__DEV__) console.log('postCheckin skip: user location unavailable')
-      return
-    }
-
-    const distM = haversineMeters(userLat, userLng, lat, lng)
-
-    if (distM > 8047) {
-      if (__DEV__) console.log('postCheckin skip: user too far from item', Math.round(distM) + 'm')
-      return
-    }
-
-    // Gate 2 — Item density: neighborhood must have > 25 active approved items
-    const { count, error: countErr } = await supabase
-      .from('items')
-      .select('id', { count: 'exact', head: true })
-      .eq('neighborhood_id', neighborhoodId)
-      .eq('is_active', true)
-      .eq('is_approved', true)
-
-    if (countErr || count == null || count <= 25) {
-      if (__DEV__) console.log('postCheckin skip: low item density', count)
-      return
-    }
-
-    // Both gates passed — fetch tags and navigate
-    supabase
-      .from('item_tags')
-      .select('tags(name)')
-      .eq('item_id', item.id)
-      .limit(5)
-      .then(({ data, error }) => {
-        if (error) {
-          if (__DEV__) console.log('postCheckin skip: tags fetch failed', error.message)
-          return
-        }
-        const checkinTags = (data ?? []).map(r => r.tags?.name).filter(Boolean)
-        if (!checkinTags.length) {
-          if (__DEV__) console.log('postCheckin skip: no tags on item', item.id)
-          return
-        }
-        if (__DEV__) console.log('postCheckin fired for item', item.id, 'tags', checkinTags)
-        navigation.navigate('NearbyTab', {
-          screen: 'Nearby',
-          params: {
-            mode:          'post_checkin',
-            checkinLat:    lat,
-            checkinLng:    lng,
-            checkinItemId: item.id,
-            checkinTags,
-          },
-        })
-      })
-      .catch(() => {
-        if (__DEV__) console.log('postCheckin skip: tags fetch exception')
-      })
-  }
-
-  async function enforceGpsCheckin(item) {
-    const checkinType = item?.checkin_type ?? item?.checkinType
-    if (checkinType !== 'gps') return true
-
-    const itemLat = item?.maps_lat ?? item?.mapsLat ?? null
-    const itemLng = item?.maps_lng ?? item?.mapsLng ?? null
-
-    if (!itemLat || !itemLng) return true
-
-    let userLat = null, userLng = null
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync()
-      if (status !== 'granted') {
-        Alert.alert('Location required', 'Location access is needed to check off this item.')
-        return false
-      }
-      const pos = await Promise.race([
-        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 6000)),
-      ]).catch(() => Location.getLastKnownPositionAsync({}))
-      userLat = pos?.coords?.latitude  ?? null
-      userLng = pos?.coords?.longitude ?? null
-    } catch { /* permission denied or device error */ }
-
-    if (!userLat || !userLng) {
-      Alert.alert('Location unavailable', 'Location access is needed to check off this item.')
-      return false
-    }
-
-    const distM = haversineMeters(userLat, userLng, itemLat, itemLng)
-
-    const thresholdM = item?.geo_radius_m ?? 500
-    if (distM > thresholdM) {
-      Alert.alert('Not there yet', `You need to be at this location to check it off (${Math.round(distM)}m away).`)
-      return false
-    }
-    return true
   }
 
   const handleCheckOff = useCallback(async (listItemId) => {
@@ -904,10 +788,18 @@ export default function ListScreen({ route, navigation }) {
       return
     }
 
-    if (!await enforceGpsCheckin(item)) return
+    const fenceResult = await checkGeoFence(item)
+    if (!fenceResult.ok) { presentGeoFenceFailure(fenceResult); return }
 
     const difficulty  = item?.difficulty  ?? 1
     const wasChecked  = item?.checked     ?? false
+
+    // Post-checkoff sheet fires on tap, not after the insert confirms, so its
+    // proximity/rank queries can run in parallel with the write. If the
+    // insert later fails (below), we reconcile by clearing it back to null.
+    if (!wasChecked) {
+      setPostCheckoffData({ itemId: item?.id, listItemId, userId: currentUserId, item })
+    }
 
     // Optimistic local update immediately — preserves scroll position
     // useItems.checkOff runs its own optimistic update in parallel, that's fine
@@ -944,6 +836,7 @@ export default function ListScreen({ route, navigation }) {
               : i
           ))
           checkOffInFlight.current = false
+          setPostCheckoffData(null)
           // Alert on unexpected errors (P0001 is already alerted inside checkOff)
           const code = result.error?.code
           if (code && code !== 'P0001' && result.error !== 'Not signed in') {
@@ -997,16 +890,10 @@ export default function ListScreen({ route, navigation }) {
         // Fetch partner suggestion — fire-and-forget, never blocks check-in
         if (!wasChecked) {
           fetchPartnerSuggestion(item?.id, !!item?.allowsPersonalNote)
-          // Defer discover navigation until after the memory modal (if any) so the
-          // modal doesn't get dismissed by navigation away from this screen.
-          if (item?.allowsPersonalNote) {
-            setPendingDiscoverItem(item)
-          } else {
-            triggerPostCheckinDiscover(item)
-          }
         }
       }).catch(() => {
         checkOffInFlight.current = false
+        setPostCheckoffData(null)
         // Revert on unexpected exception
         setLocalItems(prev => prev.map(i =>
           i.listItemId === listItemId
@@ -1015,12 +902,12 @@ export default function ListScreen({ route, navigation }) {
         ))
       })
 
-      // Celebrate and notify immediately on a fresh check (not un-check).
-      // For memory-eligible items, notification is deferred to saveMemory / skip
-      // so personal_place and personal_note are already in the DB when it fires.
+      // Notify crew immediately on a fresh check (not un-check) for
+      // higher-difficulty items. For memory-eligible items, notification is
+      // deferred to saveMemory / skip so personal_place and personal_note
+      // are already in the DB when it fires.
       if (!wasChecked) {
         if (difficulty >= 5) {
-          triggerCelebration(listItemId, difficulty)
           if (!item?.allowsPersonalNote) {
             notifyCrewCheckIn({
               listItemId,
@@ -1034,7 +921,7 @@ export default function ListScreen({ route, navigation }) {
         }
       }
     }
-  }, [ended, listId, checkOff, localItems, cityItems, navigation, triggerCelebration, currentUserId, userLifetimePts])
+  }, [ended, listId, checkOff, localItems, cityItems, navigation, currentUserId, userLifetimePts])
 
   function slideOutSuggStack(onDone) {
     Animated.timing(suggAnim, { toValue: 200, useNativeDriver: true, duration: 200 }).start(() => {
@@ -1198,9 +1085,12 @@ export default function ListScreen({ route, navigation }) {
     try {
       // Keyed by item_id, not list_item_id — a check-off made from a
       // different list containing this same item still surfaces its photo
-      // and date here. Prefer the row belonging to the list being viewed
-      // (most likely to have a personal note attached via saveMemory), else
-      // fall back to the most recent row for this item.
+      // and date here — but only rows inside THIS list's own season window
+      // (same rule as refreshCheckedState, so the modal can't show a memory
+      // for a check-in that the list itself is currently displaying as
+      // unchecked). Prefer the row belonging to the list being viewed (most
+      // likely to have a personal note attached via saveMemory), else fall
+      // back to the most recent in-window row for this item.
       const { data, error } = await supabase
         .from('check_ins')
         .select('id, list_item_id, checked_at, photo_url, personal_place, personal_note')
@@ -1211,7 +1101,9 @@ export default function ListScreen({ route, navigation }) {
         console.error('openDetailModal: check_ins query failed:', error.message)
       }
 
-      const rows = data ?? []
+      const rows = (data ?? []).filter(r =>
+        isWithinWindow(r.checked_at, listMeta?.starts_at, listMeta?.ends_at)
+      )
       const ciData = rows.find(r => r.list_item_id === item.listItemId) ?? rows[0] ?? null
       console.log('[view memory] photo_url raw:', ciData?.photo_url ?? null)
       setDetailCI(ciData)
@@ -1224,13 +1116,6 @@ export default function ListScreen({ route, navigation }) {
   }
 
   const renderItem = useCallback(({ item }) => {
-    const isCelebrating = celebratingId === item.listItemId
-    const overlayColor = item.difficulty === 25
-      ? 'rgba(139,92,246,0.22)'   // purple for Legend
-      : item.difficulty === 10
-        ? 'rgba(186,117,23,0.22)' // amber for Rare
-        : 'rgba(55,138,221,0.22)' // blue for Partner
-
     // ── Insider Drop unlock check ──────────────────────────────────
     const isInsiderDrop    = item.isInsiderDrop ?? false
     const insiderUnlocked  = computeInsiderUnlocked(item, userLifetimePts, userInsiderTier)
@@ -1273,21 +1158,40 @@ export default function ListScreen({ route, navigation }) {
       )
     }
 
+    // ── Locked Bonus Drop card — teased, not revealed: no item text, no
+    // venue, no hook. The tease itself is the hook. ────────────────────
+    const isBonusDrop      = item.isBonusDrop ?? false
+    const bonusDropUnlocked = computeBonusDropUnlocked(item, nonBonusCheckedCount)
+    if (isBonusDrop && !bonusDropUnlocked) {
+      const remaining = Math.max(0, (item.unlockThreshold ?? 0) - nonBonusCheckedCount)
+      return (
+        <TouchableOpacity
+          style={[styles.rowCard, styles.rowCardLocked]}
+          onPress={() => {
+            Alert.alert(
+              'Bonus Drop',
+              `Check off ${remaining} more item${remaining !== 1 ? 's' : ''} on this list to unlock this.`,
+              [{ text: 'Got it' }]
+            )
+          }}
+          activeOpacity={0.9}
+        >
+          <View style={styles.lockedIconWrap}>
+            <Text style={styles.lockedIcon}>🔒</Text>
+          </View>
+          <View style={styles.rowBody}>
+            <Text style={styles.lockedTeaserText}>Bonus Drop</Text>
+            <Text style={styles.lockedReqText}>
+              Unlocks at {item.unlockThreshold} check-off{item.unlockThreshold === 1 ? '' : 's'} · {nonBonusCheckedCount}/{item.unlockThreshold} so far
+            </Text>
+          </View>
+        </TouchableOpacity>
+      )
+    }
+
     // ── Normal card (+ ⭐ badge for unlocked Insider Drops) ─────────
     return (
       <View style={{ position: 'relative' }}>
-        {isCelebrating && (
-          <Animated.View
-            pointerEvents="none"
-            style={{
-              ...StyleSheet.absoluteFillObject,
-              borderRadius: 18,
-              backgroundColor: overlayColor,
-              opacity: flashAnim,
-              zIndex: 10,
-            }}
-          />
-        )}
         <TouchableOpacity
           style={[styles.rowCard, item.checked && styles.rowCardChecked]}
           onPress={() => {
@@ -1427,7 +1331,7 @@ export default function ListScreen({ route, navigation }) {
       </TouchableOpacity>
       </View>
     )
-  }, [navigation, route.params, listId, ended, destListInactive, handleCheckOff, celebratingId, flashAnim, userLifetimePts, userInsiderTier, sortMode])
+  }, [navigation, route.params, listId, ended, destListInactive, handleCheckOff, userLifetimePts, userInsiderTier, sortMode, nonBonusCheckedCount])
 
   const headerEl = useMemo(() => (
     <View style={[styles.headerBlock, heroImage && { paddingTop: headerHeight }]}>
@@ -1749,6 +1653,12 @@ export default function ListScreen({ route, navigation }) {
         onSuccess={loadSuggestions}
         listId={listId}
         listTitle={route.params?.title ?? ''}
+      />
+
+      <PostCheckoffSheet
+        data={postCheckoffData}
+        onDismiss={() => setPostCheckoffData(null)}
+        navigation={navigation}
       />
 
       <BadgeCelebrationModal

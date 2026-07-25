@@ -26,6 +26,25 @@ const { height: SCREEN_H } = Dimensions.get('window')
 // deletion. list_items is list-context only from here on and may be
 // null once its list is gone (embedded directly off check_ins where
 // still needed, never through list_items(items(...))).
+
+// Fan-out (lib/checkInFanOut.js) mirrors a check-in into every other
+// active list containing the same item, so check_ins ROWS do not equal
+// check-offs. Every query below dedupes by item_id (keeping the first
+// row seen, in whatever order it was fetched) before treating a row as
+// a distinct checked-off item.
+function dedupeByItemId(rows) {
+  const seen = new Set()
+  const out = []
+  for (const r of rows ?? []) {
+    if (r.item_id != null) {
+      if (seen.has(r.item_id)) continue
+      seen.add(r.item_id)
+    }
+    out.push(r)
+  }
+  return out
+}
+
 async function fetchBadgeDetail(badgeId, userId, earnedAt) {
   if (!userId) return null
 
@@ -54,14 +73,17 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
       case 'checkins_100': {
         const milestones = { checkins_10: 10, checkins_25: 25, checkins_50: 50, checkins_100: 100 }
         const n = milestones[badgeId]
-        // Get the Nth check-in (the one that triggered the badge)
+        // Get the Nth DISTINCT check-off (the one that triggered the badge).
+        // Fetch ascending and dedupe first — a row-based range would let
+        // fan-out rows crowd out real check-offs from the window.
         const { data } = await supabase
           .from('check_ins')
           .select('checked_at, item_id, items(body)')
           .eq('user_id', userId)
           .order('checked_at', { ascending: true })
-          .range(n - 5, n - 1)  // last 5 leading up to milestone
-        const formatted = (data ?? []).map(ci => ({
+        const deduped = dedupeByItemId(data)
+        const window = deduped.slice(Math.max(0, n - 5), n)  // last 5 leading up to milestone
+        const formatted = window.map(ci => ({
           body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
@@ -80,7 +102,7 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
           .gte('checked_at', new Date(earnedDate.getTime() - 24 * 60 * 60 * 1000).toISOString())
           .lte('checked_at', new Date(earnedDate.getTime() + 24 * 60 * 60 * 1000).toISOString())
           .order('checked_at', { ascending: true })
-        const formatted = (data ?? []).map(ci => ({
+        const formatted = dedupeByItemId(data).map(ci => ({
           body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
@@ -105,7 +127,7 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
           .gte('checked_at', weekStart.toISOString())
           .lt('checked_at', weekEnd.toISOString())
           .order('checked_at', { ascending: true })
-        const formatted = (data ?? []).map(ci => ({
+        const formatted = dedupeByItemId(data).map(ci => ({
           body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
@@ -124,10 +146,10 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
           .order('checked_at', { ascending: false })
           .limit(50)
         // Find check-ins after 10pm
-        const lateNight = (data ?? []).filter(ci => {
+        const lateNight = dedupeByItemId((data ?? []).filter(ci => {
           const hour = new Date(ci.checked_at).getHours()
           return hour >= 22 || hour < 3
-        })
+        }))
         const formatted = lateNight.slice(0, 5).map(ci => ({
           body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
@@ -151,8 +173,8 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
           .gte('checked_at', cutoff.toISOString())
           .lte('checked_at', earnedDate.toISOString())
           .order('checked_at', { ascending: false })
-          .limit(10)
-        const formatted = (data ?? []).map(ci => ({
+          .limit(30)
+        const formatted = dedupeByItemId(data).slice(0, 10).map(ci => ({
           body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
@@ -175,8 +197,8 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
           .gte('checked_at', cutoff.toISOString())
           .lte('checked_at', earnedDate.toISOString())
           .order('checked_at', { ascending: false })
-          .limit(10)
-        const formatted = (data ?? []).map(ci => ({
+          .limit(30)
+        const formatted = dedupeByItemId(data).slice(0, 10).map(ci => ({
           body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
@@ -199,8 +221,8 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
           .select('checked_at, points_awarded, item_id, items(body)')
           .eq('user_id', userId)
           .order('checked_at', { ascending: false })
-          .limit(5)
-        const formatted = (data ?? []).map(ci => ({
+          .limit(20)
+        const formatted = dedupeByItemId(data).slice(0, 5).map(ci => ({
           body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
@@ -216,8 +238,8 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
           .select('checked_at, item_id, items(body, neighborhoods!items_neighborhood_id_fkey(name))')
           .eq('user_id', userId)
           .order('checked_at', { ascending: false })
-          .limit(20)
-        const formatted = (data ?? [])
+          .limit(40)
+        const formatted = dedupeByItemId(data)
           .filter(ci => ci.items?.neighborhoods)
           .slice(0, 8)
           .map(ci => ({
@@ -279,8 +301,8 @@ async function fetchBadgeDetail(badgeId, userId, earnedAt) {
           .select('checked_at, item_id, items(body)')
           .eq('user_id', userId)
           .order('checked_at', { ascending: false })
-          .limit(10)
-        const formatted = (data ?? []).map(ci => ({
+          .limit(30)
+        const formatted = dedupeByItemId(data).slice(0, 10).map(ci => ({
           body: ci.items?.body ?? 'Unknown item',
           date: ci.checked_at,
         }))
@@ -353,11 +375,14 @@ export default function BadgesScreen({ route }) {
     if (userStats.data) setStreak(userStats.data.current_streak ?? 0)
 
     if (uid) {
-      const { count } = await supabase
+      // Fan-out rows mean row count != distinct items checked — fetch
+      // item_id only (no head) and dedupe client-side for the true count.
+      const { data: checkinRows } = await supabase
         .from('check_ins')
-        .select('id', { count: 'exact', head: true })
+        .select('item_id')
         .eq('user_id', uid)
-      setTotalCheckins(count ?? 0)
+      const distinctItemIds = new Set((checkinRows ?? []).map(r => r.item_id).filter(id => id != null))
+      setTotalCheckins(distinctItemIds.size)
     }
 
     setLoading(false)
