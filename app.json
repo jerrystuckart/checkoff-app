@@ -41,7 +41,7 @@
       }
     },
     "android": {
-      "package": "com.checkoff.app",
+      "package": "com.getcheckoff.app",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0F0F1E"
