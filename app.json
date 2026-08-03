@@ -42,6 +42,7 @@
     },
     "android": {
       "package": "com.getcheckoff.app",
+      "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#0F0F1E"

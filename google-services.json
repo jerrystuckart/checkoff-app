@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "568643740204",
+    "project_id": "checkoff-27411",
+    "storage_bucket": "checkoff-27411.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:568643740204:android:9cd56c2ae7c7e3244fe789",
+        "android_client_info": {
+          "package_name": "com.getcheckoff.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAcpRF05Lqv6M8KJaaCbGXrF_AkpnkH2x8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
