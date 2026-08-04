@@ -17,10 +17,21 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as AppleAuthentication from 'expo-apple-authentication'
 import * as Crypto from 'expo-crypto'
+import {
+  GoogleSignin,
+  GoogleSigninButton,
+  isSuccessResponse,
+  isErrorWithCode,
+  statusCodes,
+} from '@react-native-google-signin/google-signin'
 import { supabase } from '../lib/supabase'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
+
+const GOOGLE_WEB_CLIENT_ID = '568643740204-t0ppem869quivad89n4v937d5kmra7ig.apps.googleusercontent.com'
+
+GoogleSignin.configure({ webClientId: GOOGLE_WEB_CLIENT_ID })
 
 const DEV_EMAIL    = ''
 const DEV_PASSWORD = ''
@@ -216,6 +227,44 @@ export default function SignInScreen({ navigation, route }) {
     }
   }
 
+  async function signInWithGoogle() {
+    try {
+      await GoogleSignin.hasPlayServices()
+      const response = await GoogleSignin.signIn()
+
+      if (!isSuccessResponse(response)) {
+        // User cancelled — no-op
+        return
+      }
+
+      const idToken = response.data.idToken
+      if (!idToken) {
+        throw new Error('Google did not return an identity token.')
+      }
+
+      const { error } = await supabase.auth.signInWithIdToken({
+        provider: 'google',
+        token: idToken,
+      })
+
+      if (error) throw error
+
+      navigateAfterAuth()
+    } catch (e) {
+      if (isErrorWithCode(e)) {
+        if (e.code === statusCodes.IN_PROGRESS) {
+          // Another sign-in call is already running — no-op
+          return
+        }
+        if (e.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+          Alert.alert('Google Play Services required', 'Please update Google Play Services and try again.')
+          return
+        }
+      }
+      Alert.alert('Google Sign In failed', e?.message || 'Please try again.')
+    }
+  }
+
   return (
     <KeyboardAvoidingView
       style={{ flex: 1 }}
@@ -344,13 +393,24 @@ export default function SignInScreen({ navigation, route }) {
         {/* Apple Sign In — sign in mode only */}
         {!isSignUp && (
           <>
-            <AppleAuthentication.AppleAuthenticationButton
-              buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
-              buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
-              cornerRadius={14}
-              style={styles.appleBtn}
-              onPress={signInWithApple}
-            />
+            {Platform.OS === 'ios' && (
+              <AppleAuthentication.AppleAuthenticationButton
+                buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                cornerRadius={14}
+                style={styles.appleBtn}
+                onPress={signInWithApple}
+              />
+            )}
+
+            {Platform.OS === 'android' && (
+              <GoogleSigninButton
+                size={GoogleSigninButton.Size.Wide}
+                color={GoogleSigninButton.Color.Dark}
+                style={styles.googleBtn}
+                onPress={signInWithGoogle}
+              />
+            )}
 
             <View style={styles.divider}>
               <View style={styles.dividerLine} />
@@ -419,6 +479,7 @@ const styles = StyleSheet.create({
   legal:         { fontSize: 11, color: 'rgba(255,255,255,0.25)', textAlign: 'center', lineHeight: 16, marginTop: 12 },
   legalLink:     { color: AMBER, textDecorationLine: 'underline' },
   appleBtn:      { width: '100%', height: 48, marginTop: 12,},
+  googleBtn:     { width: '100%', height: 48, marginTop: 12,},
   divider:       {flexDirection: 'row',  alignItems: 'center',  marginTop: 16,  marginBottom: 8,},
   dividerLine: {flex: 1,  height: 1,  backgroundColor: 'rgba(255,255,255,0.12)',},
   dividerText: {color: 'rgba(255,255,255,0.35)',  fontSize: 12,  marginHorizontal: 10,},
