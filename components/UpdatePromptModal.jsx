@@ -8,6 +8,7 @@ import {
   Linking,
   StyleSheet,
   StatusBar,
+  Platform,
 } from 'react-native'
 
 const AMBER = '#F5A623'
@@ -36,7 +37,7 @@ export default function UpdatePromptModal({ visible, force, config, onDismiss })
   }, [visible, force])
 
   function openStore() {
-    const url = config?.app_store_url
+    const url = Platform.OS === 'ios' ? config?.app_store_url : config?.play_store_url
     if (url) Linking.openURL(url).catch(() => {})
   }
 

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { Platform } from 'react-native'
 import * as Application from 'expo-application'
 import { supabase } from '../lib/supabase'
 
@@ -15,7 +16,7 @@ export function useVersionCheck(userId) {
         const { data, error } = await supabase
           .from('app_version_config')
           .select('*')
-          .eq('platform', 'ios')
+          .eq('platform', Platform.OS)
           .single()
 
         if (error || !data) return
@@ -36,7 +37,7 @@ export function useVersionCheck(userId) {
             .from('user_update_dismissals')
             .select('id')
             .eq('user_id', userId)
-            .eq('platform', 'ios')
+            .eq('platform', Platform.OS)
             .eq('dismissed_build_number', data.latest_build_number)
             .maybeSingle()
 
@@ -58,7 +59,7 @@ export function useVersionCheck(userId) {
       .from('user_update_dismissals')
       .upsert({
         user_id: userId,
-        platform: 'ios',
+        platform: Platform.OS,
         dismissed_version: updateConfig.latest_version,
         dismissed_build_number: updateConfig.latest_build_number,
       })
