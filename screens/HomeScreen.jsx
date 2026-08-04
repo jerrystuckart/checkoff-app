@@ -753,13 +753,17 @@ async function loadNearbyRail(userId) {
 
   const now = new Date()
 
-  // Official lists bucketed into three states
+  // Official lists bucketed into three states. Start-date cutoff is
+  // midnight (T00:00:00), matching isEnded()'s own midnight cutoff below —
+  // a T12:00:00 (noon) cutoff previously meant a list starting "today"
+  // didn't count as started until local noon, showing "Coming soon" all
+  // morning on its actual launch day.
   const activeOfficial = officialLists
-    .filter(l => !isEnded(l.ends_at) && (!l.starts_at || new Date(`${l.starts_at}T12:00:00`) <= now))
+    .filter(l => !isEnded(l.ends_at) && (!l.starts_at || new Date(`${l.starts_at}T00:00:00`) <= now))
     .sort((a, b) => new Date(a.ends_at || '9999-12-31') - new Date(b.ends_at || '9999-12-31'))
 
   const upcomingOfficial = officialLists
-    .filter(l => l.starts_at && new Date(`${l.starts_at}T12:00:00`) > now)
+    .filter(l => l.starts_at && new Date(`${l.starts_at}T00:00:00`) > now)
     .sort((a, b) => new Date(a.starts_at) - new Date(b.starts_at))
 
   const endedOfficial = officialLists
@@ -962,7 +966,7 @@ async function loadNearbyRail(userId) {
         joined:    joinedIds.has(l.id),
         checked:   checkedMap[l.id] ?? 0,
         rank:      rankMap[l.id] ?? null,
-        upcoming:  !!(l.starts_at && new Date(`${l.starts_at}T12:00:00`) > today),
+        upcoming:  !!(l.starts_at && new Date(`${l.starts_at}T00:00:00`) > today),
       })))
     })()
     return () => { cancelled = true }
@@ -999,11 +1003,15 @@ async function loadNearbyRail(userId) {
 
       <View style={styles.headerCard}>
         <View style={styles.headerTopRow}>
-          <Text style={styles.logo} allowFontScaling={false} numberOfLines={1}>
+          <Text style={[styles.logo, { flexShrink: 1, minWidth: 0 }]} allowFontScaling={false} numberOfLines={1} ellipsizeMode="tail">
             Check<Text style={styles.logoOff} allowFontScaling={false}>Off</Text>
           </Text>
 
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {/* flexShrink: 0 guarantees this group (and the theme toggle inside
+              it) keeps its natural width and is never pushed off-screen —
+              the logo above absorbs any overflow instead, per the fix for
+              the toggle-unreachable bug. */}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 }}>
             {user && (
               <TouchableOpacity
                 onPress={() => navigation.navigate('WeeklyRecap')}
@@ -1013,10 +1021,10 @@ async function loadNearbyRail(userId) {
                 <Text style={styles.thisWeekBtnText}>✦ This Week</Text>
               </TouchableOpacity>
             )}
-            {user && (
+            {user && userStreak >= 1 && (
               <View style={[styles.streakPill, userStreak >= 4 && styles.streakPillActive]}>
                 <Text style={[styles.streakPillText, userStreak >= 4 && styles.streakPillTextActive]} allowFontScaling={false}>
-                  {userStreak >= 1 ? (userStreak + 'w 🔥') : 'No streak'}
+                  {userStreak + 'w 🔥'}
                 </Text>
               </View>
             )}
@@ -1182,7 +1190,7 @@ async function loadNearbyRail(userId) {
           {homeOfficialLists.map(list => {
             const joined   = joinedIds.has(list.id)
             const ended    = isEnded(list.ends_at)
-            const upcoming = !ended && list.starts_at && new Date(`${list.starts_at}T12:00:00`) > now
+            const upcoming = !ended && list.starts_at && new Date(`${list.starts_at}T00:00:00`) > now
 
             if (ended) {
               return (
