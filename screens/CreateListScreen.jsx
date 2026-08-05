@@ -10,6 +10,7 @@ import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { fetchCuratedListItems } from '../lib/useItems'
 import { useTheme } from '../lib/ThemeContext'
+import { backfillListCreditOnJoin } from '../lib/joinListCredit'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
@@ -477,6 +478,11 @@ export default function CreateListScreen({ navigation, route }) {
         }
       }
 
+      // Retroactive credit — any of these items the user already completed
+      // standalone (or via another list) counts on this new private list
+      // immediately, without replaying the original check-in.
+      backfillListCreditOnJoin(user.id, list.id).catch(() => {})
+
       setSaving(false)
       setCreatedList(list)
       setStep(3)
@@ -531,6 +537,9 @@ export default function CreateListScreen({ navigation, route }) {
         return
       }
 
+      // Retroactive credit — see curated-mode branch above for why this is safe.
+      backfillListCreditOnJoin(user.id, adoptedListId).catch(() => {})
+
       // Fetch the updated list to use in Step 3 share screen
       const { data: updatedList } = await supabase
         .from('lists')
@@ -580,6 +589,9 @@ export default function CreateListScreen({ navigation, route }) {
       Alert.alert('Error adding items', liErr.message)
       return
     }
+
+    // Retroactive credit — see curated-mode branch above for why this is safe.
+    backfillListCreditOnJoin(user.id, list.id).catch(() => {})
 
     setCreatedList(list)
     setStep(3)

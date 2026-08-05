@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import {
   Modal, View, Text, TouchableOpacity, StyleSheet,
-  Animated, PanResponder, ActivityIndicator, Share,
+  Animated, PanResponder, ActivityIndicator, Share, Alert,
 } from 'react-native'
 import * as Location from 'expo-location'
 import { supabase } from '../lib/supabase'
@@ -53,6 +53,15 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
   const [alsoHere, setAlsoHere]     = useState(null)       // item | null
   const [nearestNext, setNearestNext] = useState([])       // item[]
 
+  const [isOrphaned, setIsOrphaned] = useState(false) // Case C active: zero public lists contain this item
+  // Case C — item is on zero public (is_official) lists. Secondary "Save to a list"
+  // action reuses the same personal-list model as ItemDetailScreen's
+  // Nearby-mode "+ Add to a list" — no new schema, just this surface.
+  const [personalLists, setPersonalLists]   = useState([])  // user's own non-official lists
+  const [showSaveMenu, setShowSaveMenu]     = useState(false)
+  const [savingToList, setSavingToList]     = useState(false)
+  const [savedLabel, setSavedLabel]         = useState(null)
+
   const { entries: rankEntries } = useLeaderboard(listCtx?.listId ?? null)
 
   const dragY = useRef(new Animated.Value(0)).current
@@ -87,6 +96,11 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
     setListCtx(null)
     setAlsoHere(null)
     setNearestNext([])
+    setIsOrphaned(false)
+    setPersonalLists([])
+    setShowSaveMenu(false)
+    setSavingToList(false)
+    setSavedLabel(null)
 
     let cancelled = false
     ;(async () => {
@@ -163,13 +177,85 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
       if (cancelled) return
       setCountLabel(count)
 
-      if (listRow) {
+      // listCtx drives the leaderboard rank and the "join my list" invite
+      // framing — private-list features only. Public lists (is_official:
+      // Seasonal/Themed/Destinations) have no leaderboard and no membership
+      // at all (product decision, 2026-08), even when this check-off
+      // happened while viewing one directly — list_item_id resolves for
+      // whatever list you're currently inside regardless of public/private,
+      // membership doesn't.
+      if (listRow && !listRow.is_official) {
         let metroName = ''
         if (listRow.metro_id) {
           const { data: metroRow } = await supabase.from('metro_areas').select('name').eq('id', listRow.metro_id).maybeSingle()
           metroName = metroRow?.name?.replace(' Metro', '') ?? ''
         }
         setListCtx({ listId: listRow.id, title: listRow.title, inviteCode: listRow.invite_code, metroName })
+      }
+
+      // ── Standalone check-off (no listItemId): is this item on a live
+      // public list at all? Public-list progress is computed live by
+      // item_id + that list's own active window — no join, no membership —
+      // so it already reflects there automatically. Still worth surfacing
+      // the same season-scoped count wording as the listRow branch above.
+      // If the item isn't on any public list, this is Case C: a truly
+      // orphaned item, offer the low-key "Save to a list" (private list)
+      // secondary action instead. ──
+      if (!data.listItemId && data.itemId && data.userId) {
+        const today = new Date().toISOString().split('T')[0]
+        const { data: candidateListItems } = await supabase
+          .from('list_items')
+          .select('list_id, lists!inner(id, title, starts_at, ends_at, is_official)')
+          .eq('item_id', data.itemId)
+
+        const activePublic = (candidateListItems ?? []).filter(li => {
+          const l = li.lists
+          if (!l?.is_official) return false
+          if (l.starts_at && l.starts_at > today) return false
+          if (l.ends_at   && l.ends_at   < today) return false
+          return true
+        })
+
+        if (activePublic.length) {
+          // Soonest-ending first, matching HomeScreen's own activeOfficial
+          // sort — just for choosing which title/season word to show, not
+          // a join target. No listCtx set here — no leaderboard, no invite
+          // framing for a public list.
+          const best = [...activePublic].sort(
+            (a, b) => new Date(a.lists.ends_at || '9999-12-31') - new Date(b.lists.ends_at || '9999-12-31')
+          )[0].lists
+
+          const { data: liRows } = await supabase.from('list_items').select('item_id').eq('list_id', best.id)
+          const itemIds = (liRows ?? []).map(r => r.item_id).filter(Boolean)
+          if (itemIds.length) {
+            const { data: checkins } = await supabase
+              .from('check_ins')
+              .select('item_id, checked_at')
+              .eq('user_id', data.userId)
+              .in('item_id', itemIds)
+            const inWindow = (checkins ?? []).filter(c => isWithinWindow(c.checked_at, best.starts_at, best.ends_at))
+            const n = new Set(inWindow.map(c => c.item_id)).size
+            if (!cancelled) setCountLabel(`That's ${n} this ${seasonWordFromTitle(best.title)}`)
+          }
+        } else if (!cancelled) {
+          // Case C — truly orphaned. Load the user's own private (non-
+          // public) lists for the low-key "Save to a list" secondary action.
+          setIsOrphaned(true)
+          const { data: members } = await supabase
+            .from('list_members')
+            .select('lists(id, title, ends_at, is_official)')
+            .eq('user_id', data.userId)
+          const lists = (members ?? [])
+            .map(m => m.lists)
+            .filter(Boolean)
+            .filter(l => {
+              if (l.is_official) return false
+              if (!l.ends_at) return true
+              return new Date(l.ends_at) >= new Date()
+            })
+            .sort((a, b) => a.title.localeCompare(b.title))
+          if (!cancelled) setPersonalLists(lists)
+        }
       }
 
       // ── Also Here / Nearest Next — both skipped entirely if the checked
@@ -297,6 +383,41 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
     navigation.navigate('ItemDetail', { item })
   }
 
+  // Case C — "Save to a list." Same insert lib/checkInFanOut.js's siblings
+  // use elsewhere (ItemDetailScreen.addToList) — no new schema.
+  async function saveToExistingList(listId, listTitle) {
+    if (!data?.userId || !data?.itemId) return
+    setSavingToList(true)
+    try {
+      const { data: existing } = await supabase
+        .from('list_items')
+        .select('sort_order')
+        .eq('list_id', listId)
+        .order('sort_order', { ascending: false })
+        .limit(1)
+      const nextOrder = (existing?.[0]?.sort_order ?? 0) + 1
+
+      const { error } = await supabase
+        .from('list_items')
+        .insert({ list_id: listId, item_id: data.itemId, sort_order: nextOrder, added_by: data.userId })
+
+      if (error && error.code !== '23505') throw error
+
+      setShowSaveMenu(false)
+      setSavedLabel(`Saved to ${listTitle}`)
+    } catch (e) {
+      Alert.alert('Could not save', e.message)
+    } finally {
+      setSavingToList(false)
+    }
+  }
+
+  function createFirstList() {
+    setShowSaveMenu(false)
+    onDismiss()
+    navigation.navigate('CreateList', { adoptedItemIds: data?.itemId ? [data.itemId] : [] })
+  }
+
   return (
     <Modal transparent visible animationType="slide" onRequestClose={onDismiss} statusBarTranslucent>
       <View style={styles.overlay}>
@@ -334,6 +455,42 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
           <TouchableOpacity style={styles.inviteBtn} onPress={shareInvite} activeOpacity={0.85}>
             <Text style={styles.inviteBtnText}>Invite a friend</Text>
           </TouchableOpacity>
+
+          {/* Case C — orphaned item, low-key optional save */}
+          {phase === 'ready' && isOrphaned && !savedLabel && (
+            <TouchableOpacity
+              style={styles.saveLink}
+              onPress={() => (personalLists.length ? setShowSaveMenu(true) : createFirstList())}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.saveLinkText}>Save to a list</Text>
+            </TouchableOpacity>
+          )}
+          {phase === 'ready' && savedLabel && (
+            <Text style={styles.savedText}>{savedLabel}</Text>
+          )}
+
+          {showSaveMenu && (
+            <View style={styles.saveMenu}>
+              {personalLists.map(l => (
+                <TouchableOpacity
+                  key={l.id}
+                  style={styles.saveMenuRow}
+                  disabled={savingToList}
+                  onPress={() => saveToExistingList(l.id, l.title)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.saveMenuRowText}>{l.title}</Text>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity style={styles.saveMenuRow} onPress={createFirstList} activeOpacity={0.8}>
+                <Text style={[styles.saveMenuRowText, { color: AMBER }]}>+ New list</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.saveMenuCancel} onPress={() => setShowSaveMenu(false)}>
+                <Text style={styles.saveMenuCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </Animated.View>
       </View>
     </Modal>
@@ -449,5 +606,50 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     color: NAVY,
+  },
+  saveLink: {
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  saveLinkText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: MUTED,
+    textDecorationLine: 'underline',
+  },
+  savedText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: MUTED,
+    textAlign: 'center',
+    paddingVertical: 12,
+  },
+  saveMenu: {
+    marginTop: 4,
+    backgroundColor: CARD,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: BORDER,
+    overflow: 'hidden',
+  },
+  saveMenuRow: {
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: BORDER,
+  },
+  saveMenuRowText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: TEXT,
+  },
+  saveMenuCancel: {
+    paddingVertical: 13,
+    alignItems: 'center',
+  },
+  saveMenuCancelText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: MUTED,
   },
 })

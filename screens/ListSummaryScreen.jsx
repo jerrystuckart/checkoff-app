@@ -52,6 +52,7 @@ export default function ListSummaryScreen({ route, navigation }) {
     topItem       = null,
     streak        = 0,
     isFullyDone   = false,
+    isPublicList  = false, // public lists (Seasonal/Themed/Destinations) have no leaderboard/rank
   } = route?.params ?? {}
 
   const insets = useSafeAreaInsets()
@@ -79,20 +80,25 @@ export default function ListSummaryScreen({ route, navigation }) {
   const rankColor   = rank === 1 ? AMBER : rank === 2 ? '#A0A8B0' : rank === 3 ? '#CD7F32' : MUTED
 
   const heroEmoji   = isFullyDone
-    ? (rank === 1 ? '🏆' : '🎉')
+    ? (isPublicList ? '🏆' : rank === 1 ? '🏆' : '🎉')
     : (pct >= 75 ? '💪' : pct >= 50 ? '⚡' : '📋')
 
   const heroTitle   = isFullyDone
-    ? (rank === 1 ? 'You crushed it.' : 'List complete!')
+    ? (isPublicList ? 'You crushed it.' : rank === 1 ? 'You crushed it.' : 'List complete!')
     : 'List ended'
 
+  // Public lists have no crew to rank against — never claim a placement.
   const heroSub     = isFullyDone
-    ? `Every single item checked off. ${rank === 1 ? 'You finished first.' : `You came in ${rankLabel.toLowerCase()}.`}`
+    ? (isPublicList
+        ? 'Every single item checked off.'
+        : `Every single item checked off. ${rank === 1 ? 'You finished first.' : `You came in ${rankLabel.toLowerCase()}.`}`)
     : `${pct}% complete — ${checkedCount} of ${totalCount} items checked off.`
 
   async function shareResult() {
-    const rankStr = rank <= 3 ? rankLabel : `#${rank}`
-    const msg = `I just finished "${title}" on CheckOff — ${checkedCount}/${totalCount} items, ${totalPts} pts, ${rankStr}. Come check things off with me: https://getcheckoff.com`
+    const rankStr = isPublicList ? null : (rank <= 3 ? rankLabel : `#${rank}`)
+    const msg = isPublicList
+      ? `I just finished "${title}" on CheckOff — ${checkedCount}/${totalCount} items, ${totalPts} pts. Come check things off with me: https://getcheckoff.com`
+      : `I just finished "${title}" on CheckOff — ${checkedCount}/${totalCount} items, ${totalPts} pts, ${rankStr}. Come check things off with me: https://getcheckoff.com`
     try {
       await Share.share({ message: msg, title: 'CheckOff result' })
     } catch (e) { /* cancelled */ }
@@ -154,10 +160,12 @@ export default function ListSummaryScreen({ route, navigation }) {
             <Text style={styles.statLabel}>pts earned</Text>
           </View>
 
-          <View style={styles.statCard}>
-            <Text style={[styles.statValue, { color: rankColor }]}>{rankLabel}</Text>
-            <Text style={styles.statLabel}>crew rank</Text>
-          </View>
+          {!isPublicList && (
+            <View style={styles.statCard}>
+              <Text style={[styles.statValue, { color: rankColor }]}>{rankLabel}</Text>
+              <Text style={styles.statLabel}>crew rank</Text>
+            </View>
+          )}
 
           <View style={styles.statCard}>
             <Text style={styles.statValue}>{checkedCount}</Text>
@@ -218,13 +226,15 @@ export default function ListSummaryScreen({ route, navigation }) {
             <Text style={styles.primaryBtnText}>Start your next list →</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.secondaryBtn}
-            onPress={viewLeaderboard}
-            activeOpacity={0.88}
-          >
-            <Text style={styles.secondaryBtnText}>View crew standings</Text>
-          </TouchableOpacity>
+          {!isPublicList && (
+            <TouchableOpacity
+              style={styles.secondaryBtn}
+              onPress={viewLeaderboard}
+              activeOpacity={0.88}
+            >
+              <Text style={styles.secondaryBtnText}>View crew standings</Text>
+            </TouchableOpacity>
+          )}
 
           <TouchableOpacity
             style={styles.shareBtn}

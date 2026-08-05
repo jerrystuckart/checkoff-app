@@ -8,6 +8,7 @@ import { LinearGradient } from 'expo-linear-gradient'
 import { supabase } from '../lib/supabase'
 import { adoptDestinationList } from '../lib/useItems'
 import { useTheme } from '../lib/ThemeContext'
+import { isWithinWindow } from '../lib/seasonWindow'
 
 const AMBER = '#F5A623'
 
@@ -39,6 +40,12 @@ export default function HubScreen({ navigation, route }) {
   const [user, setUser] = useState(null)
   const [loading, setLoading] = useState(true)
   const [joiningDestListId, setJoiningDestListId] = useState(null)
+  // Public-list progress (Case A/B/C model, 2026-08) — each destination's
+  // list is a public list like any other Seasonal/Themed one: no
+  // membership, live item_id + window computation, reflects a check-off
+  // made anywhere (Hub, home rail, nearby, ItemDetail). Not Hub-specific
+  // logic — same shape as HomeScreen.jsx's "More metro lists" rail.
+  const [progressByListId, setProgressByListId] = useState({}) // { [lists.id]: { checked, total } }
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data?.user ?? null))
@@ -54,12 +61,13 @@ export default function HubScreen({ navigation, route }) {
     try {
       const { data, error } = await supabase
         .from('destinations')
-        .select('*, destination_spotlights(*), destination_lists(*, lists!destination_lists_list_id_fkey(id,title))')
+        .select('*, destination_spotlights(*), destination_lists(*, lists!destination_lists_list_id_fkey(id,title,starts_at,ends_at))')
         .eq('id', destinationId)
         .maybeSingle()
 
       if (error) throw error
       setDestination(data)
+      loadProgress(data?.destination_lists ?? [])
 
       // Partner credit lines need org_name — destination_partners itself is
       // locked to service_role, so this reads destination_partners_public
@@ -87,6 +95,43 @@ export default function HubScreen({ navigation, route }) {
     } finally {
       setLoading(false)
     }
+  }
+
+  // Same item_id + window computation as every other public list (e.g.
+  // HomeScreen.jsx's "More metro lists" rail) — no Hub-specific check-in
+  // logic, this is a read against the same check_ins rows every check-off
+  // path (tap, photo, standalone, from any screen) already writes to.
+  async function loadProgress(destLists) {
+    const { data: { user: authUser } } = await supabase.auth.getUser()
+    if (!authUser) return
+
+    const validLists = (destLists ?? []).map(dl => dl.lists).filter(l => l?.id)
+    if (!validLists.length) return
+
+    const listIds = validLists.map(l => l.id)
+    const { data: liRows } = await supabase
+      .from('list_items')
+      .select('list_id, item_id')
+      .in('list_id', listIds)
+
+    const itemIds = [...new Set((liRows ?? []).map(r => r.item_id).filter(Boolean))]
+    if (!itemIds.length) return
+
+    const { data: checkins } = await supabase
+      .from('check_ins')
+      .select('item_id, checked_at')
+      .eq('user_id', authUser.id)
+      .in('item_id', itemIds)
+
+    const result = {}
+    validLists.forEach(l => {
+      const listItemIds = new Set((liRows ?? []).filter(r => r.list_id === l.id).map(r => r.item_id))
+      const inWindow = (checkins ?? []).filter(c =>
+        listItemIds.has(c.item_id) && isWithinWindow(c.checked_at, l.starts_at, l.ends_at)
+      )
+      result[l.id] = { checked: new Set(inWindow.map(c => c.item_id)).size, total: listItemIds.size }
+    })
+    setProgressByListId(result)
   }
 
   async function handleListTap(destListId, sourceListId) {
@@ -234,6 +279,7 @@ export default function HubScreen({ navigation, route }) {
                 destList={dl}
                 partnerName={dl.show_partner_credit && dl.owner_partner_id ? partnerNames[dl.owner_partner_id] : null}
                 joining={joiningDestListId === dl.id}
+                progress={dl.lists?.id ? progressByListId[dl.lists.id] : null}
                 onPress={() => handleListTap(dl.id, dl.list_id)}
                 styles={styles}
               />
@@ -310,11 +356,14 @@ function SpotlightCard({ spotlight, partnerName, onPress, styles, colors }) {
   )
 }
 
-function ListCard({ destList, partnerName, joining, onPress, styles }) {
+function ListCard({ destList, partnerName, joining, progress, onPress, styles }) {
   return (
     <TouchableOpacity style={styles.listCard} activeOpacity={0.88} onPress={onPress} disabled={joining}>
       <View style={{ flex: 1 }}>
         <Text style={styles.listCardTitle} numberOfLines={2}>{destList.lists?.title ?? 'Untitled list'}</Text>
+        {!!progress && progress.total > 0 && (
+          <Text style={styles.listCardProgress}>{progress.checked} of {progress.total}</Text>
+        )}
         {!!partnerName && (
           <Text style={styles.creditText}>Presented by {partnerName}</Text>
         )}
@@ -427,6 +476,7 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER }) {
       marginBottom: 10,
     },
     listCardTitle: { fontSize: 15, fontWeight: '800', color: TEXT },
+    listCardProgress: { fontSize: 12, fontWeight: '700', color: AMBER, marginTop: 3 },
     listCardCTA: { fontSize: 13, fontWeight: '800', color: AMBER, marginLeft: 12 },
     emptySub: { fontSize: 13, color: MUTED },
     emptyTitle: { fontSize: 16, fontWeight: '800', color: TEXT },

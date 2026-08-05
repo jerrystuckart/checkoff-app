@@ -374,12 +374,12 @@ export default function ItemDetailScreen({ route, navigation }) {
     let listItemId = item?.listItemId
 
     if (!listItemId) {
+      // Resolves to a joined-list context if one exists; null otherwise.
+      // A null result is NOT an error — item_id is the check-in's source
+      // of truth, and list membership is never required to complete it
+      // (product decision, 2026-08). The insert below falls back to a
+      // standalone row (list_item_id: null) in that case.
       listItemId = await getOrCreateListItemId(item?.id, userId)
-    }
-
-    if (!listItemId) {
-      Alert.alert('Join a list first', 'Go to Home and join a seasonal list to start checking off items.')
-      return
     }
 
     // Photo-required items go to PhotoCheckInScreen — no tap shortcut,
@@ -422,20 +422,28 @@ export default function ItemDetailScreen({ route, navigation }) {
         // points_awarded on the primary row — same difficulty * point_multiplier
         // formula as lib/useItems.js checkOff. Fan-out (lib/checkInFanOut.js)
         // deliberately leaves secondary rows at 0 to avoid double-counting.
-        const { data: liRow } = await supabase
-          .from('list_items')
-          .select('point_multiplier')
-          .eq('id', listItemId)
-          .maybeSingle()
-        const pointsAwarded = Math.round((item?.difficulty ?? 1) * (liRow?.point_multiplier ?? 1.0))
+        // No list context (standalone check-in) means no list-specific
+        // multiplier — defaults to 1.0, same as an un-boosted list item.
+        let pointMultiplier = 1.0
+        if (listItemId) {
+          const { data: liRow } = await supabase
+            .from('list_items')
+            .select('point_multiplier')
+            .eq('id', listItemId)
+            .maybeSingle()
+          pointMultiplier = liRow?.point_multiplier ?? 1.0
+        }
+        const pointsAwarded = Math.round((item?.difficulty ?? 1) * pointMultiplier)
 
         // item_id is the canonical, always-available path to this check-in's
         // item — it survives list deletion (list_item_id goes null then).
+        // list_item_id itself is null here when the item has no joined-list
+        // context — a standalone check-in, valid on its own.
         const { error } = await supabase
           .from('check_ins')
           .insert({
             user_id: userId,
-            list_item_id: listItemId,
+            list_item_id: listItemId ?? null,
             item_id: item?.id ?? null,
             checkin_method: 'tap',
             points_awarded: pointsAwarded,
@@ -599,32 +607,21 @@ export default function ItemDetailScreen({ route, navigation }) {
       return
     }
 
-    if (!itemOnListId) {
-      // Item not on any list — prompt to add
-      if (userLists.length === 0) {
-        Alert.alert(
-          'No lists yet',
-          'Create a list first to start tracking your check-offs.',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Create a list', onPress: () => navigation.navigate('CreateList') },
-          ]
-        )
-      } else {
-        setShowListPicker(true)
-      }
-      return
-    }
+    // itemOnListId (if set) means this item is already on one of the
+    // user's own lists — use that list context. Otherwise this is a
+    // standalone check-in: valid on its own, no list required (product
+    // decision, 2026-08). "+ Add to a list" (above) remains the only way
+    // to attach an item to a personal list — that's an intentional choice,
+    // never a precondition for "I've done this."
 
     // Photo-required items go to PhotoCheckInScreen — no tap shortcut,
     // matches the existing rule at ListScreen.jsx:902. Only applies when
     // checking ON; unchecking an already-checked item needs no photo.
     if (item?.photoRequired && !checked) {
-      navigation.navigate('PhotoCheckIn', { item, listItemId: itemOnListId })
+      navigation.navigate('PhotoCheckIn', { item, listItemId: itemOnListId ?? null })
       return
     }
 
-    // Item is on a list — check it off there
     const fenceResult = await checkGeoFence(item)
     if (!fenceResult.ok) { presentGeoFenceFailure(fenceResult); return }
 
@@ -650,18 +647,26 @@ export default function ItemDetailScreen({ route, navigation }) {
         // points_awarded on the primary row — same difficulty * point_multiplier
         // formula as lib/useItems.js checkOff. Fan-out (lib/checkInFanOut.js)
         // deliberately leaves secondary rows at 0 to avoid double-counting.
-        const { data: liRow } = await supabase
-          .from('list_items')
-          .select('point_multiplier')
-          .eq('id', itemOnListId)
-          .maybeSingle()
-        const pointsAwarded = Math.round((item?.difficulty ?? 1) * (liRow?.point_multiplier ?? 1.0))
+        // No list context (standalone check-in) means no list-specific
+        // multiplier — defaults to 1.0.
+        let pointMultiplier = 1.0
+        if (itemOnListId) {
+          const { data: liRow } = await supabase
+            .from('list_items')
+            .select('point_multiplier')
+            .eq('id', itemOnListId)
+            .maybeSingle()
+          pointMultiplier = liRow?.point_multiplier ?? 1.0
+        }
+        const pointsAwarded = Math.round((item?.difficulty ?? 1) * pointMultiplier)
 
         // item_id is the canonical, always-available path to this check-in's
         // item — it survives list deletion (list_item_id goes null then).
+        // list_item_id is null here when this item isn't on any of the
+        // user's own lists — a standalone check-in, valid on its own.
         const { error } = await supabase
           .from('check_ins')
-          .insert({ user_id: userId, list_item_id: itemOnListId, item_id: item?.id ?? null, checkin_method: 'tap', points_awarded: pointsAwarded })
+          .insert({ user_id: userId, list_item_id: itemOnListId ?? null, item_id: item?.id ?? null, checkin_method: 'tap', points_awarded: pointsAwarded })
         if (error && error.code !== '23505') {
           setPostCheckoffData(null)
           throw error
@@ -1085,7 +1090,11 @@ export default function ItemDetailScreen({ route, navigation }) {
               }
 
               if (!dareListId) {
-                Alert.alert('Join a list first', 'Go to Home and join a seasonal list to start checking off items.')
+                // Dares need a shared list (DareScreen's own business rule —
+                // recipient must be a member of the same non-official list).
+                // This is a Dare-specific requirement, not a check-off one:
+                // checking the item off itself never requires a list.
+                Alert.alert('Add this to a shared list first', 'Dares need a list you and your friend both belong to.')
                 return
               }
 
@@ -1101,20 +1110,18 @@ export default function ItemDetailScreen({ route, navigation }) {
           <TouchableOpacity
             style={styles.quickBtn}
             onPress={async () => {
+              // Resolves to a joined-list context if one exists; null
+              // otherwise — a standalone photo check-in is valid on its
+              // own, no list required (product decision, 2026-08).
               let listItemId = item?.listItemId ?? itemOnListId
 
               if (!listItemId) {
                 listItemId = await getOrCreateListItemId(item?.id, userId)
               }
 
-              if (!listItemId) {
-                Alert.alert('Join a list first', 'Go to Home and join a seasonal list to start checking off items.')
-                return
-              }
-
               navigation.navigate('PhotoCheckIn', {
                 item: { ...item, is_secret: item.is_secret ?? item.isSecret ?? false },
-                listItemId,
+                listItemId: listItemId ?? null,
               })
             }}
           >

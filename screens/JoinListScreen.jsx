@@ -6,6 +6,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { recordReferral } from '../lib/referral'
+import { joinListAndBackfill } from '../lib/joinListCredit'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
@@ -77,7 +78,7 @@ export default function JoinListScreen({ route, navigation }) {
     // Load list details
     const { data: listData, error: listErr } = await supabase
       .from('lists')
-      .select('id, title, invite_code, is_public, starts_at, ends_at, cover_emoji, creator_id')
+      .select('id, title, invite_code, is_public, is_official, starts_at, ends_at, cover_emoji, creator_id')
       .eq('invite_code', invite_code)
       .single()
 
@@ -134,31 +135,28 @@ export default function JoinListScreen({ route, navigation }) {
     }
 
     if (!list) return
-    setJoining(true)
 
-    // Check if already a member first — upsert hits UPDATE path which has no RLS policy
-    const { data: existing } = await supabase
-      .from('list_members')
-      .select('id')
-      .eq('list_id', list.id)
-      .eq('user_id', userId)
-      .single()
-
-    if (existing) {
-      // Already a member — navigate directly to list
-      setJoining(false)
+    // Public lists (Seasonal/Themed/Destinations, is_official) have no
+    // membership at all — their progress is computed live by item_id, no
+    // join required or possible. This link can still resolve to one (they
+    // keep an invite_code column), so guard here rather than trust the
+    // caller never shares one. Just go straight to viewing it.
+    if (list.is_official) {
       goToList(list.id, list.title)
       return
     }
 
-    const { error: joinErr } = await supabase
-      .from('list_members')
-      .insert({ list_id: list.id, user_id: userId, invite_source: 'link' })
+    setJoining(true)
+
+    // Single canonical join entry point — inserts list_members (no-op if
+    // already a member) and gives retroactive credit for anything on this
+    // list already completed standalone or via another list.
+    const { joined, error } = await joinListAndBackfill(userId, list.id, 'link')
 
     setJoining(false)
 
-    if (joinErr) {
-      Alert.alert('Could not join', joinErr.message)
+    if (!joined) {
+      Alert.alert('Could not join', error ?? 'Something went wrong.')
       return
     }
 
@@ -276,7 +274,16 @@ export default function JoinListScreen({ route, navigation }) {
       </View>
 
       {/* CTA */}
-      {alreadyMember ? (
+      {list.is_official ? (
+        // Public list — no membership, nothing to join. Everyone sees it;
+        // progress is computed live from the user's own check-offs.
+        <TouchableOpacity
+          style={styles.joinBtn}
+          onPress={() => goToList(list.id, list.title)}
+        >
+          <Text style={styles.joinBtnText}>View list →</Text>
+        </TouchableOpacity>
+      ) : alreadyMember ? (
         <>
           <View style={styles.alreadyBadge}>
             <Text style={styles.alreadyText}>✓ You're already on this list</Text>

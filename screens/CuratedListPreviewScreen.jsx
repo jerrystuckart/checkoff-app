@@ -12,6 +12,7 @@ import { fetchCuratedListItems } from '../lib/useItems'
 import { useTheme } from '../lib/ThemeContext'
 import { proximitySort } from '../lib/proximity'
 import { getSessionDensityTier } from '../lib/densityTier'
+import { backfillListCreditOnJoin } from '../lib/joinListCredit'
 
 const AMBER  = '#F5A623'
 const NAVY   = '#1A1A2E'
@@ -339,6 +340,11 @@ export default function CuratedListPreviewScreen({ navigation, route }) {
           .insert(listItemRows)
         if (insertError) throw insertError
       }
+
+      // Retroactive credit — any of these items already completed
+      // standalone (or via another list) counts on this new private list
+      // immediately. Same as CreateListScreen's creation paths.
+      backfillListCreditOnJoin(user.id, newList.id).catch(() => {})
 
       // 5. Reset stack: Home → List, so back button goes Home and preview is gone
       navigation.dispatch(

@@ -100,11 +100,8 @@ export default function PhotoCheckInScreen({ route, navigation }) {
   }
 
   async function submitCheckIn() {
-    // Secret items from Nearby have no listItemId (no specific list context).
-    // The fan-out below handles marking all their active lists. Allow through.
-    const isSecretItem = item?.is_secret || item?.isSecret
-    if (!listItemId && !isSecretItem) {
-      Alert.alert('Missing item', 'No list item was provided for this check-in.')
+    if (!item?.id) {
+      Alert.alert('Missing item', 'No item was provided for this check-in.')
       return
     }
 
@@ -157,62 +154,72 @@ export default function PhotoCheckInScreen({ route, navigation }) {
         photoUrl = urlData?.publicUrl ?? null
       }
 
-      // For secret items coming from Nearby, listItemId is null (no specific list
-      // context). Skip the single insert — the fan-out below covers all lists.
-      let ciData = null
+      // points_awarded on the primary row — same difficulty * point_multiplier
+      // formula as lib/useItems.js checkOff. Fan-out (lib/checkInFanOut.js)
+      // deliberately leaves secondary rows at 0 to avoid double-counting.
+      // No list context (standalone check-in, e.g. from Nearby/secret-reveal
+      // with no specific list) means no list-specific multiplier — defaults
+      // to 1.0.
+      let pointMultiplier = 1.0
       if (listItemId) {
-        // points_awarded on the primary row — same difficulty * point_multiplier
-        // formula as lib/useItems.js checkOff. Fan-out (lib/checkInFanOut.js)
-        // deliberately leaves secondary rows at 0 to avoid double-counting.
         const { data: liRow } = await supabase
           .from('list_items')
           .select('point_multiplier')
           .eq('id', listItemId)
           .maybeSingle()
-        const pointsAwarded = Math.round((item?.difficulty ?? 1) * (liRow?.point_multiplier ?? 1.0))
-
-        // item_id is the canonical, always-available path to this check-in's
-        // item — it survives list deletion (list_item_id goes null then).
-        const payload = {
-          user_id: user.id,
-          list_item_id: listItemId,
-          item_id: item?.id ?? null,
-          checkin_method: photoUrl ? 'photo' : 'tap',
-          photo_url: photoUrl,
-          photo_width: photo?.width ?? null,
-          photo_height: photo?.height ?? null,
-          points_awarded: pointsAwarded,
-        }
-
-        const { data: insertData, error: ciErr } = await supabase
-          .from('check_ins')
-          .insert(payload)
-          .select()
-
-        if (ciErr) {
-          // Duplicate row = already checked in, treat as success
-          if (ciErr.code === '23505') {
-            await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
-            return
-          }
-
-          // List has ended — show friendly message and go back, no console error
-          if (ciErr.code === 'P0001' || ciErr.message?.includes('list has ended')) {
-            setPostCheckoffData(null)
-            Alert.alert(
-              'List is closed',
-              'This list has ended and check-ins are no longer accepted.',
-              [{ text: 'OK', onPress: () => navigation.goBack() }]
-            )
-            return
-          }
-
-          setPostCheckoffData(null)
-          throw new Error(`Check-in failed: ${ciErr.message}`)
-        }
-
-        ciData = insertData
+        pointMultiplier = liRow?.point_multiplier ?? 1.0
       }
+      const pointsAwarded = Math.round((item?.difficulty ?? 1) * pointMultiplier)
+
+      // item_id is the canonical, always-available path to this check-in's
+      // item — it survives list deletion (list_item_id goes null then).
+      // list_item_id is null here when there's no joined-list context — a
+      // standalone check-in, valid on its own. Always inserted (previously
+      // skipped entirely when listItemId was null, silently dropping the
+      // check-in for any listless item — the fan-out below only ever
+      // mirrors into lists the user has already joined, so it can't be
+      // relied on as the sole write).
+      const payload = {
+        user_id: user.id,
+        list_item_id: listItemId ?? null,
+        item_id: item.id,
+        checkin_method: photoUrl ? 'photo' : 'tap',
+        photo_url: photoUrl,
+        photo_width: photo?.width ?? null,
+        photo_height: photo?.height ?? null,
+        points_awarded: pointsAwarded,
+      }
+
+      const { data: insertData, error: ciErr } = await supabase
+        .from('check_ins')
+        .insert(payload)
+        .select()
+
+      let ciData = null
+
+      if (ciErr) {
+        // Duplicate row = already checked in, treat as success
+        if (ciErr.code === '23505') {
+          await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+          return
+        }
+
+        // List has ended — show friendly message and go back, no console error
+        if (ciErr.code === 'P0001' || ciErr.message?.includes('list has ended')) {
+          setPostCheckoffData(null)
+          Alert.alert(
+            'List is closed',
+            'This list has ended and check-ins are no longer accepted.',
+            [{ text: 'OK', onPress: () => navigation.goBack() }]
+          )
+          return
+        }
+
+        setPostCheckoffData(null)
+        throw new Error(`Check-in failed: ${ciErr.message}`)
+      }
+
+      ciData = insertData
 
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
 

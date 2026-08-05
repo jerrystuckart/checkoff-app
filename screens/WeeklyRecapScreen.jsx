@@ -71,6 +71,11 @@ export default function WeeklyRecapScreen({ navigation, route }) {
       const uid = user.id
 
       const [checkInsRes, streakRes] = await Promise.all([
+        // item_id (not list_items) is the canonical, always-available path
+        // to this check-in's item — a standalone check-in (list_item_id
+        // null) still needs to show up here. list_items is fetched too,
+        // but only for its list-specific point_multiplier/title — an
+        // `!inner` join on it would silently drop every standalone row.
         supabase
           .from('check_ins')
           .select(`
@@ -80,12 +85,8 @@ export default function WeeklyRecapScreen({ navigation, route }) {
             personal_place,
             personal_note,
             points_awarded,
-            list_items!inner(
-              point_multiplier,
-              list_id,
-              lists(title),
-              items!inner(id, body, difficulty)
-            )
+            items(id, body, difficulty),
+            list_items(point_multiplier, list_id, lists(title))
           `)
           .eq('user_id', uid)
           .gte('checked_at', weekStart.toISOString())
@@ -109,7 +110,7 @@ export default function WeeklyRecapScreen({ navigation, route }) {
       // difficulty for those rows undoes that safeguard.
       const flat = rawCheckIns.map(ci => {
         const li = ci.list_items
-        const item = li?.items
+        const item = ci.items
         const pts = ci.points_awarded ?? 0
         return {
           id:            ci.id,

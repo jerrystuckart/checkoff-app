@@ -174,8 +174,13 @@ export default function ListScreen({ route, navigation }) {
     checkOff,
   } = useItems(listId)
 
+  // Public lists (Seasonal/Themed/Destinations, is_official) have no
+  // leaderboard — progress there is the user's own item_id+window
+  // computation, nothing else. Leaderboards stay a private-list feature.
+  const isPublicList = !!listMeta?.is_official
+
   // Leaderboard entries used to compute user's rank for the summary screen
-  const { entries: lbEntries } = useLeaderboard(listId)
+  const { entries: lbEntries } = useLeaderboard(isPublicList ? null : listId)
   const [currentUserId, setCurrentUserId] = useState(null)
   const [userLifetimePts, setUserLifetimePts] = useState(0)
   const [userInsiderTier, setUserInsiderTier] = useState('Starter')
@@ -214,6 +219,7 @@ export default function ListScreen({ route, navigation }) {
       }
     })
   }, [])
+
 
   const [localItems, setLocalItems] = useState([])
   const [refreshingChecks, setRefreshingChecks] = useState(false)
@@ -417,7 +423,7 @@ export default function ListScreen({ route, navigation }) {
 
     const { data, error } = await supabase
       .from('lists')
-      .select('id, title, starts_at, ends_at, is_official, source_destination_list_id')
+      .select('id, title, starts_at, ends_at, is_official, is_public, source_destination_list_id')
       .eq('id', listId)
       .maybeSingle()
 
@@ -554,7 +560,6 @@ export default function ListScreen({ route, navigation }) {
     }
   }, [listId, items, listMeta])
 
-
   useFocusEffect(
     useCallback(() => {
       if (listId) {
@@ -633,6 +638,11 @@ export default function ListScreen({ route, navigation }) {
         topItem,
         streak:       myEntry?.streak ?? 0,
         isFullyDone:  fullyDone,
+        // Public lists have no leaderboard (lbEntries is always empty for
+        // them, see isPublicList above) — rank/crewSize above are
+        // meaningless placeholders for this case, ListSummaryScreen hides
+        // that stat entirely when this is true.
+        isPublicList,
       })
     }, fullyDone ? 1800 : 0)  // delay after last celebration, instant for ended
   }
@@ -1357,9 +1367,11 @@ export default function ListScreen({ route, navigation }) {
             ) : null}
           </View>
           <Text style={styles.endedBannerText}>
-            This list is now locked. You can still browse the items and view the final crew results.
+            {isPublicList
+              ? 'This list is now locked. Your check-offs stay exactly as they are.'
+              : 'This list is now locked. You can still browse the items and view the final crew results.'}
           </Text>
-          {listId && (
+          {listId && !isPublicList && (
             <TouchableOpacity
               style={styles.resultsBtn}
               onPress={() => navigation.navigate('Leaderboard', { listId, title })}
@@ -1436,7 +1448,7 @@ export default function ListScreen({ route, navigation }) {
           >
             <Text style={styles.searchDoneBtnText}>Done</Text>
           </TouchableOpacity>
-        ) : listId && (
+        ) : listId && !isPublicList && (
           <TouchableOpacity
             style={[styles.crewBtn, ended && styles.crewBtnEnded]}
             onPress={() => navigation.navigate('Leaderboard', { listId, title })}
