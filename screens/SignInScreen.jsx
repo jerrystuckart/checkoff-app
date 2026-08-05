@@ -31,7 +31,14 @@ const NAVY = '#1A1A2E'
 
 const GOOGLE_WEB_CLIENT_ID = '568643740204-t0ppem869quivad89n4v937d5kmra7ig.apps.googleusercontent.com'
 
-GoogleSignin.configure({ webClientId: GOOGLE_WEB_CLIENT_ID })
+// Android-only by design — iOS shows Apple Sign-In only and has no Google
+// config (no GoogleService-Info.plist / iosClientId). This module runs at
+// app-launch import time (App.jsx imports SignInScreen eagerly), so an
+// unguarded configure() call here fires on iOS before any button renders,
+// not just when the (already platform-gated) Google button would be tapped.
+if (Platform.OS === 'android') {
+  GoogleSignin.configure({ webClientId: GOOGLE_WEB_CLIENT_ID })
+}
 
 const DEV_EMAIL    = ''
 const DEV_PASSWORD = ''
