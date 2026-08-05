@@ -86,6 +86,9 @@ BEGIN
      AND NEW.checked_at     IS NOT DISTINCT FROM OLD.checked_at
      AND NEW.personal_place IS NOT DISTINCT FROM OLD.personal_place
      AND NEW.personal_note  IS NOT DISTINCT FROM OLD.personal_note
+     AND NEW.photo_url      IS NOT DISTINCT FROM OLD.photo_url
+     AND NEW.photo_width    IS NOT DISTINCT FROM OLD.photo_width
+     AND NEW.photo_height   IS NOT DISTINCT FROM OLD.photo_height
   THEN
     RETURN NEW;
   END IF;
