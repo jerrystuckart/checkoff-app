@@ -1378,10 +1378,10 @@ async function loadNearbyRail(userId) {
                   ].filter(Boolean).join(' · ')
                 : `${list.itemCount} item${list.itemCount === 1 ? '' : 's'}`
 
-              // hero_image_url isn't selected from `lists` yet (pending the
-              // schema/admin decision) — this is written defensively so it
-              // activates automatically once that column exists and is
-              // populated, with zero further code changes.
+              // hero_image_url is selected in the officialLists query above
+              // (themedLists is derived from it) and renders below whenever
+              // an admin has set one for this list; falls back to a solid
+              // accent card otherwise.
               const cardBody = (
                 <>
                   <View style={styles.themedCardTitleBlock}>

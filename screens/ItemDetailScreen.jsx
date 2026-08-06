@@ -371,6 +371,14 @@ export default function ItemDetailScreen({ route, navigation }) {
       return
     }
 
+    // Started here, before the list-item lookup and geofence check (both of
+    // which can take seconds on slow network/GPS — checkGeoFence alone races
+    // a 6s GPS timeout), so the button shows its spinner the instant the
+    // user taps instead of appearing frozen. Every early return between here
+    // and the try block below must reset it explicitly since none of them
+    // reach the try/finally's own reset.
+    setSaving(true)
+
     let listItemId = item?.listItemId
 
     if (!listItemId) {
@@ -386,25 +394,22 @@ export default function ItemDetailScreen({ route, navigation }) {
     // matches the existing rule at ListScreen.jsx:902. Only applies when
     // checking ON; unchecking an already-checked item needs no photo.
     if (item?.photoRequired && !checked) {
+      setSaving(false)
       navigation.navigate('PhotoCheckIn', { item, listItemId })
       return
     }
 
     const fenceResult = await checkGeoFence(item)
-    if (!fenceResult.ok) { presentGeoFenceFailure(fenceResult); return }
+    if (!fenceResult.ok) {
+      setSaving(false)
+      presentGeoFenceFailure(fenceResult)
+      return
+    }
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
-    setSaving(true)
 
     // Capture points before the insert so tier crossing can be detected after
     const pointsBeforePromise = getUserLifetimePoints(userId)
-
-    // Post-checkoff sheet fires on tap, not after the insert confirms, so
-    // its proximity/rank queries run in parallel with the write. Reconciled
-    // back to null below if the insert fails.
-    if (!checked) {
-      setPostCheckoffData({ itemId: item?.id, listItemId, userId, item })
-    }
 
     try {
       if (checked) {
@@ -451,14 +456,16 @@ export default function ItemDetailScreen({ route, navigation }) {
 
         if (error) {
           if (error.code === '23505') {
+            // Already checked off (race with another entry point) — a
+            // success-equivalent outcome, so the sheet still presents.
             setChecked(true)
+            setPostCheckoffData({ itemId: item?.id, listItemId, userId, item })
             return
           }
           // DB trigger raises P0001 when list hasn't started or has ended.
           // Catch here so the raw Postgres message (with padded month names)
           // doesn't reach the user.
           if (error.code === 'P0001') {
-            setPostCheckoffData(null)
             const msg = error.message ?? ''
             if (msg.includes('started')) {
               Alert.alert('List not active yet', 'This list hasn\'t started yet. Check back when it opens.')
@@ -470,7 +477,10 @@ export default function ItemDetailScreen({ route, navigation }) {
           throw error
         }
 
+        // Sheet only presents once the insert is confirmed — never before,
+        // so a slow/failed write can't show a false "Checked off" moment.
         setChecked(true)
+        setPostCheckoffData({ itemId: item?.id, listItemId, userId, item })
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
         supabase.functions.invoke('update-streak', {
           body: { user_id: userId },
@@ -614,23 +624,30 @@ export default function ItemDetailScreen({ route, navigation }) {
     // to attach an item to a personal list — that's an intentional choice,
     // never a precondition for "I've done this."
 
+    // Started here, before the geofence check (checkGeoFence races a 6s GPS
+    // timeout), so the button shows its spinner the instant the user taps
+    // instead of appearing frozen. Every early return between here and the
+    // try block below must reset it explicitly since neither reaches the
+    // try/finally's own reset.
+    setSaving(true)
+
     // Photo-required items go to PhotoCheckInScreen — no tap shortcut,
     // matches the existing rule at ListScreen.jsx:902. Only applies when
     // checking ON; unchecking an already-checked item needs no photo.
     if (item?.photoRequired && !checked) {
+      setSaving(false)
       navigation.navigate('PhotoCheckIn', { item, listItemId: itemOnListId ?? null })
       return
     }
 
     const fenceResult = await checkGeoFence(item)
-    if (!fenceResult.ok) { presentGeoFenceFailure(fenceResult); return }
+    if (!fenceResult.ok) {
+      setSaving(false)
+      presentGeoFenceFailure(fenceResult)
+      return
+    }
 
     await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium)
-    setSaving(true)
-
-    if (!checked) {
-      setPostCheckoffData({ itemId: item?.id, listItemId: itemOnListId, userId, item })
-    }
 
     try {
       if (checked) {
@@ -668,10 +685,14 @@ export default function ItemDetailScreen({ route, navigation }) {
           .from('check_ins')
           .insert({ user_id: userId, list_item_id: itemOnListId ?? null, item_id: item?.id ?? null, checkin_method: 'tap', points_awarded: pointsAwarded })
         if (error && error.code !== '23505') {
-          setPostCheckoffData(null)
           throw error
         }
+        // Sheet only presents once the insert is confirmed (or the row
+        // already existed, code 23505 — a success-equivalent outcome) —
+        // never before, so a slow/failed write can't show a false
+        // "Checked off" moment.
         setChecked(true)
+        setPostCheckoffData({ itemId: item?.id, listItemId: itemOnListId, userId, item })
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
         supabase.functions.invoke('update-streak', {
           body: { user_id: userId },

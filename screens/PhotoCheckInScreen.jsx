@@ -116,12 +116,6 @@ export default function PhotoCheckInScreen({ route, navigation }) {
       if (userErr) throw userErr
       if (!user) throw new Error('Sign in first')
 
-      // Post-checkoff sheet fires as soon as we know who's checking in,
-      // rather than waiting for the upload/insert to confirm, so its
-      // proximity/rank queries run in parallel with the write. Reconciled
-      // back to null below if the check-in ultimately fails.
-      setPostCheckoffData({ itemId: item?.id, listItemId, userId: user.id, item })
-
       let photoUrl = null
 
       if (photo?.uri) {
@@ -143,7 +137,6 @@ export default function PhotoCheckInScreen({ route, navigation }) {
           })
 
         if (uploadErr) {
-          setPostCheckoffData(null)
           throw new Error(`Upload failed: ${uploadErr.message}`)
         }
 
@@ -198,15 +191,16 @@ export default function PhotoCheckInScreen({ route, navigation }) {
       let ciData = null
 
       if (ciErr) {
-        // Duplicate row = already checked in, treat as success
+        // Duplicate row = already checked in — a success-equivalent
+        // outcome, so the sheet still presents.
         if (ciErr.code === '23505') {
+          setPostCheckoffData({ itemId: item?.id, listItemId, userId: user.id, item })
           await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
           return
         }
 
         // List has ended — show friendly message and go back, no console error
         if (ciErr.code === 'P0001' || ciErr.message?.includes('list has ended')) {
-          setPostCheckoffData(null)
           Alert.alert(
             'List is closed',
             'This list has ended and check-ins are no longer accepted.',
@@ -215,12 +209,15 @@ export default function PhotoCheckInScreen({ route, navigation }) {
           return
         }
 
-        setPostCheckoffData(null)
         throw new Error(`Check-in failed: ${ciErr.message}`)
       }
 
       ciData = insertData
 
+      // Sheet only presents once the insert is confirmed — never before
+      // (not even while the photo is still uploading), so a slow/failed
+      // check-in can't show a false "Checked off" moment.
+      setPostCheckoffData({ itemId: item?.id, listItemId, userId: user.id, item })
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
 
       // Mirror this check-off into every other active list containing the

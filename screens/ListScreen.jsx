@@ -140,10 +140,11 @@ export default function ListScreen({ route, navigation }) {
   // Measured (not assumed) distance from the true top of the screen to the
   // KeyboardAvoidingView below. headerHeight is only a correct proxy for this
   // when the nav header is opaque and reserves its own space — but this screen
-  // switches to headerTransparent when heroImage is set (see effect below),
-  // at which point the header floats over the content and reserves no space,
-  // so the real offset is ~0. Measuring it directly keeps this correct in both
-  // cases (and any future header change) instead of hardcoding either value.
+  // switches to headerTransparent when a hero image is set (see effect
+  // below), at which point the header floats over the content and reserves
+  // no space, so the real offset is ~0. Measuring it directly keeps this
+  // correct in both cases (and any future header change) instead of
+  // hardcoding either value.
   const [kbOffset, setKbOffset] = useState(headerHeight)
   const kbMeasureRef = useRef(null)
   const measureKbOffset = useCallback(() => {
@@ -179,6 +180,16 @@ export default function ListScreen({ route, navigation }) {
   // computation, nothing else. Leaderboards stay a private-list feature.
   const isPublicList = !!listMeta?.is_official
 
+  // heroImage (route param) is only ever passed by the HomeScreen seasonal
+  // hero card today, and even there it's a random metro-level photo, not
+  // this specific list's own image. listMeta.hero_image_url is the actual
+  // per-list column (settable today via the admin tool for any is_official
+  // list — Seasonal or Themed) — fetched above, but previously never read
+  // anywhere in this screen. The param wins when present so the seasonal
+  // card's existing behavior is unchanged; every other entry point now
+  // falls back to the list's own image once loadListMeta resolves.
+  const displayHeroImage = heroImage ?? listMeta?.hero_image_url ?? null
+
   // Leaderboard entries used to compute user's rank for the summary screen
   const { entries: lbEntries } = useLeaderboard(isPublicList ? null : listId)
   const [currentUserId, setCurrentUserId] = useState(null)
@@ -193,16 +204,19 @@ export default function ListScreen({ route, navigation }) {
     if (listId) trackEvent('list_view', { listId })
   }, [listId])
 
-  // Transparent nav bar when hero image is present so photo fills behind the header
+  // Transparent nav bar when a hero image is present so photo fills behind
+  // the header. displayHeroImage (not the raw heroImage param) so this also
+  // fires once listMeta's own hero_image_url resolves, not just for the
+  // param-driven seasonal-card case.
   useEffect(() => {
-    if (heroImage) {
+    if (displayHeroImage) {
       navigation.setOptions({
         headerTransparent: true,
         headerTintColor: '#FFFFFF',
         headerTitleStyle: { color: '#FFFFFF', fontWeight: '800' },
       })
     }
-  }, [heroImage, navigation])
+  }, [displayHeroImage, navigation])
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -423,7 +437,7 @@ export default function ListScreen({ route, navigation }) {
 
     const { data, error } = await supabase
       .from('lists')
-      .select('id, title, starts_at, ends_at, is_official, is_public, source_destination_list_id')
+      .select('id, title, starts_at, ends_at, is_official, is_public, source_destination_list_id, hero_image_url')
       .eq('id', listId)
       .maybeSingle()
 
@@ -1344,10 +1358,10 @@ export default function ListScreen({ route, navigation }) {
   }, [navigation, route.params, listId, ended, destListInactive, handleCheckOff, userLifetimePts, userInsiderTier, sortMode, nonBonusCheckedCount])
 
   const headerEl = useMemo(() => (
-    <View style={[styles.headerBlock, heroImage && { paddingTop: headerHeight }]}>
-      {heroImage ? (
+    <View style={[styles.headerBlock, displayHeroImage && { paddingTop: headerHeight }]}>
+      {displayHeroImage ? (
         <ImageBackground
-          source={{ uri: heroImage }}
+          source={{ uri: displayHeroImage }}
           style={[styles.headerHeroImage, { height: headerHeight + 180 }]}
           imageStyle={{ borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }}
         >
@@ -1533,7 +1547,7 @@ export default function ListScreen({ route, navigation }) {
     filtered.length,
     navigation,
     tick,
-    heroImage,
+    displayHeroImage,
     headerHeight,
     hubDestinationId,
     destListInactive,

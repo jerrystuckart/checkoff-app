@@ -270,7 +270,7 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
 
           const { data: candidates } = await supabase
             .from('items')
-            .select('id, body, maps_lat, maps_lng, difficulty, checkin_type')
+            .select('id, body, maps_lat, maps_lng, difficulty, checkin_type, neighborhood_id, is_universal')
             .eq('is_active', true)
             .eq('is_approved', true)
             .eq('is_universal', false)
