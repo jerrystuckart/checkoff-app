@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react'
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import {
   View,
   Text,
@@ -204,6 +204,19 @@ export default function ItemDetailScreen({ route, navigation }) {
     loadUser()
   }, [])
 
+  // Always holds the CURRENT item's id, kept in sync by the effect just
+  // below. Read by loadCheckedState/refreshItemListContext to detect when
+  // their own in-flight invocation has been superseded by a newer item —
+  // see the comment on refreshItemListContext for why this is needed.
+  // Declared before useFocusEffect below so its own updating effect runs
+  // first within the same commit whenever item?.id changes, guaranteeing
+  // the ref already reflects the new item by the time useFocusEffect's
+  // wrapped effect re-fires and calls into either guarded function.
+  const latestItemIdRef = useRef(item?.id)
+  useEffect(() => {
+    latestItemIdRef.current = item?.id
+  }, [item?.id])
+
   // Centralized secret-reveal guard — the ONLY place this decision lives.
   // Previously duplicated as a caller-side check in ListScreen.jsx and
   // DiscoverScreen.jsx (removed); any future entry point gets this for
@@ -304,12 +317,21 @@ export default function ItemDetailScreen({ route, navigation }) {
   // item's list — see the "+ Add to a list" / dare / photo-quick-action
   // call sites below, all of which read these same three values.
   //
-  // Reset happens synchronously, before any await, so a check-off that
-  // fires in the gap between an item change and this function's own
-  // lookup resolving can never read the previous item's stale value — at
-  // worst it inserts standalone (list_item_id: null), which is always a
-  // safe, independent row, never a collision with the previous item's row.
+  // This is called from two places: the useFocusEffect below (fresh,
+  // correctly re-fires per item) AND loadUser()'s own mount-time call
+  // (closured to whichever item was on screen when loadUser() itself was
+  // invoked). loadUser() has several sequential awaited steps before it
+  // ever reaches this call, so on slow network that ORIGINAL, stale
+  // invocation can resolve well after a chained check-off has moved the
+  // screen on to a newer item — and without a guard, it would silently
+  // overwrite that newer item's already-correct state with the old item's.
+  // isStale() re-checks currentItemId against the live ref before every
+  // write (not just once at the top) so a race that develops partway
+  // through this function's own awaits is still caught.
   async function refreshItemListContext(uid, currentItemId, listsOverride = null) {
+    const isStale = () => currentItemId !== latestItemIdRef.current
+    if (isStale()) return
+
     setItemOnListId(null)
     setItemOnListIds({})
 
@@ -323,6 +345,7 @@ export default function ItemDetailScreen({ route, navigation }) {
         .select('invite_code')
         .eq('id', listId)
         .single()
+      if (isStale()) return
       setListInviteCode(listData?.invite_code ?? null)
       return
     }
@@ -344,6 +367,7 @@ export default function ItemDetailScreen({ route, navigation }) {
       .eq('item_id', currentItemId)
       .in('list_id', listIds)
 
+    if (isStale()) return
     if (existing?.length) {
       // Build map of listId → listItemId for greying out in picker
       const map = {}
@@ -355,12 +379,22 @@ export default function ItemDetailScreen({ route, navigation }) {
   }
 
   async function loadCheckedState(passedUid = null) {
+    // Captured up front: this invocation's own item, fixed for its
+    // lifetime regardless of what the screen moves on to later. loadUser()
+    // calls this closured to whichever item was on screen at mount, and
+    // can still be awaiting its own earlier steps (auth, profile,
+    // list_members) well after a chained check-off has moved the screen on
+    // to a different item — on slow network, easily outliving that item.
+    // Checked again below, right before the write, so a stale resolution
+    // can never overwrite a newer item's already-correct `checked` state.
+    const startItemId = item?.id
+
     let uid = passedUid ?? userId
     if (!uid) {
       const { data: authData } = await supabase.auth.getUser()
       uid = authData?.user?.id ?? null
     }
-    if (!uid || !item?.id) return
+    if (!uid || !startItemId) return
 
     try {
       // Keyed by item_id, not list_item_id — a check-off made from a
@@ -375,7 +409,7 @@ export default function ItemDetailScreen({ route, navigation }) {
           .from('check_ins')
           .select('checked_at')
           .eq('user_id', uid)
-          .eq('item_id', item.id),
+          .eq('item_id', startItemId),
         listId
           ? supabase.from('lists').select('starts_at, ends_at').eq('id', listId).maybeSingle()
               .then(({ data: l }) => ({ starts_at: l?.starts_at ?? null, ends_at: l?.ends_at ?? null }))
@@ -383,6 +417,7 @@ export default function ItemDetailScreen({ route, navigation }) {
       ])
 
       if (error) throw error
+      if (startItemId !== latestItemIdRef.current) return
 
       const inWindow = (data ?? []).some(ci =>
         isWithinWindow(ci.checked_at, windowDates.starts_at, windowDates.ends_at)
