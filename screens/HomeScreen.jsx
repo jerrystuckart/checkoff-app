@@ -303,6 +303,62 @@ export default function HomeScreen({ navigation }) {
 
     setOfficialLists(offLists ?? [])
 
+    // Seasonal card "N of M" progress — folded into this single reload
+    // path (rather than a separate effect keyed on currentOnHome's own
+    // id/starts_at/ends_at, which never change on a plain check-off, so
+    // that effect never refired on return to Home even though the count
+    // itself had changed) so it refreshes on every loadForMetro call —
+    // mount, metro switch, and every focus, via the
+    // navigation.addListener('focus', ...) listener below that already
+    // calls loadForMetro on every return to Home. Uses offLists (the
+    // just-fetched array) directly rather than the officialLists state
+    // var, which hasn't committed yet at this point in the function.
+    // Mirrors the bucketing rule at activeOfficial/endedOfficial below
+    // (kept separate/inlined rather than shared, since render-time also
+    // needs upcomingOfficial/pastOfficialLists from that same pass and
+    // this is the only part of it this fetch needs).
+    {
+      const freshOfficial = offLists ?? []
+      const freshActive = freshOfficial
+        .filter(l => !isEnded(l.ends_at) && (!l.starts_at || new Date(`${l.starts_at}T00:00:00`) <= new Date()))
+        .sort((a, b) => new Date(a.ends_at || '9999-12-31') - new Date(b.ends_at || '9999-12-31'))
+      const freshEnded = freshOfficial
+        .filter(l => isEnded(l.ends_at))
+        .sort((a, b) => new Date(b.ends_at) - new Date(a.ends_at))
+      const freshCurrentOnHome = freshActive[0] ?? freshEnded[0] ?? null
+
+      if (!freshCurrentOnHome?.id || isEnded(freshCurrentOnHome?.ends_at)) {
+        setSeasonalCounts({ checked: 0, total: 0 })
+      } else {
+        // Bonus Drops are excluded from this count entirely — a 30-item
+        // list with 2 drops always reads "X of 30", never "of 31"/"of 32".
+        const { data: liRows } = await supabase
+          .from('list_items')
+          .select('item_id, is_bonus_drop')
+          .eq('list_id', freshCurrentOnHome.id)
+        const nonDropRows = (liRows ?? []).filter(li => !li.is_bonus_drop)
+        const total = nonDropRows.length
+        let checked = 0
+        if (userId && total > 0) {
+          const itemIds = nonDropRows.map(li => li.item_id).filter(Boolean)
+          // Season-scoped to THIS list's own window — without this,
+          // Fall's card would count every item already checked off
+          // during Summer, inflating "N of M" past the list's own
+          // item count.
+          const { data: checkins } = await supabase
+            .from('check_ins')
+            .select('item_id, checked_at')
+            .eq('user_id', userId)
+            .in('item_id', itemIds)
+          const inWindow = (checkins ?? []).filter(c =>
+            isWithinWindow(c.checked_at, freshCurrentOnHome.starts_at, freshCurrentOnHome.ends_at)
+          )
+          checked = new Set(inWindow.map(c => c.item_id)).size
+        }
+        setSeasonalCounts({ checked, total })
+      }
+    }
+
     const { data: curatedData } = await fetchCuratedLists(slug)
     setCuratedGroups((curatedData ?? []).slice(0, 6))
 
@@ -783,44 +839,14 @@ async function loadNearbyRail(userId) {
   const endedLists      = lists.filter(l => isEnded(l.ends_at))
   const totalPastCount  = endedLists.length + pastOfficialLists.length
 
-  // Seasonal card progress ("N of M") — new lightweight count query; Home
-  // has never fetched item-level data before B1. Skipped for an
-  // already-ended currentOnHome since that variant renders via the
-  // separate endedOfficialCard branch, not the progress/CTA hero card.
-  useEffect(() => {
-    const listId = currentOnHome?.id
-    if (!listId || isEnded(currentOnHome?.ends_at)) { setSeasonalCounts({ checked: 0, total: 0 }); return }
-    let cancelled = false
-    ;(async () => {
-      // Bonus Drops are excluded from this count entirely — a 30-item list
-      // with 2 drops always reads "X of 30", never "of 31"/"of 32".
-      const { data: liRows } = await supabase
-        .from('list_items')
-        .select('item_id, is_bonus_drop')
-        .eq('list_id', listId)
-      const nonDropRows = (liRows ?? []).filter(li => !li.is_bonus_drop)
-      const total = nonDropRows.length
-      let checked = 0
-      if (user?.id && total > 0) {
-        const itemIds = nonDropRows.map(li => li.item_id).filter(Boolean)
-        // Season-scoped to THIS list's own window (currentOnHome.starts_at/
-        // ends_at, already fetched above) — without this, Fall's card would
-        // count every item already checked off during Summer, inflating "N
-        // of M" and potentially exceeding the list's own item count.
-        const { data: checkins } = await supabase
-          .from('check_ins')
-          .select('item_id, checked_at')
-          .eq('user_id', user.id)
-          .in('item_id', itemIds)
-        const inWindow = (checkins ?? []).filter(c =>
-          isWithinWindow(c.checked_at, currentOnHome?.starts_at, currentOnHome?.ends_at)
-        )
-        checked = new Set(inWindow.map(c => c.item_id)).size
-      }
-      if (!cancelled) setSeasonalCounts({ checked, total })
-    })()
-    return () => { cancelled = true }
-  }, [currentOnHome?.id, currentOnHome?.starts_at, currentOnHome?.ends_at, user?.id])
+  // Seasonal card progress ("N of M") — computed inside loadForMetro now
+  // (see the fold-in right after setOfficialLists above), not here. A
+  // separate effect keyed on currentOnHome's own id/starts_at/ends_at
+  // never re-fires on a plain check-off (those values don't change), so
+  // the count went stale on every return to Home despite loadForMetro
+  // itself re-running via the focus listener below. Folding the fetch
+  // into that one existing reload path means it now refreshes wherever
+  // loadForMetro already does, with nothing new to keep in sync.
 
   // Seasonal card rank — reuses useLeaderboard as-is (not modifying it, per
   // instruction). NOTE: this mounts useLeaderboard's Realtime check_ins
