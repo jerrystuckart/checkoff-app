@@ -19,6 +19,7 @@ import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
 import { fanOutCheckIn } from '../lib/checkInFanOut'
 import { checkGeoFence, presentGeoFenceFailure } from '../lib/geoFence'
 import { updateUserLifetimePoints } from '../lib/points'
+import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
 
 const AMBER = '#F5A623'
@@ -172,6 +173,36 @@ export default function PhotoCheckInScreen({ route, navigation }) {
       // check-in for any listless item — the fan-out below only ever
       // mirrors into lists the user has already joined, so it can't be
       // relied on as the sole write).
+      //
+      // Standalone check-ins are never season-scoped at the DB level (the
+      // lifetime uniqueness constraint that used to enforce "once ever"
+      // was dropped — see 20260806_drop_standalone_lifetime_unique.sql —
+      // specifically so a prior-season check-in on this same item_id
+      // doesn't block a new one). That means nothing left in the database
+      // stops a same-season duplicate either, so this app-layer check
+      // takes over: same isWithinWindow/getCurrentSeasonWindow logic the
+      // UI's own checked-state already uses elsewhere, so they can never
+      // disagree. Only guards the standalone path — list-attached
+      // check-ins are already correctly scoped by their own list's fresh
+      // list_item_id each season, no guard needed there.
+      if (!listItemId) {
+        const [{ data: priorCheckins }, season] = await Promise.all([
+          supabase.from('check_ins').select('checked_at').eq('user_id', user.id).eq('item_id', item.id),
+          getCurrentSeasonWindow(),
+        ])
+        const alreadyThisSeason = (priorCheckins ?? []).some(ci =>
+          isWithinWindow(ci.checked_at, season.starts_at, season.ends_at)
+        )
+        if (alreadyThisSeason) {
+          Alert.alert(
+            'Already checked off',
+            "You've already checked this off this season.",
+            [{ text: 'OK', onPress: () => navigation.goBack() }]
+          )
+          return
+        }
+      }
+
       const payload = {
         user_id: user.id,
         list_item_id: listItemId ?? null,
@@ -193,17 +224,22 @@ export default function PhotoCheckInScreen({ route, navigation }) {
       if (ciErr) {
         if (ciErr.code === '23505') {
           // A unique-constraint hit alone doesn't say WHICH row it
-          // collided with — only that a check-in for THIS item, by this
-          // user, is confirmed to exist is actually a success-equivalent
-          // outcome. Any other collision must never celebrate a write
-          // that didn't happen for this item.
-          const { data: existingCheckIn } = await supabase
-            .from('check_ins')
-            .select('id')
-            .eq('user_id', user.id)
-            .eq('item_id', item?.id ?? null)
-            .maybeSingle()
-          if (existingCheckIn) {
+          // collided with — only that a check-in matching the EXACT slot
+          // we just tried to write (list_item_id if we sent one, otherwise
+          // this exact item_id with list_item_id IS NULL) is confirmed to
+          // exist is a success-equivalent outcome. Scoped to the specific
+          // attempted slot rather than a bare item_id match, and returns
+          // an array (not .maybeSingle()) so a fanned-out item with
+          // several check_ins rows sharing this item_id can't be misread
+          // as "no match" via a multi-row PGRST116 error.
+          const verifyQuery = supabase.from('check_ins').select('id').eq('user_id', user.id)
+          if (listItemId) {
+            verifyQuery.eq('list_item_id', listItemId)
+          } else {
+            verifyQuery.eq('item_id', item?.id ?? null).is('list_item_id', null)
+          }
+          const { data: existingRows } = await verifyQuery
+          if (existingRows?.length) {
             setPostCheckoffData({ itemId: item?.id, listItemId, userId: user.id, item })
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
           } else {

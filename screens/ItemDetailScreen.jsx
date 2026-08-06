@@ -521,6 +521,32 @@ export default function ItemDetailScreen({ route, navigation }) {
         // item — it survives list deletion (list_item_id goes null then).
         // list_item_id itself is null here when the item has no joined-list
         // context — a standalone check-in, valid on its own.
+        //
+        // Standalone check-ins are never season-scoped at the DB level (the
+        // lifetime uniqueness constraint that used to enforce "once ever"
+        // was dropped — see 20260806_drop_standalone_lifetime_unique.sql —
+        // specifically so a prior-season check-in on this same item_id
+        // doesn't block a new one). That means nothing left in the database
+        // stops a same-season duplicate either, so this app-layer check
+        // takes over: same isWithinWindow/getCurrentSeasonWindow logic the
+        // UI's own checked-state already uses, so the two can never
+        // disagree. Only guards the standalone path — list-attached
+        // check-ins are already correctly scoped by their own list's fresh
+        // list_item_id each season, no guard needed there.
+        if (!listItemId) {
+          const [{ data: priorCheckins }, season] = await Promise.all([
+            supabase.from('check_ins').select('checked_at').eq('user_id', userId).eq('item_id', item?.id ?? null),
+            getCurrentSeasonWindow(),
+          ])
+          const alreadyThisSeason = (priorCheckins ?? []).some(ci =>
+            isWithinWindow(ci.checked_at, season.starts_at, season.ends_at)
+          )
+          if (alreadyThisSeason) {
+            setChecked(true)
+            return
+          }
+        }
+
         const { error } = await supabase
           .from('check_ins')
           .insert({
@@ -534,18 +560,23 @@ export default function ItemDetailScreen({ route, navigation }) {
         if (error) {
           if (error.code === '23505') {
             // A unique-constraint hit alone doesn't say WHICH row it
-            // collided with — only that a check-in for THIS item, by this
-            // user, is confirmed to exist is actually a success-equivalent
-            // outcome. Any other collision (e.g. a stale list_item_id
-            // reused from a previous item on this screen) must never
-            // celebrate a write that didn't happen for this item.
-            const { data: existingCheckIn } = await supabase
-              .from('check_ins')
-              .select('id')
-              .eq('user_id', userId)
-              .eq('item_id', item?.id ?? null)
-              .maybeSingle()
-            if (existingCheckIn) {
+            // collided with — only that a check-in matching the EXACT slot
+            // we just tried to write (list_item_id if we sent one,
+            // otherwise this exact item_id with list_item_id IS NULL) is
+            // confirmed to exist is a success-equivalent outcome. Scoped
+            // to the specific attempted slot rather than a bare item_id
+            // match, and returns an array (not .maybeSingle()) so a
+            // fanned-out item with several check_ins rows sharing this
+            // item_id can't be misread as "no match" via a multi-row
+            // PGRST116 error.
+            const verifyQuery = supabase.from('check_ins').select('id').eq('user_id', userId)
+            if (listItemId) {
+              verifyQuery.eq('list_item_id', listItemId)
+            } else {
+              verifyQuery.eq('item_id', item?.id ?? null).is('list_item_id', null)
+            }
+            const { data: existingRows } = await verifyQuery
+            if (existingRows?.length) {
               setChecked(true)
               setPostCheckoffData({ itemId: item?.id, listItemId, userId, item })
             } else {
@@ -772,24 +803,54 @@ export default function ItemDetailScreen({ route, navigation }) {
         // item — it survives list deletion (list_item_id goes null then).
         // list_item_id is null here when this item isn't on any of the
         // user's own lists — a standalone check-in, valid on its own.
+        //
+        // Standalone check-ins are never season-scoped at the DB level (the
+        // lifetime uniqueness constraint that used to enforce "once ever"
+        // was dropped — see 20260806_drop_standalone_lifetime_unique.sql —
+        // specifically so a prior-season check-in on this same item_id
+        // doesn't block a new one). That means nothing left in the database
+        // stops a same-season duplicate either, so this app-layer check
+        // takes over: same isWithinWindow/getCurrentSeasonWindow logic the
+        // UI's own checked-state already uses, so the two can never
+        // disagree. Only guards the standalone path — list-attached
+        // check-ins are already correctly scoped by their own list's fresh
+        // list_item_id each season, no guard needed there.
+        if (!itemOnListId) {
+          const [{ data: priorCheckins }, season] = await Promise.all([
+            supabase.from('check_ins').select('checked_at').eq('user_id', userId).eq('item_id', item?.id ?? null),
+            getCurrentSeasonWindow(),
+          ])
+          const alreadyThisSeason = (priorCheckins ?? []).some(ci =>
+            isWithinWindow(ci.checked_at, season.starts_at, season.ends_at)
+          )
+          if (alreadyThisSeason) {
+            setChecked(true)
+            return
+          }
+        }
+
         const { error } = await supabase
           .from('check_ins')
           .insert({ user_id: userId, list_item_id: itemOnListId ?? null, item_id: item?.id ?? null, checkin_method: 'tap', points_awarded: pointsAwarded })
         if (error) {
           if (error.code !== '23505') throw error
           // A unique-constraint hit alone doesn't say WHICH row it
-          // collided with — only that a check-in for THIS item, by this
-          // user, is confirmed to exist is actually a success-equivalent
-          // outcome. Any other collision (e.g. a stale list_item_id
-          // reused from a previous item on this screen) must never
-          // celebrate a write that didn't happen for this item.
-          const { data: existingCheckIn } = await supabase
-            .from('check_ins')
-            .select('id')
-            .eq('user_id', userId)
-            .eq('item_id', item?.id ?? null)
-            .maybeSingle()
-          if (!existingCheckIn) {
+          // collided with — only that a check-in matching the EXACT slot
+          // we just tried to write (list_item_id if we sent one, otherwise
+          // this exact item_id with list_item_id IS NULL) is confirmed to
+          // exist is a success-equivalent outcome. Scoped to the specific
+          // attempted slot rather than a bare item_id match, and returns an
+          // array (not .maybeSingle()) so a fanned-out item with several
+          // check_ins rows sharing this item_id can't be misread as "no
+          // match" via a multi-row PGRST116 error.
+          const verifyQuery = supabase.from('check_ins').select('id').eq('user_id', userId)
+          if (itemOnListId) {
+            verifyQuery.eq('list_item_id', itemOnListId)
+          } else {
+            verifyQuery.eq('item_id', item?.id ?? null).is('list_item_id', null)
+          }
+          const { data: existingRows } = await verifyQuery
+          if (!existingRows?.length) {
             Alert.alert('Could not check off', 'Something went wrong — please try again.')
             return
           }

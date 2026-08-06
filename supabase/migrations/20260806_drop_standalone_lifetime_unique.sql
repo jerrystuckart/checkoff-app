@@ -1,0 +1,50 @@
+-- ============================================================
+-- Drop the standalone check-ins lifetime uniqueness constraint
+-- 2026-08-06
+--
+-- Root cause: check_ins_standalone_user_item_unique (added in
+-- 20260804_standalone_checkins.sql) enforces "at most one standalone
+-- check-in per (user_id, item_id), for all time." That was the right
+-- shape to close the point-farming gap that migration was written for,
+-- but the app's actual model is seasonal: the same item is meant to be
+-- checkable again each new season, and every check-in is a permanent,
+-- immutable, timestamped fact — the same item checked in Summer and
+-- again in Fall must produce two distinct rows, not collide.
+--
+-- Season membership is deliberately never stored on the row — it's
+-- computed at read time from checked_at vs. the current season window
+-- (lib/seasonWindow.js), exactly as list-attached check-ins already
+-- work (each season's list gets fresh list_items rows, so a re-check in
+-- a new season's list was never blocked by the (user_id, list_item_id)
+-- constraint — only the standalone path had this problem).
+--
+-- This also isn't limited to check-ins that started out standalone:
+-- check_ins_list_item_id_fkey is ON DELETE SET NULL (20260716), so any
+-- list-attached check-in whose list_items row is later removed — by an
+-- admin editing an official list, or by a user deleting a personal list
+-- they created, both routine actions — collapses into this same
+-- standalone bucket over time. A lifetime constraint on that bucket
+-- would eventually block a recheck for those items too, not just ones
+-- that were always standalone.
+--
+-- Same-season duplicate prevention and the double-tap race move to the
+-- app layer (screens/ItemDetailScreen.jsx, screens/PhotoCheckInScreen.jsx)
+-- using the same isWithinWindow/getCurrentSeasonWindow logic the UI's
+-- own checked-state already uses, so the guard and the UI can never
+-- disagree. This is deliberately best-effort, not airtight: counts and
+-- lifetime points already dedupe by item_id at read time, and points are
+-- low-stakes by design, so a rare true-simultaneous duplicate standalone
+-- row is an accepted tradeoff for keeping every check-in permanent and
+-- season membership out of the schema.
+--
+-- No data is touched — this only drops an index. Reversible by
+-- re-running the CREATE UNIQUE INDEX statement from 20260804 if needed
+-- (though re-adding it would immediately reintroduce this bug for any
+-- item already checked off in a prior season).
+--
+-- Nothing else references this index by name — it exists solely as a
+-- uniqueness guard, not a foreign key target, not used in any other
+-- constraint, RPC, or view.
+-- ============================================================
+
+DROP INDEX IF EXISTS check_ins_standalone_user_item_unique;
