@@ -20,6 +20,7 @@ import { fanOutCheckIn } from '../lib/checkInFanOut'
 import { checkGeoFence, presentGeoFenceFailure } from '../lib/geoFence'
 import { updateUserLifetimePoints } from '../lib/points'
 import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
+import { resolveCheckOffAttachment } from '../lib/checkOffAttachment'
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
 
 const AMBER = '#F5A623'
@@ -35,7 +36,7 @@ const NAVY = '#1A1A2E'
  * to ItemDetail with checkInCompleted: true param.
  */
 export default function PhotoCheckInScreen({ route, navigation }) {
-  const { item, listItemId } = route?.params ?? {}
+  const { item, listItemId: candidateListItemId } = route?.params ?? {}
   const insets = useSafeAreaInsets()
   const photoRequired     = item?.photoRequired    ?? false
 
@@ -151,18 +152,14 @@ export default function PhotoCheckInScreen({ route, navigation }) {
       // points_awarded on the primary row — same difficulty * point_multiplier
       // formula as lib/useItems.js checkOff. Fan-out (lib/checkInFanOut.js)
       // deliberately leaves secondary rows at 0 to avoid double-counting.
-      // No list context (standalone check-in, e.g. from Nearby/secret-reveal
-      // with no specific list) means no list-specific multiplier — defaults
-      // to 1.0.
-      let pointMultiplier = 1.0
-      if (listItemId) {
-        const { data: liRow } = await supabase
-          .from('list_items')
-          .select('point_multiplier')
-          .eq('id', listItemId)
-          .maybeSingle()
-        pointMultiplier = liRow?.point_multiplier ?? 1.0
-      }
+      //
+      // resolveCheckOffAttachment decides whether to actually use
+      // candidateListItemId or fall back to standalone — a personal
+      // (non-official) list's list_item_id never changes across seasons,
+      // so reusing it here would collide with
+      // check_ins_user_id_list_item_id_key the moment this item was
+      // already checked off in a prior season. See lib/checkOffAttachment.js.
+      const { listItemId, pointMultiplier } = await resolveCheckOffAttachment(candidateListItemId)
       const pointsAwarded = Math.round((item?.difficulty ?? 1) * pointMultiplier)
 
       // item_id is the canonical, always-available path to this check-in's

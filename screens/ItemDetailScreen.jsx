@@ -27,6 +27,7 @@ import { useTheme } from '../lib/ThemeContext'
 import { trackEvent } from '../lib/trackEvent'
 import { fanOutCheckIn } from '../lib/checkInFanOut'
 import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
+import { resolveCheckOffAttachment } from '../lib/checkOffAttachment'
 import { checkGeoFence, presentGeoFenceFailure } from '../lib/geoFence'
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
 
@@ -456,23 +457,25 @@ export default function ItemDetailScreen({ route, navigation }) {
     // reach the try/finally's own reset.
     setSaving(true)
 
-    let listItemId = item?.listItemId
+    let candidateListItemId = item?.listItemId
 
-    if (!listItemId) {
+    if (!candidateListItemId) {
       // Resolves to a joined-list context if one exists; null otherwise.
       // A null result is NOT an error — item_id is the check-in's source
       // of truth, and list membership is never required to complete it
       // (product decision, 2026-08). The insert below falls back to a
       // standalone row (list_item_id: null) in that case.
-      listItemId = await getOrCreateListItemId(item?.id, userId)
+      candidateListItemId = await getOrCreateListItemId(item?.id, userId)
     }
 
     // Photo-required items go to PhotoCheckInScreen — no tap shortcut,
     // matches the existing rule at ListScreen.jsx:902. Only applies when
     // checking ON; unchecking an already-checked item needs no photo.
+    // PhotoCheckInScreen resolves this same candidate itself via
+    // resolveCheckOffAttachment before it inserts.
     if (item?.photoRequired && !checked) {
       setSaving(false)
-      navigation.navigate('PhotoCheckIn', { item, listItemId })
+      navigation.navigate('PhotoCheckIn', { item, listItemId: candidateListItemId })
       return
     }
 
@@ -490,31 +493,42 @@ export default function ItemDetailScreen({ route, navigation }) {
 
     try {
       if (checked) {
+        // Check-ins are permanent across seasons — unchecking must only
+        // remove the CURRENT window's row(s), never a prior season's
+        // history. Uses this list's own dates when in list mode (matching
+        // loadCheckedState's own window source here), or the global
+        // season otherwise — same ternary, so "checked" and "what gets
+        // deleted" can never disagree.
+        const [{ data: allCheckins }, windowDates] = await Promise.all([
+          supabase.from('check_ins').select('id, checked_at').eq('user_id', userId).eq('item_id', item?.id ?? null),
+          listId
+            ? supabase.from('lists').select('starts_at, ends_at').eq('id', listId).maybeSingle()
+                .then(({ data: l }) => ({ starts_at: l?.starts_at ?? null, ends_at: l?.ends_at ?? null }))
+            : getCurrentSeasonWindow(),
+        ])
+        const idsThisWindow = (allCheckins ?? [])
+          .filter(ci => isWithinWindow(ci.checked_at, windowDates.starts_at, windowDates.ends_at))
+          .map(ci => ci.id)
         // Global by item_id, not just this list's row — a check-off is a
-        // fact about the user and the item, so unchecking must be too.
-        const { error } = await supabase
-          .from('check_ins')
-          .delete()
-          .eq('user_id', userId)
-          .eq('item_id', item?.id ?? null)
-
-        if (error) throw error
+        // fact about the user and the item, so unchecking must be too —
+        // but only within the current window; prior seasons are untouched.
+        if (idsThisWindow.length) {
+          const { error } = await supabase.from('check_ins').delete().in('id', idsThisWindow)
+          if (error) throw error
+        }
         setChecked(false)
       } else {
         // points_awarded on the primary row — same difficulty * point_multiplier
         // formula as lib/useItems.js checkOff. Fan-out (lib/checkInFanOut.js)
         // deliberately leaves secondary rows at 0 to avoid double-counting.
-        // No list context (standalone check-in) means no list-specific
-        // multiplier — defaults to 1.0, same as an un-boosted list item.
-        let pointMultiplier = 1.0
-        if (listItemId) {
-          const { data: liRow } = await supabase
-            .from('list_items')
-            .select('point_multiplier')
-            .eq('id', listItemId)
-            .maybeSingle()
-          pointMultiplier = liRow?.point_multiplier ?? 1.0
-        }
+        //
+        // resolveCheckOffAttachment decides whether to actually use
+        // candidateListItemId or fall back to standalone — a personal
+        // (non-official) list's list_item_id never changes across
+        // seasons, so reusing it here would collide with
+        // check_ins_user_id_list_item_id_key the moment this item was
+        // already checked off in a prior season. See lib/checkOffAttachment.js.
+        const { listItemId, pointMultiplier } = await resolveCheckOffAttachment(candidateListItemId)
         const pointsAwarded = Math.round((item?.difficulty ?? 1) * pointMultiplier)
 
         // item_id is the canonical, always-available path to this check-in's
@@ -773,30 +787,37 @@ export default function ItemDetailScreen({ route, navigation }) {
 
     try {
       if (checked) {
+        // Check-ins are permanent across seasons — unchecking must only
+        // remove the current (global) season's row(s), never a prior
+        // season's history. Nearby mode has no listId, so the global
+        // season window is the same source loadCheckedState used here.
+        const [{ data: allCheckins }, season] = await Promise.all([
+          supabase.from('check_ins').select('id, checked_at').eq('user_id', userId).eq('item_id', item?.id ?? null),
+          getCurrentSeasonWindow(),
+        ])
+        const idsThisSeason = (allCheckins ?? [])
+          .filter(ci => isWithinWindow(ci.checked_at, season.starts_at, season.ends_at))
+          .map(ci => ci.id)
         // Global by item_id, not just this list's row — a check-off is a
-        // fact about the user and the item, so unchecking must be too.
-        const { error } = await supabase
-          .from('check_ins')
-          .delete()
-          .eq('user_id', userId)
-          .eq('item_id', item?.id ?? null)
-        if (error) throw error
+        // fact about the user and the item, so unchecking must be too —
+        // but only within the current season; prior seasons are untouched.
+        if (idsThisSeason.length) {
+          const { error } = await supabase.from('check_ins').delete().in('id', idsThisSeason)
+          if (error) throw error
+        }
         setChecked(false)
       } else {
         // points_awarded on the primary row — same difficulty * point_multiplier
         // formula as lib/useItems.js checkOff. Fan-out (lib/checkInFanOut.js)
         // deliberately leaves secondary rows at 0 to avoid double-counting.
-        // No list context (standalone check-in) means no list-specific
-        // multiplier — defaults to 1.0.
-        let pointMultiplier = 1.0
-        if (itemOnListId) {
-          const { data: liRow } = await supabase
-            .from('list_items')
-            .select('point_multiplier')
-            .eq('id', itemOnListId)
-            .maybeSingle()
-          pointMultiplier = liRow?.point_multiplier ?? 1.0
-        }
+        //
+        // resolveCheckOffAttachment decides whether to actually use
+        // itemOnListId or fall back to standalone — a personal
+        // (non-official) list's list_item_id never changes across
+        // seasons, so reusing it here would collide with
+        // check_ins_user_id_list_item_id_key the moment this item was
+        // already checked off in a prior season. See lib/checkOffAttachment.js.
+        const { listItemId, pointMultiplier } = await resolveCheckOffAttachment(itemOnListId)
         const pointsAwarded = Math.round((item?.difficulty ?? 1) * pointMultiplier)
 
         // item_id is the canonical, always-available path to this check-in's
@@ -815,7 +836,7 @@ export default function ItemDetailScreen({ route, navigation }) {
         // disagree. Only guards the standalone path — list-attached
         // check-ins are already correctly scoped by their own list's fresh
         // list_item_id each season, no guard needed there.
-        if (!itemOnListId) {
+        if (!listItemId) {
           const [{ data: priorCheckins }, season] = await Promise.all([
             supabase.from('check_ins').select('checked_at').eq('user_id', userId).eq('item_id', item?.id ?? null),
             getCurrentSeasonWindow(),
@@ -831,7 +852,7 @@ export default function ItemDetailScreen({ route, navigation }) {
 
         const { error } = await supabase
           .from('check_ins')
-          .insert({ user_id: userId, list_item_id: itemOnListId ?? null, item_id: item?.id ?? null, checkin_method: 'tap', points_awarded: pointsAwarded })
+          .insert({ user_id: userId, list_item_id: listItemId ?? null, item_id: item?.id ?? null, checkin_method: 'tap', points_awarded: pointsAwarded })
         if (error) {
           if (error.code !== '23505') throw error
           // A unique-constraint hit alone doesn't say WHICH row it
@@ -844,8 +865,8 @@ export default function ItemDetailScreen({ route, navigation }) {
           // check_ins rows sharing this item_id can't be misread as "no
           // match" via a multi-row PGRST116 error.
           const verifyQuery = supabase.from('check_ins').select('id').eq('user_id', userId)
-          if (itemOnListId) {
-            verifyQuery.eq('list_item_id', itemOnListId)
+          if (listItemId) {
+            verifyQuery.eq('list_item_id', listItemId)
           } else {
             verifyQuery.eq('item_id', item?.id ?? null).is('list_item_id', null)
           }
@@ -860,7 +881,7 @@ export default function ItemDetailScreen({ route, navigation }) {
         // slow/failed/collided write can't show a false "Checked off"
         // moment.
         setChecked(true)
-        setPostCheckoffData({ itemId: item?.id, listItemId: itemOnListId, userId, item })
+        setPostCheckoffData({ itemId: item?.id, listItemId, userId, item })
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
         supabase.functions.invoke('update-streak', {
           body: { user_id: userId },
@@ -874,7 +895,7 @@ export default function ItemDetailScreen({ route, navigation }) {
           fanOutCheckIn({
             userId,
             itemId: item.id,
-            excludeListItemId: itemOnListId,
+            excludeListItemId: listItemId,
             checkinMethod: 'tap',
           }).catch(() => {})
         }
@@ -885,7 +906,7 @@ export default function ItemDetailScreen({ route, navigation }) {
           setMemoryNote('')
           setMemoryError(null)
           setMemoryModal({
-            listItemId: itemOnListId,
+            listItemId,
             itemId:      item?.id ?? null,
             placeLabel:  item.personalPlaceLabel  ?? 'Place or location',
             noteLabel:   item.personalPromptLabel ?? 'Any notes?',
@@ -894,7 +915,7 @@ export default function ItemDetailScreen({ route, navigation }) {
           })
         } else {
           if (difficulty >= 5) {
-            notifyCrewCheckIn({ listItemId: itemOnListId, itemBody: item?.body ?? '', difficulty, checkInId: null }).catch(() => {})
+            notifyCrewCheckIn({ listItemId, itemBody: item?.body ?? '', difficulty, checkInId: null }).catch(() => {})
           }
         }
       }
