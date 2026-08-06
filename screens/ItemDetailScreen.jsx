@@ -234,6 +234,7 @@ export default function ItemDetailScreen({ route, navigation }) {
     useCallback(() => {
       if (userId) {
         loadCheckedState()
+        refreshItemListContext(userId, item?.id)
       }
     }, [userId, item?.listItemId, item?.id])
   )
@@ -259,26 +260,19 @@ export default function ItemDetailScreen({ route, navigation }) {
 
       await loadCheckedState(uid)
 
-      // Fetch invite code for the current list so share message includes the join link
-      if (listId) {
-        supabase
-          .from('lists')
-          .select('invite_code')
-          .eq('id', listId)
-          .single()
-          .then(({ data: listData }) => {
-            if (listData?.invite_code) setListInviteCode(listData.invite_code)
-          })
-      }
-
-      // In Nearby mode, load user's active lists for the "Add to list" picker
+      // userLists itself is user-scoped (not item-scoped) — the user's own
+      // personal lists don't change per item, so this only needs fetching
+      // once, at mount. refreshItemListContext (called below, and again on
+      // every item change via the useFocusEffect above) cross-references it
+      // against whichever item is currently on screen.
+      let lists = []
       if (!listId) {
         const { data: members } = await supabase
           .from('list_members')
           .select('lists(id, title, ends_at, is_official)')
           .eq('user_id', uid)
 
-        const lists = (members ?? [])
+        lists = (members ?? [])
           .map(m => m.lists)
           .filter(Boolean)
           .filter(l => {
@@ -289,26 +283,74 @@ export default function ItemDetailScreen({ route, navigation }) {
           .sort((a, b) => a.title.localeCompare(b.title))
 
         setUserLists(lists)
-
-        // Check which of user's lists already have this item
-        const listIds = lists.map(l => l.id)
-        if (listIds.length && item?.id) {
-          const { data: existing } = await supabase
-            .from('list_items')
-            .select('id, list_id')
-            .eq('item_id', item.id)
-            .in('list_id', listIds)
-
-          if (existing?.length) {
-            // Build map of listId → listItemId for greying out in picker
-            const map = {}
-            existing.forEach(li => { map[li.list_id] = li.id })
-            setItemOnListIds(map)
-            // Set first match as the listItemId for "I've done this" button
-            setItemOnListId(existing[0].id)
-          }
-        }
       }
+
+      // Passing `lists` directly (rather than letting this read `userLists`
+      // from state) avoids reading the pre-update value of the setUserLists
+      // call just above — state updates aren't visible synchronously within
+      // the same function.
+      await refreshItemListContext(uid, item?.id, lists)
+    }
+  }
+
+  // itemOnListId / itemOnListIds / listInviteCode are all scoped to
+  // "whichever item is currently on screen" — but this screen instance is
+  // reused (not remounted) when the user chains from one item to another
+  // via PostCheckoffSheet's "Also Here"/"Nearest Next" (openItem navigates
+  // to the same 'ItemDetail' route, which React Navigation updates in place
+  // rather than pushing a new screen). Without this, all three kept
+  // reflecting whichever item was on screen at mount, silently misattaching
+  // a chained item's check-off, dare, and photo-checkin to the PREVIOUS
+  // item's list — see the "+ Add to a list" / dare / photo-quick-action
+  // call sites below, all of which read these same three values.
+  //
+  // Reset happens synchronously, before any await, so a check-off that
+  // fires in the gap between an item change and this function's own
+  // lookup resolving can never read the previous item's stale value — at
+  // worst it inserts standalone (list_item_id: null), which is always a
+  // safe, independent row, never a collision with the previous item's row.
+  async function refreshItemListContext(uid, currentItemId, listsOverride = null) {
+    setItemOnListId(null)
+    setItemOnListIds({})
+
+    if (listId) {
+      // List-mode: item?.listItemId / getOrCreateListItemId (called
+      // directly by the check-off handlers) resolve list_item_id
+      // themselves — nothing to derive here. Just keep this list's own
+      // invite code current so share messages never reference a stale one.
+      const { data: listData } = await supabase
+        .from('lists')
+        .select('invite_code')
+        .eq('id', listId)
+        .single()
+      setListInviteCode(listData?.invite_code ?? null)
+      return
+    }
+
+    // Nearby mode — and every chained item, since openItem's navigate
+    // always drops listId regardless of how the first item was opened —
+    // has no current list context to have an invite code for.
+    setListInviteCode(null)
+
+    if (!uid || !currentItemId) return
+    const lists = listsOverride ?? userLists
+    const listIds = lists.map(l => l.id)
+    if (!listIds.length) return
+
+    // Check which of the user's own lists already have this item
+    const { data: existing } = await supabase
+      .from('list_items')
+      .select('id, list_id')
+      .eq('item_id', currentItemId)
+      .in('list_id', listIds)
+
+    if (existing?.length) {
+      // Build map of listId → listItemId for greying out in picker
+      const map = {}
+      existing.forEach(li => { map[li.list_id] = li.id })
+      setItemOnListIds(map)
+      // Set first match as the listItemId for "I've done this" button
+      setItemOnListId(existing[0].id)
     }
   }
 
@@ -456,10 +498,24 @@ export default function ItemDetailScreen({ route, navigation }) {
 
         if (error) {
           if (error.code === '23505') {
-            // Already checked off (race with another entry point) — a
-            // success-equivalent outcome, so the sheet still presents.
-            setChecked(true)
-            setPostCheckoffData({ itemId: item?.id, listItemId, userId, item })
+            // A unique-constraint hit alone doesn't say WHICH row it
+            // collided with — only that a check-in for THIS item, by this
+            // user, is confirmed to exist is actually a success-equivalent
+            // outcome. Any other collision (e.g. a stale list_item_id
+            // reused from a previous item on this screen) must never
+            // celebrate a write that didn't happen for this item.
+            const { data: existingCheckIn } = await supabase
+              .from('check_ins')
+              .select('id')
+              .eq('user_id', userId)
+              .eq('item_id', item?.id ?? null)
+              .maybeSingle()
+            if (existingCheckIn) {
+              setChecked(true)
+              setPostCheckoffData({ itemId: item?.id, listItemId, userId, item })
+            } else {
+              Alert.alert('Could not check off', 'Something went wrong — please try again.')
+            }
             return
           }
           // DB trigger raises P0001 when list hasn't started or has ended.
@@ -684,13 +740,29 @@ export default function ItemDetailScreen({ route, navigation }) {
         const { error } = await supabase
           .from('check_ins')
           .insert({ user_id: userId, list_item_id: itemOnListId ?? null, item_id: item?.id ?? null, checkin_method: 'tap', points_awarded: pointsAwarded })
-        if (error && error.code !== '23505') {
-          throw error
+        if (error) {
+          if (error.code !== '23505') throw error
+          // A unique-constraint hit alone doesn't say WHICH row it
+          // collided with — only that a check-in for THIS item, by this
+          // user, is confirmed to exist is actually a success-equivalent
+          // outcome. Any other collision (e.g. a stale list_item_id
+          // reused from a previous item on this screen) must never
+          // celebrate a write that didn't happen for this item.
+          const { data: existingCheckIn } = await supabase
+            .from('check_ins')
+            .select('id')
+            .eq('user_id', userId)
+            .eq('item_id', item?.id ?? null)
+            .maybeSingle()
+          if (!existingCheckIn) {
+            Alert.alert('Could not check off', 'Something went wrong — please try again.')
+            return
+          }
         }
-        // Sheet only presents once the insert is confirmed (or the row
-        // already existed, code 23505 — a success-equivalent outcome) —
-        // never before, so a slow/failed write can't show a false
-        // "Checked off" moment.
+        // Sheet only presents once the insert is confirmed (or verified as
+        // a genuine already-checked-off duplicate) — never before, so a
+        // slow/failed/collided write can't show a false "Checked off"
+        // moment.
         setChecked(true)
         setPostCheckoffData({ itemId: item?.id, listItemId: itemOnListId, userId, item })
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)

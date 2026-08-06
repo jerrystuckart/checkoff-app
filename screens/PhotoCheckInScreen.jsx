@@ -191,11 +191,24 @@ export default function PhotoCheckInScreen({ route, navigation }) {
       let ciData = null
 
       if (ciErr) {
-        // Duplicate row = already checked in — a success-equivalent
-        // outcome, so the sheet still presents.
         if (ciErr.code === '23505') {
-          setPostCheckoffData({ itemId: item?.id, listItemId, userId: user.id, item })
-          await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+          // A unique-constraint hit alone doesn't say WHICH row it
+          // collided with — only that a check-in for THIS item, by this
+          // user, is confirmed to exist is actually a success-equivalent
+          // outcome. Any other collision must never celebrate a write
+          // that didn't happen for this item.
+          const { data: existingCheckIn } = await supabase
+            .from('check_ins')
+            .select('id')
+            .eq('user_id', user.id)
+            .eq('item_id', item?.id ?? null)
+            .maybeSingle()
+          if (existingCheckIn) {
+            setPostCheckoffData({ itemId: item?.id, listItemId, userId: user.id, item })
+            await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+          } else {
+            Alert.alert('Something went wrong', 'Please try again.')
+          }
           return
         }
 
