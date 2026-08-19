@@ -22,7 +22,31 @@
           }
         },
         {
-          "client_id": "568643740204-t0ppem869quivad89n4v937d5kmra7ig.apps.googleusercontent.com",
+          "client_id": "568643740204-7ilfo39joln81uvc6fh6hrfa36do2gp4.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.getcheckoff.app",
+            "certificate_hash": "0c901f17e15c7e5193ccd9c7cc9ea9041e8dc746"
+          }
+        },
+        {
+          "client_id": "568643740204-eskjpe9c6ln7fs73a505fpvv01ho7ej9.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.getcheckoff.app",
+            "certificate_hash": "b91445606001e31f1152fe89999103253bb3d692"
+          }
+        },
+        {
+          "client_id": "568643740204-ti17k1kklmnqq11oa77i2eefliakj5jv.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.getcheckoff.app",
+            "certificate_hash": "6c4f928b21c1aff4dca865f4a6bcbf3740ff42cf"
+          }
+        },
+        {
+          "client_id": "568643740204-2nq9rnqdna1c8ar91td8hds158fpp71r.apps.googleusercontent.com",
           "client_type": 3
         }
       ],
@@ -35,7 +59,7 @@
         "appinvite_service": {
           "other_platform_oauth_client": [
             {
-              "client_id": "568643740204-t0ppem869quivad89n4v937d5kmra7ig.apps.googleusercontent.com",
+              "client_id": "568643740204-2nq9rnqdna1c8ar91td8hds158fpp71r.apps.googleusercontent.com",
               "client_type": 3
             }
           ]

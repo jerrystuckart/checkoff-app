@@ -29,7 +29,7 @@ import { supabase } from '../lib/supabase'
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
 
-const GOOGLE_WEB_CLIENT_ID = '568643740204-t0ppem869quivad89n4v937d5kmra7ig.apps.googleusercontent.com'
+const GOOGLE_WEB_CLIENT_ID = '568643740204-2nq9rnqdna1c8ar91td8hds158fpp71r.apps.googleusercontent.com'
 
 // Android-only by design — iOS shows Apple Sign-In only and has no Google
 // config (no GoogleService-Info.plist / iosClientId). This module runs at
