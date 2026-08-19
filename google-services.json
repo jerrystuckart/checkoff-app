@@ -14,6 +14,14 @@
       },
       "oauth_client": [
         {
+          "client_id": "568643740204-6kalr5dh1kikcu98s7g1brmme4e427qg.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.getcheckoff.app",
+            "certificate_hash": "f59782c1d86b2f14260b95adad294f96728d4231"
+          }
+        },
+        {
           "client_id": "568643740204-t0ppem869quivad89n4v937d5kmra7ig.apps.googleusercontent.com",
           "client_type": 3
         }
