@@ -101,13 +101,19 @@ export default function DeepLinkListResolverScreen({ route, navigation }) {
     } catch (e) {
       console.error('DeepLinkListResolverScreen resolveList error:', e?.message ?? e)
       setFetchError('fetch_failed')
-      navigation.replace('BrowseLists')
+      // `city` (the deep link's own city_slug param, when present) is a
+      // real signal for which metro's lists to fall back to — thread it
+      // through instead of discarding it. metroName is intentionally
+      // omitted: we only have the slug here, not a display name, and
+      // BrowseListsScreen already handles a citySlug-without-metroName
+      // param combination via its own metro_areas lookup.
+      navigation.replace('BrowseLists', city ? { citySlug: city } : undefined)
       return
     }
 
     if (!listRow) {
       setFetchError('no_list')
-      navigation.replace('BrowseLists')
+      navigation.replace('BrowseLists', city ? { citySlug: city } : undefined)
       return
     }
 

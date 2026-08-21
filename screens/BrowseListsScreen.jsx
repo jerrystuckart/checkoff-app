@@ -5,6 +5,7 @@ import {
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { fetchCuratedLists } from '../lib/useItems'
+import { resolveDefaultMetro } from '../lib/resolveDefaultMetro'
 import { useTheme } from '../lib/ThemeContext'
 
 const AMBER  = '#F5A623'
@@ -25,15 +26,35 @@ export default function BrowseListsScreen({ navigation, route }) {
   const { BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY } = colors
   const styles = useMemo(() => createBrowseStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY }),
     [BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY])
-  const citySlug  = route.params?.citySlug  ?? 'phoenix'
-  const metroName = route.params?.metroName ?? 'Phoenix'
+  // No more hardcoded 'phoenix'/'Phoenix' fallback (docs/metro-launch-audit
+  // README finding #4 — every failed deep link and post-list-completion
+  // flow reached this screen with no params and silently showed Phoenix's
+  // lists to users in every other metro). When the caller doesn't know
+  // the viewer's metro, resolve a real nearest-metro default via GPS
+  // (same algorithm HomeScreen's own city-selector default uses) instead
+  // of assuming Phoenix.
+  const [citySlug, setCitySlug]   = useState(route.params?.citySlug  ?? null)
+  const [metroName, setMetroName] = useState(route.params?.metroName ?? null)
 
   const [lists, setLists]     = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError]     = useState(null)
 
   useEffect(() => {
-    load()
+    if (citySlug) {
+      load()
+      return
+    }
+    resolveDefaultMetro().then(metro => {
+      if (metro) {
+        setCitySlug(metro.slug)
+        setMetroName(metro.name)
+      } else {
+        // No active metros at all (shouldn't happen in practice) —
+        // stop the spinner rather than hang indefinitely.
+        setLoading(false)
+      }
+    })
   }, [citySlug])
 
   async function load() {
