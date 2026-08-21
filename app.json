@@ -22,7 +22,7 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.checkoff.app",
       "usesAppleSignIn": true,
-      "buildNumber": "133",
+      "buildNumber": "136",
       "associatedDomains": [
         "applinks:getcheckoff.com",
         "webcredentials:getcheckoff.com"

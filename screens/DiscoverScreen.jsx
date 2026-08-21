@@ -11,6 +11,7 @@ import { useTheme } from '../lib/ThemeContext'
 import { supabase } from '../lib/supabase'
 import { haversineMeters } from '../lib/distance'
 import { filterMaskedBonusDrops } from '../lib/bonusDrops'
+import { isItemInSeason } from '../lib/seasonFilter'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
@@ -254,7 +255,7 @@ export default function DiscoverScreen({ navigation, route }) {
             .from('items')
             .select(`
               id, body, difficulty, maps_lat, maps_lng, is_active, is_approved,
-              is_secret, secret_reveal_text, has_alcohol,
+              is_secret, secret_reveal_text, has_alcohol, season_tag,
               partner_id, maps_query, website_url, geo_radius_m,
               categories(name, color_hex),
               neighborhoods!items_neighborhood_id_fkey(name),
@@ -268,7 +269,7 @@ export default function DiscoverScreen({ navigation, route }) {
           // Locked Bonus Drops must not leak into search results — they only
           // exist inside their own list until unlocked or already checked.
           const maskedItems = await filterMaskedBonusDrops(rawItems ?? [], discoverUserId)
-          const augmented = augmentWithDistance(maskedItems, locationRef.current ?? location)
+          const augmented = augmentWithDistance(maskedItems.filter(isItemInSeason), locationRef.current ?? location)
           setTagResultItems(augmented)
           console.log('[tag search] displayItems after merge:', augmented.length)
         }
@@ -324,7 +325,7 @@ export default function DiscoverScreen({ navigation, route }) {
         .from('items')
         .select(`
           id, body, difficulty, maps_lat, maps_lng, is_active, is_approved,
-          is_secret, secret_reveal_text, has_alcohol,
+          is_secret, secret_reveal_text, has_alcohol, season_tag,
           partner_id, maps_query, website_url, geo_radius_m,
           categories(name, color_hex),
           neighborhoods!items_neighborhood_id_fkey(name),
@@ -338,7 +339,7 @@ export default function DiscoverScreen({ navigation, route }) {
       // Locked Bonus Drops must not leak into search results — they only
       // exist inside their own list until unlocked or already checked.
       const maskedItems = await filterMaskedBonusDrops(rawItems ?? [], discoverUserId)
-      const augmented = augmentWithDistance(maskedItems, locationRef.current ?? location)
+      const augmented = augmentWithDistance(maskedItems.filter(isItemInSeason), locationRef.current ?? location)
       setTagResultItems(augmented)
     } catch (e) {
       if (__DEV__) console.log('fetchTagResultItems error:', e?.message)

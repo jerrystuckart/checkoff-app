@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity,
   StyleSheet, StatusBar, ActivityIndicator, Alert,
-  RefreshControl, Modal, ImageBackground,
+  RefreshControl, Modal, ImageBackground, useWindowDimensions,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as Location from 'expo-location'
@@ -21,6 +21,7 @@ import { proximitySort, formatDistanceLabel } from '../lib/proximity'
 import { getSessionDensityTier } from '../lib/densityTier'
 import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
 import { filterMaskedBonusDrops } from '../lib/bonusDrops'
+import { isItemInSeason } from '../lib/seasonFilter'
 
 const PURPLE = '#7A4DB3'
 
@@ -54,6 +55,10 @@ function themedListAccent(title, id) {
 
 export default function HomeScreen({ navigation }) {
   const insets = useSafeAreaInsets()
+  const { width: windowWidth } = useWindowDimensions()
+  // Below this width, "This Week" yields first so the CheckOff wordmark
+  // never has to compete for space and can't get squeezed into truncating.
+  const isNarrowHeader = windowWidth < 380
   const { colors, isDark, toggleTheme } = useTheme()
   const { BG, CARD, TEXT, MUTED, LABEL, BORDER, SOFT, SOFT_2, AMBER, NAVY, GREEN, RED,
           SUCCESS_BG, SUCCESS_BORDER, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT, STATUS_BAR } = colors
@@ -547,7 +552,9 @@ async function loadNearbyRail(userId) {
         .not('maps_lng', 'is', null),
     ])
 
-    const allRawItems = [...(universalItems ?? []), ...(locatedItems ?? [])].map(mapRailItem)
+    const allRawItems = [...(universalItems ?? []), ...(locatedItems ?? [])]
+      .map(mapRailItem)
+      .filter(isItemInSeason)
     // Locked Bonus Drops must not leak here — they only exist inside their
     // own list until unlocked. Masked unconditionally unless this user has
     // already checked the item off, at which point it's a normal item.
@@ -1029,16 +1036,19 @@ async function loadNearbyRail(userId) {
 
       <View style={styles.headerCard}>
         <View style={styles.headerTopRow}>
-          <Text style={[styles.logo, { flexShrink: 1, minWidth: 0 }]} allowFontScaling={false} numberOfLines={1} ellipsizeMode="tail">
-            Check<Text style={styles.logoOff} allowFontScaling={false}>Off</Text>
-          </Text>
+          <View style={styles.logoWrapper}>
+            <Text style={styles.logo} allowFontScaling={false}>
+              Check<Text style={styles.logoOff} allowFontScaling={false}>Off</Text>
+            </Text>
+          </View>
 
-          {/* flexShrink: 0 guarantees this group (and the theme toggle inside
-              it) keeps its natural width and is never pushed off-screen —
-              the logo above absorbs any overflow instead, per the fix for
-              the toggle-unreachable bug. */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 0 }}>
-            {user && (
+          {/* Both sides are flexShrink: 0 — the logo must never be asked to
+              compress or truncate. On narrow screens the "This Week" pill
+              hides instead (see isNarrowHeader) so this group's natural
+              width shrinks to make room, rather than fighting the logo for
+              space or getting pushed off-screen itself. */}
+          <View style={styles.headerStatusGroup}>
+            {user && !isNarrowHeader && (
               <TouchableOpacity
                 onPress={() => navigation.navigate('WeeklyRecap')}
                 style={styles.thisWeekBtn}
@@ -1812,6 +1822,20 @@ function createStyles({ BG, CARD, TEXT, MUTED, LABEL, BORDER, SOFT, SOFT_2, AMBE
     marginBottom: 8,
   },
 
+  logoWrapper: {
+    flexShrink: 0,
+    flexGrow: 0,
+  },
+
+  headerStatusGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexShrink: 0,
+    flexGrow: 0,
+    marginLeft: 'auto',
+  },
+
   thisWeekBtn: {
     paddingHorizontal: 10,
     paddingVertical: 5,
@@ -1868,6 +1892,7 @@ function createStyles({ BG, CARD, TEXT, MUTED, LABEL, BORDER, SOFT, SOFT_2, AMBE
 
   logo: {
     fontSize: 32,
+    lineHeight: 36,
     fontWeight: '900',
     color: AMBER,
     letterSpacing: -1,
