@@ -1,0 +1,170 @@
+[
+  {
+    "label": "Denver Central",
+    "query": "Downtown Denver, CO",
+    "name": "Downtown Denver",
+    "address": "Downtown Denver, Denver, CO, USA",
+    "lat": 39.7451998,
+    "lng": -104.9921849
+  },
+  {
+    "label": "RiNo / Five Points",
+    "query": "RiNo Art District, Denver, CO",
+    "name": "RiNo Art District",
+    "address": "1320 27th St G, Denver, CO 80205, USA",
+    "lat": 39.7594926,
+    "lng": -104.9848447
+  },
+  {
+    "label": "LoDo / Union Station",
+    "query": "LoDo Union Station, Denver, CO",
+    "name": "Union Station",
+    "address": "Union Station, Denver, CO 80202, USA",
+    "lat": 39.751497199999996,
+    "lng": -104.9979721
+  },
+  {
+    "label": "Capitol Hill / Uptown",
+    "query": "Capitol Hill, Denver, CO",
+    "name": "Capitol Hill",
+    "address": "Capitol Hill, Denver, CO, USA",
+    "lat": 39.7336946,
+    "lng": -104.98229699999999
+  },
+  {
+    "label": "Highlands / Sunnyside",
+    "query": "Highlands neighborhood, Denver, CO",
+    "name": "Highland",
+    "address": "Highland, Denver, CO, USA",
+    "lat": 39.763218599999995,
+    "lng": -105.0111788
+  },
+  {
+    "label": "Cherry Creek",
+    "query": "Cherry Creek, Denver, CO",
+    "name": "Cherry Creek",
+    "address": "Cherry Creek, Denver, CO, USA",
+    "lat": 39.7177954,
+    "lng": -104.950215
+  },
+  {
+    "label": "Washington Park / South Denver",
+    "query": "Washington Park, Denver, CO",
+    "name": "Washington Park",
+    "address": "Washington Park, Denver, CO, USA",
+    "lat": 39.7002435,
+    "lng": -104.9687106
+  },
+  {
+    "label": "Berkeley / Tennyson",
+    "query": "Berkeley neighborhood, Denver, CO",
+    "name": "Berkeley",
+    "address": "Berkeley, Denver, CO, USA",
+    "lat": 39.7766775,
+    "lng": -105.03925269999999
+  },
+  {
+    "label": "Lakewood",
+    "query": "Lakewood, CO",
+    "name": "Lakewood",
+    "address": "Lakewood, CO, USA",
+    "lat": 39.7047095,
+    "lng": -105.08137339999999
+  },
+  {
+    "label": "Golden",
+    "query": "Golden, CO",
+    "name": "Golden",
+    "address": "Golden, CO, USA",
+    "lat": 39.755542999999996,
+    "lng": -105.2210997
+  },
+  {
+    "label": "Arvada",
+    "query": "Arvada, CO",
+    "name": "Arvada",
+    "address": "Arvada, CO, USA",
+    "lat": 39.8027644,
+    "lng": -105.08748419999999
+  },
+  {
+    "label": "Westminster",
+    "query": "Westminster, CO",
+    "name": "Westminster",
+    "address": "Westminster, CO, USA",
+    "lat": 39.836652799999996,
+    "lng": -105.0372046
+  },
+  {
+    "label": "Thornton / Northglenn",
+    "query": "Thornton, CO",
+    "name": "Thornton",
+    "address": "Thornton, CO, USA",
+    "lat": 39.8680412,
+    "lng": -104.9719243
+  },
+  {
+    "label": "Broomfield",
+    "query": "Broomfield, CO",
+    "name": "Broomfield",
+    "address": "Broomfield, CO, USA",
+    "lat": 39.9205411,
+    "lng": -105.08665040000001
+  },
+  {
+    "label": "Boulder",
+    "query": "Boulder, CO",
+    "name": "Boulder",
+    "address": "Boulder, CO, USA",
+    "lat": 40.0189728,
+    "lng": -105.2747406
+  },
+  {
+    "label": "Louisville / Superior",
+    "query": "Louisville, CO",
+    "name": "Louisville",
+    "address": "Louisville, CO, USA",
+    "lat": 39.977762999999996,
+    "lng": -105.13192959999999
+  },
+  {
+    "label": "Lafayette",
+    "query": "Lafayette, CO",
+    "name": "Lafayette",
+    "address": "Lafayette, CO, USA",
+    "lat": 39.993595899999995,
+    "lng": -105.08970579999999
+  },
+  {
+    "label": "Erie",
+    "query": "Erie, CO",
+    "name": "Erie",
+    "address": "Erie, CO, USA",
+    "lat": 40.0502623,
+    "lng": -105.04998169999999
+  },
+  {
+    "label": "Longmont",
+    "query": "Longmont, CO",
+    "name": "Longmont",
+    "address": "Longmont, CO, USA",
+    "lat": 40.167206799999995,
+    "lng": -105.1019275
+  },
+  {
+    "label": "Nederland / Eldora",
+    "query": "Nederland, CO",
+    "name": "Nederland",
+    "address": "Nederland, CO 80466, USA",
+    "lat": 39.9613759,
+    "lng": -105.5108312
+  },
+  {
+    "label": "Eldora Mountain Resort (for distance check only)",
+    "query": "Eldora Mountain Resort, CO",
+    "name": "Eldora Mountain",
+    "address": "2861 Eldora Ski Rd, Nederland, CO 80466, USA",
+    "lat": 39.9372203,
+    "lng": -105.5826786
+  }
+]

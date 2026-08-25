@@ -1,0 +1,62 @@
+diff --git a/screens/HomeScreen.jsx b/screens/HomeScreen.jsx
+index a9710ca..0b2b1b3 100644
+--- a/screens/HomeScreen.jsx
++++ b/screens/HomeScreen.jsx
+@@ -72,6 +72,13 @@ export default function HomeScreen({ navigation }) {
+   const [metros, setMetros] = useState([])
+   const [selectedMetro, setSelectedMetro] = useState(null)
+   const [season, setSeason] = useState(null)
++  // Resolved inside loadForMetro (keyed on the metroId param directly, NOT
++  // selectedMetro state — loadForMetro can run before setSelectedMetro's
++  // update has committed, e.g. on cold start, so reading selectedMetro
++  // here would risk a stale/null read). Defaults to America/Phoenix,
++  // matching every call site's prior hardcoded behavior until this is
++  // set for real.
++  const [metroTimezone, setMetroTimezone] = useState('America/Phoenix')
+ 
+   const [lists, setLists] = useState([])
+   const [officialLists, setOfficialLists] = useState([])
+@@ -292,11 +299,19 @@ export default function HomeScreen({ navigation }) {
+ 
+     const { data: metroImg } = await supabase
+       .from('metro_areas')
+-      .select('hero_images')
++      .select('hero_images, timezone')
+       .eq('id', metroId)
+       .maybeSingle()
+     const imgs = metroImg?.hero_images ?? []
+     setHeroImage(imgs.length > 0 ? imgs[Math.floor(Math.random() * imgs.length)] : null)
++    // Resolved once per loadForMetro call, from the metroId param this
++    // call was actually invoked with — not from selectedMetro, which may
++    // not have caught up yet. metro_areas.timezone is NOT NULL as of
++    // supabase/migrations/20260821_metro_timezone_platform_fix.sql, so a
++    // missing metroImg row (bad metroId) is the only null case; default
++    // preserves prior hardcoded behavior for that edge case.
++    const resolvedTimezone = metroImg?.timezone ?? 'America/Phoenix'
++    setMetroTimezone(resolvedTimezone)
+ 
+     const { data: offLists } = await supabase
+       .from('lists')
+@@ -356,7 +371,7 @@ export default function HomeScreen({ navigation }) {
+             .eq('user_id', userId)
+             .in('item_id', itemIds)
+           const inWindow = (checkins ?? []).filter(c =>
+-            isWithinWindow(c.checked_at, freshCurrentOnHome.starts_at, freshCurrentOnHome.ends_at)
++            isWithinWindow(c.checked_at, freshCurrentOnHome.starts_at, freshCurrentOnHome.ends_at, resolvedTimezone)
+           )
+           checked = new Set(inWindow.map(c => c.item_id)).size
+         }
+@@ -969,7 +984,12 @@ async function loadNearbyRail(userId) {
+           ])
+           candidates.forEach(l => {
+             const listItemIds = new Set(liRows.filter(li => li.list_id === l.id).map(li => li.item_id))
+-            const inWindow = (checkins ?? []).filter(c => listItemIds.has(c.item_id) && isWithinWindow(c.checked_at, l.starts_at, l.ends_at))
++            // `candidates` is officialLists filtered client-side (see the
++            // useEffect above) — officialLists itself is always the
++            // result of loadForMetro's own .eq('metro_id', metroId) query,
++            // so every `l` here shares the metro whose timezone was just
++            // resolved into metroTimezone state by that same load.
++            const inWindow = (checkins ?? []).filter(c => listItemIds.has(c.item_id) && isWithinWindow(c.checked_at, l.starts_at, l.ends_at, metroTimezone))
+ 
+             const mine = new Set(inWindow.filter(c => c.user_id === user.id).map(c => c.item_id))
+             checkedMap[l.id] = mine.size

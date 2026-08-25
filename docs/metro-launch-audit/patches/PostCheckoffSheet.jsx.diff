@@ -1,0 +1,77 @@
+diff --git a/components/PostCheckoffSheet.jsx b/components/PostCheckoffSheet.jsx
+index 9c8c703..21e479e 100644
+--- a/components/PostCheckoffSheet.jsx
++++ b/components/PostCheckoffSheet.jsx
+@@ -113,9 +113,13 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
+       // ── Which list did this check-off happen on (if any)? ──
+       let listRow = null
+       if (data.listItemId) {
++        // metro_areas(timezone) rides the existing lists.metro_id FK —
++        // no extra round trip. NULL when a list's metro_id is itself
++        // NULL (legacy/personal lists) — isWithinWindow's own default
++        // parameter covers that case.
+         const { data: li } = await supabase
+           .from('list_items')
+-          .select('list_id, lists(id, title, starts_at, ends_at, is_official, is_public, metro_id, invite_code)')
++          .select('list_id, lists(id, title, starts_at, ends_at, is_official, is_public, metro_id, invite_code, metro_areas(timezone))')
+           .eq('id', data.listItemId)
+           .maybeSingle()
+         listRow = li?.lists ?? null
+@@ -158,7 +162,7 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
+               .select('item_id, checked_at')
+               .eq('user_id', data.userId)
+               .in('item_id', itemIds)
+-            const inWindow = (checkins ?? []).filter(c => isWithinWindow(c.checked_at, listRow.starts_at, listRow.ends_at))
++            const inWindow = (checkins ?? []).filter(c => isWithinWindow(c.checked_at, listRow.starts_at, listRow.ends_at, listRow.metro_areas?.timezone))
+             const n = new Set(inWindow.map(c => c.item_id)).size
+             count = `That's ${n} this ${seasonWordFromTitle(listRow.title)}`
+           }
+@@ -205,7 +209,9 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
+         const today = new Date().toISOString().split('T')[0]
+         const { data: candidateListItems } = await supabase
+           .from('list_items')
+-          .select('list_id, lists!inner(id, title, starts_at, ends_at, is_official)')
++          // metro_areas(timezone) added for the same reason as the
++          // listItemId branch above — rides lists.metro_id, no extra fetch.
++          .select('list_id, lists!inner(id, title, starts_at, ends_at, is_official, metro_id, metro_areas(timezone))')
+           .eq('item_id', data.itemId)
+ 
+         const activePublic = (candidateListItems ?? []).filter(li => {
+@@ -233,7 +239,7 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
+               .select('item_id, checked_at')
+               .eq('user_id', data.userId)
+               .in('item_id', itemIds)
+-            const inWindow = (checkins ?? []).filter(c => isWithinWindow(c.checked_at, best.starts_at, best.ends_at))
++            const inWindow = (checkins ?? []).filter(c => isWithinWindow(c.checked_at, best.starts_at, best.ends_at, best.metro_areas?.timezone))
+             const n = new Set(inWindow.map(c => c.item_id)).size
+             if (!cancelled) setCountLabel(`That's ${n} this ${seasonWordFromTitle(best.title)}`)
+           }
+@@ -261,7 +267,13 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
+       // ── Also Here / Nearest Next — both skipped entirely if the checked
+       // item has no coordinates or is universal (no meaningful anchor). ──
+       if (itemLat && itemLng && !isUniversal && neighborhoodId) {
+-        const { data: myHood } = await supabase.from('neighborhoods').select('metro_id').eq('id', neighborhoodId).maybeSingle()
++        // metro_areas(timezone) rides neighborhoods.metro_id — this
++        // block already needs metroId below for the candidate-item pool
++        // query; the season-window exclusion further down reuses the
++        // same round trip for its own metro-local date conversion rather
++        // than the global getCurrentSeasonWindow() boundary being
++        // (correctly, by design) metro-agnostic itself.
++        const { data: myHood } = await supabase.from('neighborhoods').select('metro_id, metro_areas(timezone)').eq('id', neighborhoodId).maybeSingle()
+         const metroId = myHood?.metro_id
+ 
+         if (metroId) {
+@@ -295,7 +307,12 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
+             ])
+             const doneThisSeason = new Set(
+               (checkins ?? [])
+-                .filter(c => isWithinWindow(c.checked_at, season.starts_at, season.ends_at))
++                // season.starts_at/ends_at themselves are correctly
++                // metro-agnostic (global `seasons` table, no metro
++                // column, by design) — metroTimezone here only affects
++                // how each check-in's timestamp is converted to a local
++                // calendar date before comparing, which IS metro-specific.
++                .filter(c => isWithinWindow(c.checked_at, season.starts_at, season.ends_at, myHood?.metro_areas?.timezone))
+                 .map(c => c.item_id)
+             )
+             pool = pool.filter(c => !doneThisSeason.has(c.id))

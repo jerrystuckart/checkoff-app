@@ -1,0 +1,92 @@
+--- a/lib/seasonWindow.js
++++ b/lib/seasonWindow.js
+@@ -1,25 +1,45 @@
+ import { supabase } from './supabase'
+
+-// checkedAt is a full UTC timestamptz string; startsAt/endsAt are bare
+-// Phoenix-local `date` strings (YYYY-MM-DD). Comparing them directly as
+-// strings is wrong on the boundary days — a same-day timestamp always
+-// lexicographically sorts after the bare date, so it always evaluated as
+-// "past ends_at" even hours before Phoenix midnight. Converting checkedAt
+-// to its Phoenix-local calendar date first mirrors the DB trigger
+-// prevent_expired_list_checkins(), which evaluates
+-// (now() AT TIME ZONE 'America/Phoenix')::date against these same columns.
+-function toPhoenixDateString(isoTimestamp) {
+-  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Phoenix' }).format(new Date(isoTimestamp))
++// checkedAt is a full UTC timestamptz string; startsAt/endsAt are bare
++// metro-local `date` strings (YYYY-MM-DD). Comparing them directly as
++// strings is wrong on the boundary days — a same-day timestamp always
++// lexicographically sorts after the bare date, so it always evaluated as
++// "past ends_at" even hours before local midnight. Converting checkedAt
++// to its metro-local calendar date first mirrors the DB trigger
++// prevent_expired_list_checkins(), which (as of the platform timezone
++// fix — supabase/migrations/20260821_metro_timezone_platform_fix.sql)
++// evaluates (now() AT TIME ZONE <list's own metro timezone>)::date
++// against these same columns, resolved via metro_areas.timezone instead
++// of a hardcoded zone.
++//
++// JUDGMENT CALL, FLAGGED FOR REVIEW: isWithinWindow's existing callers
++// (HomeScreen.jsx's seasonal "N of M" count, PostCheckoffSheet's
++// per-list progress) do not currently have a metro_id in scope at every
++// call site — some only have the list row (which DOES have metro_id)
++// while others may only have the item. To keep this patch's blast
++// radius limited to seasonWindow.js itself rather than also touching
++// every caller, isWithinWindow's signature grows an OPTIONAL trailing
++// metroTimezone parameter that defaults to 'America/Phoenix' (matching
++// today's behavior exactly when omitted). Callers that already have a
++// list/metro's timezone in scope should pass it explicitly; callers that
++// don't are UNCHANGED and keep evaluating on America/Phoenix until they
++// are updated separately. This means the client-side fix is NOT
++// automatically complete just from this diff — see the follow-up note
++// at the bottom of this file for exactly which call sites still need a
++// second, separate patch once each one's available metro context is
++// confirmed.
++function toMetroDateString(isoTimestamp, metroTimezone = 'America/Phoenix') {
++  return new Intl.DateTimeFormat('en-CA', { timeZone: metroTimezone }).format(new Date(isoTimestamp))
+ }
+
+ // A check_ins row counts for a window only if checked_at falls inside it.
+ // Each bound is checked independently — a window with only one side set is
+ // bounded on that side and open on the other; a window with neither set
+ // (undated list, or no seasons row covering today) is all-time. Mirrors the
+ // same independent-bound handling already used by the DB trigger
+ // prevent_expired_list_checkins() and by checkInFanOut.js's list filtering.
+-export function isWithinWindow(checkedAt, startsAt, endsAt) {
++export function isWithinWindow(checkedAt, startsAt, endsAt, metroTimezone = 'America/Phoenix') {
+   if (!checkedAt) return false
+-  const checkedDate = toPhoenixDateString(checkedAt)
++  const checkedDate = toMetroDateString(checkedAt, metroTimezone)
+   if (startsAt && checkedDate < startsAt) return false
+   if (endsAt && checkedDate > endsAt) return false
+   return true
+ }
++
++// ============================================================
++// UPDATE (follow-up pass): 5 of this codebase's 6 isWithinWindow() call
++// sites are now threaded with a real metro timezone — see
++// docs/metro-launch-audit/patches/HomeScreen.jsx.diff (2 sites) and
++// docs/metro-launch-audit/patches/PostCheckoffSheet.jsx.diff (3 sites).
++// Both of those diffs apply on top of this one; together all three must
++// be applied for the client-side fix to take effect.
++//
++// ONE SITE REMAINS ON THE DEFAULT ('America/Phoenix'), FLAGGED AS
++// GENUINELY AMBIGUOUS, NOT FIXED:
++//   - screens/HomeScreen.jsx:582, inside loadNearbyRail() — this is the
++//     "Near you right now" rail, which is EXPLICITLY metro-agnostic by
++//     design (per the original audit and this file's own code comments):
++//     it pulls candidate items system-wide across every metro at once,
++//     ranked by real GPS distance from the user, independent of whichever
++//     metro is currently selected in the picker. The check_ins rows being
++//     tested here can belong to items from any metro simultaneously — the
++//     query at line ~573-578 doesn't join back to each item's metro at
++//     all. There is no single correct metroTimezone value to pass: a
++//     Denver item and a Phoenix item could both appear in the same
++//     `checkins` batch, each needing a different timezone for its own
++//     boundary-date conversion, and passing either one uniformly would be
++//     as wrong as the current default for whichever item didn't match it.
++//     A correct fix would need to resolve each check-in's own item's
++//     metro individually (an added join) rather than a single parameter
++//     — a bigger change than this pass's threading, and confirmed here
++//     rather than guessed at, per the instruction not to guess on a
++//     genuinely ambiguous site.
++// ============================================================
