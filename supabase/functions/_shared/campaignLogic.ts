@@ -1,0 +1,306 @@
+// Pure, dependency-free logic for the recap campaign — no Deno/network/DB
+// calls in this file so it can be unit tested with `deno test` in isolation.
+// index.ts (the edge function) imports these and supplies the DB/network side.
+
+export type Segment =
+  | 'ACTIVE_AUGUST'
+  | 'FALL_CONTINUATION'
+  | 'RETURNING_INACTIVE'
+  | 'NEVER_CHECKED_OFF'
+  | 'EXCLUDED';
+
+export type Platform = 'ios' | 'android' | string | null | undefined;
+
+export type MetroSource =
+  | 'checkoff_history'
+  | 'explicit_profile'
+  | 'list_history'
+  | 'interaction_history'
+  | 'unknown';
+
+// ── Calendar month boundaries ────────────────────────────────────────────────
+// "August 2026" = 2026-08-01T00:00:00 through 2026-09-01T00:00:00, exclusive
+// end, in the app's established convention (UTC-anchored calendar dates —
+// same convention the existing RPCs and send-partner-recap already use;
+// no new timezone system is introduced here).
+
+export function monthBounds(monthParam: string): { start: string; end: string } {
+  const m = /^(\d{4})-(\d{2})$/.exec(monthParam);
+  if (!m) throw new Error(`Invalid month "${monthParam}", expected YYYY-MM`);
+  const year = Number(m[1]);
+  const month = Number(m[2]); // 1-12
+  if (month < 1 || month > 12) throw new Error(`Invalid month "${monthParam}"`);
+  const start = new Date(Date.UTC(year, month - 1, 1));
+  const end = new Date(Date.UTC(year, month, 1));
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  return { start: iso(start), end: iso(end) };
+}
+
+// ── Name handling ────────────────────────────────────────────────────────────
+
+export function firstName(displayName: string | null | undefined): string | null {
+  const raw = (displayName || '').trim();
+  if (!raw) return null;
+  return raw.split(/\s+/)[0];
+}
+
+export function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+// ── Subject lines ────────────────────────────────────────────────────────────
+// Centralized + testable. Falls back to the plain no-name subject whenever
+// first_name is missing, for every segment — never a blank/awkward "{{name}},"
+
+// metroKnown only matters for NEVER_CHECKED_OFF: someone who has never
+// completed a CheckOff never gets "Monthly Recap" language regardless, but
+// with no real metro evidence there's also nothing to say they're
+// "exploring this Fall" in a specific place — that's why unknown-metro
+// gets its own, more neutral subject.
+export function subjectFor(
+  segment: Segment, displayName: string | null | undefined, seasonName?: string | null,
+  metroKnown = true,
+): string {
+  const name = firstName(displayName);
+
+  switch (segment) {
+    case 'ACTIVE_AUGUST':
+      return name
+        ? `${name}, your August Monthly CheckOff Recap 🍂`
+        : 'Your August Monthly CheckOff Recap 🍂';
+    case 'FALL_CONTINUATION':
+      return `Your August Recap: ${seasonName?.trim() || 'Fall'} is waiting 🍂`;
+    case 'RETURNING_INACTIVE':
+      return 'Your August CheckOff Update: A lot changed';
+    case 'NEVER_CHECKED_OFF':
+      return metroKnown
+        ? 'Your August CheckOff Update: Start exploring this Fall'
+        : "Your August CheckOff Update: See what's new";
+    default:
+      return 'Your August Monthly CheckOff Recap 🍂';
+  }
+}
+
+// Test-send subjects are always prefixed so they're unmistakable in an
+// inbox and never confusable with a real campaign email.
+export const TEST_SEND_LABELS: Record<string, string> = {
+  ACTIVE_AUGUST: '[TEST ACTIVE]',
+  FALL_CONTINUATION: '[TEST FALL]',
+  RETURNING_INACTIVE: '[TEST RETURNING]',
+  NEVER_CHECKED_OFF: '[TEST NEW USER]',
+};
+
+export function testSendSubject(segment: Segment, baseSubject: string): string {
+  return `${TEST_SEND_LABELS[segment] || '[TEST]'} ${baseSubject}`;
+}
+
+export const PREVIEW_TEXT =
+  'New places, Fall experiences, personalized picks, and something new coming soon.';
+
+// ── Countdown ─────────────────────────────────────────────────────────────────
+
+export function daysRemaining(endDateIso: string | null | undefined, nowIso?: string): number | null {
+  if (!endDateIso) return null;
+  const now = nowIso ? new Date(nowIso) : new Date();
+  const end = new Date(endDateIso);
+  if (Number.isNaN(end.getTime())) return null;
+  const nowUTC = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const endUTC = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+  const diff = Math.round((endUTC - nowUTC) / 86400000);
+  return Math.max(diff, 0);
+}
+
+// ── Device CTA ────────────────────────────────────────────────────────────────
+
+const APP_STORE_URL = 'https://apps.apple.com/us/app/checkoff/id6762678030';
+const PLAY_STORE_URL = 'https://play.google.com/store/apps/details?id=com.getcheckoff.app';
+const UNIVERSAL_DOWNLOAD_URL = 'https://getcheckoff.com/download';
+
+export function deviceCta(platform: Platform): { label: string; url: string } {
+  const p = (platform || '').toLowerCase();
+  if (p === 'ios') return { label: 'Open CheckOff', url: 'checkoff://home' };
+  if (p === 'android') return { label: 'Open CheckOff', url: 'checkoff://home' };
+  return { label: 'Open CheckOff', url: UNIVERSAL_DOWNLOAD_URL };
+}
+
+export function storeCta(platform: Platform): { label: string; url: string } {
+  const p = (platform || '').toLowerCase();
+  if (p === 'ios') return { label: 'Get it on the App Store', url: APP_STORE_URL };
+  if (p === 'android') return { label: 'Get it on Google Play', url: PLAY_STORE_URL };
+  return { label: 'Download CheckOff', url: UNIVERSAL_DOWNLOAD_URL };
+}
+
+// ── Streak messaging ─────────────────────────────────────────────────────────
+// Weekly streak only (matches users.current_streak semantics — never framed
+// as a daily streak). currentStreakWeeks is whatever users.current_streak
+// holds; hasRecentActivity should be true if the user has any check-in within
+// roughly the last 2 weeks (recap builder passes this in from the DB row).
+
+export function streakMessage(currentStreakWeeks: number | null | undefined, hasRecentActivity: boolean): string {
+  const weeks = currentStreakWeeks || 0;
+  if (weeks >= 1) {
+    return `Your ${weeks}-week streak is alive. Keep it going this weekend.`;
+  }
+  if (hasRecentActivity) {
+    return "You're building momentum. Check off something this week to keep it going.";
+  }
+  return 'Your next streak starts with one CheckOff.';
+}
+
+// ── Almost-there / bonus-unlock messaging ───────────────────────────────────
+// Never invents a threshold — only surfaces one when the caller supplies a
+// real unlock_threshold from list_items and the user is genuinely close.
+
+export function almostThereMessage(
+  checkedCount: number,
+  unlockThreshold: number | null | undefined,
+): string | null {
+  if (!unlockThreshold || unlockThreshold <= 0) return null;
+  const remaining = unlockThreshold - checkedCount;
+  if (remaining <= 0) return null;
+  if (remaining > 3) return null; // "almost there" = genuinely close, not a generic nudge
+  const noun = remaining === 1 ? 'CheckOff' : 'CheckOffs';
+  return `Just ${remaining} more ${noun} to unlock your next bonus.`;
+}
+
+// ── Seasonal closing copy, keyed by region — a controlled content map, not
+// scattered ad hoc conditionals. Extend this map for future metros. ─────────
+
+export const REGION_CLOSING_COPY: Record<string, string> = {
+  desert_southwest:
+    'Cooler mornings, patio weather, football weekends, and outdoor season are almost here.',
+  mountain_midwest:
+    'Leaves are changing, football is back, and the best stretch of outdoor season has arrived.',
+  // Used when we genuinely don't know the recipient's metro — never guess a
+  // region's weather/season for someone we can't place.
+  unknown:
+    'Fall is settling in across every CheckOff city — pick one and see what’s good.',
+};
+
+// metro_areas.name is always "<City> Metro" (e.g. "Phoenix Metro") — this
+// strips that suffix to get the bare city name used for region lookups,
+// curated_lists.city_slug matching, and display copy.
+export function metroSlug(metroName: string | null | undefined): string {
+  return (metroName || '').replace(/\s*Metro$/i, '').trim().toLowerCase();
+}
+
+const METRO_REGION: Record<string, keyof typeof REGION_CLOSING_COPY> = {
+  phoenix: 'desert_southwest',
+  tucson: 'desert_southwest',
+  denver: 'mountain_midwest',
+  milwaukee: 'mountain_midwest',
+};
+
+export function seasonalClosingCopy(metroName: string | null | undefined): string {
+  if (!metroName) return REGION_CLOSING_COPY.unknown;
+  const region = METRO_REGION[metroSlug(metroName)];
+  return REGION_CLOSING_COPY[region || 'desert_southwest'];
+}
+
+// ── "Since your last activity" — controlled product-update content map ─────
+// Each entry: id, dateISO (when it happened), copy, and which metros it's
+// relevant to ('*' = relevant everywhere). Selection favors items relevant
+// to the user's metro/history and after their last meaningful activity;
+// falls back to broad Android/new-market news for users with no history.
+// Counts here are placeholders where the true count must come from a live
+// query (see buildSinceLastActivityUpdates in index.ts) — this map only
+// carries the ones that are always true statements, not variable counts.
+
+export type ProductUpdate = { id: string; dateISO: string; metros: string[] | '*'; copy: string };
+
+// metros arrays use the bare, lowercased city name (see metroSlug) so they
+// match regardless of "<City> Metro" vs "<City>" naming in the DB.
+export const PRODUCT_UPDATES: ProductUpdate[] = [
+  { id: 'android_launch', dateISO: '2026-08-25', metros: '*', copy: 'CheckOff is now available to more friends — Android just launched.' },
+  { id: 'denver_launch', dateISO: '2026-08-25', metros: ['denver'], copy: 'Denver is live on CheckOff.' },
+  { id: 'tucson_fall', dateISO: '2026-07-01', metros: ['tucson'], copy: 'Tucson Fall experiences are open.' },
+  { id: 'phoenix_fall', dateISO: '2026-08-01', metros: ['phoenix'], copy: 'Phoenix Fall is live with new seasonal picks.' },
+  { id: 'milwaukee_fall', dateISO: '2026-08-01', metros: ['milwaukee'], copy: 'Milwaukee Fall added new local additions.' },
+  { id: 'streaks_live', dateISO: '2026-07-01', metros: '*', copy: 'Weekly streaks and reminders are here to help you keep momentum.' },
+];
+
+export function selectSinceLastActivityUpdates(
+  metroName: string | null | undefined,
+  sinceISO: string | null | undefined,
+  maxCount = 4,
+): ProductUpdate[] {
+  const since = sinceISO ? new Date(sinceISO).getTime() : 0;
+  const slug = metroSlug(metroName);
+  const relevant = PRODUCT_UPDATES.filter((u) => {
+    if (new Date(u.dateISO).getTime() < since) return false;
+    if (u.metros === '*') return true;
+    return slug ? u.metros.includes(slug) : false;
+  });
+  // metro-specific first, then universal, most recent first within each group
+  const byDateDesc = (a: ProductUpdate, b: ProductUpdate) => (a.dateISO < b.dateISO ? 1 : -1);
+  const specific = relevant.filter((u) => u.metros !== '*').sort(byDateDesc);
+  const universal = relevant.filter((u) => u.metros === '*').sort(byDateDesc);
+  return [...specific, ...universal].slice(0, maxCount);
+}
+
+// ── Recommendation shaping ───────────────────────────────────────────────────
+// Gives the (already metro/exclusion-filtered) DB recommendation rows the
+// three distinct roles the campaign requires. Deterministic, no fabricated
+// collaborative-filtering claim.
+
+export type RawRecommendation = { id: string; body: string; difficulty?: number | null; popularity?: number; url: string };
+export type RoledRecommendation = RawRecommendation & { role: 'easy_next' | 'made_for_you' | 'try_different' };
+
+export function assignRecommendationRoles(items: RawRecommendation[]): RoledRecommendation[] {
+  if (!items?.length) return [];
+  const sorted = [...items].sort((a, b) => (a.difficulty ?? 99) - (b.difficulty ?? 99));
+  const roles: RoledRecommendation['role'][] = ['easy_next', 'made_for_you', 'try_different'];
+  return sorted.slice(0, 3).map((it, i) => ({ ...it, role: roles[i] ?? 'made_for_you' }));
+}
+
+export const RECOMMENDATION_HEADING = 'Based on what you’ve checked off, try these next';
+
+// Some metros' curated_lists rows are still titled/tagged for a prior
+// season (Phoenix's are "Summer 2026" as of this campaign's build — a real
+// content-staleness gap in production, not a code bug). Never surface a
+// visibly wrong-season title in a Fall/August recap email.
+export function isStaleSeasonTitle(title: string): boolean {
+  return /\b(summer|winter|spring)\s*20\d\d\b/i.test(title);
+}
+
+export type CuratedListRow = { id: string; title: string; season?: string | null };
+
+// Structural filter (season column) is primary; title-text regex is a
+// defense-in-depth safety net only, in case the season column is ever
+// wrong. Caller is responsible for querying with `season IN ('fall',
+// 'anytime')` already — this re-applies the same season allowlist so the
+// function is correct even if called with an unfiltered row set (e.g. in
+// a test), and always caps at 3.
+export function selectThemedLists(rows: CuratedListRow[]): { title: string; id: string }[] {
+  const allowedSeasons = new Set(['fall', 'anytime']);
+  return rows
+    .filter((r) => (r.season == null || allowedSeasons.has(r.season)) && !isStaleSeasonTitle(r.title))
+    .slice(0, 3)
+    .map((r) => ({ id: r.id, title: r.title }));
+}
+
+// ── Segment → opening angle (used for the personal-opening headline) ───────
+
+export const SEGMENT_OPENING: Record<Segment, string> = {
+  ACTIVE_AUGUST: 'Look what you checked off in August.',
+  FALL_CONTINUATION: 'Your Fall progress is waiting.',
+  RETURNING_INACTIVE: 'A lot changed while you were away.',
+  NEVER_CHECKED_OFF: "Let's find your first CheckOff.",
+  EXCLUDED: '',
+};
+
+// A never-checked-off user with no reliable metro evidence gets this
+// opening instead of SEGMENT_OPENING.NEVER_CHECKED_OFF — never claims to
+// know where they are, never shows Phoenix-specific anything.
+export const UNKNOWN_METRO_OPENING = 'CheckOff got a lot bigger in August.';
+
+// The four markets currently live (metro_areas.is_active=true as of this
+// campaign — verified against production, not hardcoded from memory of an
+// older launch state). Used only for the market-discovery section shown to
+// never-checked-off users with unknown metro; never presented as "nearby."
+export const AVAILABLE_MARKETS = ['Phoenix', 'Milwaukee', 'Tucson', 'Denver'] as const;

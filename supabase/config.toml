@@ -1,2 +1,9 @@
 [functions.stripe-webhook]
 verify_jwt = false
+
+# campaign-link is a public GET redirect target clicked from email clients —
+# it never carries a Supabase Authorization header. Its own HMAC token (see
+# _shared/linkSigning.ts) is the actual auth check, verified inside the
+# function itself.
+[functions.campaign-link]
+verify_jwt = false
