@@ -6,6 +6,7 @@ import {
   assignRecommendationRoles, metroSlug, isStaleSeasonTitle, selectThemedLists,
   AVAILABLE_MARKETS, UNKNOWN_METRO_OPENING, testSendSubject,
   validateCityInput, MAX_CITY_LENGTH, isSafeDestination, safeDestination, CAMPAIGN_LINK_FALLBACK_DEST,
+  classifyDestination, translateDeepLinkForBrowser,
 } from './campaignLogic.ts';
 
 // ── Calendar boundaries ──────────────────────────────────────────────────────
@@ -222,6 +223,63 @@ Deno.test('safeDestination: falls back to the known-safe default for unsafe/miss
   assertEquals(safeDestination(null), CAMPAIGN_LINK_FALLBACK_DEST);
   assertEquals(safeDestination(''), CAMPAIGN_LINK_FALLBACK_DEST);
   assertEquals(safeDestination('checkoff://home'), 'checkoff://home');
+});
+
+Deno.test('isSafeDestination: allows the App Store and Play Store URLs used by fallback-page buttons', () => {
+  assert(isSafeDestination('https://apps.apple.com/us/app/checkoff/id6762678030'));
+  assert(isSafeDestination('https://play.google.com/store/apps/details?id=com.getcheckoff.app'));
+  assert(!isSafeDestination('https://apps.apple.com.evil.com'));
+});
+
+// ── Deep-link classification + browser-safe translation (Sept 2 hotfix) ────
+
+Deno.test('classifyDestination: identifies checkoff:// list/item/home', () => {
+  assertEquals(classifyDestination('checkoff://list?id=abc-123'), { type: 'list', id: 'abc-123' });
+  assertEquals(classifyDestination('checkoff://item?id=xyz-789'), { type: 'item', id: 'xyz-789' });
+  assertEquals(classifyDestination('checkoff://home'), { type: 'home', id: null });
+});
+
+Deno.test('classifyDestination: identifies already-https destinations', () => {
+  assertEquals(classifyDestination('https://getcheckoff.com/list?id=abc'), { type: 'list', id: 'abc' });
+  assertEquals(classifyDestination('https://getcheckoff.com/item?id=xyz'), { type: 'item', id: 'xyz' });
+  assertEquals(classifyDestination('https://getcheckoff.com/join/code123'), { type: 'join', id: null });
+  assertEquals(classifyDestination('https://getcheckoff.com/download'), { type: 'https_other', id: null });
+});
+
+Deno.test('classifyDestination: unparseable input is unknown, never throws', () => {
+  assertEquals(classifyDestination('not a url'), { type: 'unknown', id: null });
+});
+
+Deno.test('translateDeepLinkForBrowser: an existing delivered checkoff://item URL becomes safe HTTPS', () => {
+  assertEquals(translateDeepLinkForBrowser('checkoff://item?id=832ab5b4-2b62-463e-a26c-0647751a0460'),
+    'https://getcheckoff.com/item?id=832ab5b4-2b62-463e-a26c-0647751a0460');
+});
+
+Deno.test('translateDeepLinkForBrowser: an existing delivered checkoff://list URL becomes safe HTTPS', () => {
+  assertEquals(translateDeepLinkForBrowser('checkoff://list?id=419ba1e2-c846-434f-b168-8829e8a90a73'),
+    'https://getcheckoff.com/list?id=419ba1e2-c846-434f-b168-8829e8a90a73');
+});
+
+Deno.test('translateDeepLinkForBrowser: an existing delivered home/main-CTA URL becomes safe HTTPS', () => {
+  assertEquals(translateDeepLinkForBrowser('checkoff://home'), 'https://getcheckoff.com/open');
+});
+
+Deno.test('translateDeepLinkForBrowser: never returns a raw checkoff:// URL for a browser redirect', () => {
+  for (const dest of ['checkoff://home', 'checkoff://list?id=x', 'checkoff://item?id=x', 'checkoff://something-unknown']) {
+    const translated = translateDeepLinkForBrowser(dest);
+    assert(!translated.startsWith('checkoff://'), `expected ${dest} to translate away from checkoff://, got ${translated}`);
+    assert(translated.startsWith('https://getcheckoff.com'));
+  }
+});
+
+Deno.test('translateDeepLinkForBrowser: an already-https destination passes through untouched', () => {
+  assertEquals(translateDeepLinkForBrowser('https://getcheckoff.com/join/abc'), 'https://getcheckoff.com/join/abc');
+  assertEquals(translateDeepLinkForBrowser('https://getcheckoff.com/download'), 'https://getcheckoff.com/download');
+});
+
+Deno.test('translateDeepLinkForBrowser: unrecognized checkoff:// path falls back to the generic open page, not an error', () => {
+  assertEquals(translateDeepLinkForBrowser('checkoff://something-unknown'), 'https://getcheckoff.com/open');
+  assertEquals(translateDeepLinkForBrowser('checkoff://item'), 'https://getcheckoff.com/open'); // item with no id
 });
 
 // ── Test-send subject prefixing (inbox test package, section 5) ────────────

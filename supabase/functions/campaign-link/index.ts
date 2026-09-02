@@ -57,10 +57,42 @@
 // Also closed a pre-existing open-redirect gap: `dest` was followed
 // unconditionally; it's now validated against isSafeDestination() and
 // falls back to a known-safe URL otherwise.
+//
+// HOTFIX 2026-09-02, part 3: recommendation/season/themed-list/main-CTA
+// links all carry checkoff://... as their dest — redirecting an email
+// click straight there does nothing visible in a browser, embedded email
+// webview, or on a device without CheckOff installed/scheme-registered
+// (desktop, most testing contexts, a fresh install). Every checkoff:// dest
+// is now translated server-side to a real getcheckoff.com page
+// (translateDeepLinkForBrowser, in campaignLogic.ts) before it is ever used
+// as a redirect Location — no branch returns a raw checkoff:// URL to an
+// email click again. /list?id=<uuid> reuses the app's own already-wired
+// React Navigation route (App.jsx linking.config) over https, which is a
+// real iOS Universal Link once /list/* is added to the live
+// apple-app-site-association file (done, see getcheckoff-site). Android has
+// no equivalent App Link intentFilter for /list yet — that requires a new
+// native build (out of scope for this hotfix) — so /list?id=... still
+// serves as a correct, useful browser fallback there today; the id-derived
+// URL will simply start deep-linking on Android too once wired app-side,
+// with zero further changes needed here. /item?id=<uuid> has no in-app
+// route at all yet on either platform (checkoff://item?id=... has never
+// actually opened anything in the app — a separate, pre-existing gap, not
+// introduced by this campaign) — it is a browser-fallback-only,
+// forward-compatible placeholder for the same reason.
+//
+// The two secondary buttons a fallback page itself offers ("Open in
+// CheckOff", App Store, Play Store) route back through this same function
+// with ev=app_open_click/appstore_click/playstore_click specifically so
+// they still get logged — but these are NOT translated (would just loop
+// back to the same fallback page) and store URLs are allowed by
+// isSafeDestination's extended host allowlist.
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { getLinkSecret, verifyToken } from '../_shared/linkSigning.ts';
-import { safeDestination, validateCityInput, MAX_CITY_LENGTH } from '../_shared/campaignLogic.ts';
+import {
+  safeDestination, validateCityInput, MAX_CITY_LENGTH,
+  classifyDestination, translateDeepLinkForBrowser, FALLBACK_PAGE_ACTION_EVENTS,
+} from '../_shared/campaignLogic.ts';
 
 const SITE_URL = 'https://getcheckoff.com';
 const VOTE_PAGE_URL = `${SITE_URL}/vote`;
@@ -87,11 +119,21 @@ function voteFormUrl(userId: string, campaignId: string, token: string, segment:
   return `${VOTE_PAGE_URL}?${params.toString()}`;
 }
 
+// destinationOriginal is the RAW dest as received (before any browser-safe
+// translation) — classification must run on the original checkoff:// value
+// so old delivered links still report an accurate destination_type/id.
 async function logEvent(
-  supabase: any, userId: string, campaignId: string, eventType: string, metadata: Record<string, unknown>,
+  supabase: any, userId: string, campaignId: string, eventType: string,
+  metadata: Record<string, unknown>, destinationOriginal?: string,
 ): Promise<void> {
+  const classified = destinationOriginal ? classifyDestination(destinationOriginal) : null;
+  const fullMetadata = {
+    ...metadata,
+    ...(classified ? { destination_type: classified.type, destination_id: classified.id } : {}),
+    is_test_campaign: campaignId.endsWith('_test'),
+  };
   const { error } = await supabase.from('interaction_events').insert({
-    user_id: userId, event_type: eventType, campaign_id: campaignId, metadata,
+    user_id: userId, event_type: eventType, campaign_id: campaignId, metadata: fullMetadata,
   });
   if (error) console.error('campaign-link: attribution insert failed', error.message);
 }
@@ -189,11 +231,17 @@ Deno.serve(async (req) => {
   const segment = q.get('seg');
   const recommendationId = q.get('rec');
   const dest = safeDestination(q.get('dest'));
+  // FALLBACK_PAGE_ACTION_EVENTS (a fallback page's own "Open in CheckOff" /
+  // store buttons) intentionally carry a checkoff:// or store dest that
+  // must NOT be translated again — everything else always gets the
+  // browser-safe version so no branch ever redirects an email click
+  // straight to a raw checkoff:// URL.
+  const browserDest = FALLBACK_PAGE_ACTION_EVENTS.has(q.get('ev') || '') ? dest : translateDeepLinkForBrowser(dest);
   let metaExtra: Record<string, unknown> = {};
   try { if (q.get('meta')) metaExtra = JSON.parse(q.get('meta')!); } catch { /* ignore malformed meta */ }
 
   if (!userId || !campaignId || !token) {
-    return redirectResponse(dest); // malformed link — still send the person where they meant to go
+    return redirectResponse(browserDest); // malformed link — still send the person where they meant to go
   }
 
   let valid = false;
@@ -205,7 +253,7 @@ Deno.serve(async (req) => {
 
   if (!valid) {
     console.warn(`campaign-link: invalid token for u=${userId} c=${campaignId}`);
-    return redirectResponse(dest);
+    return redirectResponse(browserDest);
   }
 
   const supabase = createClient(
@@ -230,7 +278,7 @@ Deno.serve(async (req) => {
       .eq('id', userId);
     if (error) console.error('campaign-link: unsubscribe update failed', error.message);
 
-    await logEvent(supabase, userId, campaignId, eventType, { segment, recommendation_id: recommendationId, dest, ...metaExtra });
+    await logEvent(supabase, userId, campaignId, eventType, { segment, recommendation_id: recommendationId, dest, ...metaExtra }, dest);
 
     return redirectResponse(UNSUBSCRIBED_URL);
   }
@@ -247,12 +295,15 @@ Deno.serve(async (req) => {
     // before this fix were annotated in place, not renamed (see Open Brain).
     await logEvent(supabase, userId, campaignId, 'next_metro_vote_opened', {
       segment, dest, stage: 'opened', city: null, is_submitted_vote: false, ...metaExtra,
-    });
+    }, dest);
     return redirectResponse(voteFormUrl(userId, campaignId, token, segment, dest));
   }
 
   // ── standard tracked redirect (recommendation click, themed list,
-  // season continue, main CTA, invite click, etc.) ─────────────────────────
-  await logEvent(supabase, userId, campaignId, eventType, { segment, recommendation_id: recommendationId, dest, ...metaExtra });
-  return redirectResponse(dest);
+  // season continue, main CTA, invite click, fallback-page secondary
+  // actions, etc.) — browserDest is dest verbatim for
+  // FALLBACK_PAGE_ACTION_EVENTS, translated away from checkoff:// for
+  // everything else. ────────────────────────────────────────────────────
+  await logEvent(supabase, userId, campaignId, eventType, { segment, recommendation_id: recommendationId, dest, ...metaExtra }, dest);
+  return redirectResponse(browserDest);
 });

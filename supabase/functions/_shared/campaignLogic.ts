@@ -64,6 +64,9 @@ export function validateCityInput(raw: string | null | undefined): CityValidatio
 // param) falls back to a known-safe default rather than being followed.
 
 export const CAMPAIGN_LINK_FALLBACK_DEST = 'https://getcheckoff.com/download';
+export const SITE_URL = 'https://getcheckoff.com';
+
+const SAFE_HTTPS_HOSTS = new Set(['getcheckoff.com', 'apps.apple.com', 'play.google.com']);
 
 export function isSafeDestination(raw: string): boolean {
   let parsed: URL;
@@ -73,13 +76,79 @@ export function isSafeDestination(raw: string): boolean {
     return false;
   }
   if (parsed.protocol === 'checkoff:') return true;
-  if (parsed.protocol === 'https:' && (parsed.hostname === 'getcheckoff.com' || parsed.hostname.endsWith('.getcheckoff.com'))) return true;
+  if (parsed.protocol === 'https:' && (SAFE_HTTPS_HOSTS.has(parsed.hostname) || parsed.hostname.endsWith('.getcheckoff.com'))) return true;
   return false;
 }
 
 export function safeDestination(raw: string | null | undefined): string {
   const candidate = raw || CAMPAIGN_LINK_FALLBACK_DEST;
   return isSafeDestination(candidate) ? candidate : CAMPAIGN_LINK_FALLBACK_DEST;
+}
+
+// ── Deep-link classification + browser-safe translation ─────────────────────
+// Every already-delivered campaign email (Sept 1 send, 105 recipients) has
+// checkoff://... baked into its signed campaign-link URLs. A raw checkoff://
+// redirect target does nothing useful in a browser/email client with no
+// handler for that scheme — this is the root cause behind "buttons that
+// silently do nothing." classifyDestination() identifies what a dest
+// (old checkoff:// or already-https) actually points at, for both
+// attribution metadata and translation; translateDeepLinkForBrowser() maps
+// it to a real getcheckoff.com page that is guaranteed to render something
+// useful in a browser, with an explicit (not automatic) attempt to open the
+// app from there.
+//
+// Route choices deliberately mirror the app's own existing React Navigation
+// linking config (App.jsx `linking.config.screens...`), which already
+// treats 'list' + '?id=' as a valid path for both checkoff:// and
+// https://getcheckoff.com — so /list?id=<uuid> is not a new invented route,
+// it is the app's own existing route, just reached over https instead of a
+// custom scheme. There is no equivalent 'item' route wired in the app today
+// (checkoff://item?id=... has never actually opened anything in the app,
+// checkoff:// or not — a separate, pre-existing gap, not introduced by this
+// campaign) — /item?id=<uuid> is a forward-compatible placeholder: it works
+// today only as a browser fallback, and will start resolving as a real
+// in-app deep link with zero further email/link changes whenever the app
+// gains that route.
+
+export type DestinationType = 'list' | 'item' | 'home' | 'join' | 'https_other' | 'unknown';
+
+export function classifyDestination(raw: string): { type: DestinationType; id: string | null } {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return { type: 'unknown', id: null };
+  }
+  if (parsed.protocol === 'checkoff:') {
+    const path = parsed.hostname; // checkoff://list?id=x -> hostname 'list'
+    const id = parsed.searchParams.get('id');
+    if (path === 'list') return { type: 'list', id };
+    if (path === 'item') return { type: 'item', id };
+    if (path === 'home' || path === '') return { type: 'home', id: null };
+    return { type: 'unknown', id: null };
+  }
+  if (parsed.protocol === 'https:') {
+    if (parsed.pathname.startsWith('/list')) return { type: 'list', id: parsed.searchParams.get('id') };
+    if (parsed.pathname.startsWith('/item')) return { type: 'item', id: parsed.searchParams.get('id') };
+    if (parsed.pathname.startsWith('/join')) return { type: 'join', id: null };
+    return { type: 'https_other', id: null };
+  }
+  return { type: 'unknown', id: null };
+}
+
+// Event types used for a fallback page's own secondary buttons — these are
+// deliberate, explicit, user-initiated actions taken FROM an already-loaded
+// real webpage, not an automatic email-click redirect, so a checkoff://
+// target is appropriate for these specifically (see file header on why a
+// raw checkoff:// redirect straight from an email click is not).
+export const FALLBACK_PAGE_ACTION_EVENTS = new Set(['app_open_click', 'appstore_click', 'playstore_click']);
+
+export function translateDeepLinkForBrowser(raw: string): string {
+  if (!raw.startsWith('checkoff://')) return raw; // already a real https destination
+  const { type, id } = classifyDestination(raw);
+  if (type === 'list' && id) return `${SITE_URL}/list?id=${encodeURIComponent(id)}`;
+  if (type === 'item' && id) return `${SITE_URL}/item?id=${encodeURIComponent(id)}`;
+  return `${SITE_URL}/open`; // home, or any unrecognized checkoff:// path
 }
 
 // ── Name handling ────────────────────────────────────────────────────────────
