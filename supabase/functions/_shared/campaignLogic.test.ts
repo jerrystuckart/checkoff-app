@@ -6,7 +6,7 @@ import {
   assignRecommendationRoles, metroSlug, isStaleSeasonTitle, selectThemedLists,
   AVAILABLE_MARKETS, UNKNOWN_METRO_OPENING, testSendSubject,
   validateCityInput, MAX_CITY_LENGTH, isSafeDestination, safeDestination, CAMPAIGN_LINK_FALLBACK_DEST,
-  classifyDestination, translateDeepLinkForBrowser,
+  classifyDestination, translateDeepLinkForBrowser, voteFormUrl, classifyVotePostEligibility,
 } from './campaignLogic.ts';
 
 // ── Calendar boundaries ──────────────────────────────────────────────────────
@@ -354,4 +354,62 @@ Deno.test('assignRecommendationRoles: sparse data (0-2 items) never throws', () 
   const one = assignRecommendationRoles([{ id: '1', body: 'x', url: 'u' }]);
   assertEquals(one.length, 1);
   assertEquals(one[0].role, 'easy_next');
+});
+
+// ── voteFormUrl / classifyVotePostEligibility (Sept 2 vote-submission hotfix) ──
+// Regression coverage for the real production bug: voteFormUrl() used to
+// omit `ev=next_metro_vote`, so the static page's form action (built from
+// that URL) posted with no `ev` at all and was rejected before any city
+// validation — a real submitted vote (Jerry's wife) was silently lost.
+
+Deno.test('voteFormUrl: always includes ev=next_metro_vote — the exact regression', () => {
+  const url = voteFormUrl('u1', 'recap_2026-08', 'tok123', 'ACTIVE_AUGUST', 'https://getcheckoff.com');
+  const parsed = new URL(url);
+  assertEquals(parsed.searchParams.get('ev'), 'next_metro_vote');
+});
+
+Deno.test('voteFormUrl: preserves u/c/t/seg/dest exactly, matching a real delivered link', () => {
+  // The exact shape of Jerry's delivered production URL's params.
+  const url = voteFormUrl(
+    '11275026-65be-4421-80a4-46c57195408b', 'recap_2026-08', '342dc7e6b922fc1eaf7358a4',
+    'ACTIVE_AUGUST', 'https://getcheckoff.com',
+  );
+  const p = new URL(url).searchParams;
+  assertEquals(p.get('u'), '11275026-65be-4421-80a4-46c57195408b');
+  assertEquals(p.get('c'), 'recap_2026-08');
+  assertEquals(p.get('t'), '342dc7e6b922fc1eaf7358a4');
+  assertEquals(p.get('seg'), 'ACTIVE_AUGUST');
+  assertEquals(p.get('dest'), 'https://getcheckoff.com');
+  assertEquals(p.get('ev'), 'next_metro_vote');
+});
+
+Deno.test('voteFormUrl: null segment becomes an empty string, never the literal "null"', () => {
+  const url = voteFormUrl('u1', 'c1', 't1', null, 'https://getcheckoff.com');
+  assertEquals(new URL(url).searchParams.get('seg'), '');
+});
+
+Deno.test('voteFormUrl: optional error param is included only when given', () => {
+  const withError = voteFormUrl('u1', 'c1', 't1', null, 'https://getcheckoff.com', 'too_long');
+  assertEquals(new URL(withError).searchParams.get('error'), 'too_long');
+  const withoutError = voteFormUrl('u1', 'c1', 't1', null, 'https://getcheckoff.com');
+  assertEquals(new URL(withoutError).searchParams.get('error'), null);
+});
+
+Deno.test('classifyVotePostEligibility: ev=next_metro_vote is explicit', () => {
+  assertEquals(classifyVotePostEligibility('next_metro_vote'), 'explicit');
+});
+
+Deno.test('classifyVotePostEligibility: no ev at all is legacy_recovery, not rejected', () => {
+  assertEquals(classifyVotePostEligibility(null), 'legacy_recovery');
+  assertEquals(classifyVotePostEligibility(undefined), 'legacy_recovery');
+});
+
+Deno.test('classifyVotePostEligibility: an explicit but different event type is rejected, never silently accepted', () => {
+  assertEquals(classifyVotePostEligibility('recommendation_click'), 'rejected');
+  assertEquals(classifyVotePostEligibility('email_click'), 'rejected');
+  assertEquals(classifyVotePostEligibility('unsubscribe'), 'rejected');
+});
+
+Deno.test('classifyVotePostEligibility: empty string ev is treated as absent (legacy_recovery), not rejected', () => {
+  assertEquals(classifyVotePostEligibility(''), 'legacy_recovery');
 });

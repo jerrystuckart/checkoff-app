@@ -92,10 +92,10 @@ import { getLinkSecret, verifyToken } from '../_shared/linkSigning.ts';
 import {
   safeDestination, validateCityInput, MAX_CITY_LENGTH,
   classifyDestination, translateDeepLinkForBrowser, FALLBACK_PAGE_ACTION_EVENTS,
+  voteFormUrl, classifyVotePostEligibility,
 } from '../_shared/campaignLogic.ts';
 
 const SITE_URL = 'https://getcheckoff.com';
-const VOTE_PAGE_URL = `${SITE_URL}/vote`;
 const VOTE_SUBMITTED_URL = `${SITE_URL}/vote-submitted`;
 const UNSUBSCRIBED_URL = `${SITE_URL}/unsubscribed`;
 
@@ -111,12 +111,6 @@ function redirectResponse(location: string): Response {
     status: 302,
     headers: { Location: location, 'Cache-Control': 'no-store' },
   });
-}
-
-function voteFormUrl(userId: string, campaignId: string, token: string, segment: string | null, dest: string, error?: string): string {
-  const params = new URLSearchParams({ u: userId, c: campaignId, t: token, seg: segment || '', dest });
-  if (error) params.set('error', error);
-  return `${VOTE_PAGE_URL}?${params.toString()}`;
 }
 
 // destinationOriginal is the RAW dest as received (before any browser-safe
@@ -145,8 +139,9 @@ async function logEvent(
 // not "count me twice."
 async function recordVoteSubmission(
   supabase: any, userId: string, campaignId: string, city: string, segment: string | null,
+  submissionFlow: 'explicit' | 'legacy_recovery',
 ): Promise<void> {
-  const metadata = { segment, city, campaign_id: campaignId, stage: 'submitted', is_submitted_vote: true };
+  const metadata = { segment, city, campaign_id: campaignId, stage: 'submitted', is_submitted_vote: true, submission_flow: submissionFlow };
   const { data: existing, error: findError } = await supabase
     .from('interaction_events')
     .select('id')
@@ -168,7 +163,7 @@ async function recordVoteSubmission(
   }
 }
 
-async function handleVoteSubmission(req: Request, supabase: any): Promise<Response> {
+async function handleVoteSubmission(req: Request, supabase: any, submissionFlow: 'explicit' | 'legacy_recovery'): Promise<Response> {
   let form = new URLSearchParams();
   try {
     const contentType = req.headers.get('content-type') || '';
@@ -212,7 +207,7 @@ async function handleVoteSubmission(req: Request, supabase: any): Promise<Respon
   }
 
   const city: string = cityResult.city;
-  await recordVoteSubmission(supabase, userId, campaignId, city, segment);
+  await recordVoteSubmission(supabase, userId, campaignId, city, segment, submissionFlow);
   return redirectResponse(`${VOTE_SUBMITTED_URL}?city=${encodeURIComponent(city)}`);
 }
 
@@ -263,11 +258,22 @@ Deno.serve(async (req) => {
   );
 
   // ── POST: vote submission (only meaningful path for POST) ────────────────
+  // Legacy-recovery: a POST with NO `ev` at all (as opposed to an explicit,
+  // different event type) is tolerated as a *candidate* next_metro_vote
+  // submission — covers anyone whose browser already had the broken
+  // pre-fix /vote page open (built before voteFormUrl() carried ev) when
+  // this deployed. This does NOT broaden acceptance of arbitrary eventless
+  // POSTs: handleVoteSubmission still requires a valid signed token and a
+  // non-empty, validated city exactly as the explicit path does — a
+  // malformed or unsigned eventless POST is rejected the same way an
+  // explicit one would be. Only the flow actually recorded differs
+  // (submission_flow: 'explicit' | 'legacy_recovery'), for audit clarity.
   if (method === 'POST') {
-    if (eventType !== 'next_metro_vote') {
+    const eligibility = classifyVotePostEligibility(q.get('ev'));
+    if (eligibility === 'rejected') {
       return jsonResponse({ error: 'POST not supported for this event type' }, 400);
     }
-    return await handleVoteSubmission(req, supabase);
+    return await handleVoteSubmission(req, supabase, eligibility);
   }
 
   // ── unsubscribe ────────────────────────────────────────────────────────

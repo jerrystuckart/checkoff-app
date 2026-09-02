@@ -151,6 +151,47 @@ export function translateDeepLinkForBrowser(raw: string): string {
   return `${SITE_URL}/open`; // home, or any unrecognized checkoff:// path
 }
 
+// ── Vote-form URL + legacy-recovery classification ──────────────────────────
+// HOTFIX 2026-09-02, part 4: voteFormUrl() previously omitted `ev` from the
+// redirect it builds to the static /vote page. The static page's own form
+// action is built from its URL's query string, so a real production vote
+// (Jerry's wife, delivered link) posted with NO `ev` param at all, and was
+// rejected by campaign-link ("POST not supported for this event type")
+// before any city validation or DB write — nothing was recorded, and
+// nothing on that rejection path logs the request body, so the submitted
+// city cannot be recovered. `ev: 'next_metro_vote'` is now always included
+// here — the single, exhaustively-tested source of truth for this URL.
+
+export function voteFormUrl(
+  userId: string, campaignId: string, token: string, segment: string | null, dest: string, error?: string,
+): string {
+  const params = new URLSearchParams({ u: userId, c: campaignId, t: token, seg: segment || '', dest, ev: 'next_metro_vote' });
+  if (error) params.set('error', error);
+  return `${SITE_URL}/vote?${params.toString()}`;
+}
+
+export type VotePostEligibility = 'explicit' | 'legacy_recovery' | 'rejected';
+
+// Decides whether a POST is allowed into the vote-submission handler at
+// all, from the `ev` query param alone (before any body/token/city
+// validation, which happens unconditionally afterward regardless of which
+// eligible flow this returns — this function only ever narrows which POSTs
+// are even considered, never widens what counts as a valid vote).
+// 'explicit'       — ev=next_metro_vote, the normal current-page case.
+// 'legacy_recovery' — ev is absent entirely (not just non-matching) — the
+//                     tightly-scoped compatibility path for a browser tab
+//                     that already had the pre-fix /vote page open, whose
+//                     form action was built without ev at all. Still fully
+//                     re-validated (token + city) downstream; this alone
+//                     never records a vote.
+// 'rejected'        — ev is present but set to something else entirely —
+//                     genuinely not a vote submission, never accepted.
+export function classifyVotePostEligibility(evParam: string | null | undefined): VotePostEligibility {
+  if (evParam === 'next_metro_vote') return 'explicit';
+  if (!evParam) return 'legacy_recovery';
+  return 'rejected';
+}
+
 // ── Name handling ────────────────────────────────────────────────────────────
 
 export function firstName(displayName: string | null | undefined): string | null {
