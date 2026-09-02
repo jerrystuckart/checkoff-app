@@ -5,6 +5,7 @@ import {
   streakMessage, almostThereMessage, seasonalClosingCopy, selectSinceLastActivityUpdates,
   assignRecommendationRoles, metroSlug, isStaleSeasonTitle, selectThemedLists,
   AVAILABLE_MARKETS, UNKNOWN_METRO_OPENING, testSendSubject,
+  validateCityInput, MAX_CITY_LENGTH, isSafeDestination, safeDestination, CAMPAIGN_LINK_FALLBACK_DEST,
 } from './campaignLogic.ts';
 
 // ── Calendar boundaries ──────────────────────────────────────────────────────
@@ -157,6 +158,70 @@ Deno.test('selectSinceLastActivityUpdates: no history falls back to universal ne
 Deno.test('selectSinceLastActivityUpdates: excludes updates before the since date', () => {
   const picks = selectSinceLastActivityUpdates('Denver Metro', '2026-09-01');
   assert(!picks.some((p) => p.id === 'denver_launch')); // happened before the cutoff
+});
+
+// ── Next-metro-vote city validation (campaign-link hotfix) ─────────────────
+
+Deno.test('validateCityInput: accepts a normal city, trims and collapses whitespace', () => {
+  const r = validateCityInput('  Austin,   TX  ');
+  assert(r.ok);
+  if (r.ok) assertEquals(r.city, 'Austin, TX');
+});
+
+Deno.test('validateCityInput: rejects empty/whitespace-only input', () => {
+  assertEquals(validateCityInput('').ok, false);
+  assertEquals(validateCityInput('   ').ok, false);
+  assertEquals(validateCityInput(null).ok, false);
+  const r = validateCityInput('');
+  if (r.ok === false) assertEquals(r.reason, 'empty');
+});
+
+Deno.test('validateCityInput: rejects excessively long input', () => {
+  const long = 'A'.repeat(MAX_CITY_LENGTH + 1);
+  const r = validateCityInput(long);
+  assertEquals(r.ok, false);
+  if (r.ok === false) assertEquals(r.reason, 'too_long');
+});
+
+Deno.test('validateCityInput: accepts exactly the max length', () => {
+  const exact = 'A'.repeat(MAX_CITY_LENGTH);
+  assert(validateCityInput(exact).ok);
+});
+
+Deno.test('validateCityInput: rejects angle-bracket/HTML input as unsafe', () => {
+  const r = validateCityInput('<script>alert(1)</script>');
+  assertEquals(r.ok, false);
+  if (r.ok === false) assertEquals(r.reason, 'unsafe_characters');
+  const r2 = validateCityInput('Austin<img src=x>');
+  assertEquals(r2.ok, false);
+});
+
+// ── Destination safety (open-redirect prevention) ───────────────────────────
+
+Deno.test('isSafeDestination: allows checkoff:// deep links', () => {
+  assert(isSafeDestination('checkoff://home'));
+  assert(isSafeDestination('checkoff://item?id=abc'));
+});
+
+Deno.test('isSafeDestination: allows getcheckoff.com and subdomains over https', () => {
+  assert(isSafeDestination('https://getcheckoff.com/download'));
+  assert(isSafeDestination('https://getcheckoff.com'));
+  assert(isSafeDestination('https://www.getcheckoff.com/join'));
+});
+
+Deno.test('isSafeDestination: rejects unrelated/attacker-controlled domains', () => {
+  assert(!isSafeDestination('https://evil.com'));
+  assert(!isSafeDestination('https://getcheckoff.com.evil.com'));
+  assert(!isSafeDestination('http://getcheckoff.com')); // not https
+  assert(!isSafeDestination('javascript:alert(1)'));
+  assert(!isSafeDestination('not a url'));
+});
+
+Deno.test('safeDestination: falls back to the known-safe default for unsafe/missing input', () => {
+  assertEquals(safeDestination('https://evil.com'), CAMPAIGN_LINK_FALLBACK_DEST);
+  assertEquals(safeDestination(null), CAMPAIGN_LINK_FALLBACK_DEST);
+  assertEquals(safeDestination(''), CAMPAIGN_LINK_FALLBACK_DEST);
+  assertEquals(safeDestination('checkoff://home'), 'checkoff://home');
 });
 
 // ── Test-send subject prefixing (inbox test package, section 5) ────────────
