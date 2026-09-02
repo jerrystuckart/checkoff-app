@@ -2,8 +2,8 @@
 // email that needs post-send attribution: recommendation clicks, "Continue
 // season list", "Vote for a city", and one-click unsubscribe. Logs a row to
 // interaction_events (campaign_id + metadata columns added in
-// 20260901_recap_campaign_phase1.sql) then either 302s to the real
-// destination or renders a small branded HTML page.
+// 20260901_recap_campaign_phase1.sql) then 302s — either to the real
+// destination, or to a static branded page on getcheckoff.com.
 //
 // GET /campaign-link
 //   ?u=<user_id>            required
@@ -17,45 +17,55 @@
 //   &rec=<item id>          optional, recommendation id echoed into metadata
 //   &meta=<url-encoded json> optional, merged into metadata
 //
-// POST /campaign-link (only meaningful with ev=next_metro_vote — the voting
-// form's own submit target) — form-encoded body: u, c, t, seg, dest, city.
+// POST /campaign-link (only meaningful with ev=next_metro_vote — the
+// getcheckoff.com/vote form's own submit target) — form-encoded body:
+// u, c, t, seg, dest, city.
 //
 // Unsigned or mismatched tokens still redirect (never breaks a user's click)
 // but skip both the attribution write and the unsubscribe/vote action, and
 // are logged server-side as invalid.
 //
-// HOTFIX 2026-09-02: two production bugs fixed here.
-//   1. HTML responses (unsubscribe, next_metro_vote) were served with a bare
-//      'Content-Type': 'text/html' header with no charset — production
-//      showed these as text/plain (raw source) to at least one real
-//      recipient. Every HTML response now explicitly sets
-//      'Content-Type: text/html; charset=utf-8' and 'Cache-Control: no-store'
-//      via a single htmlResponse() helper, never left to inference.
+// HOTFIX 2026-09-02, part 1: two production bugs fixed.
+//   1. HTML responses (unsubscribe, next_metro_vote) rendered inline here
+//      showed as raw text/plain source to a real recipient. Root cause:
+//      Supabase's Edge Functions relay downgrades Content-Type: text/html
+//      to text/plain for GET responses (an anti-XSS measure), unless the
+//      project has a Pro-plan custom domain for functions — confirmed
+//      absent for this project. POST responses are unaffected.
 //   2. next_metro_vote unconditionally claimed "Your vote is recorded" on a
-//      bare GET click, with no city ever collected — a real user could
-//      never have actually voted for anything. GET now renders a form
-//      instead and logs 'next_metro_vote_opened' (intent, not a vote); a
-//      new POST path validates and records 'next_metro_vote_submitted'
-//      with the actual city. See PRODUCTION EVENT CORRECTION note in the
-//      Sept 2 Open Brain entry for how the one pre-existing city-less
-//      'next_metro_vote' event was annotated (not deleted).
-//   Also closed a pre-existing open-redirect gap: `dest` was followed
-//   unconditionally; it's now validated against isSafeDestination() and
-//   falls back to a known-safe URL otherwise.
+//      bare GET click, with no city ever collected.
+//
+// HOTFIX 2026-09-02, part 2: since this function genuinely cannot serve
+// real HTML on GET, every human-facing page (the vote form, its
+// confirmation, and unsubscribe) now lives as a static page on
+// getcheckoff.com (a separate Vercel-hosted site, not subject to the
+// restriction above) and this function only ever 302-redirects to it —
+// redirects have no content-type/body to downgrade, so they always work.
+// campaign-link itself now does exactly two things: verify + log, then
+// either redirect (GET) or validate + record + redirect (POST). It never
+// renders a page body again.
+//   - GET  ev=next_metro_vote  -> log 'next_metro_vote_opened', redirect to
+//     https://getcheckoff.com/vote?u=..&c=..&t=..&seg=..&dest=..
+//   - POST ev=next_metro_vote  -> validate token + city, record
+//     'next_metro_vote_submitted' (newest submission per user+campaign
+//     wins — see recordVoteSubmission), redirect to
+//     https://getcheckoff.com/vote-submitted?city=<city>, or back to
+//     /vote?...&error=<reason> on validation failure (the static page
+//     re-renders the form with that error).
+//   - GET  ev=unsubscribe -> perform the opt-out, log, redirect to
+//     https://getcheckoff.com/unsubscribed
+// Also closed a pre-existing open-redirect gap: `dest` was followed
+// unconditionally; it's now validated against isSafeDestination() and
+// falls back to a known-safe URL otherwise.
 
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { getLinkSecret, verifyToken } from '../_shared/linkSigning.ts';
 import { safeDestination, validateCityInput, MAX_CITY_LENGTH } from '../_shared/campaignLogic.ts';
-import { buildVotingFormHtml, buildVoteConfirmationHtml, buildSimpleMessageHtml } from '../_shared/campaignLinkPages.ts';
 
-const HOME_URL = 'https://getcheckoff.com';
-
-function htmlResponse(html: string, status = 200): Response {
-  return new Response(html, {
-    status,
-    headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' },
-  });
-}
+const SITE_URL = 'https://getcheckoff.com';
+const VOTE_PAGE_URL = `${SITE_URL}/vote`;
+const VOTE_SUBMITTED_URL = `${SITE_URL}/vote-submitted`;
+const UNSUBSCRIBED_URL = `${SITE_URL}/unsubscribed`;
 
 function jsonResponse(obj: unknown, status = 200): Response {
   return new Response(JSON.stringify(obj), {
@@ -69,6 +79,12 @@ function redirectResponse(location: string): Response {
     status: 302,
     headers: { Location: location, 'Cache-Control': 'no-store' },
   });
+}
+
+function voteFormUrl(userId: string, campaignId: string, token: string, segment: string | null, dest: string, error?: string): string {
+  const params = new URLSearchParams({ u: userId, c: campaignId, t: token, seg: segment || '', dest });
+  if (error) params.set('error', error);
+  return `${VOTE_PAGE_URL}?${params.toString()}`;
 }
 
 async function logEvent(
@@ -134,10 +150,7 @@ async function handleVoteSubmission(req: Request, supabase: any): Promise<Respon
   const dest = safeDestination(form.get('dest') || q.get('dest'));
 
   if (!userId || !campaignId || !token) {
-    return htmlResponse(
-      buildSimpleMessageHtml('Something went wrong', 'This link is missing information — please open the voting link from your email again.', HOME_URL),
-      400,
-    );
+    return redirectResponse(SITE_URL); // nothing usable to redirect back to the form with
   }
 
   let valid = false;
@@ -147,29 +160,18 @@ async function handleVoteSubmission(req: Request, supabase: any): Promise<Respon
     console.error('campaign-link: signing secret unavailable', e.message);
   }
   if (!valid) {
-    return htmlResponse(
-      buildSimpleMessageHtml('Something went wrong', 'This voting link is no longer valid — please open it from your email again.', HOME_URL),
-      400,
-    );
+    return redirectResponse(voteFormUrl(userId, campaignId, token, segment, dest, 'invalid_token'));
   }
 
   const cityResult = validateCityInput(form.get('city'));
   if (cityResult.ok === false) {
     const reason: string = cityResult.reason;
-    const errorMessage = reason === 'empty'
-      ? 'Please enter a city.'
-      : reason === 'too_long'
-      ? `Please keep it under ${MAX_CITY_LENGTH} characters.`
-      : 'Please use plain text only.';
-    return htmlResponse(
-      buildVotingFormHtml({ u: userId, c: campaignId, t: token, seg: segment, dest, errorMessage }),
-      400,
-    );
+    return redirectResponse(voteFormUrl(userId, campaignId, token, segment, dest, reason));
   }
 
   const city: string = cityResult.city;
   await recordVoteSubmission(supabase, userId, campaignId, city, segment);
-  return htmlResponse(buildVoteConfirmationHtml(city, HOME_URL));
+  return redirectResponse(`${VOTE_SUBMITTED_URL}?city=${encodeURIComponent(city)}`);
 }
 
 Deno.serve(async (req) => {
@@ -230,27 +232,23 @@ Deno.serve(async (req) => {
 
     await logEvent(supabase, userId, campaignId, eventType, { segment, recommendation_id: recommendationId, dest, ...metaExtra });
 
-    return htmlResponse(buildSimpleMessageHtml(
-      "You're unsubscribed",
-      "You won't get CheckOff recap emails going forward. You'll still get essential account emails.",
-      HOME_URL,
-    ));
+    return redirectResponse(UNSUBSCRIBED_URL);
   }
 
-  // ── next_metro_vote (GET): render the form, log intent only — never a
-  // claimed vote. See file header for the bug this replaces. ─────────────
+  // ── next_metro_vote (GET): redirect to the static form, log intent only —
+  // never a claimed vote. See file header for the bug this replaces. ──────
   if (eventType === 'next_metro_vote') {
     // Preserves the original event_type ('next_metro_vote') for the
     // production-analytics-safe path is NOT used here — no external
     // analytics consumer depends on that string yet (interaction_events'
     // campaign_id/metadata columns are new as of this campaign), so this
     // uses the clearer, unambiguous 'next_metro_vote_opened' name going
-    // forward. The one pre-existing city-less 'next_metro_vote' row from
-    // before this fix was annotated in place, not renamed (see Open Brain).
+    // forward. The pre-existing city-less 'next_metro_vote' rows from
+    // before this fix were annotated in place, not renamed (see Open Brain).
     await logEvent(supabase, userId, campaignId, 'next_metro_vote_opened', {
       segment, dest, stage: 'opened', city: null, is_submitted_vote: false, ...metaExtra,
     });
-    return htmlResponse(buildVotingFormHtml({ u: userId, c: campaignId, t: token, seg: segment, dest }));
+    return redirectResponse(voteFormUrl(userId, campaignId, token, segment, dest));
   }
 
   // ── standard tracked redirect (recommendation click, themed list,
