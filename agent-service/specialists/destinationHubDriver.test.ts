@@ -214,6 +214,118 @@ test('destination driver: STOP_PURSUIT is a routine WAIT (HOLD), never a Jerry e
 })
 
 // ---------------------------------------------------------------------------
+// executedAt is deterministic runtime metadata, never trusted from the
+// model (Phase 2H — a real live DVA-1 proof caught a ~2-year-stale
+// hallucinated date in this field).
+// ---------------------------------------------------------------------------
+
+test('destination driver: executedAt is ALWAYS the driver\'s own clock, even when the model returns a hallucinated/false date in DVA-1, DVA-2, and DAP artifacts', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const destinationId = 'destination-false-clock'
+  const destinationName = 'False Clock'
+  const HALLUCINATED_DATE = '2024-06-10T20:28:00Z' // a real value a live model actually returned, ~2 years stale
+  const REAL_NOW = '2026-09-05T12:00:00.000Z'
+
+  executor.scriptWhen(
+    (r) => r.stage === 'D2_DVA1' && r.destinationId === destinationId,
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { artifact: { provider: 'dva1_claude_project', destinationId, destinationName, artifactRef: `dva1-${destinationId}`, executedAt: HALLUCINATED_DATE, contentHash: null, score: 90, recommendationText: 'synthetic', currentStrategyFit: 'FITS_CURRENT_STRATEGY' } },
+        methodologyId: 'destination/dva1',
+        methodologyVersion: 'v2',
+      })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'D3_DVA2' && r.destinationId === destinationId,
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: {
+          artifact: {
+            provider: 'dva2_claude_project',
+            destinationId,
+            destinationName,
+            artifactRef: `dva2-${destinationId}`,
+            executedAt: HALLUCINATED_DATE,
+            contentHash: null,
+            worthPursuing: 'YES',
+            recommendedPriority: 'HIGH_PRIORITY_CREATE_DAP',
+            recommendedNextStep: 'BUILD_DAP_NOW',
+            rationale: 'synthetic',
+            knownRisks: [],
+            evidenceGaps: [],
+            consumedDva1ArtifactRef: `dva1-${destinationId}`,
+          },
+        },
+        methodologyId: 'destination/dva2',
+        methodologyVersion: 'v2',
+      })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'D4_DAP' && r.destinationId === destinationId,
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: {
+          artifact: {
+            provider: 'dap_claude_project',
+            destinationId,
+            destinationName,
+            artifactRef: `dap-${destinationId}`,
+            executedAt: HALLUCINATED_DATE,
+            contentHash: null,
+            consumedDva2ArtifactRef: `dva2-${destinationId}`,
+            extracted: {
+              recommendedChampion: `${destinationName} Chamber director`,
+              secondaryChampions: [],
+              decisionMakers: [],
+              stakeholderOrganizations: [],
+              fundingBudgetClues: [],
+              likelyBuyer: null,
+              estimatedSalesDifficulty: null,
+              timingConsiderations: [],
+              politicalStakeholderComplexity: null,
+              objectionsHurdles: [],
+              destinationPainPoints: [],
+              checkoffValueProposition: `CheckOff for ${destinationName}`,
+              recommendedEntryStrategy: 'chamber introduction',
+              relationshipSequence: [],
+              recommendedOfferDirection: null,
+              rightNowTask: {
+                currentStage: 'Relationship Building',
+                currentGoal: `Introduce CheckOff to ${destinationName}'s Chamber`,
+                highestPriorityTask: 'Send personalized introductory email',
+                targetDate: '2026-09-12',
+                estimatedTime: '30 minutes',
+                expectedResult: 'A reply or scheduled call',
+                whyItMatters: 'First touch determines whether relationship-building can begin.',
+              },
+            },
+          },
+        },
+        methodologyId: 'destination/dap',
+        methodologyVersion: 'v2',
+      })
+  )
+
+  const run = await driveDestinationHub({ runStore, execStore, executors: [executor], now: () => REAL_NOW }, 'false-clock-synthetic', { candidate: candidate(destinationId, destinationName) })
+
+  const state = run.state as { dva1?: { executedAt: string }; dva2?: { executedAt: string }; dap?: { executedAt: string } }
+  assert.equal(state.dva1?.executedAt, REAL_NOW, 'DVA-1 executedAt must be the driver clock, never the hallucinated model date')
+  assert.notEqual(state.dva1?.executedAt, HALLUCINATED_DATE)
+  assert.equal(state.dva2?.executedAt, REAL_NOW, 'DVA-2 executedAt must be the driver clock, never the hallucinated model date')
+  assert.notEqual(state.dva2?.executedAt, HALLUCINATED_DATE)
+  assert.equal(state.dap?.executedAt, REAL_NOW, 'DAP executedAt must be the driver clock, never the hallucinated model date')
+  assert.notEqual(state.dap?.executedAt, HALLUCINATED_DATE)
+})
+
+// ---------------------------------------------------------------------------
 // 20 concurrent destinations (spec section 15/18) — isolation proof
 // ---------------------------------------------------------------------------
 

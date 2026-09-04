@@ -33,7 +33,7 @@
 // destinationRelationship.ts's stage graph + asset-level model, and the
 // SAME executor/routing/playbookRun primitives the metro driver uses.
 
-import { screenDiscoveryCandidate, evaluateDVA1Gate, validateDva2Input, routeDVA2Recommendation, validateDapInput, dapEntryConditionMet, type DiscoveryCandidate, type DVA1Artifact, type DVA2Artifact, type DAPArtifact } from '../playbooks/destinationHubLifecycle'
+import { screenDiscoveryCandidate, evaluateDVA1Gate, validateDva2Input, routeDVA2Recommendation, validateDapInput, dapEntryConditionMet, type DiscoveryCandidate, type DVA1Artifact, type DVA2Artifact, type DAPArtifact, type ExternalArtifactRef } from '../playbooks/destinationHubLifecycle'
 import { requiredAssetLevel } from '../playbooks/destinationRelationship'
 import { runExecutionRouted } from './routing'
 import type { ExecutionStore, SpecialistExecutor, SpecialistExecutionRequest, AcceptResultOutcome, ExecutionRecord } from './executor'
@@ -93,6 +93,24 @@ export interface DestinationDriverDeps {
 
 function eid(runId: string, stage: string): string {
   return `${runId}::${stage}`
+}
+
+/**
+ * `executedAt` is execution metadata, not analytical content — it must
+ * never be trusted from model output. A real live DVA-1 proof (Phase 2H)
+ * caught the model returning a hallucinated date (~2 years stale) for
+ * this field despite instructions to report the actual timestamp; a
+ * model has no reliable clock and no business asserting when the
+ * orchestrator itself ran something. This unconditionally OVERWRITES
+ * whatever the model put in evidence.artifact.executedAt with the real
+ * completion time the driver observed — same `deps.now` clock (DI'd for
+ * tests) already used for run.updatedAt. Any model-authored date that
+ * belongs in the narrative (e.g. "as of early 2026...") stays wherever
+ * the model put it inside fullReportMarkdown/extracted content —
+ * untouched — this only ever overrides the dedicated metadata field.
+ */
+function stampExecutedAt<T extends ExternalArtifactRef>(artifact: T, deps: DestinationDriverDeps): T {
+  return { ...artifact, executedAt: (deps.now ?? (() => new Date().toISOString()))() }
 }
 
 async function persist(run: PlaybookRunRecord, deps: DestinationDriverDeps): Promise<PlaybookRunRecord> {
@@ -174,7 +192,7 @@ async function stepD2Dva1(deps: DestinationDriverDeps, run: PlaybookRunRecord): 
   if (resolved.kind === 'UNAVAILABLE') return block(run, resolved.reason)
   if (resolved.kind === 'FAILED') return escalate(run, 'DVA-1 execution did not produce valid evidence.', { decisionNeeded: 'Review DVA-1 execution failure.', why: resolved.reason })
 
-  const dva1 = resolved.envelope.evidence.artifact as DVA1Artifact
+  const dva1 = stampExecutedAt(resolved.envelope.evidence.artifact as DVA1Artifact, deps)
   state.dva1 = dva1
   run.state = state
   const gate = evaluateDVA1Gate(dva1)
@@ -224,7 +242,7 @@ async function stepD3Dva2(deps: DestinationDriverDeps, run: PlaybookRunRecord): 
   if (resolved.kind === 'UNAVAILABLE') return block(run, resolved.reason)
   if (resolved.kind === 'FAILED') return escalate(run, 'DVA-2 execution did not produce valid evidence.', { decisionNeeded: 'Review DVA-2 execution failure.', why: resolved.reason })
 
-  const dva2 = resolved.envelope.evidence.artifact as DVA2Artifact
+  const dva2 = stampExecutedAt(resolved.envelope.evidence.artifact as DVA2Artifact, deps)
   // HARD ISOLATION — never accept a DVA-2 that consumed the wrong DVA-1.
   const validation = validateDva2Input(state.dva1!, dva2)
   if (!validation.valid) return block(run, `DVA-2 identity validation failed: ${validation.reason}`)
@@ -280,7 +298,7 @@ async function stepD4Dap(deps: DestinationDriverDeps, run: PlaybookRunRecord): P
   if (resolved.kind === 'UNAVAILABLE') return block(run, resolved.reason)
   if (resolved.kind === 'FAILED') return escalate(run, 'DAP execution did not produce valid evidence.', { decisionNeeded: 'Review DAP execution failure.', why: resolved.reason })
 
-  const dap = resolved.envelope.evidence.artifact as DAPArtifact
+  const dap = stampExecutedAt(resolved.envelope.evidence.artifact as DAPArtifact, deps)
   const validation = validateDapInput(state.dva2!, dap)
   if (!validation.valid) return block(run, `DAP identity validation failed: ${validation.reason}`)
 

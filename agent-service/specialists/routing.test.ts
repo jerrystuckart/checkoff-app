@@ -88,3 +88,51 @@ test('runExecutionRouted: a qualified executor actually runs and completes the e
   assert.ok('accepted' in outcome && outcome.accepted)
   assert.equal((await store.get(request.executionId))?.status, 'COMPLETE')
 })
+
+// ---------------------------------------------------------------------------
+// Hard playbook/methodology isolation guard (Phase 2H) — a Metro Launch
+// project must never be able to reach a Destination (DVA-1/DVA-2/DAP)
+// methodology, and vice versa is fine (destination_hub_lifecycle IS
+// allowed to invoke them). This is the one chokepoint both
+// metroLaunchDriver.ts and destinationHubDriver.ts share.
+// ---------------------------------------------------------------------------
+
+for (const dvaMethodologyId of ['destination/dva1', 'destination/dva2', 'destination/dap']) {
+  test(`runExecutionRouted: a metro_launch playbookKey request for ${dvaMethodologyId} fails fast with a clear error — never silently misrouted`, async () => {
+    const store = new InMemoryExecutionStore()
+    const request = req({ playbookKey: 'metro_launch', methodologyId: dvaMethodologyId, methodologyVersion: 'v2', projectId: 'san-diego' })
+    const executor = new TestExecutor()
+    await assert.rejects(
+      () => runExecutionRouted(store, request, [executor]),
+      (err: Error) => {
+        assert.match(err.message, /Orchestration guard violation/)
+        assert.match(err.message, new RegExp(dvaMethodologyId.replace('/', '\\/')))
+        assert.match(err.message, /metro_launch/)
+        assert.match(err.message, /san-diego/)
+        return true
+      }
+    )
+    // The guard must trip BEFORE any execution is even registered — never a partial/ghost record.
+    assert.ok(!(await store.get(request.executionId)))
+  })
+}
+
+test('runExecutionRouted: destination_hub_lifecycle playbookKey IS allowed to invoke DVA-1', async () => {
+  const store = new InMemoryExecutionStore()
+  const request = req({ playbookKey: 'destination_hub_lifecycle', specialist: 'destination_strategist', methodologyId: 'destination/dva1', methodologyVersion: 'v2', destinationId: 'destination-x', requiredEvidenceKeys: ['artifact'] })
+  const executor = new TestExecutor()
+  executor.script(request.executionId, fakeEnvelope({ taskId: request.executionId, objective: request.objective, evidence: { artifact: {} }, methodologyId: 'destination/dva1', methodologyVersion: 'v2' }))
+
+  const outcome = await runExecutionRouted(store, request, [executor])
+  assert.ok('accepted' in outcome && outcome.accepted)
+})
+
+test('runExecutionRouted: a metro_launch playbookKey request for its OWN methodology is unaffected by the guard', async () => {
+  const store = new InMemoryExecutionStore()
+  const request = req({ playbookKey: 'metro_launch', methodologyId: 'metro_launch', methodologyVersion: 'v1' })
+  const executor = new TestExecutor()
+  executor.script(request.executionId, fakeEnvelope({ taskId: request.executionId, objective: request.objective, evidence: { candidates: ['a'] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' }))
+
+  const outcome = await runExecutionRouted(store, request, [executor])
+  assert.ok('accepted' in outcome && outcome.accepted)
+})

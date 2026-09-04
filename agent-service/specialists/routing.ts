@@ -25,6 +25,30 @@ export function selectExecutor(request: SpecialistExecutionRequest, executors: r
   return executors.find((e) => e.canExecute(request)) ?? null
 }
 
+// ---------------------------------------------------------------------------
+// Hard playbook/methodology isolation guard. metroLaunchDriver.ts and
+// destinationHubDriver.ts both funnel every execution through this SAME
+// runExecutionRouted() — the one chokepoint both drivers share — so this
+// is where a Metro Launch project physically CANNOT reach a Destination
+// (DVA-1/DVA-2/DAP) methodology, by construction, not by convention. A
+// Metro project accidentally passed a DVA methodologyId (a bug in a
+// caller, a copy-pasted request, a future driver mistake) fails loudly
+// and immediately, before any executor or provider is even selected —
+// never a silent misroute that burns a real AI call against the wrong
+// workflow.
+// ---------------------------------------------------------------------------
+
+const DESTINATION_ONLY_METHODOLOGY_IDS: ReadonlySet<string> = new Set(['destination/dva1', 'destination/dva2', 'destination/dap'])
+const DESTINATION_HUB_PLAYBOOK_KEY_GUARD = 'destination_hub_lifecycle'
+
+function assertMethodologyAllowedForPlaybook(request: SpecialistExecutionRequest): void {
+  if (DESTINATION_ONLY_METHODOLOGY_IDS.has(request.methodologyId) && request.playbookKey !== DESTINATION_HUB_PLAYBOOK_KEY_GUARD) {
+    throw new Error(
+      `Orchestration guard violation: methodology "${request.methodologyId}" may only be invoked by playbookKey "${DESTINATION_HUB_PLAYBOOK_KEY_GUARD}", but this request came from playbookKey "${request.playbookKey}" (projectId=${request.projectId}). A Metro Launch (or any non-Destination) project must never invoke a DVA methodology.`
+    )
+  }
+}
+
 /**
  * The routed equivalent of executor.ts's runExecution: tries every
  * candidate executor in order via selectExecutor, and only when NONE
@@ -38,6 +62,7 @@ export async function runExecutionRouted(
   executors: readonly SpecialistExecutor[],
   now: () => string = () => new Date().toISOString()
 ): Promise<AcceptResultOutcome | ExecutionRecord> {
+  assertMethodologyAllowedForPlaybook(request)
   const chosen = selectExecutor(request, executors)
   if (!chosen) {
     const record = await registerExecution(store, request, null, now)
