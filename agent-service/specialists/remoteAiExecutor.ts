@@ -211,6 +211,37 @@ export function parseModelEnvelope(text: string): EnvelopeParseResult {
 // EXECUTOR_UNAVAILABLE via that completeness check.
 const WIRED_SPECIALISTS = new Set(['research_verifier', 'checkoff_editor', 'destination_strategist'])
 
+// ---------------------------------------------------------------------------
+// Which (specialist, methodology) combinations actually require LIVE web
+// research capability — Phase 2H, a real live proof caught destination_
+// strategist NEVER receiving the web_search tool, for ANY of DVA-1/DVA-2/
+// DAP, because only 'research_verifier' triggered it here. That silently
+// contradicted the real ingested methodologies, which are explicit about
+// this:
+//   - destination/dva1: "Research Budget: 3-6 web searches, 2-3 full-page
+//     fetches" (methodologies/destination/dva1/v2.md)
+//   - destination/dva2: "Research Budget: 15-25 web searches, up to 8-12
+//     meaningful page/document fetches" (methodologies/destination/dva2/v2.md)
+//   - destination/dap: explicitly the OPPOSITE — "Do not perform new
+//     research... Use only the information contained in the DVA-2 report"
+//     (methodologies/destination/dap/v2.md) — DAP must NOT get live web
+//     research; it is a downstream synthesis of DVA-2, not new research.
+// Without real search grounding, DVA-1/DVA-2 were producing internally
+// inconsistent, ungrounded numbers (e.g. a live DVA-2 proof's own report
+// stated a $20,000 Champion price while the downstream DAP referenced an
+// "approved DVA-2" price of $9,500 that never appeared anywhere in the
+// DVA-2 artifact) — a symptom of the model confabulating a research
+// process it was never actually given tools to perform.
+// ---------------------------------------------------------------------------
+
+const LIVE_WEB_RESEARCH_METHODOLOGY_IDS: ReadonlySet<string> = new Set(['metro_launch', 'destination/dva1', 'destination/dva2'])
+
+function methodologyRequiresLiveWebResearch(request: SpecialistExecutionRequest): boolean {
+  if (request.specialist === 'research_verifier') return true
+  if (request.specialist === 'destination_strategist') return LIVE_WEB_RESEARCH_METHODOLOGY_IDS.has(request.methodologyId)
+  return false
+}
+
 export class RemoteAiExecutor implements SpecialistExecutor {
   readonly executorType = 'REMOTE_AI_EXECUTOR' as const
 
@@ -227,7 +258,7 @@ export class RemoteAiExecutor implements SpecialistExecutor {
   constructor(private readonly adapters: ProviderAdapter[]) {}
 
   private qualifiedAdapters(request: SpecialistExecutionRequest): ProviderAdapter[] {
-    const needsLiveWeb = request.specialist === 'research_verifier'
+    const needsLiveWeb = methodologyRequiresLiveWebResearch(request)
     const qualified = this.adapters.filter((a) => a.isConfigured() && (!needsLiveWeb || a.supportsLiveWebResearch))
     return orderAdaptersForSpecialist(request.specialist, qualified)
   }
@@ -246,12 +277,12 @@ export class RemoteAiExecutor implements SpecialistExecutor {
   async execute(request: SpecialistExecutionRequest): Promise<SpecialistResultEnvelope | { unavailable: true; reason: string }> {
     const qualified = this.qualifiedAdapters(request)
     if (qualified.length === 0) {
-      return { unavailable: true, reason: `no configured provider available for specialist=${request.specialist} (live web research required: ${request.specialist === 'research_verifier'})` }
+      return { unavailable: true, reason: `no configured provider available for specialist=${request.specialist} (live web research required: ${methodologyRequiresLiveWebResearch(request)})` }
     }
 
     const { systemPrompt, userPrompt } =
       request.specialist === 'research_verifier' ? buildResearchVerifierPrompt(request) : request.specialist === 'checkoff_editor' ? buildCheckoffEditorPrompt(request) : buildDestinationStrategistPrompt(request)
-    const requiresLiveWebResearch = request.specialist === 'research_verifier'
+    const requiresLiveWebResearch = methodologyRequiresLiveWebResearch(request)
 
     const failures: string[] = []
     for (const adapter of qualified) {

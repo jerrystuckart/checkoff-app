@@ -245,3 +245,60 @@ test('RemoteAiExecutor: an unconfigured provider never counts as a fallback atte
   const outcome = await executor.execute(req())
   assert.ok(!('unavailable' in outcome))
 })
+
+// ---------------------------------------------------------------------------
+// requiresLiveWebResearch routing per (specialist, methodology) — Phase 2H.
+// A real live DVA-2/DAP proof caught destination_strategist NEVER
+// receiving the web_search tool for ANY methodology, contradicting the
+// real ingested DVA-1/DVA-2 research-budget requirements (destination/dap
+// is the deliberate exception — it must NOT get new research, per its own
+// methodology text).
+// ---------------------------------------------------------------------------
+
+class CapturingAdapter implements ProviderAdapter {
+  readonly providerKey = 'capturing'
+  readonly supportsLiveWebResearch = true
+  capturedRequiresLiveWebResearch: boolean | null = null
+  isConfigured() {
+    return true
+  }
+  async complete(input: ProviderCompletionInput): Promise<ProviderCompletionResult> {
+    this.capturedRequiresLiveWebResearch = input.requiresLiveWebResearch
+    return { text: validEnvelopeJson({ methodologyId: 'destination/dva1', methodologyVersion: 'v2' }) }
+  }
+}
+
+test('RemoteAiExecutor: research_verifier requires live web research', async () => {
+  const adapter = new CapturingAdapter()
+  const executor = new RemoteAiExecutor([adapter])
+  await executor.execute(req())
+  assert.equal(adapter.capturedRequiresLiveWebResearch, true)
+})
+
+test('RemoteAiExecutor: destination_strategist + destination/dva1 requires live web research (methodology names a 3-6 search budget)', async () => {
+  const adapter = new CapturingAdapter()
+  const executor = new RemoteAiExecutor([adapter])
+  await executor.execute(req({ specialist: 'destination_strategist', methodologyId: 'destination/dva1', methodologyVersion: 'v2', stage: 'D2_DVA1', authorityOperations: ['destination_hub.dva1_screen'] }))
+  assert.equal(adapter.capturedRequiresLiveWebResearch, true)
+})
+
+test('RemoteAiExecutor: destination_strategist + destination/dva2 requires live web research (methodology names a 15-25 search budget)', async () => {
+  const adapter = new CapturingAdapter()
+  const executor = new RemoteAiExecutor([adapter])
+  await executor.execute(req({ specialist: 'destination_strategist', methodologyId: 'destination/dva2', methodologyVersion: 'v2', stage: 'D3_DVA2', authorityOperations: ['destination_hub.draft_dva2'] }))
+  assert.equal(adapter.capturedRequiresLiveWebResearch, true)
+})
+
+test('RemoteAiExecutor: destination_strategist + destination/dap does NOT request live web research — its own methodology forbids new research', async () => {
+  const adapter = new CapturingAdapter()
+  const executor = new RemoteAiExecutor([adapter])
+  await executor.execute(req({ specialist: 'destination_strategist', methodologyId: 'destination/dap', methodologyVersion: 'v2', stage: 'D4_DAP', authorityOperations: ['destination_hub.draft_dap'] }))
+  assert.equal(adapter.capturedRequiresLiveWebResearch, false)
+})
+
+test('RemoteAiExecutor: checkoff_editor does not request live web research', async () => {
+  const adapter = new CapturingAdapter()
+  const executor = new RemoteAiExecutor([adapter])
+  await executor.execute(req({ specialist: 'checkoff_editor', methodologyId: 'checkoff_editor', methodologyVersion: 'v1', authorityOperations: [] }))
+  assert.equal(adapter.capturedRequiresLiveWebResearch, false)
+})
