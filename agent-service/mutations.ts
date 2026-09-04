@@ -1,7 +1,7 @@
-// Phase 0D — the ONLY write surface into agent.*. Three explicitly
-// designed operations, nothing generic: createTask, transitionTask,
-// updateTaskPlan. No generic updateTask(arbitraryFields), no raw SQL
-// exposed to callers.
+// Phase 0D (+ Phase 2A's recordPlaybookStage) — the ONLY write surface
+// into agent.*. Four explicitly designed operations, nothing generic:
+// createTask, transitionTask, updateTaskPlan, recordPlaybookStage. No
+// generic updateTask(arbitraryFields), no raw SQL exposed to callers.
 //
 // Every mutation runs inside withWriteTransaction (db.ts) — the task
 // update and its task_events row are always in the same transaction, so
@@ -320,6 +320,19 @@ export interface TransitionTaskInput {
     evidenceSources: string[]
     evidenceSummary?: string
   }
+  /**
+   * Chief Phase 2A — the playbook (and its fine-grained stage) this
+   * transition belongs to, when the caller is a playbook engine (e.g.
+   * businessPhotoOutreachEngine.ts). Merged into the SAME STATUS_CHANGED
+   * event's metadata as idempotencyKey/reconciliation above — same
+   * "merge, never replace" pattern, so an ordinary caller that never
+   * passes this sees no change at all. A playbook's fine-grained stage is
+   * coarser-than-status information (agent.tasks.status stays the small,
+   * generalizable set); this field is what lets a playbook engine derive
+   * "what stage is this task actually at" by reading its own most recent
+   * task_events row, without a new schema/table.
+   */
+  playbookStage?: { playbookKey: string; stage: string }
 }
 
 export interface TransitionTaskResult {
@@ -452,6 +465,7 @@ export async function transitionTask(input: TransitionTaskInput): Promise<Transi
     const eventMetadata = {
       ...(isMeaningful(input.idempotencyKey) ? { idempotencyKey: input.idempotencyKey } : {}),
       ...(input.reconciliation ? { reconciliation: input.reconciliation } : {}),
+      ...(input.playbookStage ? { playbookStage: input.playbookStage } : {}),
     }
     await client.query(
       `INSERT INTO agent.task_events (task_id, event_type, from_status, to_status, changed_by_owner_id, note, metadata)
@@ -552,5 +566,85 @@ export async function updateTaskPlan(input: UpdateTaskPlanInput): Promise<Update
     )
 
     return { task: await fetchTaskById(client, input.taskId), changed: true }
+  })
+}
+
+// ---------------------------------------------------------------------------
+// recordPlaybookStage — Chief Phase 2A. A FOURTH, deliberately narrow write
+// operation: appends one task_events row recording a playbook's
+// fine-grained stage advance that does NOT change the task's coarse
+// agent.tasks.status (e.g. RESPONSE_CLASSIFICATION -> PHOTO_SUBMITTED,
+// both IN_PROGRESS). When a stage advance DOES change coarse status, the
+// caller uses transitionTask's playbookStage field instead — this
+// function is only for the same-status case, so a playbook's stage
+// history is never split across two different event shapes for what is
+// conceptually one kind of fact ("what stage is this task at now").
+//
+// Never touches agent.tasks itself — task.status/next_action/etc are
+// unaffected, exactly like every other read of "current stage" (always
+// derived from the latest task_events row, never a duplicated column).
+// ---------------------------------------------------------------------------
+
+export interface RecordPlaybookStageInput {
+  taskId: string
+  playbookKey: string
+  stage: string
+  actorOwnerKey: string
+  evidence?: Record<string, unknown>
+  note?: string
+  /**
+   * Required for idempotency: a stable key derived from the evidence that
+   * caused this stage record (e.g. `${submissionId}:${stage}`), so the
+   * SAME evidence observed twice (a duplicate webhook delivery, a
+   * reconciliation pass re-run after a process restart, the business
+   * reopening the confirmation page) never appends a second identical
+   * event. Same-key-same-stage is a safe no-op; same-key-different-stage
+   * is a conflict (mirrors transitionTask's idempotencyKey contract).
+   */
+  idempotencyKey: string
+}
+
+export interface RecordPlaybookStageResult {
+  recorded: boolean
+}
+
+export async function recordPlaybookStage(input: RecordPlaybookStageInput): Promise<RecordPlaybookStageResult> {
+  return withWriteTransaction(async (client) => {
+    const actorOwnerId = await resolveOwnerId(client, input.actorOwnerKey)
+    // Locks the task row only to serialize concurrent stage-recording
+    // calls for the same task — no task column is written.
+    await client.query('SELECT 1 FROM agent.tasks WHERE id = $1 FOR UPDATE', [input.taskId]).then((r) => {
+      if (r.rows.length === 0) throw new TaskNotFoundError(input.taskId)
+    })
+
+    const priorUse = await client.query<{ metadata: { stage?: string } }>(
+      `SELECT metadata FROM agent.task_events
+       WHERE task_id = $1 AND event_type = 'PLAYBOOK_STAGE' AND metadata ->> 'idempotencyKey' = $2
+       ORDER BY changed_at DESC LIMIT 1`,
+      [input.taskId, input.idempotencyKey]
+    )
+    if (priorUse.rows.length > 0) {
+      const priorStage = priorUse.rows[0].metadata?.stage
+      if (priorStage !== input.stage) {
+        throw new IdempotencyConflictError(
+          `task ${input.taskId} playbook stage idempotencyKey ${input.idempotencyKey}`,
+          `previously recorded for stage ${priorStage}, now requested for ${input.stage}`
+        )
+      }
+      return { recorded: false }
+    }
+
+    const metadata = {
+      idempotencyKey: input.idempotencyKey,
+      playbookKey: input.playbookKey,
+      stage: input.stage,
+      ...(input.evidence ? { evidence: input.evidence } : {}),
+    }
+    await client.query(
+      `INSERT INTO agent.task_events (task_id, event_type, changed_by_owner_id, note, metadata)
+       VALUES ($1, 'PLAYBOOK_STAGE', $2, $3, $4)`,
+      [input.taskId, actorOwnerId, input.note ?? null, JSON.stringify(metadata)]
+    )
+    return { recorded: true }
   })
 }

@@ -34,6 +34,16 @@ import { query } from './db'
 // filesystem write, not a database write, but it's still write-shaped and
 // belongs in this approved set for the same reason as everything else
 // here: an explicit, reviewed, narrow capability — never a generic one.
+// Phase 2A adds recordPlaybookStage (mutations.ts's fourth, narrowly-scoped
+// write primitive — a task_events-only record of a playbook's fine-grained
+// stage, never touching agent.tasks columns) plus the Business Photo
+// Outreach playbook engine's own write-shaped operations: recordOutreachSent
+// and createClingFulfillmentTask (both thin, reviewed wrappers around
+// transitionTask/createTask — no new write path underneath them).
+// seedBusinessPhotoOutreachTasks and reconcileBusinessPhotoOutreach are
+// listed here too for completeness even though neither matches the
+// writeLikeName heuristic below (their names start with "seed"/"reconcile")
+// — both ultimately call only createTask/transitionTask/recordPlaybookStage.
 const APPROVED_MUTATIONS = new Set([
   'createTask',
   'transitionTask',
@@ -44,6 +54,11 @@ const APPROVED_MUTATIONS = new Set([
   'syncDecisionToOpenBrain',
   'executeAutonomousAction',
   'writeArtifact',
+  'recordPlaybookStage',
+  'recordOutreachSent',
+  'createClingFulfillmentTask',
+  'seedBusinessPhotoOutreachTasks',
+  'reconcileBusinessPhotoOutreach',
 ])
 
 test('read-only safety: agent-service exports exactly the approved mutation set, nothing else write-shaped', () => {

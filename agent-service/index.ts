@@ -73,7 +73,7 @@ export type {
 } from './auditTypes'
 export { renderChiefAuditReport } from './renderAudit'
 
-export { createTask, transitionTask, updateTaskPlan } from './mutations'
+export { createTask, transitionTask, updateTaskPlan, recordPlaybookStage } from './mutations'
 export type {
   CreateTaskInput,
   CreateTaskResult,
@@ -81,6 +81,8 @@ export type {
   TransitionTaskResult,
   UpdateTaskPlanInput,
   UpdateTaskPlanResult,
+  RecordPlaybookStageInput,
+  RecordPlaybookStageResult,
 } from './mutations'
 
 export { ALLOWED_TRANSITIONS, assertTransitionAllowed } from './transitions'
@@ -234,3 +236,48 @@ export {
 } from './errors'
 
 export { closePool } from './db'
+
+// ---------------------------------------------------------------------------
+// Chief Phase 2A — Playbooks, Standing Authority, Work Queue, Daily Brief
+// ---------------------------------------------------------------------------
+
+export type { AuthorityLevel } from './playbooks/standingAuthority'
+export { STANDING_AUTHORITY, AUTO_TELL_ACTIVE, evaluateAuthority, mayActWithoutJerry, UnknownAuthorityOperationError } from './playbooks/standingAuthority'
+
+export type { PlaybookDefinition, PlaybookStageDefinition, AuthorityOperationKey } from './playbooks/types'
+
+export type {
+  BusinessPhotoOutreachStage,
+  SecretBusinessOutreachStage,
+  BusinessOutreachTokenEvidence,
+  BusinessOutreachSubmissionEvidence,
+  BusinessOutreachCandidateEvidence,
+  BusinessOutreachEvidence,
+  ResponseClassification,
+  StageAdvanceResult,
+} from './playbooks/businessPhotoOutreach'
+export {
+  BUSINESS_PHOTO_OUTREACH_SOURCE_TYPE,
+  BUSINESS_PHOTO_OUTREACH_PLAYBOOK,
+  SECRET_BUSINESS_OUTREACH_PLAYBOOK,
+  classifyResponse,
+  isSecretBranch,
+  deriveNextStage,
+  coarseStatusForStage,
+  verifyAuthorityCoverage,
+} from './playbooks/businessPhotoOutreach'
+
+export type { OutreachTokenSeed, SeedResult, RecordSentInput, ReconcileOneResult, ClingFulfillmentInput } from './playbooks/businessPhotoOutreachEngine'
+export {
+  readEvidence,
+  seedBusinessPhotoOutreachTasks,
+  recordOutreachSent,
+  reconcileBusinessPhotoOutreach,
+  createClingFulfillmentTask,
+} from './playbooks/businessPhotoOutreachEngine'
+
+export type { WorkQueueStatus, WorkQueueItem } from './playbooks/workQueue'
+export { getWorkQueue, getTopNextActions } from './playbooks/workQueue'
+
+export type { BusinessPhotoOutreachBriefSection } from './playbooks/dailyBrief'
+export { getBusinessPhotoOutreachBriefSection, getBusinessPhotoOutreachStageFor } from './playbooks/dailyBrief'
