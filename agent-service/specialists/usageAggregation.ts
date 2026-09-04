@@ -80,3 +80,47 @@ export function summarizeExecutionUsage(records: readonly ExecutionRecord[]): Us
 
   return { byProject, byPlaybook, byMethodology, bySpecialist, byProvider, overall }
 }
+
+// ---------------------------------------------------------------------------
+// Phase 2I — the optional daily/portfolio-brief usage section (spec
+// section 15: "keep this secondary; don't clutter normal briefs"). A
+// standalone pure function, deliberately NOT wired into chiefBrief.ts's
+// default assembly — a caller opts in by calling this explicitly and
+// attaching the result to ChiefBrief.aiUsage (chiefBriefTypes.ts), rather
+// than this being computed on every brief whether wanted or not.
+// ---------------------------------------------------------------------------
+
+export interface ChiefBriefUsageSummary {
+  spendTodayUsd: number
+  spendThisMonthUsd: number
+  perDestinationSpendUsd: Record<string, number>
+}
+
+function isSameUtcDay(a: Date, b: Date): boolean {
+  return a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate()
+}
+
+function isSameUtcMonth(a: Date, b: Date): boolean {
+  return a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth()
+}
+
+export function computeChiefBriefUsageSummary(records: readonly ExecutionRecord[], now: Date): ChiefBriefUsageSummary {
+  let spendTodayUsd = 0
+  let spendThisMonthUsd = 0
+  const perDestinationSpendUsd: Record<string, number> = {}
+
+  for (const record of records) {
+    const usage = record.envelope?.providerUsage
+    if (!usage || !usage.available || usage.costUsd == null) continue
+    const completedAt = record.completedAt ? new Date(record.completedAt) : null
+    if (!completedAt) continue
+
+    if (isSameUtcMonth(completedAt, now)) spendThisMonthUsd += usage.costUsd
+    if (isSameUtcDay(completedAt, now)) spendTodayUsd += usage.costUsd
+
+    const destinationKey = record.request.destinationId ?? record.request.metroId ?? record.request.projectId
+    perDestinationSpendUsd[destinationKey] = (perDestinationSpendUsd[destinationKey] ?? 0) + usage.costUsd
+  }
+
+  return { spendTodayUsd, spendThisMonthUsd, perDestinationSpendUsd }
+}

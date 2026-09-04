@@ -172,6 +172,23 @@ test('RemoteAiExecutor: canExecute is false for destination_strategist/v2 with N
   assert.equal(executor.canExecute(dvaReq), false)
 })
 
+test('RemoteAiExecutor: canExecute is TRUE for destination_relationship_manager against destination_commercial/v1 once a provider is configured', () => {
+  const executor = new RemoteAiExecutor([new FakeAdapter(true, true)])
+  const relReq = req({ specialist: 'destination_relationship_manager', methodologyId: 'destination_commercial', methodologyVersion: 'v1', authorityOperations: ['destination_relationship.draft_outreach'] })
+  assert.equal(executor.canExecute(relReq), true)
+})
+
+test('RemoteAiExecutor: destination_relationship_manager draft output flows through into evidence.artifact.draft', async () => {
+  const executor = new RemoteAiExecutor([new FakeAdapter(true, true, { text: validEnvelopeJson({ methodologyId: 'destination_commercial', methodologyVersion: 'v1', evidence: { artifact: { draft: { subject: 'Hi Hood River', bodyText: 'Personalized copy', channel: 'email' } } } }) })])
+  const relReq = req({ specialist: 'destination_relationship_manager', methodologyId: 'destination_commercial', methodologyVersion: 'v1', authorityOperations: ['destination_relationship.draft_outreach'] })
+  const outcome = await executor.execute(relReq)
+  assert.ok(!('unavailable' in outcome))
+  if (!('unavailable' in outcome)) {
+    const artifact = outcome.evidence.artifact as { draft: { subject: string } }
+    assert.equal(artifact.draft.subject, 'Hi Hood River')
+  }
+})
+
 test('RemoteAiExecutor: execute() returns unavailable, never a fabricated result, when the provider call itself fails', async () => {
   const executor = new RemoteAiExecutor([new FakeAdapter(true, true, new Error('network unreachable'))])
   const outcome = await executor.execute(req())
@@ -300,6 +317,13 @@ test('RemoteAiExecutor: checkoff_editor does not request live web research', asy
   const adapter = new CapturingAdapter()
   const executor = new RemoteAiExecutor([adapter])
   await executor.execute(req({ specialist: 'checkoff_editor', methodologyId: 'checkoff_editor', methodologyVersion: 'v1', authorityOperations: [] }))
+  assert.equal(adapter.capturedRequiresLiveWebResearch, false)
+})
+
+test('RemoteAiExecutor: destination_relationship_manager does not request live web research — it drafts from context it is already given', async () => {
+  const adapter = new CapturingAdapter()
+  const executor = new RemoteAiExecutor([adapter])
+  await executor.execute(req({ specialist: 'destination_relationship_manager', methodologyId: 'destination_commercial', methodologyVersion: 'v1', authorityOperations: ['destination_relationship.draft_outreach'] }))
   assert.equal(adapter.capturedRequiresLiveWebResearch, false)
 })
 

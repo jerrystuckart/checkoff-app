@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { summarizeExecutionUsage } from './usageAggregation'
+import { summarizeExecutionUsage, computeChiefBriefUsageSummary } from './usageAggregation'
 import type { ExecutionRecord } from './executor'
 import type { SpecialistResultEnvelope } from './types'
 
@@ -23,7 +23,7 @@ function envelope(overrides: Partial<SpecialistResultEnvelope> = {}): Specialist
   }
 }
 
-function record(options: { request?: Partial<ExecutionRecord['request']>; envelope?: SpecialistResultEnvelope | null }): ExecutionRecord {
+function record(options: { request?: Partial<ExecutionRecord['request']>; envelope?: SpecialistResultEnvelope | null; completedAt?: string | null }): ExecutionRecord {
   return {
     request: {
       specialist: 'research_verifier',
@@ -46,7 +46,7 @@ function record(options: { request?: Partial<ExecutionRecord['request']>; envelo
     status: 'COMPLETE',
     executorType: 'REMOTE_AI_EXECUTOR',
     startedAt: '2026-09-08T00:00:00.000Z',
-    completedAt: '2026-09-08T00:00:01.000Z',
+    completedAt: options.completedAt !== undefined ? options.completedAt : '2026-09-08T00:00:01.000Z',
     envelope: options.envelope ?? null,
     attempts: 1,
     retriedAt: [],
@@ -109,4 +109,55 @@ test('summarizeExecutionUsage: providerUsage.available=false counts as unavailab
   const summary = summarizeExecutionUsage(records)
   assert.equal(summary.overall.unavailableCount, 1)
   assert.equal(summary.overall.executionCount, 1)
+})
+
+test('summarizeExecutionUsage: bySpecialist correctly rolls up destination_relationship_manager executions alongside destination_strategist ones (Phase 2I)', () => {
+  const records: ExecutionRecord[] = [
+    record({
+      request: { projectId: 'destination-hood-river-or', destinationId: 'destination-hood-river-or', playbookKey: 'destination_relationship', methodologyId: 'destination_commercial', methodologyVersion: 'v1', specialist: 'destination_relationship_manager' },
+      envelope: envelope({ providerKey: 'openai', providerUsage: { provider: 'openai', model: 'gpt-4.1-mini', inputTokens: 500, outputTokens: 200, totalTokens: 700, costUsd: 0.0005, pricingVersion: 'v1', available: true } }),
+    }),
+  ]
+  const summary = summarizeExecutionUsage(records)
+  assert.equal(summary.bySpecialist['destination_relationship_manager'].executionCount, 1)
+  assert.ok(Math.abs(summary.bySpecialist['destination_relationship_manager'].costUsd - 0.0005) < 1e-9)
+})
+
+// ---------------------------------------------------------------------------
+// computeChiefBriefUsageSummary — the optional daily/portfolio-brief section
+// ---------------------------------------------------------------------------
+
+test('computeChiefBriefUsageSummary: sums today/this-month spend and per-destination spend from real completedAt timestamps', () => {
+  const now = new Date('2026-09-08T18:00:00.000Z')
+  const records: ExecutionRecord[] = [
+    record({
+      request: { projectId: 'destination-hood-river-or', destinationId: 'destination-hood-river-or' },
+      completedAt: '2026-09-08T10:00:00.000Z', // today
+      envelope: envelope({ providerKey: 'openai', providerUsage: { provider: 'openai', model: 'gpt-4.1', inputTokens: 1000, outputTokens: 500, totalTokens: 1500, costUsd: 0.03, pricingVersion: 'v1', available: true } }),
+    }),
+    record({
+      request: { projectId: 'destination-hood-river-or', destinationId: 'destination-hood-river-or', executionId: 'exec-2', idempotencyKey: 'idem-2' },
+      completedAt: '2026-09-01T10:00:00.000Z', // earlier this month, not today
+      envelope: envelope({ providerKey: 'openai', providerUsage: { provider: 'openai', model: 'gpt-4.1', inputTokens: 1000, outputTokens: 500, totalTokens: 1500, costUsd: 0.02, pricingVersion: 'v1', available: true } }),
+    }),
+    record({
+      request: { projectId: 'destination-willcox-az', destinationId: 'destination-willcox-az', executionId: 'exec-3', idempotencyKey: 'idem-3' },
+      completedAt: '2026-08-01T10:00:00.000Z', // last month — excluded from both totals
+      envelope: envelope({ providerKey: 'openai', providerUsage: { provider: 'openai', model: 'gpt-4.1', inputTokens: 1000, outputTokens: 500, totalTokens: 1500, costUsd: 0.05, pricingVersion: 'v1', available: true } }),
+    }),
+  ]
+
+  const summary = computeChiefBriefUsageSummary(records, now)
+  assert.ok(Math.abs(summary.spendTodayUsd - 0.03) < 1e-9)
+  assert.ok(Math.abs(summary.spendThisMonthUsd - 0.05) < 1e-9) // today's + earlier-this-month's, never last month's
+  assert.ok(Math.abs(summary.perDestinationSpendUsd['destination-hood-river-or'] - 0.05) < 1e-9)
+  assert.ok(Math.abs(summary.perDestinationSpendUsd['destination-willcox-az'] - 0.05) < 1e-9)
+})
+
+test('computeChiefBriefUsageSummary: unavailable usage never contributes a fabricated cost', () => {
+  const now = new Date('2026-09-08T18:00:00.000Z')
+  const records: ExecutionRecord[] = [record({ completedAt: '2026-09-08T10:00:00.000Z', envelope: envelope({ providerKey: 'openai', providerUsage: null }) })]
+  const summary = computeChiefBriefUsageSummary(records, now)
+  assert.equal(summary.spendTodayUsd, 0)
+  assert.equal(summary.spendThisMonthUsd, 0)
 })

@@ -246,3 +246,40 @@ export function buildDestinationStrategistPrompt(request: SpecialistExecutionReq
 
   return { systemPrompt, userPrompt }
 }
+
+// ---------------------------------------------------------------------------
+// destination_relationship_manager (Phase 2I). Scope is deliberately
+// narrow: ONLY personalized outreach/reply drafting — the one asset that
+// genuinely benefits from AI-written prose tailored to a specific
+// relationship. Everything else the specialist "owns" per registry.ts
+// (classification, follow-up timing, the one-pager/deck, contact
+// association) is deterministic code (gmailRelationshipLogic.ts,
+// followUpEngine.ts, salesAssets.ts) — never an AI call for something
+// this bounded. This specialist NEVER drafts pricing, commercial terms,
+// or a promise — those stay APPROVAL_REQUIRED and outside its scope
+// entirely; the prompt says so explicitly, not just standingAuthority.ts.
+// ---------------------------------------------------------------------------
+
+const RELATIONSHIP_DRAFT_ENVELOPE_SHAPE = `{
+  "draft": {
+    "subject": "<email subject line, or empty string for a non-email channel>",
+    "bodyText": "<the full personalized message text>",
+    "channel": "<email | linkedin | phone_script — whatever the input context's recommended channel is>"
+  }
+}`
+
+export function buildDestinationRelationshipManagerPrompt(request: SpecialistExecutionRequest, now: string = new Date().toISOString()): { systemPrompt: string; userPrompt: string } {
+  const methodologyText = readMethodologyFileVerbatim(request.methodologyId, request.methodologyVersion)
+  const systemPrompt = [
+    `You are executing CheckOff's "destination_relationship_manager" specialist role, drafting personalized outbound outreach or a reply — NOT sending it (sending is a separate, human-approved step you have no part in). Below is the EXACT, VERBATIM methodology governing this relationship.`,
+    runtimeDateContextLine(now),
+    `--- BEGIN METHODOLOGY (${request.methodologyId}/${request.methodologyVersion}) ---\n${methodologyText}\n--- END METHODOLOGY ---`,
+    `You draft outreach ONLY. You must NEVER: state or imply specific pricing, make a commercial commitment, agree to terms, promise a specific deliverable date, or say anything that could be read as a contractual commitment. If the input context includes hasPriorCorrespondence: true, the draft must acknowledge the prior relationship — never write as though this is a cold first contact when it is not. Personalize using the destination's real DAP findings given in the input context — never generic partner-outreach boilerplate.`,
+    `Respond with evidence.artifact using this exact shape:\n${RELATIONSHIP_DRAFT_ENVELOPE_SHAPE}`,
+    envelopeInstructions(request),
+  ].join('\n\n')
+
+  const userPrompt = [`Objective: ${request.objective}`, `Input context (destination/contact identity, DAP findings, relationship history, prior-correspondence flag, requested tone): ${JSON.stringify(request.inputs)}`].join('\n')
+
+  return { systemPrompt, userPrompt }
+}

@@ -38,6 +38,11 @@ const DEFAULT_RESEARCH_MODEL = 'gpt-4.1'
 const DEFAULT_EDITOR_MODEL = 'gpt-4.1-mini'
 const DEFAULT_DVA1_MODEL = 'gpt-4.1'
 const DEFAULT_DEEP_ANALYSIS_MODEL = 'gpt-4.1'
+// Phase 2I — destination_relationship_manager drafts ONE thing (outreach/
+// reply copy) from context it's already handed; same cost profile as
+// checkoff_editor's constrained editorial transformation, not open-ended
+// research, so it gets the same ECONOMY-tier cheap model by default.
+const DEFAULT_RELATIONSHIP_MODEL = 'gpt-4.1-mini'
 
 function fromEnvOrDefault(envVar: string, fallback: string): { value: string; source: 'default' | 'env' } {
   const raw = process.env[envVar]
@@ -71,6 +76,10 @@ export function resolveOpenAiModel(specialist: string, methodologyId: string): M
     const { value, source } = fromEnvOrDefault('CHIEF_OPENAI_EDITOR_MODEL', DEFAULT_EDITOR_MODEL)
     return { model: value, costTier: 'ECONOMY', source }
   }
+  if (specialist === 'destination_relationship_manager') {
+    const { value, source } = fromEnvOrDefault('CHIEF_OPENAI_RELATIONSHIP_MODEL', DEFAULT_RELATIONSHIP_MODEL)
+    return { model: value, costTier: 'ECONOMY', source }
+  }
   if (specialist === 'destination_strategist') {
     if (methodologyId === 'destination/dva1') {
       const { value, source } = fromEnvOrDefault('CHIEF_OPENAI_DVA1_MODEL', DEFAULT_DVA1_MODEL)
@@ -97,4 +106,5 @@ export const MODEL_ROUTING_ENV_VARS = Object.freeze({
   CHIEF_OPENAI_EDITOR_MODEL: DEFAULT_EDITOR_MODEL,
   CHIEF_OPENAI_DVA1_MODEL: DEFAULT_DVA1_MODEL,
   CHIEF_OPENAI_DEEP_ANALYSIS_MODEL: `<unset by default — falls back to ${DEFAULT_DEEP_ANALYSIS_MODEL} at STANDARD tier; set explicitly to opt into PREMIUM>`,
+  CHIEF_OPENAI_RELATIONSHIP_MODEL: DEFAULT_RELATIONSHIP_MODEL,
 })

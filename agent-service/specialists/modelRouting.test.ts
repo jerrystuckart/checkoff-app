@@ -73,6 +73,22 @@ test('resolveOpenAiModel: destination/dva2 or destination/dap reaches PREMIUM on
   })
 })
 
+test('resolveOpenAiModel: destination_relationship_manager defaults to the cheap gpt-4.1-mini at ECONOMY tier — drafting is a bounded editorial task, not open-ended research', () => {
+  withEnv({ CHIEF_OPENAI_RELATIONSHIP_MODEL: undefined }, () => {
+    const route = resolveOpenAiModel('destination_relationship_manager', 'destination_commercial')
+    assert.equal(route.model, 'gpt-4.1-mini')
+    assert.equal(route.costTier, 'ECONOMY')
+  })
+})
+
+test('resolveOpenAiModel: destination_relationship_manager honors CHIEF_OPENAI_RELATIONSHIP_MODEL override', () => {
+  withEnv({ CHIEF_OPENAI_RELATIONSHIP_MODEL: 'gpt-4.1-mini-custom' }, () => {
+    const route = resolveOpenAiModel('destination_relationship_manager', 'destination_commercial')
+    assert.equal(route.model, 'gpt-4.1-mini-custom')
+    assert.equal(route.source, 'env')
+  })
+})
+
 test('resolveOpenAiModel: an unlisted specialist falls back to the research route at STANDARD, never guesses PREMIUM', () => {
   withEnv({ CHIEF_OPENAI_RESEARCH_MODEL: undefined }, () => {
     const route = resolveOpenAiModel('some_future_specialist', 'some/methodology')

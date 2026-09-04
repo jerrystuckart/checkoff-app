@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildDestinationStrategistPrompt, buildResearchVerifierPrompt, buildCheckoffEditorPrompt, researchExecutionTypeFor } from './promptBuilders'
+import { buildDestinationStrategistPrompt, buildResearchVerifierPrompt, buildCheckoffEditorPrompt, buildDestinationRelationshipManagerPrompt, researchExecutionTypeFor } from './promptBuilders'
 import type { SpecialistExecutionRequest } from './executor'
 
 function req(overrides: Partial<SpecialistExecutionRequest> = {}): SpecialistExecutionRequest {
@@ -73,4 +73,19 @@ test('researchExecutionTypeFor / buildResearchVerifierPrompt / buildCheckoffEdit
 
   const editorReq: SpecialistExecutionRequest = { ...req(), specialist: 'checkoff_editor', methodologyId: 'checkoff_editor', methodologyVersion: 'v1' }
   assert.match(buildCheckoffEditorPrompt(editorReq).systemPrompt, /checkoffizedItem/)
+})
+
+test('buildDestinationRelationshipManagerPrompt: embeds the destination_commercial methodology verbatim and requests only a draft object — never pricing/commitment', () => {
+  const relReq: SpecialistExecutionRequest = { ...req(), specialist: 'destination_relationship_manager', methodologyId: 'destination_commercial', methodologyVersion: 'v1', stage: 'ASSETS_PREP', playbookKey: 'destination_relationship', authorityOperations: ['destination_relationship.draft_outreach'] }
+  const { systemPrompt } = buildDestinationRelationshipManagerPrompt(relReq)
+  assert.match(systemPrompt, /Progressive Sales Assets/) // a real heading from destination_commercial/v1.md, proving verbatim embedding
+  assert.match(systemPrompt, /"draft"/)
+  assert.match(systemPrompt, /NEVER: state or imply specific pricing/)
+  assert.match(systemPrompt, /never write as though this is a cold first contact/i)
+})
+
+test('buildDestinationRelationshipManagerPrompt: includes the runtime date context line, same as every other REMOTE_AI prompt', () => {
+  const relReq: SpecialistExecutionRequest = { ...req(), specialist: 'destination_relationship_manager', methodologyId: 'destination_commercial', methodologyVersion: 'v1', stage: 'ASSETS_PREP', playbookKey: 'destination_relationship', authorityOperations: ['destination_relationship.draft_outreach'] }
+  const { systemPrompt } = buildDestinationRelationshipManagerPrompt(relReq, '2026-09-08T12:00:00.000Z')
+  assert.match(systemPrompt, /2026-09-08T12:00:00\.000Z/)
 })

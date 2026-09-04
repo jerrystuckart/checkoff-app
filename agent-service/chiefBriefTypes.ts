@@ -80,4 +80,11 @@ export interface ChiefBrief {
   blocked: ChiefBriefBlockedItem[]
   recentChanges: ChiefBriefItem[]
   summary: ChiefBriefSummaryCounts
+  /**
+   * Phase 2I — real AI usage/cost (agent-service/specialists/usageAggregation.ts's
+   * computeChiefBriefUsageSummary), attached ONLY when a caller opts in.
+   * Deliberately optional and NOT computed by getChiefBrief() by default —
+   * "keep this secondary; don't clutter normal briefs" was explicit.
+   */
+  aiUsage?: import('./specialists/usageAggregation').ChiefBriefUsageSummary
 }

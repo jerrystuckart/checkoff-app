@@ -8,7 +8,7 @@
 
 import type { SpecialistExecutor, SpecialistExecutionRequest } from './executor'
 import type { SpecialistResultEnvelope, SpecialistKey, ProviderUsageInfo } from './types'
-import { buildResearchVerifierPrompt, buildCheckoffEditorPrompt, buildDestinationStrategistPrompt } from './promptBuilders'
+import { buildResearchVerifierPrompt, buildCheckoffEditorPrompt, buildDestinationStrategistPrompt, buildDestinationRelationshipManagerPrompt } from './promptBuilders'
 import { getMethodology, methodologyExists } from './methodologyRegistry'
 import { estimateCostUsd, type TokenUsage } from './usagePricing'
 
@@ -26,6 +26,7 @@ export const SPECIALIST_PROVIDER_PREFERENCE: Readonly<Partial<Record<SpecialistK
   research_verifier: ['openai', 'anthropic'],
   checkoff_editor: ['anthropic', 'openai'],
   destination_strategist: ['anthropic', 'openai'],
+  destination_relationship_manager: ['anthropic', 'openai'],
 })
 
 /**
@@ -221,7 +222,7 @@ export function parseModelEnvelope(text: string): EnvelopeParseResult {
 // knows how to BUILD a prompt for the specialist at all; a specific
 // methodology (e.g. a not-yet-ingested v3) still correctly reports
 // EXECUTOR_UNAVAILABLE via that completeness check.
-const WIRED_SPECIALISTS = new Set(['research_verifier', 'checkoff_editor', 'destination_strategist'])
+const WIRED_SPECIALISTS = new Set(['research_verifier', 'checkoff_editor', 'destination_strategist', 'destination_relationship_manager'])
 
 // ---------------------------------------------------------------------------
 // Which (specialist, methodology) combinations actually require LIVE web
@@ -326,7 +327,9 @@ export class RemoteAiExecutor implements SpecialistExecutor {
         ? buildResearchVerifierPrompt(request, nowIso)
         : request.specialist === 'checkoff_editor'
           ? buildCheckoffEditorPrompt(request, nowIso)
-          : buildDestinationStrategistPrompt(request, nowIso)
+          : request.specialist === 'destination_relationship_manager'
+            ? buildDestinationRelationshipManagerPrompt(request, nowIso)
+            : buildDestinationStrategistPrompt(request, nowIso)
     const requiresLiveWebResearch = methodologyRequiresLiveWebResearch(request)
 
     const failures: string[] = []
