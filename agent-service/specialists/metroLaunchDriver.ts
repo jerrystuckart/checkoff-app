@@ -157,12 +157,20 @@ async function stepM0(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
 }
 
 async function stepM1(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  // Phase 2H live-provider proof finding: the M0 geographic-scope decision
+  // (including any open questions it deliberately flagged, e.g. "is North
+  // County in scope?") was never actually reaching the M1 research
+  // prompt — stepM1 only ever sent a generic objective, so the model had
+  // no way to know about a scope decision Chief had already recorded.
+  // Threading it through here means M1 evidence can actually speak to the
+  // specific open question, instead of a comparably-generic result.
+  const m0 = readState(run).m0Decisions
   const request: SpecialistExecutionRequest = {
     specialist: 'research_verifier',
     playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
     stage: 'M1_GEOGRAPHY_MAP',
     objective: `${run.projectId}: neighborhood/geography research`,
-    inputs: { executionType: 'BROAD_DISCOVERY' },
+    inputs: { executionType: 'BROAD_DISCOVERY', geographicScope: m0?.geographicScope ?? null },
     requiredEvidenceKeys: ['neighborhoods'],
     methodologyId: 'metro_launch',
     methodologyVersion: 'v1',

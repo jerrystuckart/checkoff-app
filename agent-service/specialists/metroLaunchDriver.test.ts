@@ -308,3 +308,36 @@ test('driveMetroLaunch: a rejected evidence result retries up to the guardrail, 
   assert.match(run.jerryReason ?? '', /evidence validation/)
   assert.ok(run.totalRetries > 0 && run.totalRetries <= 3, 'retries must be bounded, not infinite')
 })
+
+// ---------------------------------------------------------------------------
+// Phase 2H — a real live-provider proof against OpenAI exposed that the
+// M0 geographic-scope decision (including an explicitly flagged open
+// question, e.g. "does North County belong in scope?") never reached the
+// M1 research prompt at all, producing comparably-generic results. Fixed
+// by threading state.m0Decisions.geographicScope into M1's request
+// inputs — this test locks that in.
+// ---------------------------------------------------------------------------
+
+test('driveMetroLaunch: M1 request inputs carry the M0 geographicScope decision, so the research prompt can actually address it', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  let capturedGeographicScope: unknown = 'NEVER_CALLED'
+
+  executor.scriptWhen(
+    (r) => r.stage === 'M1_GEOGRAPHY_MAP',
+    (r) => {
+      capturedGeographicScope = (r.inputs as { geographicScope?: unknown }).geographicScope
+      return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { neighborhoods: [] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
+    }
+  )
+
+  const projectId = 'san-diego-geoscope-threading-test'
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  seeded!.state = { m0Decisions: RESOLVED_M0 }
+  await runStore.put(seeded!)
+
+  await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN, maxSteps: 2 })
+  assert.equal(capturedGeographicScope, RESOLVED_M0.geographicScope)
+})
