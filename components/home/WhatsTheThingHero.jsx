@@ -47,6 +47,7 @@ import { LinearGradient } from 'expo-linear-gradient'
 import PressableTactile from '../PressableTactile'
 import { isSpecialItemPresentation } from '../../lib/whatsGoodDisplayLayout'
 import { resolvedItemImage } from '../../lib/whatsGoodImageSource'
+import { currentRotationContext } from '../../lib/rotationContext'
 import { useCoverCandidateCTA } from '../../lib/useCoverCandidateCTA'
 import CoverCandidateCTA from '../CoverCandidateCTA'
 
@@ -64,7 +65,7 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
   const { TEXT, MUTED, AMBER, NAVY, CARD_ELEVATED, ENDED_BG, ENDED_BORDER, ENDED_TEXT, SHADOW_COLOR } = colors
   const isSpecial = isSpecialItemPresentation(item)
   const venueName = item.partnerName ?? null
-  const image = resolvedItemImage(item)
+  const image = resolvedItemImage(item, currentRotationContext(userId))
   const showImageMode = !compact && Boolean(image)
 
   const opacity = anim

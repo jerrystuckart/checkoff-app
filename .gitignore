@@ -102,3 +102,9 @@ ios/Pods/
 
 # Generated review reports (geocoding, etc.) — not source, not for commit
 scripts/output/
+
+# Simulator/visual-verification screenshots and local-only dev preview
+# imagery — never real production assets, never committed. See
+# CheckOff Release Candidate — Final Cleanup (2026-09-03).
+docs/visual-verification/
+assets/dev-preview/

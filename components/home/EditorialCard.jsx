@@ -35,6 +35,7 @@ import { deriveVenueAndThing } from '../../lib/whatsGoodItemPresentation'
 import { isSpecialItemPresentation } from '../../lib/whatsGoodDisplayLayout'
 import { formatDistanceLabel } from '../../lib/proximity'
 import { extractQuotedVenueFromBody } from '../../lib/itemDetailHeaderTitle'
+import { currentRotationContext } from '../../lib/rotationContext'
 
 // FINAL CLEANUP BEFORE BUILD 144 — item 1: category was competing
 // visually with venue/thing on the primary card ("Bar & drinks" reads as
@@ -46,9 +47,9 @@ function metaLine(item) {
   return item?.is_universal ? null : formatDistanceLabel(item?.distM)
 }
 
-function PrimaryImageMode({ item, colors, isSpecial, venueName, thing, meta, onPress }) {
+function PrimaryImageMode({ item, colors, isSpecial, venueName, thing, meta, onPress, userId }) {
   const { AMBER, ENDED_TEXT } = colors
-  const image = resolvedItemImage(item)
+  const image = resolvedItemImage(item, currentRotationContext(userId))
   const accent = isSpecial ? ENDED_TEXT : AMBER
 
   return (
@@ -144,11 +145,11 @@ function PrimaryNoImageMode({ item, colors, isSpecial, venueName, thing, meta, o
 // The user taps to discover the actual thing on Item Detail. Falls back
 // to a short, single-line clamp of the thing text only when there's no
 // meaningful venue name to show instead (universal items, etc).
-function SecondaryRow({ item, colors, onPress }) {
+function SecondaryRow({ item, colors, onPress, userId }) {
   const { TEXT, CARD_ELEVATED, AMBER, ENDED_TEXT, SHADOW_COLOR } = colors
   const isSpecial = isSpecialItemPresentation(item)
   const { venueName, thing } = deriveVenueAndThing(item)
-  const image = resolvedItemImage(item)
+  const image = resolvedItemImage(item, currentRotationContext(userId))
   const accent = isSpecial ? ENDED_TEXT : AMBER
   const distLabel = item?.is_universal ? null : formatDistanceLabel(item?.distM)
   // venueName only exists for items with a real partners row — most
@@ -181,20 +182,20 @@ function SecondaryRow({ item, colors, onPress }) {
   )
 }
 
-export default function EditorialCard({ item, onPress, colors, variant = 'primary' }) {
+export default function EditorialCard({ item, onPress, colors, variant = 'primary', userId = null }) {
   if (!item) return null
 
   const isSpecial = isSpecialItemPresentation(item)
   const { venueName, thing } = deriveVenueAndThing(item)
   const meta = metaLine(item)
-  const image = resolvedItemImage(item)
+  const image = resolvedItemImage(item, currentRotationContext(userId))
 
   if (variant === 'row') {
-    return <SecondaryRow item={item} colors={colors} onPress={onPress} />
+    return <SecondaryRow item={item} colors={colors} onPress={onPress} userId={userId} />
   }
 
   if (image) {
-    return <PrimaryImageMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} />
+    return <PrimaryImageMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} userId={userId} />
   }
   return <PrimaryNoImageMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} />
 }

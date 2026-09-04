@@ -3,9 +3,22 @@
 // legacy zoneBanner block — visually elevated to a true image-backed hero
 // rather than a flat bordered card, and always wins the top hero slot (see
 // lib/homeHeroLayout.js). Falls back to a themed gradient-less solid panel
-// when the zone's linked curated list has no hero_image_url — same
-// "no missing-image error" principle as the rest of the app's image
-// fallbacks (see THEMED_LIST_ACCENTS in HomeScreen.jsx).
+// when the Destination has no hero_image_url — same "no missing-image
+// error" principle as the rest of the app's image fallbacks (see
+// THEMED_LIST_ACCENTS in HomeScreen.jsx). Never invents imagery.
+//
+// Investigate + Restore Destination Hub Hero (2026-09-03) — two fixes:
+//   1. Image source was destinations(hero_image_url), embedded on the
+//      zone by HomeScreen.jsx's query — NOT curated_lists (that column
+//      doesn't exist there; see HomeScreen.jsx's zone-query comment for
+//      the root-cause write-up).
+//   2. Title now uses the short zone.name ("Willcox") under a "YOU'RE IN"
+//      eyebrow, not the full banner_title string — real destination data
+//      (e.g. Willcox's banner_title = "You're in Willcox! 🍷") already
+//      says "You're in X", so rendering both stacked read as a redundant
+//      double "You're in / You're in Willcox" line. banner_subtitle (a
+//      real per-destination descriptor, e.g. "25 experiences waiting —
+//      wine, history, and hidden gems.") still renders as-is when present.
 
 import React from 'react'
 import { View, Text, TouchableOpacity, ImageBackground, StyleSheet } from 'react-native'
@@ -13,8 +26,8 @@ import { View, Text, TouchableOpacity, ImageBackground, StyleSheet } from 'react
 export default function DestinationHero({ zone, onPress, onDismiss, colors }) {
   if (!zone) return null
   const { NAVY, AMBER } = colors
-  const title = zone.banner_title || zone.name
-  const heroImageUrl = zone.curated_lists?.hero_image_url ?? null
+  const title = zone.name || zone.banner_title
+  const heroImageUrl = zone.destinations?.hero_image_url ?? null
 
   const Content = (
     <>
@@ -27,7 +40,7 @@ export default function DestinationHero({ zone, onPress, onDismiss, colors }) {
         <Text style={styles.title} numberOfLines={2}>{title}</Text>
         {zone.banner_subtitle ? <Text style={styles.subtitle} numberOfLines={2}>{zone.banner_subtitle}</Text> : null}
         <TouchableOpacity onPress={onPress} activeOpacity={0.88} style={[styles.cta, { backgroundColor: AMBER }]}>
-          <Text style={[styles.ctaText, { color: NAVY }]}>See the list →</Text>
+          <Text style={[styles.ctaText, { color: NAVY }]}>Explore {title} →</Text>
         </TouchableOpacity>
       </View>
     </>

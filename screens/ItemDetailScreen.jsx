@@ -36,7 +36,8 @@ import { isAtPlace } from '../lib/whatsGoodAtPlace'
 import { useCoverCandidateCTA } from '../lib/useCoverCandidateCTA'
 import CoverCandidateCTA from '../components/CoverCandidateCTA'
 import { resolvedItemImage } from '../lib/whatsGoodImageSource'
-import { fetchActiveCoverImageUrl } from '../lib/coverCandidates'
+import { currentRotationContext } from '../lib/rotationContext'
+import { fetchActiveCoverImageUrl, fetchDisplayEligibleImagePool } from '../lib/coverCandidates'
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
 
 const AMBER = '#F5A623'
@@ -258,7 +259,31 @@ export default function ItemDetailScreen({ route, navigation }) {
     return () => { cancelled = true }
   }, [item?.id])
 
-  const resolvedItem = fetchedCoverUrl ? { ...item, activeCoverImageUrl: fetchedCoverUrl } : item
+  // Multi-Image Rotation (2026-09-03) — fetch the full display-eligible
+  // pool directly (fresh signed URLs), same reasoning as fetchedCoverUrl
+  // above: an item navigated here from Near You/Lists/Profile never had
+  // HomeScreen's own displayEligibleImages attach step run on it, and
+  // even when it did, those signed URLs may be stale by the time this
+  // screen mounts. This is the only source of truth this screen reads —
+  // resolvedItemImage() below is called with the SAME (userId, dateKey)
+  // context Home uses (see lib/rotationContext.js), so a multi-image item
+  // renders the identical pick here as it just did on Home, within the
+  // same session/day.
+  const [fetchedImagePool, setFetchedImagePool] = useState(null)
+  useEffect(() => {
+    let cancelled = false
+    if (!item?.id) return undefined
+    fetchDisplayEligibleImagePool({ itemId: item.id }).then((pool) => {
+      if (!cancelled && pool.length > 0) setFetchedImagePool(pool)
+    })
+    return () => { cancelled = true }
+  }, [item?.id])
+
+  const resolvedItem = {
+    ...item,
+    ...(fetchedCoverUrl ? { activeCoverImageUrl: fetchedCoverUrl } : null),
+    ...(fetchedImagePool ? { displayEligibleImages: fetchedImagePool } : null),
+  }
 
   // useCoverCandidateCTA already checks for an existing approved image
   // internally (lib/coverCandidateEligibility.js) — not re-checked here.
@@ -1204,7 +1229,7 @@ export default function ItemDetailScreen({ route, navigation }) {
 
   const ring = item.ring_weight ?? 0
   const ringColor = RING_COLORS[ring] ?? RING_COLORS[0]
-  const itemDetailImage = resolvedItemImage(resolvedItem)
+  const itemDetailImage = resolvedItemImage(resolvedItem, currentRotationContext(userId))
   const hasLoc = item.maps_query || ((item.maps_lat ?? item.mapsLat) && (item.maps_lng ?? item.mapsLng))
   const hasWeb = !!item.website_url
   const isPartner = !!item.partner_id

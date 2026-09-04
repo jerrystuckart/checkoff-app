@@ -25,7 +25,7 @@ import { View, Text, StyleSheet } from 'react-native'
 import { splitWhatsGoodDisplayLayout } from '../../lib/whatsGoodDisplayLayout'
 import EditorialCard from './EditorialCard'
 
-export default function WhatsGoodDiscovery({ items, navigation, colors }) {
+export default function WhatsGoodDiscovery({ items, navigation, colors, userId = null }) {
   if (!items || items.length === 0) return null
   const { TEXT } = colors
   const { primary, secondary } = splitWhatsGoodDisplayLayout(items)
@@ -35,12 +35,12 @@ export default function WhatsGoodDiscovery({ items, navigation, colors }) {
     <View style={styles.wrapper}>
       <Text style={[styles.heading, { color: TEXT }]}>What's Good</Text>
 
-      <EditorialCard item={primary} variant="primary" colors={colors} onPress={() => navigation.navigate('ItemDetail', { item: primary })} />
+      <EditorialCard item={primary} variant="primary" colors={colors} userId={userId} onPress={() => navigation.navigate('ItemDetail', { item: primary })} />
 
       {secondary.length > 0 && (
         <View style={styles.secondaryStack}>
           {secondary.map(item => (
-            <EditorialCard key={item.id} item={item} variant="row" colors={colors} onPress={() => navigation.navigate('ItemDetail', { item })} />
+            <EditorialCard key={item.id} item={item} variant="row" colors={colors} userId={userId} onPress={() => navigation.navigate('ItemDetail', { item })} />
           ))}
         </View>
       )}

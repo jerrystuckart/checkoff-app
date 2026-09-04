@@ -23,8 +23,7 @@ import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
 import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { isItemInSeason } from '../lib/seasonFilter'
 import { useWhatsGood } from '../lib/useWhatsGood'
-import { applyDevMixedImagePreview } from '../lib/devPreviewOverrides'
-import { attachActiveCoverImages } from '../lib/coverCandidates'
+import { attachActiveCoverImages, attachDisplayEligibleImagePools } from '../lib/coverCandidates'
 import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
 import WhatsGoodDebugPanel from '../components/WhatsGoodDebugPanel'
 import { deriveHomeHeroLayout } from '../lib/homeHeroLayout'
@@ -230,9 +229,19 @@ export default function HomeScreen({ navigation }) {
           try {
             let zoneQuery = supabase
               .from('destination_zones')
-              // curated_lists(hero_image_url) added for the 2026 redesign's
-              // DestinationHero — additive only, legacy zoneBanner ignores it.
-              .select('id, name, slug, banner_title, banner_subtitle, center_lat, center_lng, radius_km, destination_id, is_active, curated_list_id, curated_lists(hero_image_url)')
+              // destinations(hero_image_url) added for the 2026 redesign's
+              // DestinationHero — additive only, legacy zoneBanner ignores
+              // it. Investigate + Restore Destination Hub Hero (2026-09-03):
+              // this previously (incorrectly) embedded curated_lists
+              // (hero_image_url), a column that does not exist on
+              // curated_lists at all — the embed made the WHOLE query
+              // throw a 400, silently swallowed by the catch below, so
+              // nearbyZone never got set regardless of any admin toggle.
+              // The Destination's hero image actually lives on
+              // destinations.hero_image_url (see the admin tool's
+              // Destinations tab image upload) — destination_zones has
+              // exactly one FK to destinations, so no embed hint is needed.
+              .select('id, name, slug, banner_title, banner_subtitle, center_lat, center_lng, radius_km, destination_id, is_active, curated_list_id, destinations(hero_image_url)')
             if (!__DEV__) {
               zoneQuery = zoneQuery.eq('is_active', true)
             }
@@ -609,7 +618,15 @@ async function loadNearbyRail(userId) {
     // actually selected a cover for ever have a truthy
     // activeCoverCandidateId, so this is a no-op fast-path for the vast
     // majority of items today.
-    const rawItems = await attachActiveCoverImages(maskedItems)
+    const withActiveCover = await attachActiveCoverImages(maskedItems)
+    // Multi-Image Rotation (2026-09-03) — also attach the full
+    // display-eligible pool where one exists, so resolvedItemImages()/
+    // resolvedItemImage(item, context) can rotate rather than always
+    // showing the single activeCoverImageUrl above. Kept as a separate
+    // attach step (not merged into attachActiveCoverImages) so that
+    // function's existing single-image contract is untouched for any
+    // other caller relying on it.
+    const rawItems = await attachDisplayEligibleImagePools(withActiveCover)
     setRawNearbyItems(rawItems)
 
     if (userId && rawItems.length > 0) {
@@ -1369,11 +1386,11 @@ async function loadNearbyRail(userId) {
               <WhatsTheThingHero item={whatsGood.atPlaceItem} navigation={navigation} colors={colors} userId={user?.id ?? null} />
             )}
 
-            {heroLayout.secondarySlot === 'at_place_compact' && whatsGood.atPlaceItem && (
+            {heroLayout.showAtPlaceCompact && whatsGood.atPlaceItem && (
               <WhatsTheThingHero item={whatsGood.atPlaceItem} navigation={navigation} colors={colors} compact />
             )}
 
-            {heroLayout.secondarySlot === 'near_you_compact' && (
+            {heroLayout.showNearYouCompact && (
               <NearYouCompact
                 items={nearYouCompactItems}
                 colors={colors}
@@ -1382,7 +1399,7 @@ async function loadNearbyRail(userId) {
               />
             )}
 
-            <WhatsGoodDiscovery items={applyDevMixedImagePreview(whatsGood.items)} navigation={navigation} colors={colors} />
+            <WhatsGoodDiscovery items={whatsGood.items} navigation={navigation} colors={colors} userId={user?.id ?? null} />
 
             {/* Tester-only field-test instrumentation — today that means
                 Jerry only (the sole whats_good_v1 feature_flag_overrides
