@@ -56,7 +56,7 @@ test('AnthropicMessagesAdapter: isConfigured() is true once an API key is suppli
 
 test('AnthropicMessagesAdapter: complete() throws rather than silently succeeding when called with no key', async () => {
   const adapter = new AnthropicMessagesAdapter({ apiKey: undefined })
-  await assert.rejects(() => adapter.complete({ systemPrompt: 's', userPrompt: 'u', requiresLiveWebResearch: false }))
+  await assert.rejects(() => adapter.complete({ systemPrompt: 's', userPrompt: 'u', requiresLiveWebResearch: false, specialist: 'research_verifier', methodologyId: 'metro_launch' }))
 })
 
 test('AnthropicMessagesAdapter: a real (mocked) HTTP call includes the web_search tool only when live research is required', async () => {
@@ -67,18 +67,18 @@ test('AnthropicMessagesAdapter: a real (mocked) HTTP call includes the web_searc
   }) as unknown as typeof fetch
 
   const adapter = new AnthropicMessagesAdapter({ apiKey: 'sk-test-fake', fetchImpl: fakeFetch })
-  await adapter.complete({ systemPrompt: 's', userPrompt: 'u', requiresLiveWebResearch: true })
+  await adapter.complete({ systemPrompt: 's', userPrompt: 'u', requiresLiveWebResearch: true, specialist: 'research_verifier', methodologyId: 'metro_launch' })
   assert.ok(capturedBody)
   assert.ok(Array.isArray((capturedBody as { tools?: unknown[] }).tools))
 
-  await adapter.complete({ systemPrompt: 's', userPrompt: 'u', requiresLiveWebResearch: false })
+  await adapter.complete({ systemPrompt: 's', userPrompt: 'u', requiresLiveWebResearch: false, specialist: 'research_verifier', methodologyId: 'metro_launch' })
   assert.equal((capturedBody as { tools?: unknown[] }).tools, undefined)
 })
 
 test('AnthropicMessagesAdapter: a non-2xx response throws with the response body included', async () => {
   const fakeFetch = (async () => new Response('rate limited', { status: 429 })) as typeof fetch
   const adapter = new AnthropicMessagesAdapter({ apiKey: 'sk-test-fake', fetchImpl: fakeFetch })
-  await assert.rejects(() => adapter.complete({ systemPrompt: 's', userPrompt: 'u', requiresLiveWebResearch: false }), /429/)
+  await assert.rejects(() => adapter.complete({ systemPrompt: 's', userPrompt: 'u', requiresLiveWebResearch: false, specialist: 'research_verifier', methodologyId: 'metro_launch' }), /429/)
 })
 
 // ---------------------------------------------------------------------------

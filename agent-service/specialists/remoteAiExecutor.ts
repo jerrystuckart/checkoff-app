@@ -50,6 +50,15 @@ export interface ProviderCompletionInput {
   userPrompt: string
   /** Whether this call needs live web research capability — an adapter that can't do this for a given request should be excluded by capability routing before it ever reaches here. */
   requiresLiveWebResearch: boolean
+  /**
+   * Phase 2H — which specialist/methodology this call is for, so an
+   * adapter that supports cost/quality model routing (see
+   * modelRouting.ts) can pick the right pinned model. An adapter that
+   * doesn't support routing (e.g. AnthropicMessagesAdapter today) is
+   * free to ignore these and use its own single configured model.
+   */
+  specialist: string
+  methodologyId: string
 }
 
 export interface ProviderCompletionResult {
@@ -248,7 +257,7 @@ export class RemoteAiExecutor implements SpecialistExecutor {
     for (const adapter of qualified) {
       let completion: { text: string }
       try {
-        completion = await adapter.complete({ systemPrompt, userPrompt, requiresLiveWebResearch })
+        completion = await adapter.complete({ systemPrompt, userPrompt, requiresLiveWebResearch, specialist: request.specialist, methodologyId: request.methodologyId })
       } catch (err) {
         // Transient/provider-side failure — record it and fall through to
         // the next qualified adapter rather than giving up immediately.

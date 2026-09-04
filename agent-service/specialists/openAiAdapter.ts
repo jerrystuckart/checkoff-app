@@ -10,21 +10,30 @@
 // OPENAI_API_KEY — isConfigured() is false without it, same discipline
 // as the Anthropic adapter.
 //
-// DEFAULT MODEL (Phase 2H live-provider proof, 2026-09-05): 'gpt-4.1',
-// not 'gpt-5'. A real live call against this account with 'gpt-5'
-// failed with a 404 model_not_found — "Your organization must be
-// verified to use the model gpt-5" (org verification not completed).
-// 'gpt-4.1' was verified working end-to-end in the same session: live
-// web_search tool use, a real cited source URL, and current (2026)
-// information. Override via CHIEF_OPENAI_RESEARCH_MODEL once
-// organization verification is done and gpt-5 access is confirmed —
-// this default is a live-environment finding, not a permanent ceiling.
+// MODEL SELECTION (Phase 2H): per-call, via modelRouting.ts's
+// `specialist + methodology -> configured model` policy — NOT one fixed
+// model per adapter instance. `options.model` (or
+// CHIEF_OPENAI_RESEARCH_MODEL at construction time) remains available as
+// a hard override for callers that want ALL calls through this instance
+// pinned to one model regardless of routing (e.g. tests); when unset,
+// every call resolves its own model from the routing table using that
+// call's actual specialist/methodology.
+//
+// gpt-4.1 (the routing table's default for research/DVA-1) was verified
+// working end-to-end in a real live-provider proof, 2026-09-05: live
+// web_search tool use, a real cited source URL, current (2026)
+// information. gpt-5 404s on this account — "organization must be
+// verified" — so it is deliberately NOT the default; see modelRouting.ts
+// for the full pinned-model policy (never auto-escalate to a newer
+// model merely because one exists).
 
 import type { ProviderAdapter, ProviderCompletionInput, ProviderCompletionResult } from './remoteAiExecutor'
+import { resolveOpenAiModel } from './modelRouting'
 
 export interface OpenAiAdapterOptions {
   apiKey?: string
   baseUrl?: string
+  /** Hard override — when set, EVERY call through this instance uses exactly this model, bypassing modelRouting.ts entirely. Leave unset to let each call route by its own specialist/methodology. */
   model?: string
   fetchImpl?: typeof fetch
   /**
@@ -50,13 +59,14 @@ export class OpenAiAdapter implements ProviderAdapter {
 
   private readonly apiKey: string | undefined
   private readonly baseUrl: string
-  private readonly model: string
+  /** Hard override only — undefined means "route per-call" (the normal path). */
+  private readonly explicitModel: string | undefined
   private readonly fetchImpl: typeof fetch
 
   constructor(options: OpenAiAdapterOptions = {}) {
     this.apiKey = options.apiKey ?? process.env.OPENAI_API_KEY
     this.baseUrl = options.baseUrl ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com'
-    this.model = options.model ?? process.env.CHIEF_OPENAI_RESEARCH_MODEL ?? 'gpt-4.1'
+    this.explicitModel = options.model
     this.fetchImpl = options.fetchImpl ?? fetch
     this.supportsLiveWebResearch = options.supportsLiveWebResearch ?? envFlag('CHIEF_OPENAI_SUPPORTS_WEB_SEARCH', true)
   }
@@ -65,18 +75,24 @@ export class OpenAiAdapter implements ProviderAdapter {
     return !!this.apiKey
   }
 
+  /** The model THIS call will use — exposed for logging/reporting, not just internal use. */
+  modelFor(specialist: string, methodologyId: string): string {
+    return this.explicitModel ?? resolveOpenAiModel(specialist, methodologyId).model
+  }
+
   async complete(input: ProviderCompletionInput): Promise<ProviderCompletionResult> {
     if (!this.apiKey) {
       throw new Error('OpenAiAdapter.complete called without OPENAI_API_KEY configured — canExecute()/isConfigured() should have prevented this.')
     }
+    const model = this.modelFor(input.specialist, input.methodologyId)
     if (input.requiresLiveWebResearch && !this.supportsLiveWebResearch) {
       // Honest failure per spec section 9 — never silently drop the web
       // requirement and answer from training data instead.
-      throw new Error(`OpenAiAdapter is configured with model "${this.model}", which this configuration declares does NOT support live web research (CHIEF_OPENAI_SUPPORTS_WEB_SEARCH=false) — refusing to answer a live-research request from memory.`)
+      throw new Error(`OpenAiAdapter is configured with model "${model}", which this configuration declares does NOT support live web research (CHIEF_OPENAI_SUPPORTS_WEB_SEARCH=false) — refusing to answer a live-research request from memory.`)
     }
 
     const body: Record<string, unknown> = {
-      model: this.model,
+      model,
       input: [
         { role: 'system', content: input.systemPrompt },
         { role: 'user', content: input.userPrompt },
