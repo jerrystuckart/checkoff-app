@@ -1,0 +1,184 @@
+[
+  {
+    "userId": "11275026-65be-4421-80a4-46c57195408b",
+    "segment": "ACTIVE_AUGUST",
+    "metroName": "Phoenix Metro",
+    "metroSource": "checkoff_history",
+    "isSynthetic": false,
+    "subject": "Jerry, your August Monthly CheckOff Recap \ud83c\udf42",
+    "previewText": "New places, Fall experiences, personalized picks, and something new coming soon.",
+    "mainCta": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=11275026-65be-4421-80a4-46c57195408b&c=recap_2026-08&t=342dc7e6b922fc1eaf7358a4&dest=checkoff%3A%2F%2Fhome&ev=main_cta_click&seg=ACTIVE_AUGUST",
+    "recommendationIds": [
+      "832ab5b4-2b62-463e-a26c-0647751a0460",
+      "1d7a67a8-7e85-4812-84ac-a1373a797e00",
+      "a6974d0f-084d-4118-ac85-b1ee6a166c66"
+    ],
+    "updates": [],
+    "themedLists": [
+      "West Valley's Best",
+      "Phoenix Hidden Gems",
+      "Rediscover Downtown Peoria"
+    ],
+    "nextMetroVoteUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=11275026-65be-4421-80a4-46c57195408b&c=recap_2026-08&t=342dc7e6b922fc1eaf7358a4&dest=https%3A%2F%2Fgetcheckoff.com&ev=next_metro_vote&seg=ACTIVE_AUGUST",
+    "suggestAnotherCityUrl": "mailto:hello@getcheckoff.com?subject=City%20Suggestion&body=I%27d%20love%20to%20see%20CheckOff%20in%3A%20",
+    "inviteUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=11275026-65be-4421-80a4-46c57195408b&c=recap_2026-08&t=342dc7e6b922fc1eaf7358a4&dest=https%3A%2F%2Fgetcheckoff.com%2Fjoin&ev=invite_click&seg=ACTIVE_AUGUST",
+    "unsubscribeUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=11275026-65be-4421-80a4-46c57195408b&c=recap_2026-08&t=342dc7e6b922fc1eaf7358a4&dest=https%3A%2F%2Fgetcheckoff.com%2Fdownload&ev=unsubscribe&seg=ACTIVE_AUGUST",
+    "seasonListDeepLink": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=11275026-65be-4421-80a4-46c57195408b&c=recap_2026-08&t=342dc7e6b922fc1eaf7358a4&dest=checkoff%3A%2F%2Flist%3Fid%3D419ba1e2-c846-434f-b168-8829e8a90a73&ev=season_continue_click&seg=ACTIVE_AUGUST",
+    "recommendationUrls": [
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=11275026-65be-4421-80a4-46c57195408b&c=recap_2026-08&t=342dc7e6b922fc1eaf7358a4&dest=checkoff%3A%2F%2Fitem%3Fid%3D832ab5b4-2b62-463e-a26c-0647751a0460&ev=recommendation_click&seg=ACTIVE_AUGUST&rec=832ab5b4-2b62-463e-a26c-0647751a0460",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=11275026-65be-4421-80a4-46c57195408b&c=recap_2026-08&t=342dc7e6b922fc1eaf7358a4&dest=checkoff%3A%2F%2Fitem%3Fid%3D1d7a67a8-7e85-4812-84ac-a1373a797e00&ev=recommendation_click&seg=ACTIVE_AUGUST&rec=1d7a67a8-7e85-4812-84ac-a1373a797e00",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=11275026-65be-4421-80a4-46c57195408b&c=recap_2026-08&t=342dc7e6b922fc1eaf7358a4&dest=checkoff%3A%2F%2Fitem%3Fid%3Da6974d0f-084d-4118-ac85-b1ee6a166c66&ev=recommendation_click&seg=ACTIVE_AUGUST&rec=a6974d0f-084d-4118-ac85-b1ee6a166c66"
+    ],
+    "themedListUrls": [
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=11275026-65be-4421-80a4-46c57195408b&c=recap_2026-08&t=342dc7e6b922fc1eaf7358a4&dest=checkoff%3A%2F%2Flist%3Fid%3Dc79e270f-b342-4fb8-b99d-097c18713255&ev=themed_list_click&seg=ACTIVE_AUGUST",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=11275026-65be-4421-80a4-46c57195408b&c=recap_2026-08&t=342dc7e6b922fc1eaf7358a4&dest=checkoff%3A%2F%2Flist%3Fid%3Da0ab709f-3b4f-4efc-b2b7-8813178f035b&ev=themed_list_click&seg=ACTIVE_AUGUST",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=11275026-65be-4421-80a4-46c57195408b&c=recap_2026-08&t=342dc7e6b922fc1eaf7358a4&dest=checkoff%3A%2F%2Flist%3Fid%3D186e6c04-19f8-4093-ae6b-d5cf5ae2f627&ev=themed_list_click&seg=ACTIVE_AUGUST"
+    ],
+    "file": "preview-ACTIVE_AUGUST.html"
+  },
+  {
+    "userId": "SYNTHETIC-fall-continuation-preview",
+    "segment": "FALL_CONTINUATION",
+    "metroName": "Milwaukee Metro",
+    "metroSource": "checkoff_history",
+    "isSynthetic": true,
+    "subject": "Your August Recap: Fall 2026 \u2014 Milwaukee Metro is waiting \ud83c\udf42",
+    "previewText": "New places, Fall experiences, personalized picks, and something new coming soon.",
+    "mainCta": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=SYNTHETIC-fall-continuation-preview&c=recap_2026-08&t=3432cc33215510b08aaee855&dest=checkoff%3A%2F%2Fhome&ev=main_cta_click&seg=FALL_CONTINUATION",
+    "recommendationIds": [
+      "x1",
+      "x2",
+      "x3"
+    ],
+    "updates": [
+      "android_launch"
+    ],
+    "themedLists": [
+      "The Green Bay Leap",
+      "The Door County Detour",
+      "Madison State Street Drift"
+    ],
+    "nextMetroVoteUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=SYNTHETIC-fall-continuation-preview&c=recap_2026-08&t=3432cc33215510b08aaee855&dest=https%3A%2F%2Fgetcheckoff.com&ev=next_metro_vote&seg=FALL_CONTINUATION",
+    "suggestAnotherCityUrl": "mailto:hello@getcheckoff.com?subject=City%20Suggestion&body=I%27d%20love%20to%20see%20CheckOff%20in%3A%20",
+    "inviteUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=SYNTHETIC-fall-continuation-preview&c=recap_2026-08&t=3432cc33215510b08aaee855&dest=https%3A%2F%2Fgetcheckoff.com%2Fjoin&ev=invite_click&seg=FALL_CONTINUATION",
+    "unsubscribeUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=SYNTHETIC-fall-continuation-preview&c=recap_2026-08&t=3432cc33215510b08aaee855&dest=https%3A%2F%2Fgetcheckoff.com%2Fdownload&ev=unsubscribe&seg=FALL_CONTINUATION",
+    "seasonListDeepLink": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=SYNTHETIC-fall-continuation-preview&c=recap_2026-08&t=3432cc33215510b08aaee855&dest=checkoff%3A%2F%2Flist%3Fid%3D21523c15-4bd0-4fc1-b8ec-c1d67ca2fa40&ev=season_continue_click&seg=FALL_CONTINUATION",
+    "recommendationUrls": [
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=SYNTHETIC-fall-continuation-preview&c=recap_2026-08&t=3432cc33215510b08aaee855&dest=checkoff%3A%2F%2Fitem%3Fid%3Dx1&ev=recommendation_click&seg=FALL_CONTINUATION&rec=x1",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=SYNTHETIC-fall-continuation-preview&c=recap_2026-08&t=3432cc33215510b08aaee855&dest=checkoff%3A%2F%2Fitem%3Fid%3Dx2&ev=recommendation_click&seg=FALL_CONTINUATION&rec=x2",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=SYNTHETIC-fall-continuation-preview&c=recap_2026-08&t=3432cc33215510b08aaee855&dest=checkoff%3A%2F%2Fitem%3Fid%3Dx3&ev=recommendation_click&seg=FALL_CONTINUATION&rec=x3"
+    ],
+    "themedListUrls": [
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=SYNTHETIC-fall-continuation-preview&c=recap_2026-08&t=3432cc33215510b08aaee855&dest=checkoff%3A%2F%2Flist%3Fid%3D56789554-8c13-4af5-a826-67a9b77b4c4b&ev=themed_list_click&seg=FALL_CONTINUATION",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=SYNTHETIC-fall-continuation-preview&c=recap_2026-08&t=3432cc33215510b08aaee855&dest=checkoff%3A%2F%2Flist%3Fid%3D0abc58b1-48f2-4454-9f23-5f686572a6a5&ev=themed_list_click&seg=FALL_CONTINUATION",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=SYNTHETIC-fall-continuation-preview&c=recap_2026-08&t=3432cc33215510b08aaee855&dest=checkoff%3A%2F%2Flist%3Fid%3D1cc1a75c-b869-42cf-b809-cc8ef386b97d&ev=themed_list_click&seg=FALL_CONTINUATION"
+    ],
+    "file": "preview-FALL_CONTINUATION.html"
+  },
+  {
+    "userId": "1c56db65-5a08-4618-9e22-930ba7a9fc3b",
+    "segment": "RETURNING_INACTIVE",
+    "metroName": "Milwaukee Metro",
+    "metroSource": "checkoff_history",
+    "isSynthetic": false,
+    "subject": "Your August CheckOff Update: A lot changed",
+    "previewText": "New places, Fall experiences, personalized picks, and something new coming soon.",
+    "mainCta": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=1c56db65-5a08-4618-9e22-930ba7a9fc3b&c=recap_2026-08&t=417bf6b4d8e4ffd02c6c8052&dest=checkoff%3A%2F%2Fhome&ev=main_cta_click&seg=RETURNING_INACTIVE",
+    "recommendationIds": [
+      "df422f70-16e3-421b-a8c9-aef7a8fb424e",
+      "22b3868e-4768-46e4-8e0c-db4725989902",
+      "fa30a438-f676-4baa-b72b-cc92b9da33b9"
+    ],
+    "updates": [
+      "milwaukee_fall",
+      "android_launch",
+      "streaks_live"
+    ],
+    "themedLists": [
+      "The Green Bay Leap",
+      "The Door County Detour",
+      "Madison State Street Drift"
+    ],
+    "nextMetroVoteUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=1c56db65-5a08-4618-9e22-930ba7a9fc3b&c=recap_2026-08&t=417bf6b4d8e4ffd02c6c8052&dest=https%3A%2F%2Fgetcheckoff.com&ev=next_metro_vote&seg=RETURNING_INACTIVE",
+    "suggestAnotherCityUrl": "mailto:hello@getcheckoff.com?subject=City%20Suggestion&body=I%27d%20love%20to%20see%20CheckOff%20in%3A%20",
+    "inviteUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=1c56db65-5a08-4618-9e22-930ba7a9fc3b&c=recap_2026-08&t=417bf6b4d8e4ffd02c6c8052&dest=https%3A%2F%2Fgetcheckoff.com%2Fjoin&ev=invite_click&seg=RETURNING_INACTIVE",
+    "unsubscribeUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=1c56db65-5a08-4618-9e22-930ba7a9fc3b&c=recap_2026-08&t=417bf6b4d8e4ffd02c6c8052&dest=https%3A%2F%2Fgetcheckoff.com%2Fdownload&ev=unsubscribe&seg=RETURNING_INACTIVE",
+    "seasonListDeepLink": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=1c56db65-5a08-4618-9e22-930ba7a9fc3b&c=recap_2026-08&t=417bf6b4d8e4ffd02c6c8052&dest=checkoff%3A%2F%2Flist%3Fid%3D21523c15-4bd0-4fc1-b8ec-c1d67ca2fa40&ev=season_continue_click&seg=RETURNING_INACTIVE",
+    "recommendationUrls": [
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=1c56db65-5a08-4618-9e22-930ba7a9fc3b&c=recap_2026-08&t=417bf6b4d8e4ffd02c6c8052&dest=checkoff%3A%2F%2Fitem%3Fid%3Ddf422f70-16e3-421b-a8c9-aef7a8fb424e&ev=recommendation_click&seg=RETURNING_INACTIVE&rec=df422f70-16e3-421b-a8c9-aef7a8fb424e",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=1c56db65-5a08-4618-9e22-930ba7a9fc3b&c=recap_2026-08&t=417bf6b4d8e4ffd02c6c8052&dest=checkoff%3A%2F%2Fitem%3Fid%3D22b3868e-4768-46e4-8e0c-db4725989902&ev=recommendation_click&seg=RETURNING_INACTIVE&rec=22b3868e-4768-46e4-8e0c-db4725989902",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=1c56db65-5a08-4618-9e22-930ba7a9fc3b&c=recap_2026-08&t=417bf6b4d8e4ffd02c6c8052&dest=checkoff%3A%2F%2Fitem%3Fid%3Dfa30a438-f676-4baa-b72b-cc92b9da33b9&ev=recommendation_click&seg=RETURNING_INACTIVE&rec=fa30a438-f676-4baa-b72b-cc92b9da33b9"
+    ],
+    "themedListUrls": [
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=1c56db65-5a08-4618-9e22-930ba7a9fc3b&c=recap_2026-08&t=417bf6b4d8e4ffd02c6c8052&dest=checkoff%3A%2F%2Flist%3Fid%3D56789554-8c13-4af5-a826-67a9b77b4c4b&ev=themed_list_click&seg=RETURNING_INACTIVE",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=1c56db65-5a08-4618-9e22-930ba7a9fc3b&c=recap_2026-08&t=417bf6b4d8e4ffd02c6c8052&dest=checkoff%3A%2F%2Flist%3Fid%3D0abc58b1-48f2-4454-9f23-5f686572a6a5&ev=themed_list_click&seg=RETURNING_INACTIVE",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=1c56db65-5a08-4618-9e22-930ba7a9fc3b&c=recap_2026-08&t=417bf6b4d8e4ffd02c6c8052&dest=checkoff%3A%2F%2Flist%3Fid%3D1cc1a75c-b869-42cf-b809-cc8ef386b97d&ev=themed_list_click&seg=RETURNING_INACTIVE"
+    ],
+    "file": "preview-RETURNING_INACTIVE.html"
+  },
+  {
+    "userId": "084fee9e-bd64-4bca-8268-ab9cbd5562f9",
+    "segment": "NEVER_CHECKED_OFF",
+    "metroName": null,
+    "metroSource": "unknown",
+    "isSynthetic": false,
+    "subject": "Your August CheckOff Update: See what's new",
+    "previewText": "New places, Fall experiences, personalized picks, and something new coming soon.",
+    "mainCta": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=084fee9e-bd64-4bca-8268-ab9cbd5562f9&c=recap_2026-08&t=97c143f8ad4303aa3942ea6a&dest=checkoff%3A%2F%2Fhome&ev=main_cta_click&seg=NEVER_CHECKED_OFF",
+    "recommendationIds": [],
+    "updates": [
+      "android_launch",
+      "streaks_live"
+    ],
+    "themedLists": [],
+    "nextMetroVoteUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=084fee9e-bd64-4bca-8268-ab9cbd5562f9&c=recap_2026-08&t=97c143f8ad4303aa3942ea6a&dest=https%3A%2F%2Fgetcheckoff.com&ev=next_metro_vote&seg=NEVER_CHECKED_OFF",
+    "suggestAnotherCityUrl": "mailto:hello@getcheckoff.com?subject=City%20Suggestion&body=I%27d%20love%20to%20see%20CheckOff%20in%3A%20",
+    "inviteUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=084fee9e-bd64-4bca-8268-ab9cbd5562f9&c=recap_2026-08&t=97c143f8ad4303aa3942ea6a&dest=https%3A%2F%2Fgetcheckoff.com%2Fjoin&ev=invite_click&seg=NEVER_CHECKED_OFF",
+    "unsubscribeUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=084fee9e-bd64-4bca-8268-ab9cbd5562f9&c=recap_2026-08&t=97c143f8ad4303aa3942ea6a&dest=https%3A%2F%2Fgetcheckoff.com%2Fdownload&ev=unsubscribe&seg=NEVER_CHECKED_OFF",
+    "seasonListDeepLink": null,
+    "recommendationUrls": [],
+    "themedListUrls": [],
+    "file": "preview-NEVER_CHECKED_OFF-unknown_metro.html"
+  },
+  {
+    "userId": "154cf84d-3f16-47df-93cb-33433e5c8f3c",
+    "segment": "NEVER_CHECKED_OFF",
+    "metroName": "Phoenix Metro",
+    "metroSource": "list_history",
+    "isSynthetic": false,
+    "subject": "Your August CheckOff Update: Start exploring this Fall",
+    "previewText": "New places, Fall experiences, personalized picks, and something new coming soon.",
+    "mainCta": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=154cf84d-3f16-47df-93cb-33433e5c8f3c&c=recap_2026-08&t=325547611ea78164a6883811&dest=checkoff%3A%2F%2Fhome&ev=main_cta_click&seg=NEVER_CHECKED_OFF",
+    "recommendationIds": [
+      "c9335ef7-3b9d-4058-8063-077311cf9ebb",
+      "24e42913-0570-4f54-9c3d-f9ad59e8aa70",
+      "0af3ff2d-a276-45db-af9a-0276a5d44b89"
+    ],
+    "updates": [
+      "phoenix_fall",
+      "android_launch",
+      "streaks_live"
+    ],
+    "themedLists": [
+      "West Valley's Best",
+      "Phoenix Hidden Gems",
+      "Rediscover Downtown Peoria"
+    ],
+    "nextMetroVoteUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=154cf84d-3f16-47df-93cb-33433e5c8f3c&c=recap_2026-08&t=325547611ea78164a6883811&dest=https%3A%2F%2Fgetcheckoff.com&ev=next_metro_vote&seg=NEVER_CHECKED_OFF",
+    "suggestAnotherCityUrl": "mailto:hello@getcheckoff.com?subject=City%20Suggestion&body=I%27d%20love%20to%20see%20CheckOff%20in%3A%20",
+    "inviteUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=154cf84d-3f16-47df-93cb-33433e5c8f3c&c=recap_2026-08&t=325547611ea78164a6883811&dest=https%3A%2F%2Fgetcheckoff.com%2Fjoin&ev=invite_click&seg=NEVER_CHECKED_OFF",
+    "unsubscribeUrl": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=154cf84d-3f16-47df-93cb-33433e5c8f3c&c=recap_2026-08&t=325547611ea78164a6883811&dest=https%3A%2F%2Fgetcheckoff.com%2Fdownload&ev=unsubscribe&seg=NEVER_CHECKED_OFF",
+    "seasonListDeepLink": "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=154cf84d-3f16-47df-93cb-33433e5c8f3c&c=recap_2026-08&t=325547611ea78164a6883811&dest=checkoff%3A%2F%2Flist%3Fid%3D419ba1e2-c846-434f-b168-8829e8a90a73&ev=season_continue_click&seg=NEVER_CHECKED_OFF",
+    "recommendationUrls": [
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=154cf84d-3f16-47df-93cb-33433e5c8f3c&c=recap_2026-08&t=325547611ea78164a6883811&dest=checkoff%3A%2F%2Fitem%3Fid%3Dc9335ef7-3b9d-4058-8063-077311cf9ebb&ev=recommendation_click&seg=NEVER_CHECKED_OFF&rec=c9335ef7-3b9d-4058-8063-077311cf9ebb",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=154cf84d-3f16-47df-93cb-33433e5c8f3c&c=recap_2026-08&t=325547611ea78164a6883811&dest=checkoff%3A%2F%2Fitem%3Fid%3D0af3ff2d-a276-45db-af9a-0276a5d44b89&ev=recommendation_click&seg=NEVER_CHECKED_OFF&rec=0af3ff2d-a276-45db-af9a-0276a5d44b89",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=154cf84d-3f16-47df-93cb-33433e5c8f3c&c=recap_2026-08&t=325547611ea78164a6883811&dest=checkoff%3A%2F%2Fitem%3Fid%3D24e42913-0570-4f54-9c3d-f9ad59e8aa70&ev=recommendation_click&seg=NEVER_CHECKED_OFF&rec=24e42913-0570-4f54-9c3d-f9ad59e8aa70"
+    ],
+    "themedListUrls": [
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=154cf84d-3f16-47df-93cb-33433e5c8f3c&c=recap_2026-08&t=325547611ea78164a6883811&dest=checkoff%3A%2F%2Flist%3Fid%3Dc79e270f-b342-4fb8-b99d-097c18713255&ev=themed_list_click&seg=NEVER_CHECKED_OFF",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=154cf84d-3f16-47df-93cb-33433e5c8f3c&c=recap_2026-08&t=325547611ea78164a6883811&dest=checkoff%3A%2F%2Flist%3Fid%3Da0ab709f-3b4f-4efc-b2b7-8813178f035b&ev=themed_list_click&seg=NEVER_CHECKED_OFF",
+      "https://uggusbbswybyplypkbxz.supabase.co/functions/v1/campaign-link?u=154cf84d-3f16-47df-93cb-33433e5c8f3c&c=recap_2026-08&t=325547611ea78164a6883811&dest=checkoff%3A%2F%2Flist%3Fid%3D186e6c04-19f8-4093-ae6b-d5cf5ae2f627&ev=themed_list_click&seg=NEVER_CHECKED_OFF"
+    ],
+    "file": "preview-NEVER_CHECKED_OFF-known_metro.html"
+  }
+]

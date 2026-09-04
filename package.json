@@ -6,9 +6,20 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "agent:verify": "tsx agent-service/verify.ts",
+    "agent:verify:open-brain-sync": "tsx agent-service/verifyOpenBrainSyncPrivileges.ts",
+    "agent:verify:open-brain-live": "tsx agent-service/verifyOpenBrainLive.ts",
+    "agent:verify:decision-promotion": "tsx agent-service/verifyDecisionPromotionPrivileges.ts",
+    "agent:audit": "tsx agent-service/runAudit.ts",
+    "agent:test": "tsx --test agent-service/*.test.ts",
+    "agent:test:mutations": "AGENT_SERVICE_ALLOW_MUTATION_TESTS=1 tsx --test agent-service/*.test.ts",
+    "agent:typecheck": "tsc --noEmit -p agent-service/tsconfig.json",
+    "whats-good:test": "node --test lib/*.test.js",
+    "visit-detection:test": "node --test lib/visitDetection/*.test.js"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-clipboard/clipboard": "^1.16.3",
     "@react-native-community/datetimepicker": "8.6.0",
@@ -29,8 +40,10 @@
     "expo-location": "~55.1.9",
     "expo-notifications": "~55.0.22",
     "expo-status-bar": "~55.0.6",
+    "expo-task-manager": "~55.0.20",
     "expo-updates": "~55.0.26",
     "jsonwebtoken": "^9.0.3",
+    "pg": "^8.16.3",
     "react": "19.2.0",
     "react-native": "0.83.6",
     "react-native-safe-area-context": "~5.6.0",
@@ -40,7 +53,10 @@
   "private": true,
   "devDependencies": {
     "@react-native-community/cli": "latest",
+    "@types/node": "^20.19.20",
+    "@types/pg": "^8.15.6",
     "@types/react": "~19.2.10",
+    "tsx": "^4.20.6",
     "typescript": "~5.9.2"
   }
 }

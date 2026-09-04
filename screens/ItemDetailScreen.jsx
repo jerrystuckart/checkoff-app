@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import {
   View,
   Text,
+  Image,
   TouchableOpacity,
   StyleSheet,
   TextInput,
@@ -28,7 +29,14 @@ import { trackEvent } from '../lib/trackEvent'
 import { fanOutCheckIn } from '../lib/checkInFanOut'
 import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
 import { resolveCheckOffAttachment } from '../lib/checkOffAttachment'
+import { cancelAtPlaceReminder } from '../lib/visitDetection/atPlaceReminder'
 import { checkGeoFence, presentGeoFenceFailure } from '../lib/geoFence'
+import * as Location from 'expo-location'
+import { isAtPlace } from '../lib/whatsGoodAtPlace'
+import { useCoverCandidateCTA } from '../lib/useCoverCandidateCTA'
+import CoverCandidateCTA from '../components/CoverCandidateCTA'
+import { resolvedItemImage } from '../lib/whatsGoodImageSource'
+import { fetchActiveCoverImageUrl } from '../lib/coverCandidates'
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
 
 const AMBER = '#F5A623'
@@ -204,6 +212,65 @@ export default function ItemDetailScreen({ route, navigation }) {
   useEffect(() => {
     loadUser()
   }, [])
+
+  // Community Cover Photos V1 — a one-shot, permission-check-only location
+  // read (never requests; if the OS permission isn't already granted, this
+  // silently stays null and the contribution CTA below just doesn't show —
+  // matches this app's "never silently prompt" convention). Uses the same
+  // existing, approved foreground presence rule as Home
+  // (lib/whatsGoodAtPlace.js's isAtPlace, min(geo_radius_m, 150m)) — not a
+  // new radius/dwell concept.
+  const [detailUserLocation, setDetailUserLocation] = useState(null)
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { status } = await Location.getForegroundPermissionsAsync()
+        if (status !== 'granted') return
+        const pos = await Location.getLastKnownPositionAsync({}).catch(() => null)
+        if (!cancelled && pos?.coords) {
+          setDetailUserLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude })
+        }
+      } catch {
+        // location unavailable — contribution CTA simply won't show
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+
+  const isAtPlaceForItem = isAtPlace(item, detailUserLocation)
+
+  // Final UI Pass Before Build 144 — item 3: one image truth regardless of
+  // navigation source. `item` (route.params.item) only carries
+  // activeCoverImageUrl when it came from HomeScreen's own enriched query;
+  // this fetch fills the gap for Near You/Nearby, Lists, and
+  // Profile/history entry points. `resolvedItem` (not `item`) is what
+  // feeds both the eligibility check below and the image render further
+  // down, so a selected cover is never missed and the "no contribution CTA
+  // once a cover exists" rule holds no matter how this screen was reached.
+  const [fetchedCoverUrl, setFetchedCoverUrl] = useState(null)
+  useEffect(() => {
+    let cancelled = false
+    if (!item?.id) return undefined
+    fetchActiveCoverImageUrl({ itemId: item.id }).then((url) => {
+      if (!cancelled && url) setFetchedCoverUrl(url)
+    })
+    return () => { cancelled = true }
+  }, [item?.id])
+
+  const resolvedItem = fetchedCoverUrl ? { ...item, activeCoverImageUrl: fetchedCoverUrl } : item
+
+  // useCoverCandidateCTA already checks for an existing approved image
+  // internally (lib/coverCandidateEligibility.js) — not re-checked here.
+  const showCoverContributionCTA = useCoverCandidateCTA({ userId, item: resolvedItem, isAtPlace: isAtPlaceForItem })
+
+  // Visit Reminder V1.5 — as soon as this item is checked off (any of the
+  // checkoff paths below, tap/photo/etc. all funnel into setChecked(true)),
+  // cancel any pending at-place reminder for it. No-op if none is pending
+  // (e.g. the flag was off, or the item was never at-place).
+  useEffect(() => {
+    if (checked && item?.id) cancelAtPlaceReminder(item.id)
+  }, [checked, item?.id])
 
   // Always holds the CURRENT item's id, kept in sync by the effect just
   // below. Read by loadCheckedState/refreshItemListContext to detect when
@@ -1137,6 +1204,7 @@ export default function ItemDetailScreen({ route, navigation }) {
 
   const ring = item.ring_weight ?? 0
   const ringColor = RING_COLORS[ring] ?? RING_COLORS[0]
+  const itemDetailImage = resolvedItemImage(resolvedItem)
   const hasLoc = item.maps_query || ((item.maps_lat ?? item.mapsLat) && (item.maps_lng ?? item.mapsLng))
   const hasWeb = !!item.website_url
   const isPartner = !!item.partner_id
@@ -1153,6 +1221,21 @@ export default function ItemDetailScreen({ route, navigation }) {
       contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
       showsVerticalScrollIndicator={false}
     >
+      {/* FINAL UI PASS BEFORE BUILD 144 — item 2: the top area is either
+          the real selected image, or (only when no cover exists AND the
+          user is physically eligible) an intentional contribution CTA —
+          never a dead empty placeholder. When there's no image and the
+          user isn't eligible to submit one, this area renders nothing at
+          all; the tag/headline card below is real content, not a gap. */}
+      {itemDetailImage ? (
+        <Image source={{ uri: itemDetailImage.url }} style={styles.itemImage} resizeMode="cover" />
+      ) : showCoverContributionCTA ? (
+        <View style={styles.topContributionWrap}>
+          <Text style={styles.coverContributionTitle}>Help locals see the thing</Text>
+          <CoverCandidateCTA item={resolvedItem} navigation={navigation} colors={colors} compact />
+        </View>
+      ) : null}
+
       <View style={styles.itemCard}>
         <View style={styles.tagRow}>
           <View style={[styles.tag, { backgroundColor: `${ringColor}18`, borderColor: `${ringColor}33` }]}>
@@ -1707,6 +1790,13 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     fontSize: 14,
   },
 
+  itemImage: {
+    width: '100%',
+    height: 220,
+    borderRadius: 24,
+    marginBottom: 16,
+  },
+
   itemCard: {
     backgroundColor: CARD,
     borderRadius: 28,
@@ -1735,12 +1825,28 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     fontWeight: '700',
   },
 
+  // FINAL UI PASS BEFORE BUILD 144 — item 1: was 30/40 (a billboard, not a
+  // headline) — dropped to a strong editorial-headline size that still
+  // dominates the card without eating the viewport on long copy.
   itemBody: {
-    fontSize: 30,
+    fontSize: 21,
     fontWeight: '800',
     color: TEXT,
-    lineHeight: 40,
-    marginBottom: 10,
+    lineHeight: 27,
+    marginBottom: 8,
+  },
+
+  // Contribution CTA now lives in the TOP area (see the render above) —
+  // this wrapper gives it the same intentional spacing the old
+  // below-the-card block had.
+  topContributionWrap: {
+    marginBottom: 16,
+  },
+  coverContributionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: MUTED,
+    marginBottom: 4,
   },
 
   locationLabel: {

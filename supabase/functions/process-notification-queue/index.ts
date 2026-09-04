@@ -90,6 +90,26 @@ function buildMessage(row: NotificationRow, token: string): PushMessage | null {
     }
   }
 
+  // Visit Reminder V1 — queued by the candidate_visits AFTER INSERT trigger
+  // (see supabase/migrations/20260902_visit_reminder_v1_notify_trigger.sql)
+  // once a departure clears the existing notify-eligible confidence
+  // threshold. Generic, non-creepy copy per product spec — no venue name,
+  // no "we saw you at X".
+  if (row.type === 'candidate_visit_high_confidence') {
+    return {
+      to:    token,
+      title: 'Did you CheckOff the Thing?',
+      body:  'You were just at a CheckOff spot 👀',
+      sound: 'default',
+      data:  {
+        screen: 'Home',
+        kind: 'candidate_visit_high_confidence',
+        item_id: p.item_id ?? null,
+        candidate_visit_id: p.candidate_visit_id ?? null,
+      },
+    }
+  }
+
   if (row.type === 'list_invite') {
     const fromName  = String(p.from_name  ?? 'Someone')
     const listTitle = String(p.list_title ?? 'a list')

@@ -2,7 +2,7 @@
   "expo": {
     "name": "CheckOff",
     "slug": "checkoff",
-    "version": "1.1.5",
+    "version": "1.1.6",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -22,7 +22,7 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.checkoff.app",
       "usesAppleSignIn": true,
-      "buildNumber": "136",
+      "buildNumber": "137",
       "associatedDomains": [
         "applinks:getcheckoff.com",
         "webcredentials:getcheckoff.com"
@@ -30,10 +30,11 @@
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "UIBackgroundModes": [
-          "remote-notification"
+          "remote-notification",
+          "location"
         ],
         "NSLocationWhenInUseUsageDescription": "CheckOff uses your location to show items near you and verify GPS check-ins.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "CheckOff uses your location to show items near you and verify GPS check-ins.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "CheckOff can recognize when you're spending time at a place in our catalog, so it can help recover a CheckOff you forgot or let you know about a nearby pick. Never miss the thing.",
         "NSPhotoLibraryUsageDescription": "CheckOff lets you add photos to your check-ins.",
         "NSCameraUsageDescription": "CheckOff lets you take photos for check-ins.",
         "LSApplicationQueriesSchemes": [
@@ -56,6 +57,7 @@
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
         "CAMERA",
         "POST_NOTIFICATIONS"
       ],
@@ -77,6 +79,7 @@
     },
     "plugins": [
       "expo-location",
+      "expo-task-manager",
       "expo-apple-authentication",
       "@react-native-google-signin/google-signin",
       [

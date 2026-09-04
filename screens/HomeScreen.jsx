@@ -22,6 +22,18 @@ import { getSessionDensityTier } from '../lib/densityTier'
 import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
 import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { isItemInSeason } from '../lib/seasonFilter'
+import { useWhatsGood } from '../lib/useWhatsGood'
+import { applyDevMixedImagePreview } from '../lib/devPreviewOverrides'
+import { attachActiveCoverImages } from '../lib/coverCandidates'
+import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
+import WhatsGoodDebugPanel from '../components/WhatsGoodDebugPanel'
+import { deriveHomeHeroLayout } from '../lib/homeHeroLayout'
+import { selectNearYouCompactRows } from '../lib/nearYouCompact'
+import CompactHomeHeader from '../components/home/CompactHomeHeader'
+import DestinationHero from '../components/home/DestinationHero'
+import NearYouCompact from '../components/home/NearYouCompact'
+import WhatsTheThingHero from '../components/home/WhatsTheThingHero'
+import WhatsGoodDiscovery from '../components/home/WhatsGoodDiscovery'
 
 const PURPLE = '#7A4DB3'
 
@@ -218,7 +230,9 @@ export default function HomeScreen({ navigation }) {
           try {
             let zoneQuery = supabase
               .from('destination_zones')
-              .select('id, name, slug, banner_title, banner_subtitle, center_lat, center_lng, radius_km, destination_id, is_active')
+              // curated_lists(hero_image_url) added for the 2026 redesign's
+              // DestinationHero — additive only, legacy zoneBanner ignores it.
+              .select('id, name, slug, banner_title, banner_subtitle, center_lat, center_lng, radius_km, destination_id, is_active, curated_list_id, curated_lists(hero_image_url)')
             if (!__DEV__) {
               zoneQuery = zoneQuery.eq('is_active', true)
             }
@@ -525,6 +539,20 @@ function mapRailItem(item) {
     maps_query:          item.maps_query ?? null,
     partner_id:          item.partner_id ?? null,
     partnerName:         item.partners?.business_name ?? null,
+    // 2026 redesign image audit: neither items nor partners currently has
+    // photo_url populated for any live row (0/4 partners as of this
+    // audit) — this field exists so the new home/*.jsx card components
+    // have a real path forward the moment photos are added, without
+    // another data-plumbing change. Every card gracefully falls back to a
+    // solid-color initial glyph when this is null (see
+    // components/home/WhatsGoodDiscovery.jsx).
+    photo_url:           item.partners?.photo_url ?? null,
+    // Community Cover Photos V1 — the item's admin-selected cover, if any
+    // (see lib/coverCandidates.js's resolveActiveCoverUrl). Resolved to a
+    // real signed activeCoverImageUrl just below, in resolveActiveCoverImages
+    // — this raw id is the input to that resolution, not consumed directly
+    // by any card component.
+    activeCoverCandidateId: item.active_cover_candidate_id ?? null,
     has_alcohol:         item.has_alcohol ?? false,
     season_tag:          item.season_tag ?? null,
     allowsPersonalNote:  item.allows_personal_note ?? false,
@@ -545,9 +573,10 @@ async function loadNearbyRail(userId) {
       maps_lat, maps_lng, geo_radius_m, is_secret, secret_reveal_text,
       website_url, maps_query, partner_id, has_alcohol, season_tag,
       allows_personal_note, personal_prompt_label, personal_place_label,
+      active_cover_candidate_id,
       categories(name, color_hex),
       neighborhoods!items_neighborhood_id_fkey(id, name),
-      partners!items_partner_id_fkey(business_name)
+      partners!items_partner_id_fkey(business_name, photo_url)
     `
 
     const [{ data: universalItems }, { data: locatedItems }] = await Promise.all([
@@ -573,7 +602,14 @@ async function loadNearbyRail(userId) {
     // Locked Bonus Drops must not leak here — they only exist inside their
     // own list until unlocked. Masked unconditionally unless this user has
     // already checked the item off, at which point it's a normal item.
-    const rawItems = await filterMaskedBonusDrops(allRawItems, userId)
+    const maskedItems = await filterMaskedBonusDrops(allRawItems, userId)
+    // Community Cover Photos V1 — resolve any item with a real selected
+    // cover (items.active_cover_candidate_id) to a signed
+    // activeCoverImageUrl. Cheap in practice: only items an admin has
+    // actually selected a cover for ever have a truthy
+    // activeCoverCandidateId, so this is a no-op fast-path for the vast
+    // majority of items today.
+    const rawItems = await attachActiveCoverImages(maskedItems)
     setRawNearbyItems(rawItems)
 
     if (userId && rawItems.length > 0) {
@@ -686,6 +722,29 @@ async function loadNearbyRail(userId) {
     })
     return sorted.filter(item => !checkedItemIds.has(item.id)).slice(0, 5)
   }, [rawNearbyItems, userLocation, sessionTier, checkedItemIds])
+
+  // What's Good V1 — behind the `whats_good_v1` feature flag (disabled
+  // globally). Owns its own location/refresh cycle entirely separate from
+  // userLocation above; see lib/useWhatsGood.js's module doc for why. No
+  // effect on existing Home Rail behavior when the flag is off.
+  const homeRailItemIds = useMemo(() => nearbyRailItems.map(item => item.id), [nearbyRailItems])
+  const whatsGood = useWhatsGood({
+    userId: user?.id ?? null,
+    rawNearbyItems,
+    homeRailItemIds,
+    navigation,
+  })
+
+  // Visit Reminder V1.5 — behind the separate `at_place_checkoff_reminders`
+  // flag (disabled globally). Reuses whatsGood.atPlaceItem (the existing
+  // approved foreground presence rule) and this screen's own season-scoped
+  // checkedItemIds rather than re-deriving either. See
+  // lib/visitDetection/useAtPlaceReminder.js.
+  useAtPlaceReminder({
+    userId: user?.id ?? null,
+    atPlaceItem: whatsGood.atPlaceItem,
+    isCheckedOff: whatsGood.atPlaceItem ? checkedItemIds.has(whatsGood.atPlaceItem.id) : false,
+  })
 
   // Location denied/unavailable, or genuinely nothing nearby (empty tier) —
   // both read as "do these anywhere" rather than a failure state. Suppressed
@@ -1054,6 +1113,14 @@ async function loadNearbyRail(userId) {
     >
       <StatusBar barStyle={STATUS_BAR} />
 
+      {/* ══════════════════════════════════════════════════════════════
+          LEGACY top-of-Home — untouched, byte-identical to before the
+          2026 redesign. Renders whenever whats_good_v1 is disabled
+          (the default for every non-tester user). See the
+          whatsGood.enabled branch below for the redesigned experience.
+          ══════════════════════════════════════════════════════════════ */}
+      {!whatsGood.enabled && (
+      <>
       <View style={styles.headerCard}>
         <View style={styles.headerTopRow}>
           <View style={styles.logoWrapper}>
@@ -1236,6 +1303,94 @@ async function loadNearbyRail(userId) {
           </ScrollView>
         </>
       )}
+
+      </>
+      )}
+      {/* ══════════════════════ end LEGACY top-of-Home ══════════════════════ */}
+
+      {/* ══════════════════════════════════════════════════════════════
+          2026 REDESIGN — behind whats_good_v1 (disabled globally; Jerry-
+          only override). See lib/homeHeroLayout.js for the hero-priority
+          rule (destination > at-place > none) that decides what renders
+          here on any given load.
+          ══════════════════════════════════════════════════════════════ */}
+      {whatsGood.enabled && (() => {
+        const tier2       = getTierByName(userInsiderTier)
+        const tierIdx2     = ['Starter', 'Explorer', 'Local', 'Insider', 'Legend'].indexOf(userInsiderTier)
+        const filledDots2 = tierIdx2 < 0 ? 1 : tierIdx2 + 1
+        const metroLabel2 = selectedMetro?.name?.replace(' Metro', '') ?? '—'
+        const multiMetro2 = metros.length > 1
+
+        function openMetroPicker2() {
+          if (!multiMetro2) return
+          Alert.alert(
+            'Switch City',
+            'Choose your city',
+            metros.map(m => ({ text: m.name.replace(' Metro', ''), onPress: () => switchMetro(m) }))
+              .concat([{ text: 'Cancel', style: 'cancel' }])
+          )
+        }
+
+        const heroLayout = deriveHomeHeroLayout({
+          hasDestination: Boolean(nearbyZone && !zoneBannerDismissed),
+          hasAtPlace: Boolean(whatsGood.atPlaceItem),
+        })
+        const nearYouCompactItems = selectNearYouCompactRows(nearbyRailItems, undefined, whatsGood.atPlaceItem?.id ?? null)
+
+        return (
+          <View>
+            <CompactHomeHeader
+              colors={colors}
+              isDark={isDark}
+              onToggleTheme={toggleTheme}
+              userStreak={userStreak}
+              showThisWeek={Boolean(user) && !isNarrowHeader}
+              onThisWeekPress={() => navigation.navigate('WeeklyRecap')}
+              metroLabel={metroLabel2}
+              multiMetro={multiMetro2}
+              onMetroPress={openMetroPicker2}
+              userInsiderTier={userInsiderTier}
+              tierColor={tier2.text}
+              tierProgressFilledDots={filledDots2}
+              onProfilePress={() => navigation.navigate('ProfileTab')}
+              showProfileStatus={Boolean(user)}
+            />
+
+            {heroLayout.primaryHero === 'destination' && (
+              <DestinationHero
+                zone={nearbyZone}
+                colors={colors}
+                onPress={() => handleDestinationZoneTap(nearbyZone)}
+                onDismiss={() => setZoneBannerDismissed(true)}
+              />
+            )}
+
+            {heroLayout.primaryHero === 'at_place' && (
+              <WhatsTheThingHero item={whatsGood.atPlaceItem} navigation={navigation} colors={colors} userId={user?.id ?? null} />
+            )}
+
+            {heroLayout.secondarySlot === 'at_place_compact' && whatsGood.atPlaceItem && (
+              <WhatsTheThingHero item={whatsGood.atPlaceItem} navigation={navigation} colors={colors} compact />
+            )}
+
+            {heroLayout.secondarySlot === 'near_you_compact' && (
+              <NearYouCompact
+                items={nearYouCompactItems}
+                colors={colors}
+                onItemPress={(item) => navigation.navigate('ItemDetail', { item })}
+                onSeeAllPress={() => navigation.navigate('NearbyTab')}
+              />
+            )}
+
+            <WhatsGoodDiscovery items={applyDevMixedImagePreview(whatsGood.items)} navigation={navigation} colors={colors} />
+
+            {/* Tester-only field-test instrumentation — today that means
+                Jerry only (the sole whats_good_v1 feature_flag_overrides
+                row); see WhatsGoodDebugPanel.jsx's own module doc. */}
+            <WhatsGoodDebugPanel debug={whatsGood.debug} colors={colors} />
+          </View>
+        )
+      })()}
 
       {homeOfficialLists.length > 0 && (
         <>

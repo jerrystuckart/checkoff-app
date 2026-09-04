@@ -47,6 +47,7 @@ yarn-error.*
 # Local secrets and environment files
 .env
 .env.*
+!.env.example
 *.pem
 
 # Supabase CLI local session cache

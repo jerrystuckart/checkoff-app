@@ -24,6 +24,7 @@ import { useAuth }             from './lib/useAuth'
 import { useOnboarding }      from './lib/useOnboarding'
 import { ThemeProvider }      from './lib/ThemeContext'
 import { useNotifications }   from './lib/useNotifications'
+import { useCandidateVisitTracking } from './lib/visitDetection/candidateVisitTracker'
 import { useVersionCheck }    from './hooks/useVersionCheck'
 import ErrorBoundary          from './components/ErrorBoundary'
 import UpdatePromptModal      from './components/UpdatePromptModal'
@@ -47,6 +48,7 @@ import SplashScreen            from './screens/SplashScreen'
 import ProfileScreen           from './screens/ProfileScreen'
 import DareScreen              from './screens/DareScreen'
 import PhotoCheckInScreen      from './screens/PhotoCheckInScreen'
+import CoverCandidateCaptureScreen from './screens/CoverCandidateCaptureScreen'
 import BrowseListsScreen       from './screens/BrowseListsScreen'
 import CuratedListPreviewScreen from './screens/CuratedListPreviewScreen'
 import DeepLinkListResolverScreen from './screens/DeepLinkListResolverScreen'
@@ -62,6 +64,7 @@ import SecretRevealScreen       from './screens/SecretRevealScreen'
 import PastListsScreen          from './screens/PastListsScreen'
 import WeeklyRecapScreen        from './screens/WeeklyRecapScreen'
 import InsiderAccessScreen      from './screens/InsiderAccessScreen'
+import { resolveItemDetailHeaderTitle } from './lib/itemDetailHeaderTitle'
 
 const Stack = createNativeStackNavigator()
 const Tab = createBottomTabNavigator()
@@ -109,7 +112,7 @@ function NearbyStack() {
         name="ItemDetail"
         component={ItemDetailScreen}
         options={({ route }) => ({
-          title: route.params?.item?.body?.slice(0, 30) ?? 'Item',
+          title: resolveItemDetailHeaderTitle(route.params?.item),
         })}
       />
       <Stack.Screen
@@ -136,6 +139,11 @@ function NearbyStack() {
         name="PhotoCheckIn"
         component={PhotoCheckInScreen}
         options={{ title: 'Add photo' }}
+      />
+      <Stack.Screen
+        name="CoverCandidateCapture"
+        component={CoverCandidateCaptureScreen}
+        options={{ headerShown: false }}
       />
       <Stack.Screen
         name="SecretReveal"
@@ -238,7 +246,7 @@ function HomeStack() {
         name="ItemDetail"
         component={ItemDetailScreen}
         options={({ route }) => ({
-          title: route.params?.item?.body?.slice(0, 30) ?? 'Item',
+          title: resolveItemDetailHeaderTitle(route.params?.item),
         })}
       />
       <Stack.Screen
@@ -260,6 +268,11 @@ function HomeStack() {
         name="PhotoCheckIn"
         component={PhotoCheckInScreen}
         options={{ title: 'Add photo' }}
+      />
+      <Stack.Screen
+        name="CoverCandidateCapture"
+        component={CoverCandidateCaptureScreen}
+        options={{ headerShown: false }}
       />
       <Stack.Screen
         name="SecretReveal"
@@ -337,7 +350,7 @@ function ListsStack() {
         name="ItemDetail"
         component={ItemDetailScreen}
         options={({ route }) => ({
-          title: route.params?.item?.body?.slice(0, 30) ?? 'Item',
+          title: resolveItemDetailHeaderTitle(route.params?.item),
         })}
       />
       <Stack.Screen
@@ -354,6 +367,11 @@ function ListsStack() {
         name="PhotoCheckIn"
         component={PhotoCheckInScreen}
         options={{ title: 'Add photo' }}
+      />
+      <Stack.Screen
+        name="CoverCandidateCapture"
+        component={CoverCandidateCaptureScreen}
+        options={{ headerShown: false }}
       />
       <Stack.Screen
         name="SecretReveal"
@@ -479,6 +497,7 @@ function App() {
   const { needsOnboarding, completeOnboarding, checkingOnboarding } = useOnboarding()
   const { forceUpdate, softUpdate, updateConfig, dismissSoftUpdate } = useVersionCheck(userId)
   useNotifications(userId)
+  useCandidateVisitTracking(userId)
 
 
   // Show splash for a minimum of 2 seconds AND until auth resolves —

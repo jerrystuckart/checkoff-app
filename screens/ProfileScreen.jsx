@@ -14,6 +14,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/useAuth'
 import { useTheme } from '../lib/ThemeContext'
 import * as Sentry from '@sentry/react-native'
+import VisitDetectionDebugPanel from '../components/VisitDetectionDebugPanel'
 
 export default function ProfileScreen({ navigation }) {
   const insets = useSafeAreaInsets()
@@ -80,7 +81,7 @@ export default function ProfileScreen({ navigation }) {
       sunday.setHours(23, 59, 59, 999)
 
       const [profileRes, badgesRes, checkinsRes, totalRes, weeklyRes] = await Promise.all([
-        supabase.from('users').select('id, display_name, current_streak, longest_streak, created_at, is_admin, pref_show_alcohol, notif_check_ins, notif_invites, notif_nudges, founding_number, lifetime_points, insider_tier').eq('id', uid).single(),
+        supabase.from('users').select('id, display_name, current_streak, longest_streak, created_at, is_admin, visit_detection_tester, pref_show_alcohol, notif_check_ins, notif_invites, notif_nudges, founding_number, lifetime_points, insider_tier').eq('id', uid).single(),
         supabase.from('user_badges').select('badge_id, earned_at, badge_definitions(id, name, icon, description)').eq('user_id', uid).order('earned_at', { ascending: false }).limit(6),
         // item_id is the canonical, always-available path to a check-in's
         // item — it survives list deletion. list_items is list-context
@@ -363,6 +364,9 @@ export default function ProfileScreen({ navigation }) {
         )}
         {profile?.is_admin && (
           <View style={styles.adminBadge}><Text style={styles.adminBadgeText}>⚙ Admin</Text></View>
+        )}
+        {profile?.visit_detection_tester && (
+          <VisitDetectionDebugPanel userId={user?.id} />
         )}
         {/* Tier badge pill */}
         {(() => {

@@ -1,0 +1,212 @@
+[
+  {
+    "checkins_this_month": 14,
+    "completed_item_names": [
+      {
+        "body": "Share a Ball-Buster at 'The Break Room'",
+        "id": "5a65f3b9-507f-4796-98b4-3047a6ba88ee"
+      },
+      {
+        "body": "Meet a friend at 'Vine Tavern & Eatery' for dinner",
+        "id": "2e39cdf5-96c8-4bb6-a961-98df71111bc1"
+      },
+      {
+        "body": "Go see some Fireworks",
+        "id": "d9b84a79-ff1a-4ea0-974c-b6e65bef539e"
+      },
+      {
+        "body": "Order the boozy soft-serve at 'Arizona Wilderness DTPHX' \u2014 then claim a picnic table beneath the beer garden string lights",
+        "id": "b9b8b79a-8734-4a81-b55e-2a55b142c4c2"
+      },
+      {
+        "body": "Answer one trivia question correctly at 'Pedal Haus Brewery' \u2014 Tuesday nights turn the Roosevelt Row taproom into a neighborhood competition",
+        "id": "cd793225-d298-4dfa-a319-30d4c495c288"
+      },
+      {
+        "body": "Order the Goddess Energy latte at 'Wild Pine Coffee & Cocktails' \u2014 oat milk, intention, and a retro-Victorian room that feels like it teleported in from somewhere else entirely",
+        "id": "24e42913-0570-4f54-9c3d-f9ad59e8aa70"
+      },
+      {
+        "body": "Order the Cookie A La G'Mode at 'Biggies Cookies & Cream' \u2014 a warm oversized cookie crowned with a cold scoop of gelato, drizzled and stacked Peoria-style",
+        "id": "6d003c11-816b-467d-9662-2801f6d85a07"
+      },
+      {
+        "body": "Order the Cookie A La G'Mode at 'Biggies Cookies & Cream' \u2014 a warm oversized cookie crowned with a cold scoop of gelato, drizzled and stacked Peoria-style",
+        "id": "6d003c11-816b-467d-9662-2801f6d85a07"
+      },
+      {
+        "body": "Ask the bartender why Amber is a Bitch at \u2018Richter Aleworks\u2019",
+        "id": "c9335ef7-3b9d-4058-8063-077311cf9ebb"
+      },
+      {
+        "body": "Ask the bartender why Amber is a Bitch at \u2018Richter Aleworks\u2019",
+        "id": "c9335ef7-3b9d-4058-8063-077311cf9ebb"
+      },
+      {
+        "body": "As you approach Crust's kitchen slip into 'The Raven' \u2014 order a cocktail inside the restaurant's moody hidden lounge",
+        "id": "39e9f4eb-d9ea-49d1-ade5-30f4d1c81966"
+      },
+      {
+        "body": "As you approach Crust's kitchen slip into 'The Raven' \u2014 order a cocktail inside the restaurant's moody hidden lounge",
+        "id": "39e9f4eb-d9ea-49d1-ade5-30f4d1c81966"
+      },
+      {
+        "body": "As you approach Crust's kitchen slip into 'The Raven' \u2014 order a cocktail inside the restaurant's moody hidden lounge",
+        "id": "39e9f4eb-d9ea-49d1-ade5-30f4d1c81966"
+      },
+      {
+        "body": "Try a slice of strawberry chipotle cheesecake at 'Coyoac\u00e1n's Bakery' \u2014 share it with someone, or decide the sweet heat is too good to split",
+        "id": "6d83f191-2a1f-4c31-9128-6017f46ae47e"
+      }
+    ],
+    "current_streak_weeks": 20,
+    "days_since_last_checkin": 2,
+    "display_name": "Jerry Stuckart",
+    "email": "je***@hotmail.com",
+    "exclusion_reason": null,
+    "last_checkin_at": "2026-08-30T02:35:20.543438+00:00",
+    "last_checkin_item_name": "Share a Ball-Buster at 'The Break Room'",
+    "lifetime_checkins": 117,
+    "lifetime_points": 152,
+    "metro_id": "43e9fba2-4a26-4941-817f-db860265ea51",
+    "metro_is_default_fallback": false,
+    "metro_name": "Phoenix Metro",
+    "most_active_hood": "Peoria",
+    "new_items_since_last_checkin": 0,
+    "platform": null,
+    "points_this_month": 30,
+    "recommended_items": [
+      {
+        "body": "Browse a few stores and cool off inside 'Chandler Fashion Center'",
+        "difficulty": 1,
+        "id": "832ab5b4-2b62-463e-a26c-0647751a0460",
+        "popularity": 3,
+        "url": "checkoff://item?id=832ab5b4-2b62-463e-a26c-0647751a0460"
+      },
+      {
+        "body": "Sample in-house baked goods at 'Elevate Coffee Co.' \u2014 Park West's newest caf\u00e9 has a private reservable room, a full espresso bar, and just took over the most beloved coffee spot in the West Valley",
+        "difficulty": 1,
+        "id": "1d7a67a8-7e85-4812-84ac-a1373a797e00",
+        "popularity": 2,
+        "url": "checkoff://item?id=1d7a67a8-7e85-4812-84ac-a1373a797e00"
+      },
+      {
+        "body": "Add 'in bed' to the end of your fortune cookie at 'Pei Wei'",
+        "difficulty": 1,
+        "id": "a6974d0f-084d-4118-ac85-b1ee6a166c66",
+        "popularity": 2,
+        "url": "checkoff://item?id=a6974d0f-084d-4118-ac85-b1ee6a166c66"
+      }
+    ],
+    "season_checked_count": 3,
+    "season_days_remaining": 90,
+    "season_ends_at": "2026-11-30",
+    "season_list_id": "419ba1e2-c846-434f-b168-8829e8a90a73",
+    "season_name": "Fall 2026 \u2014 Phoenix Metro",
+    "season_total_items": 32,
+    "segment": "ACTIVE_AUGUST",
+    "user_id": "11275026-65be-4421-80a4-46c57195408b"
+  },
+  {
+    "checkins_this_month": 0,
+    "completed_item_names": [],
+    "current_streak_weeks": 1,
+    "days_since_last_checkin": 65,
+    "display_name": "David Walters",
+    "email": "da***@hotmail.com",
+    "exclusion_reason": null,
+    "last_checkin_at": "2026-06-28T15:02:40.032859+00:00",
+    "last_checkin_item_name": "Summerfest",
+    "lifetime_checkins": 10,
+    "lifetime_points": 16,
+    "metro_id": "93a9daa3-7412-474d-9f0f-097f953f3275",
+    "metro_is_default_fallback": false,
+    "metro_name": "Milwaukee Metro",
+    "most_active_hood": null,
+    "new_items_since_last_checkin": 44,
+    "platform": null,
+    "points_this_month": 0,
+    "recommended_items": [
+      {
+        "body": "Find the goats on the roof at 'Al Johnson's Swedish Restaurant' and explain to someone why they are up there",
+        "difficulty": 1,
+        "id": "d5d246b7-15a9-4bbe-9238-663af8d02ffd",
+        "popularity": 2,
+        "url": "checkoff://item?id=d5d246b7-15a9-4bbe-9238-663af8d02ffd"
+      },
+      {
+        "body": "Sit in the taproom at 'Door County Brewing Co' and ask what's on tap that you can't get anywhere else",
+        "difficulty": 1,
+        "id": "facbcd4e-96ec-4b83-bafb-14eef530af25",
+        "popularity": 1,
+        "url": "checkoff://item?id=facbcd4e-96ec-4b83-bafb-14eef530af25"
+      },
+      {
+        "body": "Order a Bloody Mary at 'Sobelman's' \u2014 enough said",
+        "difficulty": 1,
+        "id": "df422f70-16e3-421b-a8c9-aef7a8fb424e",
+        "popularity": 1,
+        "url": "checkoff://item?id=df422f70-16e3-421b-a8c9-aef7a8fb424e"
+      }
+    ],
+    "season_checked_count": 0,
+    "season_days_remaining": 90,
+    "season_ends_at": "2026-11-30",
+    "season_list_id": "21523c15-4bd0-4fc1-b8ec-c1d67ca2fa40",
+    "season_name": "Fall 2026 \u2014 Milwaukee Metro",
+    "season_total_items": 32,
+    "segment": "RETURNING_INACTIVE",
+    "user_id": "468c2f62-977f-4587-b613-2ab1d3c6613f"
+  },
+  {
+    "checkins_this_month": 0,
+    "completed_item_names": [],
+    "current_streak_weeks": 0,
+    "days_since_last_checkin": null,
+    "display_name": "Veronica Poore",
+    "email": "vy***@yahoo.com",
+    "exclusion_reason": null,
+    "last_checkin_at": null,
+    "last_checkin_item_name": null,
+    "lifetime_checkins": 0,
+    "lifetime_points": 0,
+    "metro_id": "43e9fba2-4a26-4941-817f-db860265ea51",
+    "metro_is_default_fallback": true,
+    "metro_name": "Phoenix Metro",
+    "most_active_hood": null,
+    "new_items_since_last_checkin": 0,
+    "platform": null,
+    "points_this_month": 0,
+    "recommended_items": [
+      {
+        "body": "Ask the bartender why Amber is a Bitch at \u2018Richter Aleworks\u2019",
+        "difficulty": 1,
+        "id": "c9335ef7-3b9d-4058-8063-077311cf9ebb",
+        "popularity": 17,
+        "url": "checkoff://item?id=c9335ef7-3b9d-4058-8063-077311cf9ebb"
+      },
+      {
+        "body": "Order the Goddess Energy latte at 'Wild Pine Coffee & Cocktails' \u2014 oat milk, intention, and a retro-Victorian room that feels like it teleported in from somewhere else entirely",
+        "difficulty": 5,
+        "id": "24e42913-0570-4f54-9c3d-f9ad59e8aa70",
+        "popularity": 8,
+        "url": "checkoff://item?id=24e42913-0570-4f54-9c3d-f9ad59e8aa70"
+      },
+      {
+        "body": "Order the Cardinal Burger at 'Big's American Bar & Grill'",
+        "difficulty": 1,
+        "id": "0af3ff2d-a276-45db-af9a-0276a5d44b89",
+        "popularity": 7,
+        "url": "checkoff://item?id=0af3ff2d-a276-45db-af9a-0276a5d44b89"
+      }
+    ],
+    "season_checked_count": 0,
+    "season_days_remaining": 90,
+    "season_ends_at": "2026-11-30",
+    "season_list_id": "419ba1e2-c846-434f-b168-8829e8a90a73",
+    "season_name": "Fall 2026 \u2014 Phoenix Metro",
+    "season_total_items": 32,
+    "segment": "NEVER_CHECKED_OFF",
+    "user_id": "8ebbaeb7-ec81-415f-86b2-61ca41324d6b"
+  }
+]

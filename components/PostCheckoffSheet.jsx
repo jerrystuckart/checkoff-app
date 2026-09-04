@@ -10,6 +10,10 @@ import { haversineMeters } from '../lib/distance'
 import { formatDistanceLabel } from '../lib/proximity'
 import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
 import { filterMaskedBonusDrops } from '../lib/bonusDrops'
+import { useCoverCandidateCTA } from '../lib/useCoverCandidateCTA'
+import CoverCandidateCTA from './CoverCandidateCTA'
+
+const coverContributionColors = { TEXT, MUTED, BORDER, AMBER }
 
 const AMBER  = '#F5A623'
 const NAVY   = '#0F0F1E'
@@ -61,6 +65,23 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
   const [showSaveMenu, setShowSaveMenu]     = useState(false)
   const [savingToList, setSavingToList]     = useState(false)
   const [savedLabel, setSavedLabel]         = useState(null)
+
+  // Community Cover Photos V1 — "Great checkoff. Help locals see the
+  // thing?" Dismissible, never blocks the primary flow (the checkoff
+  // already succeeded before this sheet ever renders). Post-checkoff is
+  // treated as an at-place signal in its own right (the item is either
+  // photo-verified in-person, or a tap checkoff the user just performed
+  // for this specific item) — not a second live GPS check on top of the
+  // one the checkoff flow itself already required.
+  const [coverPromptDismissed, setCoverPromptDismissed] = useState(false)
+  // This component stays mounted across dismiss/reopen cycles (see the
+  // `if (!data) return null` below) rather than being remounted by its
+  // callers, so a dismissal for one checkoff must not silently carry over
+  // and suppress the prompt for the NEXT one.
+  useEffect(() => {
+    setCoverPromptDismissed(false)
+  }, [data?.itemId])
+  const showCoverContributionPrompt = useCoverCandidateCTA({ userId: data?.userId ?? null, item: data?.item ?? null, isAtPlace: true }) && !coverPromptDismissed
 
   const { entries: rankEntries } = useLeaderboard(listCtx?.listId ?? null)
 
@@ -473,6 +494,22 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
             <Text style={styles.inviteBtnText}>Invite a friend</Text>
           </TouchableOpacity>
 
+          {/* Community Cover Photos V1 — the strongest contribution
+              moment per product guidance: right after a successful
+              checkoff. Purely optional, dismissible, never blocks
+              anything above (the checkoff already succeeded). */}
+          {phase === 'ready' && showCoverContributionPrompt && (
+            <View style={styles.coverPromptCard}>
+              <View style={styles.coverPromptHeader}>
+                <Text style={styles.coverPromptTitle}>Great checkoff. Help locals see the thing?</Text>
+                <TouchableOpacity onPress={() => setCoverPromptDismissed(true)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Text style={styles.coverPromptDismiss}>✕</Text>
+                </TouchableOpacity>
+              </View>
+              <CoverCandidateCTA item={data.item} navigation={navigation} colors={coverContributionColors} compact />
+            </View>
+          )}
+
           {/* Case C — orphaned item, low-key optional save */}
           {phase === 'ready' && isOrphaned && !savedLabel && (
             <TouchableOpacity
@@ -623,6 +660,32 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '800',
     color: NAVY,
+  },
+  coverPromptCard: {
+    marginTop: 16,
+    padding: 14,
+    borderRadius: 16,
+    backgroundColor: 'rgba(245,166,35,0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(245,166,35,0.25)',
+  },
+  coverPromptHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  coverPromptTitle: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '800',
+    color: TEXT,
+    marginRight: 10,
+  },
+  coverPromptDismiss: {
+    fontSize: 14,
+    color: MUTED,
+    padding: 2,
   },
   saveLink: {
     alignItems: 'center',
