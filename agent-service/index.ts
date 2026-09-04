@@ -305,3 +305,130 @@ export {
 
 export type { DetectResult, AssessResult, ApplyDecisionInput, ApplyDecisionResult } from './playbooks/photoModerationEngine'
 export { detectNewCandidates, gatherContext, runAssessment, applyJerryDecision, dryRunAssessment } from './playbooks/photoModerationEngine'
+
+// ---------------------------------------------------------------------------
+// Chief Phase 2C — Specialist Agent Architecture
+// ---------------------------------------------------------------------------
+
+export type { SpecialistKey, SpecialistDefinition, DelegationRequest, SpecialistResultEnvelope, EnvelopeValidationResult } from './specialists/types'
+export { SPECIALIST_REGISTRY, getSpecialist, listSpecialists } from './specialists/registry'
+export { assertDelegationAuthorized, validateResultEnvelope, buildDelegationRequest, ownerKeyFor } from './specialists/delegation'
+export type { Capability } from './specialists/capabilityRouting'
+export { capabilitiesFor, specialistsWithCapability, requiresLiveVerification } from './specialists/capabilityRouting'
+
+// --- Metro Launch playbook ---
+
+export type {
+  MetroLaunchStage,
+  MetroDefinition,
+  NeighborhoodDefinition,
+  CategoryTarget,
+  CategoryCoveragePlan,
+  CategoryCount,
+  NeighborhoodCount,
+  CoverageAuditEvidence,
+  CoverageGap,
+  MetroLoopAction,
+  GateVerdict,
+  GateResult,
+  QualityAuditEvidence,
+  LocationEvidence,
+  PresentationEvidence,
+  OutreachReadinessEvidence,
+  MetroGateEvidence,
+} from './playbooks/metroLaunch'
+export {
+  METRO_LAUNCH_PLAYBOOK_KEY,
+  METRO_LAUNCH_SOURCE_TYPE,
+  METRO_LAUNCH_STAGE_ORDER,
+  verifyNoRingOverlap,
+  auditCoverage,
+  deriveMetroLoopAction,
+  evaluateMetroGates,
+  allGatesPass,
+  coarseStatusForStage as metroCoarseStatusForStage,
+} from './playbooks/metroLaunch'
+
+export {
+  SAN_DIEGO_METRO_DEFINITION,
+  SAN_DIEGO_PROPOSED_NEIGHBORHOODS,
+  SAN_DIEGO_CATEGORY_PLAN,
+  SAN_DIEGO_EXECUTION_MANIFEST,
+  SAN_DIEGO_JERRY_DECISIONS_NEEDED,
+} from './playbooks/sanDiegoManifest'
+
+// --- Destination Hub Lifecycle playbook (Phase 2C, revised 2026-09-04:
+// DVA-1/DVA-2/DAP are external Claude Project artifacts, not internally
+// reproduced — see destinationHubLifecycle.ts's own module doc) ---
+
+export type {
+  DestinationHubStage,
+  PipelineState,
+  DiscoveryCandidate,
+  ExternalArtifactRef,
+  DVA1Tier,
+  DVA1Artifact,
+  DVA1GateDecision,
+  DVA2Recommendation,
+  DVA2Artifact,
+  DVA2GateDecision,
+  DAPExtractedFields,
+  DAPArtifact,
+  DestinationContentInventory,
+  PartnerReviewRow,
+  DestinationOffer,
+  DestinationLoopAction,
+} from './playbooks/destinationHubLifecycle'
+export {
+  DESTINATION_HUB_PLAYBOOK_KEY,
+  DESTINATION_HUB_SOURCE_TYPE,
+  DESTINATION_HUB_STAGE_ORDER,
+  screenDiscoveryCandidate,
+  classifyDVA1Score,
+  dva1RequiresJerryApproval,
+  evaluateDVA1Gate,
+  validateDva2Input,
+  routeDVA2Recommendation,
+  validateDapInput,
+  dapEntryConditionMet,
+  contentInventoryIsCommercialOnly,
+  buildPartnerFriendlyReview,
+  WILLCOX_RETRIEVED_OFFER_PATTERN,
+  proposalViolatesRetrievedRules,
+  deriveDestinationLoopAction,
+  coarseStatusForStage as destinationCoarseStatusForStage,
+} from './playbooks/destinationHubLifecycle'
+
+export type { ExecutorGap } from './playbooks/destinationExecutorGap'
+export { DESTINATION_EXECUTOR_GAPS } from './playbooks/destinationExecutorGap'
+
+// --- Destination Relationship playbook (Phase 2C correction) ---
+
+export type { RelationshipStage, SalesAssetLevel, DestinationContactContext } from './playbooks/destinationRelationship'
+export {
+  RELATIONSHIP_PLAYBOOK_KEY,
+  RELATIONSHIP_SOURCE_TYPE,
+  RELATIONSHIP_STAGE_ORDER,
+  RELATIONSHIP_TRANSITIONS,
+  assertRelationshipTransitionAllowed,
+  coarseStatusForRelationshipStage,
+  requiredAssetLevel,
+  isolateContactContext,
+} from './playbooks/destinationRelationship'
+
+// --- Destination Dossier + Portfolio (Phase 2C correction) ---
+
+export type {
+  DestinationScoped,
+  EvaluationSection,
+  PeopleSection,
+  CommercialSection,
+  RelationshipSection,
+  ProductSection,
+  TimingSection,
+  DestinationDossier,
+  DossierInputs,
+  PortfolioEntry,
+  RankedPortfolioAction,
+} from './playbooks/destinationDossier'
+export { assertAllSameDestination, assembleDossier, rankPortfolioActions, filterByWaitingOn, filterByStage } from './playbooks/destinationDossier'

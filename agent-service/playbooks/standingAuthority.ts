@@ -82,6 +82,47 @@ export const STANDING_AUTHORITY: Readonly<Record<string, AuthorityLevel>> = Obje
   'photo_moderation.reconcile_evidence': 'AUTO',
   'photo_moderation.secret_item_escalate': 'AUTO', // deciding TO escalate for a secret item is deterministic; the escalated exception itself is APPROVAL_REQUIRED (see business_outreach.secret_item_exception above)
 
+  // --- Metro Launch (Chief Phase 2C) ---
+  'metro_launch.research': 'AUTO',
+  'metro_launch.coverage_count': 'AUTO',
+  'metro_launch.identify_gap': 'AUTO',
+  'metro_launch.create_draft_task': 'AUTO',
+  'metro_launch.build_internal_artifact': 'AUTO',
+  'metro_launch.deterministic_db_bookkeeping': 'AUTO',
+  'metro_launch.stage_catalog_write': 'AUTO', // staged (is_active=false) writes only — see gate/APPROVAL_REQUIRED entries below for anything public-facing
+  'metro_launch.public_launch': 'APPROVAL_REQUIRED',
+  'metro_launch.destructive_data_change': 'APPROVAL_REQUIRED',
+
+  // --- Destination Hub Lifecycle (Chief Phase 2C) ---
+  'destination_hub.research': 'AUTO',
+  'destination_hub.dva1_screen': 'AUTO',
+  'destination_hub.draft_dva2': 'AUTO',
+  'destination_hub.draft_dap': 'AUTO',
+  'destination_hub.build_internal_artifact': 'AUTO',
+  'destination_hub.stakeholder_research': 'AUTO',
+  'destination_hub.content_inventory': 'AUTO',
+  'destination_hub.public_launch': 'APPROVAL_REQUIRED',
+  'destination_hub.commercial_offer': 'APPROVAL_REQUIRED',
+  'destination_hub.pricing_change': 'APPROVAL_REQUIRED',
+  'destination_hub.partner_commitment': 'APPROVAL_REQUIRED',
+  'destination_hub.relationship_sensitive_communication': 'APPROVAL_REQUIRED',
+  'destination_hub.hub_activation': 'APPROVAL_REQUIRED',
+
+  // --- Destination Relationship Manager (Chief Phase 2C correction) ---
+  'destination_relationship.identify_contact': 'AUTO',
+  'destination_relationship.select_channel': 'AUTO',
+  'destination_relationship.draft_outreach': 'AUTO', // drafting only — sending is send_email below
+  'destination_relationship.classify_reply': 'AUTO',
+  'destination_relationship.schedule_followup': 'AUTO',
+  'destination_relationship.track_sentiment': 'AUTO',
+  'destination_relationship.gather_meeting_evidence': 'AUTO', // pre-call brief assembly from DVA/DAP/contact/email history
+  'destination_relationship.send_email': 'APPROVAL_REQUIRED',
+  'destination_relationship.create_calendar_event': 'APPROVAL_REQUIRED',
+  'destination_relationship.change_pricing': 'APPROVAL_REQUIRED',
+  'destination_relationship.commercial_commitment': 'APPROVAL_REQUIRED',
+  'destination_relationship.accept_contract': 'APPROVAL_REQUIRED',
+  'destination_relationship.relationship_sensitive_promise': 'APPROVAL_REQUIRED',
+
   // --- AUTO_TELL: designed, not yet activated ---
   'business_outreach.send_routine_thank_you': 'AUTO_TELL',
   'business_outreach.send_receipt_acknowledgment': 'AUTO_TELL',
