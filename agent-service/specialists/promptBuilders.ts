@@ -137,7 +137,8 @@ const DVA_ARTIFACT_ENVELOPE_SHAPE: Record<string, string> = {
   "contentHash": null,
   "score": <the Overall Opportunity Score, 0-100, from the rubric's own "Calculate" section>,
   "recommendationText": "<the Section 12 Recommendation, one sentence>",
-  "currentStrategyFit": "FITS_CURRENT_STRATEGY" | "STRONG_BUT_LATER_STAGE" | "WEAK_STRATEGIC_FIT"  // from Section 13, exactly one of these three
+  "currentStrategyFit": "FITS_CURRENT_STRATEGY" | "STRONG_BUT_LATER_STAGE" | "WEAK_STRATEGIC_FIT",  // from Section 13, exactly one of these three
+  "fullReportMarkdown": "<the COMPLETE report you produced, every required section verbatim — Executive Summary, Destination Snapshot, weighted Opportunity Scorecard, Why People Visit, Why CheckOff Could Win, Regional Integration Opportunity, Preliminary Hub Scale, Complexity Profile, Opportunities, Risks, Confidence, Recommendation, Current-Strategy Fit. This is the authoritative artifact — the fields above are only an extracted projection of it, never a replacement for it.>"
 }`,
   'destination/dva2': `evidence.artifact must be exactly:
 {
@@ -153,7 +154,8 @@ const DVA_ARTIFACT_ENVELOPE_SHAPE: Record<string, string> = {
   "rationale": "<why>",
   "knownRisks": ["<risk>", ...],
   "evidenceGaps": ["<from Section 24's 'Questions DAP Must Resolve', only if recommendedNextStep is HOLD_DAP_UNTIL_ISSUE_RESOLVED>"],
-  "consumedDva1ArtifactRef": "<the DVA-1 artifactRef you were given as input — echo exactly>"
+  "consumedDva1ArtifactRef": "<the DVA-1 artifactRef you were given as input — echo exactly>",
+  "fullReportMarkdown": "<the COMPLETE report you produced, every required section verbatim. This is the authoritative artifact — the fields above are only an extracted projection of it.>"
 }`,
   'destination/dap': `evidence.artifact must be exactly:
 {
@@ -189,7 +191,8 @@ const DVA_ARTIFACT_ENVELOPE_SHAPE: Record<string, string> = {
       "expectedResult": "<Section 21>",
       "whyItMatters": "<Section 21>"
     }
-  }
+  },
+  "fullReportMarkdown": "<the COMPLETE report you produced, every required section verbatim. This is the authoritative artifact — the fields above are only an extracted projection of it.>"
 }`,
 }
 
@@ -208,7 +211,7 @@ export function buildDestinationStrategistPrompt(request: SpecialistExecutionReq
   const systemPrompt = [
     `You are executing CheckOff's "destination_strategist" specialist role. Below is the EXACT, VERBATIM methodology you must follow — every rule, section, and constraint in it is authoritative. Do not skip sections, do not invent a different process, do not add or remove requirements.`,
     `--- BEGIN METHODOLOGY (${request.methodologyId}/${request.methodologyVersion}) ---\n${methodologyText}\n--- END METHODOLOGY ---`,
-    `After producing the full report the methodology describes, extract the structured decision fields into evidence.artifact using this exact shape:\n${artifactShape}`,
+    `Produce the FULL report the methodology describes, with every required section. Then put that complete report VERBATIM into evidence.artifact.fullReportMarkdown (never summarized or omitted — it is the authoritative artifact) and extract the structured decision fields alongside it into evidence.artifact using this exact shape:\n${artifactShape}`,
     envelopeInstructions(request),
   ].join('\n\n')
 

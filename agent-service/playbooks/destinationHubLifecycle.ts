@@ -183,6 +183,21 @@ export interface ExternalArtifactRef {
   artifactRef: string
   executedAt: string // ISO timestamp
   contentHash: string | null
+  /**
+   * Phase 2H — a real live DVA-1 proof exposed that the structured
+   * decision fields alone (score/currentStrategyFit, etc.) were being
+   * treated as THE artifact, discarding the full methodology-defined
+   * report (Executive Summary, Destination Snapshot, weighted
+   * Opportunity Scorecard, Why People Visit, Regional Integration
+   * Opportunity, Complexity Profile, Opportunities/Risks, etc.) the
+   * methodology actually requires producing. Matches the principle
+   * already established for DAP ("the full artifact remains the
+   * authoritative source; structured fields are only an operational
+   * projection") — now applied uniformly to DVA-1/DVA-2/DAP. Optional
+   * (not every historical/synthetic artifact needs to carry it) but
+   * every REAL execution should populate it.
+   */
+  fullReportMarkdown?: string
 }
 
 export type DVA1Tier = 'ELITE' | 'EXCELLENT' | 'BORDERLINE' | 'ARCHIVE'

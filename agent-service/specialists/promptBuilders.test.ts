@@ -54,6 +54,18 @@ test('buildDestinationStrategistPrompt: throws for an unregistered methodology r
   assert.throws(() => buildDestinationStrategistPrompt(req({ methodologyId: 'destination/dva1', methodologyVersion: 'v99' })))
 })
 
+test('buildDestinationStrategistPrompt: requires the FULL report verbatim in fullReportMarkdown, not just the extracted structured fields (Phase 2H — a real live run exposed the full narrative was being discarded)', () => {
+  const dva1Prompt = buildDestinationStrategistPrompt(req())
+  assert.match(dva1Prompt.systemPrompt, /fullReportMarkdown/)
+  assert.match(dva1Prompt.systemPrompt, /authoritative artifact/)
+
+  const dva2Prompt = buildDestinationStrategistPrompt(req({ methodologyId: 'destination/dva2', methodologyVersion: 'v2', stage: 'D3_DVA2' }))
+  assert.match(dva2Prompt.systemPrompt, /fullReportMarkdown/)
+
+  const dapPrompt = buildDestinationStrategistPrompt(req({ methodologyId: 'destination/dap', methodologyVersion: 'v2', stage: 'D4_DAP' }))
+  assert.match(dapPrompt.systemPrompt, /fullReportMarkdown/)
+})
+
 test('researchExecutionTypeFor / buildResearchVerifierPrompt / buildCheckoffEditorPrompt: still work unchanged (Phase 2E/2F regression check)', () => {
   const researchReq: SpecialistExecutionRequest = { ...req(), specialist: 'research_verifier', methodologyId: 'metro_launch', methodologyVersion: 'v1', inputs: { executionType: 'CATEGORY_GAP' } }
   assert.equal(researchExecutionTypeFor(researchReq), 'CATEGORY_GAP')
