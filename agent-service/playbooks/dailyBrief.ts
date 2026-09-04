@@ -15,6 +15,7 @@
 import { getAllTasks } from '../queries'
 import type { TaskSummary } from '../types'
 import { BUSINESS_PHOTO_OUTREACH_SOURCE_TYPE, type BusinessPhotoOutreachStage } from './businessPhotoOutreach'
+import { PHOTO_MODERATION_SOURCE_TYPE } from './photoModeration'
 import { query } from '../db'
 
 export interface BusinessPhotoOutreachBriefSection {
@@ -63,3 +64,47 @@ export async function getBusinessPhotoOutreachBriefSection(now: Date = new Date(
 }
 
 export { stageFor as getBusinessPhotoOutreachStageFor }
+
+// ---------------------------------------------------------------------------
+// Photo Moderation section — deliberately terse per the Phase 2B spec
+// ("do not dump every candidate into the main brief"): only the top few
+// NEEDS_JERRY items, everything else is a count.
+// ---------------------------------------------------------------------------
+
+export interface PhotoModerationBriefItem {
+  taskId: string
+  title: string
+  waitingSince: Date | null
+}
+
+export interface PhotoModerationBriefSection {
+  pendingCount: number
+  assessedCount: number
+  needsJerryCount: number
+  oldestWaiting: PhotoModerationBriefItem | null
+  /** Top few NEEDS_JERRY items to show inline — the rest are covered by needsJerryCount alone. */
+  topNeedsJerry: PhotoModerationBriefItem[]
+}
+
+const TOP_NEEDS_JERRY_LIMIT = 3
+
+export async function getPhotoModerationBriefSection(now: Date = new Date()): Promise<PhotoModerationBriefSection> {
+  const allTasks = await getAllTasks()
+  const tasks = allTasks.filter((t: TaskSummary) => t.sourceType === PHOTO_MODERATION_SOURCE_TYPE)
+
+  const pending = tasks.filter((t) => t.status === 'READY' || t.status === 'IN_PROGRESS')
+  const needsJerry = tasks
+    .filter((t) => t.status === 'NEEDS_JERRY')
+    .sort((a, b) => (a.updatedAt?.getTime() ?? 0) - (b.updatedAt?.getTime() ?? 0)) // oldest-waiting first
+  const complete = tasks.filter((t) => t.status === 'DONE')
+
+  const oldest = needsJerry[0] ?? null
+
+  return {
+    pendingCount: pending.length,
+    assessedCount: needsJerry.length + complete.length,
+    needsJerryCount: needsJerry.length,
+    oldestWaiting: oldest ? { taskId: oldest.id, title: oldest.title, waitingSince: oldest.updatedAt } : null,
+    topNeedsJerry: needsJerry.slice(0, TOP_NEEDS_JERRY_LIMIT).map((t) => ({ taskId: t.id, title: t.title, waitingSince: t.updatedAt })),
+  }
+}

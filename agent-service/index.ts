@@ -279,5 +279,29 @@ export {
 export type { WorkQueueStatus, WorkQueueItem } from './playbooks/workQueue'
 export { getWorkQueue, getTopNextActions } from './playbooks/workQueue'
 
-export type { BusinessPhotoOutreachBriefSection } from './playbooks/dailyBrief'
-export { getBusinessPhotoOutreachBriefSection, getBusinessPhotoOutreachStageFor } from './playbooks/dailyBrief'
+export type { BusinessPhotoOutreachBriefSection, PhotoModerationBriefSection, PhotoModerationBriefItem } from './playbooks/dailyBrief'
+export { getBusinessPhotoOutreachBriefSection, getBusinessPhotoOutreachStageFor, getPhotoModerationBriefSection } from './playbooks/dailyBrief'
+
+// --- Chief Phase 2B — Photo Moderation ---
+
+export type {
+  PhotoModerationStage,
+  PoolEntry,
+  PhotoCandidateContext,
+  Verdict,
+  AssessmentDimension,
+  ModerationRecommendation,
+  PhotoAssessment,
+  DecisionPacket,
+  JerryPhotoDecision,
+} from './playbooks/photoModeration'
+export {
+  PHOTO_MODERATION_SOURCE_TYPE,
+  PHOTO_MODERATION_PLAYBOOK_KEY,
+  assessCandidate,
+  buildDecisionPacket,
+  verifyDecisionAuthority,
+} from './playbooks/photoModeration'
+
+export type { DetectResult, AssessResult, ApplyDecisionInput, ApplyDecisionResult } from './playbooks/photoModerationEngine'
+export { detectNewCandidates, gatherContext, runAssessment, applyJerryDecision, dryRunAssessment } from './playbooks/photoModerationEngine'

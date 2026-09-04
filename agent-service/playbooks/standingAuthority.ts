@@ -74,6 +74,14 @@ export const STANDING_AUTHORITY: Readonly<Record<string, AuthorityLevel>> = Obje
   'business_outreach.mark_complete': 'AUTO',
   'business_outreach.secret_branch_route': 'AUTO', // routing to the non-spoiler branch is deterministic (is_secret is structured data)
 
+  // --- Photo Moderation (Chief Phase 2B) ---
+  'photo_moderation.detect_candidate': 'AUTO',
+  'photo_moderation.create_moderation_task': 'AUTO',
+  'photo_moderation.gather_context': 'AUTO',
+  'photo_moderation.assess_recommend': 'AUTO',
+  'photo_moderation.reconcile_evidence': 'AUTO',
+  'photo_moderation.secret_item_escalate': 'AUTO', // deciding TO escalate for a secret item is deterministic; the escalated exception itself is APPROVAL_REQUIRED (see business_outreach.secret_item_exception above)
+
   // --- AUTO_TELL: designed, not yet activated ---
   'business_outreach.send_routine_thank_you': 'AUTO_TELL',
   'business_outreach.send_receipt_acknowledgment': 'AUTO_TELL',
@@ -81,6 +89,11 @@ export const STANDING_AUTHORITY: Readonly<Record<string, AuthorityLevel>> = Obje
   'business_outreach.send_cling_received_ack': 'AUTO_TELL',
 
   // --- APPROVAL_REQUIRED: kept with Jerry ---
+  'photo_moderation.approve': 'APPROVAL_REQUIRED',
+  'photo_moderation.reject': 'APPROVAL_REQUIRED',
+  'photo_moderation.add_to_rotation': 'APPROVAL_REQUIRED',
+  'photo_moderation.remove_from_rotation': 'APPROVAL_REQUIRED',
+  'photo_moderation.set_primary': 'APPROVAL_REQUIRED',
   'business_outreach.send_outbound_email': 'APPROVAL_REQUIRED',
   'business_outreach.resolve_item_correction': 'APPROVAL_REQUIRED',
   'business_outreach.approve_reject_photo': 'APPROVAL_REQUIRED',

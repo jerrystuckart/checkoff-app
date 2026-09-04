@@ -59,6 +59,14 @@ const APPROVED_MUTATIONS = new Set([
   'createClingFulfillmentTask',
   'seedBusinessPhotoOutreachTasks',
   'reconcileBusinessPhotoOutreach',
+  // Phase 2B — Photo Moderation. detectNewCandidates/runAssessment only
+  // ever create tasks and record recommendations (never mutate
+  // item_cover_candidates); applyJerryDecision is the one function that
+  // does mutate it, and ONLY by calling the existing, already-approved
+  // coverCandidateModeration.ts operations — never new SQL.
+  'detectNewCandidates',
+  'runAssessment',
+  'applyJerryDecision',
 ])
 
 test('read-only safety: agent-service exports exactly the approved mutation set, nothing else write-shaped', () => {
