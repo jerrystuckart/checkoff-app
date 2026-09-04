@@ -215,7 +215,11 @@ export function buildDestinationStrategistPrompt(request: SpecialistExecutionReq
     envelopeInstructions(request),
   ].join('\n\n')
 
-  const userPrompt = [`Objective: ${request.objective}`, `Input context (destination identity + any prior-stage artifact reference): ${JSON.stringify(request.inputs)}`].join('\n')
+  const userPrompt = [
+    `Objective: ${request.objective}`,
+    `Input context (destination identity + any prior-stage artifact this methodology consumes): ${JSON.stringify(request.inputs)}`,
+    `If the input context above includes a prior-stage artifact (e.g. consumedDva1Artifact, consumedDva2Artifact), that IS the real, actual output of that prior stage — use its fullReportMarkdown and fields as your evidence base per the methodology's own instructions. Do not invent or re-derive numbers the prior artifact already reports.`,
+  ].join('\n')
 
   return { systemPrompt, userPrompt }
 }

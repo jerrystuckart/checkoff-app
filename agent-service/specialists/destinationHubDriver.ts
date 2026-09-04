@@ -226,7 +226,15 @@ async function stepD3Dva2(deps: DestinationDriverDeps, run: PlaybookRunRecord): 
     playbookKey: DESTINATION_HUB_DRIVER_PLAYBOOK_KEY,
     stage: 'D3_DVA2',
     objective: `${state.candidate?.destinationName}: DVA-2 deep opportunity analysis`,
-    inputs: { destinationId: state.candidate?.destinationId, consumedDva1ArtifactRef: state.dva1?.artifactRef },
+    // Phase 2H — a real live proof exposed this passing only
+    // consumedDva1ArtifactRef, a bare string, never the actual DVA-1
+    // report. DVA-2's own methodology text opens by validating/revising
+    // DVA-1's findings — impossible without seeing them. The model was
+    // silently reinventing "DVA-1 Recap" numbers from scratch instead of
+    // reading the real artifact, producing internally inconsistent
+    // output. Passing the full artifact (including fullReportMarkdown)
+    // gives the model the actual prior-stage evidence to build on.
+    inputs: { destinationId: state.candidate?.destinationId, consumedDva1ArtifactRef: state.dva1?.artifactRef, consumedDva1Artifact: state.dva1 ?? null },
     requiredEvidenceKeys: ['artifact'],
     methodologyId: 'destination/dva2',
     methodologyVersion: 'v2',
@@ -282,7 +290,11 @@ async function stepD4Dap(deps: DestinationDriverDeps, run: PlaybookRunRecord): P
     playbookKey: DESTINATION_HUB_DRIVER_PLAYBOOK_KEY,
     stage: 'D4_DAP',
     objective: `${state.candidate?.destinationName}: Destination Action Plan`,
-    inputs: { destinationId: state.candidate?.destinationId, consumedDva2ArtifactRef: state.dva2?.artifactRef },
+    // Phase 2H — same real defect as D3's consumedDva1Artifact above:
+    // DAP's own methodology text says "Use only the information
+    // contained in the DVA-2 report provided" — it MUST receive the
+    // actual report, not a bare artifactRef string it cannot dereference.
+    inputs: { destinationId: state.candidate?.destinationId, consumedDva2ArtifactRef: state.dva2?.artifactRef, consumedDva2Artifact: state.dva2 ?? null },
     requiredEvidenceKeys: ['artifact'],
     methodologyId: 'destination/dap',
     methodologyVersion: 'v2',

@@ -326,6 +326,128 @@ test('destination driver: executedAt is ALWAYS the driver\'s own clock, even whe
 })
 
 // ---------------------------------------------------------------------------
+// DVA-2 and DAP must receive the REAL prior-stage artifact, not just a
+// bare artifactRef string (Phase 2H — a real live proof showed the model
+// reinventing "DVA-1 Recap"/DVA-2 price numbers from scratch because the
+// driver never actually gave it the prior report to read).
+// ---------------------------------------------------------------------------
+
+test('destination driver: D3 (DVA-2) request inputs carry the FULL DVA-1 artifact, not just its artifactRef string', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const destinationId = 'destination-artifact-threading'
+  const destinationName = 'Artifact Threading'
+  scriptDva1(executor, destinationId, destinationName, 91, 'FITS_CURRENT_STRATEGY')
+
+  let capturedInputs: Record<string, unknown> | null = null
+  executor.scriptWhen(
+    (r) => r.stage === 'D3_DVA2' && r.destinationId === destinationId,
+    (r) => {
+      capturedInputs = r.inputs
+      return fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: {
+          artifact: {
+            provider: 'dva2_claude_project',
+            destinationId,
+            destinationName,
+            artifactRef: `dva2-${destinationId}`,
+            executedAt: '2026-09-05T01:00:00Z',
+            contentHash: null,
+            worthPursuing: 'YES',
+            recommendedPriority: 'HIGH_PRIORITY_CREATE_DAP',
+            recommendedNextStep: 'BUILD_DAP_NOW',
+            rationale: 'synthetic',
+            knownRisks: [],
+            evidenceGaps: [],
+            consumedDva1ArtifactRef: `dva1-${destinationId}`,
+          },
+        },
+        methodologyId: 'destination/dva2',
+        methodologyVersion: 'v2',
+      })
+    }
+  )
+
+  await driveDestinationHub({ runStore, execStore, executors: [executor] }, 'artifact-threading-synthetic', { candidate: candidate(destinationId, destinationName), maxSteps: 4 })
+
+  assert.ok(capturedInputs, 'D3 must have executed')
+  const consumed = (capturedInputs as { consumedDva1Artifact?: { score?: number; recommendationText?: string } }).consumedDva1Artifact
+  assert.ok(consumed, 'D3 inputs must include the real consumedDva1Artifact object, not just a ref string')
+  assert.equal(consumed?.score, 91, 'the real DVA-1 score must be threaded through, not re-derivable only from a bare artifactRef string')
+})
+
+test('destination driver: D4 (DAP) request inputs carry the FULL DVA-2 artifact, not just its artifactRef string', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const destinationId = 'destination-artifact-threading-2'
+  const destinationName = 'Artifact Threading Two'
+  scriptDva1(executor, destinationId, destinationName, 91, 'FITS_CURRENT_STRATEGY')
+  scriptDva2(executor, destinationId, destinationName, 'BUILD_DAP_NOW')
+
+  let capturedInputs: Record<string, unknown> | null = null
+  executor.scriptWhen(
+    (r) => r.stage === 'D4_DAP' && r.destinationId === destinationId,
+    (r) => {
+      capturedInputs = r.inputs
+      return fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: {
+          artifact: {
+            provider: 'dap_claude_project',
+            destinationId,
+            destinationName,
+            artifactRef: `dap-${destinationId}`,
+            executedAt: '2026-09-05T02:00:00Z',
+            contentHash: null,
+            consumedDva2ArtifactRef: `dva2-${destinationId}`,
+            extracted: {
+              recommendedChampion: `${destinationName} Chamber director`,
+              secondaryChampions: [],
+              decisionMakers: [],
+              stakeholderOrganizations: [],
+              fundingBudgetClues: [],
+              likelyBuyer: null,
+              estimatedSalesDifficulty: null,
+              timingConsiderations: [],
+              politicalStakeholderComplexity: null,
+              objectionsHurdles: [],
+              destinationPainPoints: [],
+              checkoffValueProposition: 'synthetic',
+              recommendedEntryStrategy: 'synthetic',
+              relationshipSequence: [],
+              recommendedOfferDirection: null,
+              rightNowTask: {
+                currentStage: 'Relationship Building',
+                currentGoal: 'synthetic',
+                highestPriorityTask: 'synthetic',
+                targetDate: '2026-09-12',
+                estimatedTime: '30 minutes',
+                expectedResult: 'synthetic',
+                whyItMatters: 'synthetic',
+              },
+            },
+          },
+        },
+        methodologyId: 'destination/dap',
+        methodologyVersion: 'v2',
+      })
+    }
+  )
+
+  await driveDestinationHub({ runStore, execStore, executors: [executor] }, 'artifact-threading-2-synthetic', { candidate: candidate(destinationId, destinationName), maxSteps: 5 })
+
+  assert.ok(capturedInputs, 'D4 must have executed')
+  const consumed = (capturedInputs as { consumedDva2Artifact?: { recommendedNextStep?: string } }).consumedDva2Artifact
+  assert.ok(consumed, 'D4 inputs must include the real consumedDva2Artifact object, not just a ref string')
+  assert.equal(consumed?.recommendedNextStep, 'BUILD_DAP_NOW', 'the real DVA-2 recommendation must be threaded through, not re-derivable only from a bare artifactRef string')
+})
+
+// ---------------------------------------------------------------------------
 // 20 concurrent destinations (spec section 15/18) — isolation proof
 // ---------------------------------------------------------------------------
 
