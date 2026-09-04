@@ -2,11 +2,18 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { SPECIALIST_REGISTRY, listSpecialists, getSpecialist } from './registry'
 
-test('the revised first-generation team is exactly six specialists', () => {
+test('the revised first-generation team is exactly seven specialists (Phase 2D adds checkoff_editor)', () => {
   assert.deepEqual(
     Object.keys(SPECIALIST_REGISTRY).sort(),
-    ['business_outreach', 'destination_activation', 'destination_relationship_manager', 'destination_strategist', 'metro_builder', 'research_verifier'].sort()
+    ['business_outreach', 'checkoff_editor', 'destination_activation', 'destination_relationship_manager', 'destination_strategist', 'metro_builder', 'research_verifier'].sort()
   )
+})
+
+test('checkoff_editor owns final item wording, not discovery or verification', () => {
+  const editor = getSpecialist('checkoff_editor')
+  assert.ok(editor.owns.some((o) => o.toLowerCase().includes('wording')))
+  assert.ok(!editor.owns.some((o) => o.toLowerCase().includes('discovery')))
+  assert.ok(!editor.capabilities.includes('live_web_research'))
 })
 
 test('destination_relationship_manager exists and owns the ongoing human relationship (Phase 2C correction)', () => {

@@ -108,3 +108,7 @@ scripts/output/
 # CheckOff Release Candidate — Final Cleanup (2026-09-03).
 docs/visual-verification/
 assets/dev-preview/
+
+# Chief Phase 2D operator CLI local state (agent-service/cli.ts) — never
+# a source of truth, never committed.
+.chief-executions.json

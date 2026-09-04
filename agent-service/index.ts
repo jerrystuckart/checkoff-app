@@ -432,3 +432,28 @@ export type {
   RankedPortfolioAction,
 } from './playbooks/destinationDossier'
 export { assertAllSameDestination, assembleDossier, rankPortfolioActions, filterByWaitingOn, filterByStage } from './playbooks/destinationDossier'
+
+// ---------------------------------------------------------------------------
+// Chief Phase 2D — Methodology Recovery + Executable Specialist Runtime
+// ---------------------------------------------------------------------------
+
+export type { MethodologyDefinition } from './specialists/methodologyRegistry'
+export { METHODOLOGY_REGISTRY, UnknownMethodologyError, getMethodology, methodologyExists, methodologiesFor } from './specialists/methodologyRegistry'
+
+export type { ExecutorType, ExecutionStatus, SpecialistExecutionRequest, ExecutionRecord, ExecutionIdentityCheck, ExecutionStore, AcceptResultOutcome, SpecialistExecutor } from './specialists/executor'
+export {
+  AuthorityRejectedExecutionError,
+  assertExecutionAuthorized,
+  assertMethodologyValid,
+  identityMismatches,
+  assertExecutionIdentity,
+  InMemoryExecutionStore,
+  registerExecution,
+  acceptExecutionResult,
+  retryExecution,
+  markExecutorUnavailable,
+  runExecution,
+} from './specialists/executor'
+
+export type { ManualAssignmentPackage } from './specialists/manualExecutor'
+export { buildManualAssignmentPackage, beginManualExecution, submitManualResult } from './specialists/manualExecutor'

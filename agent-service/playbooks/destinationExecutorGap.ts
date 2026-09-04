@@ -38,6 +38,56 @@ export interface ExecutorGap {
   workaroundToday: string
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2D addition — Gmail/Calendar resume-event DESIGN ONLY (spec
+// section 22). No Gmail/Calendar integration is wired here or anywhere
+// in this codebase; this is the shape a future integration would need to
+// slot into the existing WAITING + nextCheckAt resume primitive
+// unchanged. Nothing here sends an email or touches Jerry's calendar.
+// ---------------------------------------------------------------------------
+
+export type DestinationRelationshipResumeEventKind = 'GMAIL_REPLY_RECEIVED' | 'MEETING_REQUESTED' | 'MEETING_SCHEDULED' | 'MEETING_COMPLETE'
+
+export interface DestinationRelationshipResumeEvent {
+  kind: DestinationRelationshipResumeEventKind
+  destinationId: string
+  contactId: string | null
+  occurredAt: string
+  /** Free-form payload specific to the event kind — an inbound email's subject/snippet, a meeting's proposed time, etc. Never itself a source of truth; the resume logic re-reads structured state, this just wakes it up. */
+  payload: Record<string, unknown>
+}
+
+export interface ResumeAction {
+  action: 'ASSOCIATE_AND_CLASSIFY' | 'CHECK_JERRY_AVAILABILITY' | 'CREATE_MEETING_PREP_TASK' | 'CAPTURE_OUTCOME_AND_FOLLOW_UPS'
+  requiresJerry: boolean
+  reason: string
+}
+
+/**
+ * The dispatcher a future Gmail/Calendar integration would call — pure,
+ * no I/O. `GMAIL_REPLY_RECEIVED` -> associate to the correct destination/
+ * contact then classify (AUTO — destination_relationship.classify_reply).
+ * `MEETING_REQUESTED` -> check Jerry's availability; Jerry's own
+ * participation/scheduling choice is APPROVAL_REQUIRED
+ * (destination_relationship.create_calendar_event), so this always
+ * requires Jerry. `MEETING_SCHEDULED` -> create a meeting-prep task
+ * (AUTO — destination_relationship.gather_meeting_evidence).
+ * `MEETING_COMPLETE` -> capture outcome/action items, create follow-ups
+ * (AUTO).
+ */
+export function deriveResumeAction(event: DestinationRelationshipResumeEvent): ResumeAction {
+  switch (event.kind) {
+    case 'GMAIL_REPLY_RECEIVED':
+      return { action: 'ASSOCIATE_AND_CLASSIFY', requiresJerry: false, reason: 'Inbound reply — associate to destination/contact and classify deterministically before any further routing.' }
+    case 'MEETING_REQUESTED':
+      return { action: 'CHECK_JERRY_AVAILABILITY', requiresJerry: true, reason: "Creating a calendar event is APPROVAL_REQUIRED — Jerry's availability/choice is needed regardless of how routine the request looks." }
+    case 'MEETING_SCHEDULED':
+      return { action: 'CREATE_MEETING_PREP_TASK', requiresJerry: false, reason: 'A scheduled meeting needs a prep brief assembled from the dossier — gathering evidence for that is AUTO.' }
+    case 'MEETING_COMPLETE':
+      return { action: 'CAPTURE_OUTCOME_AND_FOLLOW_UPS', requiresJerry: false, reason: 'Recording what happened and queuing follow-ups is AUTO; any resulting commercial action is gated separately by its own standing-authority entry.' }
+  }
+}
+
 export const DESTINATION_EXECUTOR_GAPS: readonly ExecutorGap[] = Object.freeze([
   {
     key: 'dva1_invocation',

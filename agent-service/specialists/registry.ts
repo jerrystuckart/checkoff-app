@@ -36,6 +36,21 @@ export const SPECIALIST_REGISTRY: Readonly<Record<SpecialistKey, SpecialistDefin
     capabilities: ['live_web_research', 'live_browser_research'],
     canChangeStrategicScope: false,
   },
+  /**
+   * Phase 2D addition — the item-language specialist named in the Phase
+   * 2D spec section 2, previously missing from the registry entirely.
+   * Owns ONLY the transformation from a research_verifier-verified fact
+   * to final CheckOff wording; never discovers or verifies anything
+   * itself. See methodologies/checkoff_editor/v1.md.
+   */
+  checkoff_editor: {
+    key: 'checkoff_editor',
+    ownerKey: 'checkoff_editor',
+    name: 'CheckOff Editor',
+    owns: ['final CheckOff item wording', 'editorial voice/style enforcement', 'factual-fidelity check against the researched source'],
+    capabilities: ['content_editorial'],
+    canChangeStrategicScope: false,
+  },
   business_outreach: {
     key: 'business_outreach',
     ownerKey: 'business_outreach',

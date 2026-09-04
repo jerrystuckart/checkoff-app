@@ -55,6 +55,11 @@ export function validateResultEnvelope(request: DelegationRequest, result: Speci
   if (!result.jerryRequired && result.jerryReason) {
     reasons.push('jerryReason is set but jerryRequired is false — inconsistent envelope')
   }
+  if (result.methodologyId !== request.methodologyId || result.methodologyVersion !== request.methodologyVersion) {
+    reasons.push(
+      `methodology mismatch: delegated ${request.methodologyId}/${request.methodologyVersion}, result claims ${result.methodologyId}/${result.methodologyVersion} — a result must record the exact methodology it actually ran`
+    )
+  }
 
   return { valid: reasons.length === 0, missingEvidenceKeys, reasons }
 }
@@ -72,9 +77,11 @@ export function buildDelegationRequest(
   stage: string,
   objective: string,
   inputs: Record<string, unknown>,
-  requiredEvidenceKeys: string[]
+  requiredEvidenceKeys: string[],
+  methodologyId: string,
+  methodologyVersion: string
 ): DelegationRequest {
-  return { specialist, playbookKey, stage, objective, inputs, requiredEvidenceKeys }
+  return { specialist, playbookKey, stage, objective, inputs, requiredEvidenceKeys, methodologyId, methodologyVersion }
 }
 
 /** Which specialist a given delegation actually targets, resolved to its real agent.owners.owner_key (never assumed to equal the SpecialistKey string). */

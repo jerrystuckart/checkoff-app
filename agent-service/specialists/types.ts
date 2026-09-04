@@ -12,7 +12,14 @@
 // own claim of "done" is never itself the evidence (same discipline
 // already used in actionExecution.ts's verifyCompletion() requirement).
 
-export type SpecialistKey = 'metro_builder' | 'research_verifier' | 'business_outreach' | 'destination_strategist' | 'destination_relationship_manager' | 'destination_activation'
+export type SpecialistKey =
+  | 'metro_builder'
+  | 'research_verifier'
+  | 'checkoff_editor'
+  | 'business_outreach'
+  | 'destination_strategist'
+  | 'destination_relationship_manager'
+  | 'destination_activation'
 
 export interface SpecialistDefinition {
   key: SpecialistKey
@@ -39,6 +46,14 @@ export interface DelegationRequest {
   inputs: Record<string, unknown>
   /** What evidence Chief requires back before this delegation can be accepted — checked by validateResultEnvelope. */
   requiredEvidenceKeys: string[]
+  /**
+   * Which versioned methodology (agent-service/specialists/methodologies/<id>/<version>.md) this
+   * delegation executes — Phase 2D requirement: every specialist execution runs a versioned
+   * CheckOff methodology, never an ad hoc prompt invented at delegation time. Checked by
+   * validateMethodologyReference in executor.ts.
+   */
+  methodologyId: string
+  methodologyVersion: string
 }
 
 // ---------------------------------------------------------------------------
@@ -61,6 +76,9 @@ export interface SpecialistResultEnvelope {
   jerryRequired: boolean
   /** Why Jerry is required, when jerryRequired is true — never left implicit. */
   jerryReason: string | null
+  /** Restated from the originating DelegationRequest — Chief validates this matches before ever accepting the envelope (see executor.ts's validateExecutionIdentity). */
+  methodologyId: string
+  methodologyVersion: string
 }
 
 export interface EnvelopeValidationResult {

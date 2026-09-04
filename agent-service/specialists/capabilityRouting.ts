@@ -19,6 +19,7 @@ export type Capability =
   | 'destination_data_read'
   | 'documents_presentation_assets'
   | 'checkoff_operational_state'
+  | 'content_editorial'
 
 export function capabilitiesFor(specialist: SpecialistKey): string[] {
   return SPECIALIST_REGISTRY[specialist].capabilities
