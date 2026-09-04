@@ -9,6 +9,16 @@
 // tool when live research is required. Gated entirely on
 // OPENAI_API_KEY — isConfigured() is false without it, same discipline
 // as the Anthropic adapter.
+//
+// DEFAULT MODEL (Phase 2H live-provider proof, 2026-09-05): 'gpt-4.1',
+// not 'gpt-5'. A real live call against this account with 'gpt-5'
+// failed with a 404 model_not_found — "Your organization must be
+// verified to use the model gpt-5" (org verification not completed).
+// 'gpt-4.1' was verified working end-to-end in the same session: live
+// web_search tool use, a real cited source URL, and current (2026)
+// information. Override via CHIEF_OPENAI_RESEARCH_MODEL once
+// organization verification is done and gpt-5 access is confirmed —
+// this default is a live-environment finding, not a permanent ceiling.
 
 import type { ProviderAdapter, ProviderCompletionInput, ProviderCompletionResult } from './remoteAiExecutor'
 
@@ -46,7 +56,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   constructor(options: OpenAiAdapterOptions = {}) {
     this.apiKey = options.apiKey ?? process.env.OPENAI_API_KEY
     this.baseUrl = options.baseUrl ?? process.env.OPENAI_BASE_URL ?? 'https://api.openai.com'
-    this.model = options.model ?? process.env.CHIEF_OPENAI_RESEARCH_MODEL ?? 'gpt-5'
+    this.model = options.model ?? process.env.CHIEF_OPENAI_RESEARCH_MODEL ?? 'gpt-4.1'
     this.fetchImpl = options.fetchImpl ?? fetch
     this.supportsLiveWebResearch = options.supportsLiveWebResearch ?? envFlag('CHIEF_OPENAI_SUPPORTS_WEB_SEARCH', true)
   }
