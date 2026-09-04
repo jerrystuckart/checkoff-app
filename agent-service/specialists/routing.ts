@@ -8,6 +8,12 @@
 
 import { registerExecution, markExecutorUnavailable, runExecution, type ExecutionStore, type SpecialistExecutor, type SpecialistExecutionRequest, type AcceptResultOutcome, type ExecutionRecord } from './executor'
 
+// Provider preference policy (spec section 10) now lives in
+// remoteAiExecutor.ts (RemoteAiExecutor applies it internally on every
+// execute() call) — re-exported here so routing-level callers/tests have
+// one place to import both execution routing and provider preference from.
+export { SPECIALIST_PROVIDER_PREFERENCE, orderAdaptersForSpecialist } from './remoteAiExecutor'
+
 /**
  * Pure selection: the first executor (in the given priority order) whose
  * own canExecute() says yes. Order matters — pass the most-preferred

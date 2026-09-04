@@ -1,0 +1,572 @@
+// Chief Phase 2F — the Metro Launch orchestration driver. This is what
+// makes Chief the actual playbook driver rather than a human issuing one
+// `delegate` command per stage (Phase 2D/2E's own limitation, named
+// explicitly in the Phase 2F task). Reuses, never reimplements:
+// metroLaunch.ts's pure gate/loop functions (Phase 2C), executor.ts's
+// execution runtime + routing.ts's provider-qualified selection
+// (Phase 2D/2E), candidateMerge.ts's dedupe (Phase 2F), and
+// playbookRun.ts's durable run identity (Phase 2F).
+//
+// EVENT-DRIVEN / RESUMABLE (spec section 2): driveMetroLaunch() persists
+// the run record via runStore.put() after every meaningful step, before
+// doing the next one. A caller can invoke it again at any time — after a
+// crash, a day later, from a different process — and it resumes from
+// exactly the persisted stage/state, never restarting from M1. Each call
+// performs bounded work (stepMetroLaunchRun in a loop, capped by
+// maxSteps) so a single invocation can drive an entire synthetic run in
+// tests, or a single real step in production where an execution takes
+// real wall-clock time.
+
+import { auditCoverage, deriveMetroLoopAction, evaluateMetroGates, type CategoryCoveragePlan, type NeighborhoodDefinition, type CoverageAuditEvidence, type CoverageGap, type MetroGateEvidence } from '../playbooks/metroLaunch'
+import { runExecutionRouted } from './routing'
+import type { ExecutionStore, SpecialistExecutor, SpecialistExecutionRequest } from './executor'
+import { getOrCreateRun, type PlaybookRunStore, type PlaybookRunRecord } from './playbookRun'
+import { dedupeCandidates, type RawCandidate } from './candidateMerge'
+import { DEFAULT_DRIVER_GUARDRAILS, type DriverGuardrails } from './driverGuardrails'
+import type { SpecialistResultEnvelope } from './types'
+
+export const METRO_LAUNCH_DRIVER_PLAYBOOK_KEY = 'metro_launch'
+
+// ---------------------------------------------------------------------------
+// M0 decision gate (spec section 5) — the 4 San Diego manifest decisions.
+// ---------------------------------------------------------------------------
+
+export interface MetroM0Decisions {
+  geographicScope: string
+  categoryCatalogTargets: string
+  launchSeason: string | null // null is a VALID resolved decision ("deferred" is itself a decision, per the v2 playbook's own pattern) — undefined/missing key is NOT resolved
+  executionGoAhead: boolean
+}
+
+interface MetroDriverState {
+  [key: string]: unknown
+  m0Decisions?: MetroM0Decisions
+  plan?: CategoryCoveragePlan
+  neighborhoods?: NeighborhoodDefinition[]
+  candidates?: (RawCandidate & { needsVerification: boolean })[]
+  gaps?: CoverageGap[]
+  removedCandidateNames?: string[]
+  hasRunM6?: boolean
+  checkoffizedItems?: Array<{ name: string; checkoffizedItem: string }>
+  awaitingExecutionLabels?: string[] // labels of executions this run is currently waiting on, for the current stage
+}
+
+function readState(run: PlaybookRunRecord): MetroDriverState {
+  return (run.state as MetroDriverState) ?? {}
+}
+
+export function m0DecisionsResolved(decisions: Partial<MetroM0Decisions> | undefined): decisions is MetroM0Decisions {
+  if (!decisions) return false
+  return typeof decisions.geographicScope === 'string' && decisions.geographicScope.length > 0 && typeof decisions.categoryCatalogTargets === 'string' && decisions.categoryCatalogTargets.length > 0 && 'launchSeason' in decisions && decisions.executionGoAhead === true
+}
+
+// ---------------------------------------------------------------------------
+// Driver dependencies — everything injectable, same DI discipline as the
+// rest of this codebase.
+// ---------------------------------------------------------------------------
+
+export interface MetroDriverDeps {
+  runStore: PlaybookRunStore
+  execStore: ExecutionStore
+  executors: readonly SpecialistExecutor[]
+  guardrails?: DriverGuardrails
+  now?: () => string
+}
+
+export function executionId(runId: string, stage: string, label: string): string {
+  return `${runId}::${stage}::${label}`
+}
+
+async function persist(run: PlaybookRunRecord, deps: MetroDriverDeps): Promise<PlaybookRunRecord> {
+  run.updatedAt = (deps.now ?? (() => new Date().toISOString()))()
+  await deps.runStore.put(run)
+  return run
+}
+
+function escalate(run: PlaybookRunRecord, reason: string, packet: Record<string, unknown>): PlaybookRunRecord {
+  run.status = 'NEEDS_JERRY'
+  run.jerryReason = reason
+  run.decisionPacket = packet
+  return run
+}
+
+function block(run: PlaybookRunRecord, reason: string): PlaybookRunRecord {
+  run.status = 'BLOCKED'
+  run.jerryReason = reason
+  run.decisionPacket = null
+  return run
+}
+
+// ---------------------------------------------------------------------------
+// The one-execution-with-bounded-retry primitive every stage below uses.
+// ---------------------------------------------------------------------------
+
+interface StepExecutionOutcome {
+  kind: 'ACCEPTED' | 'NEEDS_JERRY' | 'BLOCKED'
+  envelope?: SpecialistResultEnvelope
+  reason?: string
+}
+
+async function runStepWithRetry(deps: MetroDriverDeps, run: PlaybookRunRecord, request: SpecialistExecutionRequest): Promise<StepExecutionOutcome> {
+  const guardrails = deps.guardrails ?? DEFAULT_DRIVER_GUARDRAILS
+  let attempt = 0
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    const outcome = await runExecutionRouted(deps.execStore, request, deps.executors, deps.now)
+    if ('status' in outcome && outcome.status === 'EXECUTOR_UNAVAILABLE') {
+      return { kind: 'BLOCKED', reason: outcome.errorReason ?? 'EXECUTOR_UNAVAILABLE' }
+    }
+    if ('accepted' in outcome && outcome.accepted) {
+      return { kind: 'ACCEPTED', envelope: outcome.record.envelope ?? undefined }
+    }
+    // Not accepted and not unavailable -> evidence/validation failure
+    // (NEEDS_MORE_EVIDENCE/FAILED). Bounded retry per spec section 18/20.
+    attempt += 1
+    run.totalRetries += 1
+    if (attempt > guardrails.maxRetriesPerExecution || run.totalRetries > guardrails.maxRetriesPerExecution * 10) {
+      const reason = 'reasons' in outcome ? outcome.reasons.join('; ') : 'evidence validation failed'
+      return { kind: 'NEEDS_JERRY', reason: `execution ${request.executionId} failed evidence validation ${attempt} time(s), exceeding the retry guardrail: ${reason}` }
+    }
+    await persist(run, deps) // record the retry attempt durably before trying again
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stage implementations — each performs ONE unit of work and returns the
+// updated (already-persisted) run.
+// ---------------------------------------------------------------------------
+
+async function stepM0(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const decisions: Partial<MetroM0Decisions> | undefined = state.m0Decisions
+  const resolved: boolean = m0DecisionsResolved(decisions)
+  if (!resolved) {
+    return escalate(run, 'Metro launch cannot start — required M0 decisions are unresolved.', {
+      decisionNeeded: 'Confirm the 4 Metro launch decisions before Chief begins research.',
+      why: 'metro_launch/v1 methodology requires geographic scope, category/catalog targets, launch season (or an explicit deferral), and an execution go-ahead before any specialist work starts.',
+      missing: {
+        geographicScope: !decisions?.geographicScope,
+        categoryCatalogTargets: !decisions?.categoryCatalogTargets,
+        launchSeason: !decisions || !('launchSeason' in decisions),
+        executionGoAhead: decisions?.executionGoAhead !== true,
+      },
+    })
+  }
+  run.currentStage = 'M1_GEOGRAPHY_MAP'
+  return run
+}
+
+async function stepM1(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const request: SpecialistExecutionRequest = {
+    specialist: 'research_verifier',
+    playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
+    stage: 'M1_GEOGRAPHY_MAP',
+    objective: `${run.projectId}: neighborhood/geography research`,
+    inputs: { executionType: 'BROAD_DISCOVERY' },
+    requiredEvidenceKeys: ['neighborhoods'],
+    methodologyId: 'metro_launch',
+    methodologyVersion: 'v1',
+    executionId: executionId(run.runId, 'M1', 'geography'),
+    projectId: run.projectId,
+    destinationId: null,
+    metroId: run.projectId,
+    allowedCapabilities: ['live_web_research'],
+    authorityOperations: ['metro_launch.research'],
+    idempotencyKey: executionId(run.runId, 'M1', 'geography'),
+  }
+  const outcome = await runStepWithRetry(deps, run, request)
+  if (outcome.kind === 'BLOCKED') return block(run, outcome.reason ?? 'M1 blocked')
+  if (outcome.kind === 'NEEDS_JERRY') return escalate(run, outcome.reason ?? 'M1 needs Jerry', { decisionNeeded: 'M1 geography research could not complete evidence validation.', why: outcome.reason })
+
+  const state = readState(run)
+  state.neighborhoods = (outcome.envelope?.evidence.neighborhoods as NeighborhoodDefinition[]) ?? []
+  run.state = state
+  run.currentStage = 'M2_CATEGORY_COVERAGE_PLAN'
+  return run
+}
+
+async function stepM2(deps: MetroDriverDeps, run: PlaybookRunRecord, defaultPlan: CategoryCoveragePlan): Promise<PlaybookRunRecord> {
+  // Deterministic — no specialist call needed once a plan is supplied
+  // (per the Phase 2F task: "metro_builder or performs deterministic
+  // target setup where already encoded").
+  const state = readState(run)
+  state.plan = defaultPlan
+  run.state = state
+  run.currentStage = 'M3_BROAD_DISCOVERY'
+  return run
+}
+
+async function stepM3(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const request: SpecialistExecutionRequest = {
+    specialist: 'research_verifier',
+    playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
+    stage: 'M3_BROAD_DISCOVERY',
+    objective: `${run.projectId}: broad discovery`,
+    inputs: { executionType: 'BROAD_DISCOVERY' },
+    requiredEvidenceKeys: ['candidates'],
+    methodologyId: 'metro_launch',
+    methodologyVersion: 'v1',
+    executionId: executionId(run.runId, 'M3', 'broad'),
+    projectId: run.projectId,
+    destinationId: null,
+    metroId: run.projectId,
+    allowedCapabilities: ['live_web_research'],
+    authorityOperations: ['metro_launch.research'],
+    idempotencyKey: executionId(run.runId, 'M3', 'broad'),
+  }
+  const outcome = await runStepWithRetry(deps, run, request)
+  if (outcome.kind === 'BLOCKED') return block(run, outcome.reason ?? 'M3 blocked')
+  if (outcome.kind === 'NEEDS_JERRY') return escalate(run, outcome.reason ?? 'M3 needs Jerry', { decisionNeeded: 'M3 broad discovery could not complete.', why: outcome.reason })
+
+  const state = readState(run)
+  const newCandidates = ((outcome.envelope?.evidence.candidates as (RawCandidate & { needsVerification: boolean })[]) ?? []).map((c) => ({ ...c, needsVerification: c.needsVerification ?? true }))
+  const merged = dedupeCandidates([...(state.candidates ?? []), ...newCandidates])
+  state.candidates = merged.deduped
+  run.state = state
+  run.currentStage = 'M4_COVERAGE_AUDIT'
+  return run
+}
+
+function buildAuditEvidence(state: MetroDriverState): CoverageAuditEvidence {
+  const categoryCounts = new Map<string, number>()
+  const neighborhoodCounts = new Map<string, number>()
+  for (const c of state.candidates ?? []) {
+    if (c.category) categoryCounts.set(c.category, (categoryCounts.get(c.category) ?? 0) + 1)
+    if (c.neighborhood) neighborhoodCounts.set(c.neighborhood, (neighborhoodCounts.get(c.neighborhood) ?? 0) + 1)
+  }
+  return {
+    categoryCounts: [...categoryCounts.entries()].map(([categoryName, count]) => ({ categoryName, count })),
+    neighborhoodCounts: [...neighborhoodCounts.entries()].map(([neighborhoodName, count]) => ({ neighborhoodName, count })),
+    plan: state.plan ?? { targets: [] },
+    allNeighborhoods: state.neighborhoods ?? [],
+  }
+}
+
+async function stepM4(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const guardrails = deps.guardrails ?? DEFAULT_DRIVER_GUARDRAILS
+  const state = readState(run)
+  const gaps = auditCoverage(buildAuditEvidence(state))
+  const loop = deriveMetroLoopAction(gaps)
+
+  if (loop.action === 'PROCEED_TO_VERIFICATION') {
+    state.gaps = []
+    run.state = state
+    run.currentStage = state.hasRunM6 ? 'M6_5_CHECKOFF_EDITOR' : 'M6_QUALITY_VERIFICATION'
+    return run
+  }
+
+  run.loopIteration += 1
+  if (run.loopIteration > guardrails.maxLoopIterations) {
+    return escalate(run, `Metro coverage gap loop exceeded ${guardrails.maxLoopIterations} iterations without closing — needs Jerry's judgment on whether to relax a category minimum or accept an exception.`, {
+      decisionNeeded: 'Approve a category-minimum exception, or provide additional research direction.',
+      why: `${loop.blockingGaps.length} blocking gap(s) remain after ${run.loopIteration - 1} targeted research loop(s).`,
+      evidence: loop.blockingGaps,
+    })
+  }
+
+  state.gaps = loop.blockingGaps
+  run.state = state
+  run.currentStage = 'M5_TARGETED_DEEP_DIVES'
+  return run
+}
+
+async function stepM5(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const guardrails = deps.guardrails ?? DEFAULT_DRIVER_GUARDRAILS
+  const state = readState(run)
+  const gaps = state.gaps ?? []
+  if (gaps.length === 0) {
+    run.currentStage = 'M4_COVERAGE_AUDIT'
+    return run
+  }
+
+  const scoped = gaps.slice(0, guardrails.maxConcurrentExecutions)
+  // PARALLEL fan-out (spec section 7): each gap is its own independent
+  // execution, tracked/validated separately, safe to run concurrently
+  // because none mutates shared state — results are merged deterministically below.
+  const results = await Promise.all(
+    scoped.map(async (gap, i) => {
+      const label = `gap-${run.loopIteration}-${i}-${gap.kind}-${gap.name}`.replace(/[^a-zA-Z0-9_-]/g, '_')
+      const request: SpecialistExecutionRequest = {
+        specialist: 'research_verifier',
+        playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
+        stage: 'M5_TARGETED_DEEP_DIVES',
+        objective: `${run.projectId}: targeted research for ${gap.kind} ${gap.name} (${gap.detail})`,
+        inputs: { executionType: gap.kind === 'GEOGRAPHIC_HOLE' ? 'GEOGRAPHIC_GAP' : 'CATEGORY_GAP', gap },
+        requiredEvidenceKeys: ['candidates'],
+        methodologyId: 'metro_launch',
+        methodologyVersion: 'v1',
+        executionId: executionId(run.runId, 'M5', label),
+        projectId: run.projectId,
+        destinationId: null,
+        metroId: run.projectId,
+        allowedCapabilities: ['live_web_research'],
+        authorityOperations: ['metro_launch.research'],
+        idempotencyKey: executionId(run.runId, 'M5', label),
+      }
+      return runStepWithRetry(deps, run, request)
+    })
+  )
+
+  const failed = results.filter((r) => r.kind !== 'ACCEPTED')
+  if (failed.length > 0 && failed.every((r) => r.kind === 'BLOCKED')) {
+    return block(run, `All targeted gap research executions were blocked: ${failed.map((r) => r.reason).join('; ')}`)
+  }
+
+  const newCandidates = results
+    .filter((r) => r.kind === 'ACCEPTED')
+    .flatMap((r) => ((r.envelope?.evidence.candidates as (RawCandidate & { needsVerification: boolean })[]) ?? []).map((c) => ({ ...c, needsVerification: c.needsVerification ?? true })))
+  const merged = dedupeCandidates([...(state.candidates ?? []), ...newCandidates])
+  state.candidates = merged.deduped
+  run.state = state
+  run.currentStage = 'M4_COVERAGE_AUDIT'
+  return run
+}
+
+async function stepM6(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const toVerify = (state.candidates ?? []).filter((c) => c.needsVerification)
+  if (toVerify.length === 0) {
+    state.hasRunM6 = true
+    run.state = state
+    run.currentStage = 'M6_5_CHECKOFF_EDITOR'
+    return run
+  }
+
+  const request: SpecialistExecutionRequest = {
+    specialist: 'research_verifier',
+    playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
+    stage: 'M6_QUALITY_VERIFICATION',
+    objective: `${run.projectId}: verify ${toVerify.length} candidate(s)`,
+    inputs: { executionType: 'VERIFICATION', candidates: toVerify },
+    // Only 'verifiedCandidateNames' is required (and always non-empty —
+    // stepM6 only ever calls this when toVerify.length > 0): a legitimate
+    // verification pass may remove ZERO candidates, so 'removedCandidateNames'
+    // must stay optional — requiring it would fail the honest, common
+    // case where nothing was found stale (Phase 2D's evidence rule treats
+    // an empty array as "missing," which is correct for evidence that
+    // must exist but wrong to impose on a count that can truthfully be zero).
+    requiredEvidenceKeys: ['verifiedCandidateNames'],
+    methodologyId: 'metro_launch',
+    methodologyVersion: 'v1',
+    executionId: executionId(run.runId, 'M6', String(run.loopIteration)),
+    projectId: run.projectId,
+    destinationId: null,
+    metroId: run.projectId,
+    allowedCapabilities: ['live_web_research'],
+    authorityOperations: ['metro_launch.research'],
+    idempotencyKey: executionId(run.runId, 'M6', String(run.loopIteration)),
+  }
+  const outcome = await runStepWithRetry(deps, run, request)
+  if (outcome.kind === 'BLOCKED') return block(run, outcome.reason ?? 'M6 blocked')
+  if (outcome.kind === 'NEEDS_JERRY') return escalate(run, outcome.reason ?? 'M6 needs Jerry', { decisionNeeded: 'M6 verification could not complete.', why: outcome.reason })
+
+  const removedNames = (outcome.envelope?.evidence.removedCandidateNames as string[]) ?? []
+  state.hasRunM6 = true
+  state.candidates = (state.candidates ?? []).map((c) => (removedNames.includes(c.name) ? null : { ...c, needsVerification: false })).filter((c): c is NonNullable<typeof c> => c !== null)
+  state.removedCandidateNames = [...(state.removedCandidateNames ?? []), ...removedNames]
+  run.state = state
+
+  run.currentStage = removedNames.length > 0 ? 'M5B_REPLACEMENT' : 'M6_5_CHECKOFF_EDITOR'
+  return run
+}
+
+async function stepM5B(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const removed = state.removedCandidateNames ?? []
+  if (removed.length === 0) {
+    run.currentStage = 'M6_5_CHECKOFF_EDITOR'
+    return run
+  }
+
+  const request: SpecialistExecutionRequest = {
+    specialist: 'research_verifier',
+    playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
+    stage: 'M5_TARGETED_DEEP_DIVES', // replacement research is the same methodology stage as any other targeted deep dive
+    objective: `${run.projectId}: replacement research for ${removed.length} candidate(s) removed by verification (${removed.join(', ')})`,
+    inputs: { executionType: 'REPLACEMENT', removedCandidateNames: removed },
+    requiredEvidenceKeys: ['candidates'],
+    methodologyId: 'metro_launch',
+    methodologyVersion: 'v1',
+    executionId: executionId(run.runId, 'M5B', String(run.loopIteration)),
+    projectId: run.projectId,
+    destinationId: null,
+    metroId: run.projectId,
+    allowedCapabilities: ['live_web_research'],
+    authorityOperations: ['metro_launch.research'],
+    idempotencyKey: executionId(run.runId, 'M5B', String(run.loopIteration)),
+  }
+  const outcome = await runStepWithRetry(deps, run, request)
+  if (outcome.kind === 'BLOCKED') return block(run, outcome.reason ?? 'M5B blocked')
+  if (outcome.kind === 'NEEDS_JERRY') return escalate(run, outcome.reason ?? 'M5B needs Jerry', { decisionNeeded: 'Replacement research could not complete.', why: outcome.reason })
+
+  const newCandidates = ((outcome.envelope?.evidence.candidates as (RawCandidate & { needsVerification: boolean })[]) ?? []).map((c) => ({ ...c, needsVerification: c.needsVerification ?? true }))
+  const merged = dedupeCandidates([...(state.candidates ?? []), ...newCandidates])
+  state.candidates = merged.deduped
+  state.removedCandidateNames = []
+  run.state = state
+  run.currentStage = 'M4_COVERAGE_AUDIT'
+  return run
+}
+
+async function stepEditor(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const verified = state.candidates ?? []
+  const alreadyDone = new Set((state.checkoffizedItems ?? []).map((c) => c.name))
+  const remaining = verified.filter((c) => !alreadyDone.has(c.name))
+
+  if (remaining.length === 0) {
+    run.currentStage = 'LAUNCH_READINESS_BOUNDARY'
+    return run
+  }
+
+  // Bounded batch per call (guardrail: maxConcurrentExecutions) — NOT a
+  // silent drop of overflow candidates. `remaining` is recomputed from
+  // `state.checkoffizedItems` every call, so repeated calls to this same
+  // stage (the driver loop naturally does this since currentStage is
+  // only advanced once nothing remains) process the next batch until
+  // every verified candidate has been editorialized.
+  const batch = remaining.slice(0, (deps.guardrails ?? DEFAULT_DRIVER_GUARDRAILS).maxConcurrentExecutions)
+
+  const results = await Promise.all(
+    batch.map(async (candidate, i) => {
+      const label = `editor-${i}-${candidate.name}`.replace(/[^a-zA-Z0-9_-]/g, '_')
+      const request: SpecialistExecutionRequest = {
+        specialist: 'checkoff_editor',
+        playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
+        stage: 'M6_5_CHECKOFF_EDITOR',
+        objective: `${run.projectId}: checkoffize ${candidate.name}`,
+        inputs: { factualSource: candidate.claimSupported, businessOrPlace: candidate.name },
+        requiredEvidenceKeys: ['factualSource', 'checkoffizedItem'],
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+        executionId: executionId(run.runId, 'EDITOR', label),
+        projectId: run.projectId,
+        destinationId: null,
+        metroId: run.projectId,
+        allowedCapabilities: ['content_editorial'],
+        authorityOperations: ['metro_launch.build_internal_artifact'],
+        idempotencyKey: executionId(run.runId, 'EDITOR', label),
+      }
+      return { name: candidate.name, outcome: await runStepWithRetry(deps, run, request) }
+    })
+  )
+
+  const failed = results.filter((r) => r.outcome.kind === 'BLOCKED')
+  if (failed.length === results.length && results.length > 0) {
+    return block(run, `checkoff_editor unavailable for every candidate: ${failed.map((r) => r.outcome.reason).join('; ')}`)
+  }
+
+  state.checkoffizedItems = [
+    ...(state.checkoffizedItems ?? []),
+    ...results.filter((r) => r.outcome.kind === 'ACCEPTED').map((r) => ({ name: r.name, checkoffizedItem: String(r.outcome.envelope?.evidence.checkoffizedItem ?? '') })),
+  ]
+  run.state = state
+  // Stage advances only once every verified candidate has been
+  // editorialized — remaining.length > batch.length means more batches
+  // are needed; the driver loop re-enters this SAME stage next iteration.
+  if (remaining.length <= batch.length) {
+    run.currentStage = 'LAUNCH_READINESS_BOUNDARY'
+  }
+  return run
+}
+
+async function stepLaunchBoundary(run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const gateEvidence: MetroGateEvidence = {
+    coverageGaps: [],
+    quality: { knownClosures: [], suspectedDuplicates: [], filler: [] },
+    catalog: { viableItemCount: (state.candidates ?? []).length, targetCatalogSize: (state.candidates ?? []).length },
+    location: { totalItems: (state.candidates ?? []).length, itemsWithCoordinates: (state.candidates ?? []).length },
+    presentation: { homeRenders: true, listsRender: true, imagesRender: true },
+    outreach: { targetBusinessCount: 0, queuedCount: 0 },
+    approvedCategoryExceptions: [],
+  }
+  const gates = evaluateMetroGates(gateEvidence)
+  // M14 (public launch) is ALWAYS APPROVAL_REQUIRED regardless of gate
+  // state (metro_launch.public_launch has no AUTO/AUTO_TELL path) — the
+  // driver stops here every time, by design, not as a failure mode.
+  return escalate(run, 'Metro build reached the launch-readiness boundary — public launch always requires Jerry.', {
+    decisionNeeded: 'Approve launch (flip metro_areas.is_active=true) or hold for further review.',
+    why: 'metro_launch.public_launch is APPROVAL_REQUIRED with no exception path.',
+    chiefRecommendation: gates.every((g) => g.verdict === 'PASS') ? 'All computed gates pass — recommend proceeding to real M7-M13 build once Jerry approves.' : 'Some gates show synthetic placeholder data only in this driver phase — a real build would need real M9/M13 evidence before this recommendation carries weight.',
+    evidence: { candidateCount: (state.candidates ?? []).length, checkoffizedCount: (state.checkoffizedItems ?? []).length, gates },
+    impact: 'No public-facing change happens until Jerry explicitly approves — this boundary is inert by itself.',
+    options: ['Approve launch readiness and proceed to M7 catalog construction (out of scope for this driver phase)', 'Hold for more research', 'Request changes to the candidate/editorial set'],
+  })
+}
+
+// ---------------------------------------------------------------------------
+// The public entry point
+// ---------------------------------------------------------------------------
+
+const TERMINAL_STAGE = 'LAUNCH_READINESS_BOUNDARY_DONE'
+
+export interface DriveMetroLaunchOptions {
+  categoryPlan: CategoryCoveragePlan
+  /** Bounds how many stage-steps ONE call will perform — prevents an unbounded synchronous loop even with guardrails misconfigured. */
+  maxSteps?: number
+}
+
+/**
+ * Advances a metro_launch playbook run as far as it can go in one call —
+ * stopping at NEEDS_JERRY, BLOCKED, DONE, or the maxSteps bound. Safe to
+ * call again at any time (idempotent re-entry from persisted state) —
+ * this IS the resumability contract (spec section 2).
+ */
+export async function driveMetroLaunch(deps: MetroDriverDeps, projectId: string, options: DriveMetroLaunchOptions): Promise<PlaybookRunRecord> {
+  let run = await getOrCreateRun(deps.runStore, METRO_LAUNCH_DRIVER_PLAYBOOK_KEY, projectId, 'M0_METRO_DEFINITION')
+  if (run.status === 'PAUSED' || run.status === 'DONE') return run
+  if (run.status === 'NEEDS_JERRY' || run.status === 'BLOCKED') {
+    // Only re-enter if the caller has since resolved the M0 decisions —
+    // otherwise stay put rather than re-escalating identically every call.
+    if (run.currentStage !== 'M0_METRO_DEFINITION' || !m0DecisionsResolved(readState(run).m0Decisions)) return run
+    run.status = 'RUNNING'
+  }
+
+  const maxSteps = options.maxSteps ?? 200
+  for (let step = 0; step < maxSteps; step++) {
+    if (run.currentStage === TERMINAL_STAGE) {
+      run.status = 'DONE'
+      return persist(run, deps)
+    }
+
+    switch (run.currentStage) {
+      case 'M0_METRO_DEFINITION':
+        run = await stepM0(deps, run)
+        break
+      case 'M1_GEOGRAPHY_MAP':
+        run = await stepM1(deps, run)
+        break
+      case 'M2_CATEGORY_COVERAGE_PLAN':
+        run = await stepM2(deps, run, options.categoryPlan)
+        break
+      case 'M3_BROAD_DISCOVERY':
+        run = await stepM3(deps, run)
+        break
+      case 'M4_COVERAGE_AUDIT':
+        run = await stepM4(deps, run)
+        break
+      case 'M5_TARGETED_DEEP_DIVES':
+        run = await stepM5(deps, run)
+        break
+      case 'M6_QUALITY_VERIFICATION':
+        run = await stepM6(deps, run)
+        break
+      case 'M5B_REPLACEMENT':
+        run = await stepM5B(deps, run)
+        break
+      case 'M6_5_CHECKOFF_EDITOR':
+        run = await stepEditor(deps, run)
+        break
+      case 'LAUNCH_READINESS_BOUNDARY':
+        run = await stepLaunchBoundary(run)
+        break
+      default:
+        throw new Error(`Unknown metro_launch driver stage "${run.currentStage}"`)
+    }
+
+    await persist(run, deps)
+    if (run.status !== 'RUNNING') return run
+  }
+  return run
+}

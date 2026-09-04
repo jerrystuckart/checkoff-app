@@ -481,3 +481,30 @@ export { computeContentHash, computeFileHash, ingestMethodology, verifyMethodolo
 
 export type { DestinationRelationshipResumeEventKind, DestinationRelationshipResumeEvent, ResumeAction } from './playbooks/destinationExecutorGap'
 export { deriveResumeAction } from './playbooks/destinationExecutorGap'
+
+// ---------------------------------------------------------------------------
+// Chief Phase 2F — Autonomous Orchestration Driver + OpenAI Research Executor
+// ---------------------------------------------------------------------------
+
+export type { RawCandidate, NormalizedCandidateKey, DedupeResult } from './specialists/candidateMerge'
+export { candidateKey, candidatesAreSameThing, dedupeCandidates, mergeCandidateSets } from './specialists/candidateMerge'
+
+export type { OpenAiAdapterOptions } from './specialists/openAiAdapter'
+export { OpenAiAdapter } from './specialists/openAiAdapter'
+
+export { SPECIALIST_PROVIDER_PREFERENCE, orderAdaptersForSpecialist } from './specialists/remoteAiExecutor'
+
+export type { DriverGuardrails } from './specialists/driverGuardrails'
+export { DEFAULT_DRIVER_GUARDRAILS, GuardrailExceededError, assertWithinGuardrail } from './specialists/driverGuardrails'
+
+export type { PlaybookRunStatus, PlaybookRunRecord, PlaybookRunStore } from './specialists/playbookRun'
+export { playbookRunId, InMemoryPlaybookRunStore, getOrCreateRun, pauseRun, resumeRun, recordJerryDecision } from './specialists/playbookRun'
+
+export { DbPlaybookRunStore, taskStatusForRunStatus, PLAYBOOK_RUN_SOURCE_TYPE, DRIVER_OWNER_KEY } from './specialists/dbPlaybookRunStore'
+export type { DbPlaybookRunStoreDeps } from './specialists/dbPlaybookRunStore'
+
+export type { MetroM0Decisions, MetroDriverDeps, DriveMetroLaunchOptions } from './specialists/metroLaunchDriver'
+export { METRO_LAUNCH_DRIVER_PLAYBOOK_KEY, m0DecisionsResolved, driveMetroLaunch, executionId as metroDriverExecutionId } from './specialists/metroLaunchDriver'
+
+export type { DestinationDriverDeps, DriveDestinationHubOptions } from './specialists/destinationHubDriver'
+export { DESTINATION_HUB_DRIVER_PLAYBOOK_KEY, driveDestinationHub } from './specialists/destinationHubDriver'

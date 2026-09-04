@@ -1,8 +1,23 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { selectExecutor, runExecutionRouted } from './routing'
+import { selectExecutor, runExecutionRouted, orderAdaptersForSpecialist } from './routing'
 import { InMemoryExecutionStore, type SpecialistExecutor, type SpecialistExecutionRequest } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
+import type { ProviderAdapter } from './remoteAiExecutor'
+
+function fakeAdapter(providerKey: string): ProviderAdapter {
+  return { providerKey, supportsLiveWebResearch: true, isConfigured: () => true, complete: async () => ({ text: '{}' }) }
+}
+
+test('orderAdaptersForSpecialist: research_verifier prefers openai first, anthropic second', () => {
+  const ordered = orderAdaptersForSpecialist('research_verifier', [fakeAdapter('anthropic'), fakeAdapter('openai')])
+  assert.deepEqual(ordered.map((a) => a.providerKey), ['openai', 'anthropic'])
+})
+
+test('orderAdaptersForSpecialist: an unlisted provider sorts after every preferred one, never dropped', () => {
+  const ordered = orderAdaptersForSpecialist('research_verifier', [fakeAdapter('some_future_provider'), fakeAdapter('openai')])
+  assert.deepEqual(ordered.map((a) => a.providerKey), ['openai', 'some_future_provider'])
+})
 
 function req(overrides: Partial<SpecialistExecutionRequest> = {}): SpecialistExecutionRequest {
   return {

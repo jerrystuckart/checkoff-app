@@ -185,3 +185,51 @@ test('RemoteAiExecutor: execute() with malformed model output returns a structur
     assert.ok(outcome.blockers.length > 0)
   }
 })
+
+// ---------------------------------------------------------------------------
+// Provider fallback + providerKey attribution (Phase 2F, spec section 19)
+// ---------------------------------------------------------------------------
+
+test('RemoteAiExecutor: a transient failure on the FIRST qualified provider falls through to the SECOND, preserving the same request', async () => {
+  const failing = new FakeAdapter(true, true, new Error('503 upstream overloaded'))
+  const succeeding = new FakeAdapter(true, true, { text: validEnvelopeJson() })
+  const executor = new RemoteAiExecutor([failing, succeeding])
+  const outcome = await executor.execute(req())
+  assert.ok(!('unavailable' in outcome))
+  if (!('unavailable' in outcome)) {
+    assert.equal(outcome.taskId, 'exec-research-1') // same request preserved across the fallback
+  }
+})
+
+test('RemoteAiExecutor: records which provider actually produced the accepted result', async () => {
+  const openai = new FakeAdapter(true, true, { text: validEnvelopeJson() })
+  Object.defineProperty(openai, 'providerKey', { value: 'openai' })
+  const executor = new RemoteAiExecutor([openai])
+  const outcome = await executor.execute(req())
+  assert.ok(!('unavailable' in outcome))
+  if (!('unavailable' in outcome)) {
+    assert.equal(outcome.providerKey, 'openai')
+  }
+})
+
+test('RemoteAiExecutor: unavailable ONLY once every qualified provider has failed transiently, and the reason names each', async () => {
+  const a = new FakeAdapter(true, true, new Error('network unreachable'))
+  Object.defineProperty(a, 'providerKey', { value: 'anthropic' })
+  const b = new FakeAdapter(true, true, new Error('rate limited'))
+  Object.defineProperty(b, 'providerKey', { value: 'openai' })
+  const executor = new RemoteAiExecutor([a, b])
+  const outcome = await executor.execute(req())
+  assert.ok('unavailable' in outcome && outcome.unavailable)
+  if ('unavailable' in outcome) {
+    assert.match(outcome.reason, /anthropic/)
+    assert.match(outcome.reason, /openai/)
+  }
+})
+
+test('RemoteAiExecutor: an unconfigured provider never counts as a fallback attempt — only configured, capable ones are tried', async () => {
+  const unconfigured = new FakeAdapter(true, false)
+  const configured = new FakeAdapter(true, true, { text: validEnvelopeJson() })
+  const executor = new RemoteAiExecutor([unconfigured, configured])
+  const outcome = await executor.execute(req())
+  assert.ok(!('unavailable' in outcome))
+})

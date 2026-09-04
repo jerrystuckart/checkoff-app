@@ -7,9 +7,39 @@
 // Never falls back to fabricating a result.
 
 import type { SpecialistExecutor, SpecialistExecutionRequest } from './executor'
-import type { SpecialistResultEnvelope } from './types'
+import type { SpecialistResultEnvelope, SpecialistKey } from './types'
 import { buildResearchVerifierPrompt, buildCheckoffEditorPrompt } from './promptBuilders'
 import { getMethodology, methodologyExists } from './methodologyRegistry'
+
+// ---------------------------------------------------------------------------
+// Provider PREFERENCE policy (spec section 10) — data-driven, not a
+// hardcoded vendor binding. research_verifier prefers a live-web-capable,
+// high-recall provider; checkoff_editor and destination_strategist keep a
+// simple ordered default today (no real quality signal exists yet to
+// differentiate providers on those tasks). Listing a providerKey here
+// does NOT mean it's configured — qualifiedAdapters() below still filters
+// to only configured, capability-qualified adapters first.
+// ---------------------------------------------------------------------------
+
+export const SPECIALIST_PROVIDER_PREFERENCE: Readonly<Partial<Record<SpecialistKey, readonly string[]>>> = Object.freeze({
+  research_verifier: ['openai', 'anthropic'],
+  checkoff_editor: ['anthropic', 'openai'],
+  destination_strategist: ['anthropic', 'openai'],
+})
+
+/**
+ * Orders `adapters` by this specialist's preference list — unlisted
+ * providers sort AFTER every listed one, preserving relative input order
+ * among themselves.
+ */
+export function orderAdaptersForSpecialist(specialist: SpecialistKey, adapters: readonly ProviderAdapter[]): ProviderAdapter[] {
+  const preference = SPECIALIST_PROVIDER_PREFERENCE[specialist] ?? []
+  const rank = (a: ProviderAdapter): number => {
+    const i = preference.indexOf(a.providerKey)
+    return i === -1 ? preference.length : i
+  }
+  return [...adapters].sort((a, b) => rank(a) - rank(b))
+}
 
 // ---------------------------------------------------------------------------
 // Provider adapter — the ONLY seam a specific vendor's API shape touches.
@@ -167,64 +197,88 @@ const WIRED_SPECIALISTS = new Set(['research_verifier', 'checkoff_editor'])
 export class RemoteAiExecutor implements SpecialistExecutor {
   readonly executorType = 'REMOTE_AI_EXECUTOR' as const
 
+  /**
+   * Adapters in PREFERENCE order — the first one that's both configured
+   * and capability-qualified is tried first; a transient failure (network
+   * error, non-2xx, rate limit) falls through to the next qualified
+   * adapter automatically (spec section 19), preserving the exact same
+   * methodology/objective/evidence requirements across the retry. Order
+   * is entirely caller-controlled (routing.ts / the driver decides
+   * preference — e.g. quality-preferred provider first) — this class
+   * itself has no vendor opinion.
+   */
   constructor(private readonly adapters: ProviderAdapter[]) {}
 
-  private selectAdapter(request: SpecialistExecutionRequest): ProviderAdapter | null {
+  private qualifiedAdapters(request: SpecialistExecutionRequest): ProviderAdapter[] {
     const needsLiveWeb = request.specialist === 'research_verifier'
-    return this.adapters.find((a) => a.isConfigured() && (!needsLiveWeb || a.supportsLiveWebResearch)) ?? null
+    const qualified = this.adapters.filter((a) => a.isConfigured() && (!needsLiveWeb || a.supportsLiveWebResearch))
+    return orderAdaptersForSpecialist(request.specialist, qualified)
   }
 
   canExecute(request: SpecialistExecutionRequest): boolean {
-    // Only the two specialists Phase 2E actually wires — every other
+    // Only the two specialists Phase 2E/2F actually wire — every other
     // specialist (including destination_strategist until its DVA
     // methodologies are supplied — see methodologyIngestion.ts) is
     // honestly EXECUTOR_UNAVAILABLE through this executor today.
     if (!WIRED_SPECIALISTS.has(request.specialist)) return false
     if (!methodologyExists(request.methodologyId, request.methodologyVersion)) return false
     if (!getMethodology(request.methodologyId, request.methodologyVersion).complete) return false
-    return this.selectAdapter(request) !== null
+    return this.qualifiedAdapters(request).length > 0
   }
 
   async execute(request: SpecialistExecutionRequest): Promise<SpecialistResultEnvelope | { unavailable: true; reason: string }> {
-    const adapter = this.selectAdapter(request)
-    if (!adapter) {
+    const qualified = this.qualifiedAdapters(request)
+    if (qualified.length === 0) {
       return { unavailable: true, reason: `no configured provider available for specialist=${request.specialist} (live web research required: ${request.specialist === 'research_verifier'})` }
     }
 
     const { systemPrompt, userPrompt } = request.specialist === 'research_verifier' ? buildResearchVerifierPrompt(request) : buildCheckoffEditorPrompt(request)
+    const requiresLiveWebResearch = request.specialist === 'research_verifier'
 
-    let completion: { text: string }
-    try {
-      completion = await adapter.complete({ systemPrompt, userPrompt, requiresLiveWebResearch: request.specialist === 'research_verifier' })
-    } catch (err) {
-      // A provider call that genuinely fails (network error, non-2xx,
-      // rate limit) is EXECUTOR_UNAVAILABLE, not a fabricated result.
-      return { unavailable: true, reason: `provider call failed: ${err instanceof Error ? err.message : String(err)}` }
-    }
-
-    const parsed = parseModelEnvelope(completion.text)
-    if (!parsed.ok || !parsed.envelope) {
-      // The provider DID run — this is a structurally invalid result,
-      // not an unavailable executor. Hand back a minimal, honestly-empty
-      // envelope so the normal evidence-validation path (acceptExecutionResult)
-      // rejects it as FAILED/NEEDS_MORE_EVIDENCE, with the parse failure
-      // recorded as a blocker — never silently discarded.
-      return {
-        taskId: request.executionId,
-        objective: request.objective,
-        actionsPerformed: [],
-        evidence: {},
-        artifacts: [],
-        confidence: 'LOW',
-        blockers: [parsed.reason ?? 'model output could not be parsed as a valid ResultEnvelope'],
-        discoveredFollowUpWork: [],
-        recommendedNextAction: 'retry — model output was not valid structured JSON',
-        jerryRequired: false,
-        jerryReason: null,
-        methodologyId: request.methodologyId,
-        methodologyVersion: request.methodologyVersion,
+    const failures: string[] = []
+    for (const adapter of qualified) {
+      let completion: { text: string }
+      try {
+        completion = await adapter.complete({ systemPrompt, userPrompt, requiresLiveWebResearch })
+      } catch (err) {
+        // Transient/provider-side failure — record it and fall through to
+        // the next qualified adapter rather than giving up immediately.
+        failures.push(`${adapter.providerKey}: ${err instanceof Error ? err.message : String(err)}`)
+        continue
       }
+
+      const parsed = parseModelEnvelope(completion.text)
+      if (!parsed.ok || !parsed.envelope) {
+        // The provider DID run — this is a structurally invalid result,
+        // not an unavailable executor. Hand back a minimal, honestly-empty
+        // envelope so the normal evidence-validation path
+        // (acceptExecutionResult) rejects it as FAILED/NEEDS_MORE_EVIDENCE,
+        // with the parse failure recorded as a blocker — never silently
+        // discarded, and never retried against another provider (this
+        // provider DID respond; retrying a structurally-bad response is a
+        // job for the driver's own bounded-retry policy, not provider
+        // fallback, which exists for TRANSIENT failures specifically).
+        return {
+          taskId: request.executionId,
+          objective: request.objective,
+          actionsPerformed: [],
+          evidence: {},
+          artifacts: [],
+          confidence: 'LOW',
+          blockers: [parsed.reason ?? 'model output could not be parsed as a valid ResultEnvelope'],
+          discoveredFollowUpWork: [],
+          recommendedNextAction: 'retry — model output was not valid structured JSON',
+          jerryRequired: false,
+          jerryReason: null,
+          methodologyId: request.methodologyId,
+          methodologyVersion: request.methodologyVersion,
+          providerKey: adapter.providerKey,
+        }
+      }
+      return { ...parsed.envelope, providerKey: adapter.providerKey }
     }
-    return parsed.envelope
+
+    // Every qualified adapter failed transiently.
+    return { unavailable: true, reason: `all ${qualified.length} qualified provider(s) failed: ${failures.join('; ')}` }
   }
 }

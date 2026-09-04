@@ -21,9 +21,24 @@ export class TestExecutor implements SpecialistExecutor {
   readonly executorType = 'LOCAL_TOOL_EXECUTOR' as const
   private responses = new Map<string, TestExecutorOutcome>()
   private unavailableSpecialists = new Set<string>()
+  /**
+   * Phase 2F addition — a fallback list of (predicate, responder) pairs,
+   * checked IN ORDER only when no exact executionId match exists. Lets a
+   * driver-level test respond by STAGE/OBJECTIVE SHAPE (e.g. "any M5
+   * targeted-gap execution for the Shopping category") instead of having
+   * to hand-compute every internally-generated parallel-fan-out
+   * executionId — the driver test cares about behavior, not the exact
+   * internal id scheme. Exact `.script()` entries still take priority,
+   * so existing executionId-keyed tests are completely unaffected.
+   */
+  private resolvers: Array<{ matches: (request: SpecialistExecutionRequest) => boolean; respond: (request: SpecialistExecutionRequest) => TestExecutorOutcome }> = []
 
   script(executionId: string, outcome: TestExecutorOutcome): void {
     this.responses.set(executionId, outcome)
+  }
+
+  scriptWhen(matches: (request: SpecialistExecutionRequest) => boolean, respond: (request: SpecialistExecutionRequest) => TestExecutorOutcome): void {
+    this.resolvers.push({ matches, respond })
   }
 
   makeSpecialistUnavailable(specialist: string): void {
@@ -36,10 +51,10 @@ export class TestExecutor implements SpecialistExecutor {
 
   async execute(request: SpecialistExecutionRequest): Promise<TestExecutorOutcome> {
     const scripted = this.responses.get(request.executionId)
-    if (!scripted) {
-      throw new Error(`TestExecutor has no scripted response for executionId "${request.executionId}" — call .script() before running this execution.`)
-    }
-    return scripted
+    if (scripted) return scripted
+    const resolver = this.resolvers.find((r) => r.matches(request))
+    if (resolver) return resolver.respond(request)
+    throw new Error(`TestExecutor has no scripted response or matching resolver for executionId "${request.executionId}" (objective: "${request.objective}") — call .script() or .scriptWhen() before running this execution.`)
   }
 }
 

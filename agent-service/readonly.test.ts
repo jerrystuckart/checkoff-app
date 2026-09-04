@@ -67,6 +67,19 @@ const APPROVED_MUTATIONS = new Set([
   'detectNewCandidates',
   'runAssessment',
   'applyJerryDecision',
+  // Phase 2F — the playbook-run orchestration driver's own write surface
+  // (playbookRun.ts / dbPlaybookRunStore.ts). These operate ONLY through
+  // the PlaybookRunStore abstraction (DbPlaybookRunStore, in production,
+  // itself calls nothing but the already-approved createTask/
+  // transitionTask/recordPlaybookStage underneath — no new SQL) — never a
+  // second, competing write path into agent.*. recordJerryDecision is the
+  // one that matches the naming heuristic; pauseRun/resumeRun/
+  // getOrCreateRun are listed here too for completeness even though their
+  // names don't match it, same as seedBusinessPhotoOutreachTasks above.
+  'recordJerryDecision',
+  'pauseRun',
+  'resumeRun',
+  'getOrCreateRun',
 ])
 
 test('read-only safety: agent-service exports exactly the approved mutation set, nothing else write-shaped', () => {

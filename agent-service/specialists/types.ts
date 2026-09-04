@@ -79,6 +79,16 @@ export interface SpecialistResultEnvelope {
   /** Restated from the originating DelegationRequest — Chief validates this matches before ever accepting the envelope (see executor.ts's validateExecutionIdentity). */
   methodologyId: string
   methodologyVersion: string
+  /**
+   * Chief Phase 2F — which provider actually produced this result (e.g.
+   * 'anthropic', 'openai'), when the executor is a REMOTE_AI_EXECUTOR
+   * trying multiple configured providers with fallback (spec section
+   * 19: "Record which provider actually produced the accepted result").
+   * Optional and null for every executor type that isn't provider-based
+   * (MANUAL_EXECUTOR, the deterministic TestExecutor) — never required,
+   * so no existing envelope construction breaks.
+   */
+  providerKey?: string | null
 }
 
 export interface EnvelopeValidationResult {
