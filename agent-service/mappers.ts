@@ -14,6 +14,7 @@ import type {
   TaskStatus,
   BlockerRef,
   TaskEventSummary,
+  TaskEventDetail,
   DecisionSummary,
   InteractionSummary,
   DecisionEventSummary,
@@ -161,6 +162,15 @@ export function mapTaskEventRow(row: TaskEventRow): TaskEventSummary {
     changedAt: row.changed_at,
     note: row.note,
   }
+}
+
+/** Phase 2E — same row shape as TaskEventRow plus metadata (JSONB, already a plain object once pg parses it — no JSON.parse needed). */
+export interface TaskEventDetailRow extends TaskEventRow {
+  metadata: Record<string, unknown> | null
+}
+
+export function mapTaskEventDetailRow(row: TaskEventDetailRow): TaskEventDetail {
+  return { ...mapTaskEventRow(row), metadata: row.metadata ?? {} }
 }
 
 export interface DecisionRow extends OwnerCols, ProjectRefCols {

@@ -31,6 +31,18 @@ export interface MethodologyDefinition {
    * see destination/dva1|dva2|dap's own doc for why they're false.
    */
   complete: boolean
+  /**
+   * Chief Phase 2E addition. sha256 of the exact file content, recorded
+   * ONLY once a methodology has gone through a real, deliberate
+   * ingestion (methodologyIngestion.ts's ingestMethodology()) — null for
+   * every doc this codebase authored itself (the gate-semantics-only DVA
+   * placeholders, and the metro_launch/checkoff_editor/
+   * destination_commercial docs distilled from repo+Open Brain evidence).
+   * verifyMethodologyIntegrity() checks every non-null hash still matches
+   * the file on disk, so a hand-edit after ingestion is caught rather
+   * than silently drifting from what Jerry actually provided.
+   */
+  contentHash: string | null
 }
 
 export const METHODOLOGY_REGISTRY: readonly MethodologyDefinition[] = Object.freeze([
@@ -40,6 +52,7 @@ export const METHODOLOGY_REGISTRY: readonly MethodologyDefinition[] = Object.fre
     allowedSpecialists: ['metro_builder', 'research_verifier'],
     docPath: 'agent-service/specialists/methodologies/metro_launch/v1.md',
     complete: true,
+    contentHash: null,
   },
   {
     methodologyId: 'checkoff_editor',
@@ -47,6 +60,7 @@ export const METHODOLOGY_REGISTRY: readonly MethodologyDefinition[] = Object.fre
     allowedSpecialists: ['checkoff_editor'],
     docPath: 'agent-service/specialists/methodologies/checkoff_editor/v1.md',
     complete: true,
+    contentHash: null,
   },
   {
     methodologyId: 'destination_commercial',
@@ -54,6 +68,7 @@ export const METHODOLOGY_REGISTRY: readonly MethodologyDefinition[] = Object.fre
     allowedSpecialists: ['destination_relationship_manager', 'destination_activation'],
     docPath: 'agent-service/specialists/methodologies/destination_commercial/v1.md',
     complete: true,
+    contentHash: null,
   },
   {
     methodologyId: 'destination/dva1',
@@ -61,6 +76,7 @@ export const METHODOLOGY_REGISTRY: readonly MethodologyDefinition[] = Object.fre
     allowedSpecialists: ['destination_strategist'],
     docPath: 'agent-service/specialists/methodologies/destination/dva1/v1.md',
     complete: false, // gate semantics only — full DVA-1 question set/rubric lives in an external Claude Project, not yet exported
+    contentHash: null,
   },
   {
     methodologyId: 'destination/dva2',
@@ -68,6 +84,7 @@ export const METHODOLOGY_REGISTRY: readonly MethodologyDefinition[] = Object.fre
     allowedSpecialists: ['destination_strategist'],
     docPath: 'agent-service/specialists/methodologies/destination/dva2/v1.md',
     complete: false,
+    contentHash: null,
   },
   {
     methodologyId: 'destination/dap',
@@ -75,6 +92,7 @@ export const METHODOLOGY_REGISTRY: readonly MethodologyDefinition[] = Object.fre
     allowedSpecialists: ['destination_strategist'],
     docPath: 'agent-service/specialists/methodologies/destination/dap/v1.md',
     complete: false,
+    contentHash: null,
   },
 ])
 

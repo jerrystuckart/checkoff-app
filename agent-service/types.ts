@@ -134,6 +134,18 @@ export interface TaskEventSummary {
 }
 
 /**
+ * Chief Phase 2E. Same shape as TaskEventSummary plus `metadata` — kept as
+ * a SEPARATE type rather than adding metadata to TaskEventSummary itself,
+ * so every existing caller of getRecentTaskChanges/mapTaskEventRow is
+ * unaffected. Used by dbExecutionStore.ts to reconstruct a full
+ * ExecutionRecord (identity snapshot + result envelope) from the
+ * task_events.metadata JSONB already written by recordPlaybookStage.
+ */
+export interface TaskEventDetail extends TaskEventSummary {
+  metadata: Record<string, unknown>
+}
+
+/**
  * Phase 1B. See chiefBrief.ts's module doc / the Phase 1B design audit for
  * why this is intentionally NOT classified further here (no WAITING/
  * NEEDS_RESPONSE/INFORMATIONAL split): agent.interactions has zero live

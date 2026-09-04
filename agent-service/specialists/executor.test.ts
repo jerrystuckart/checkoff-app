@@ -48,23 +48,23 @@ test('assertExecutionAuthorized: throws UnknownAuthorityOperationError for an un
   assert.throws(() => assertExecutionAuthorized(req({ authorityOperations: ['totally_unregistered_op'] })), UnknownAuthorityOperationError)
 })
 
-test('registerExecution: refuses to create an execution requesting APPROVAL_REQUIRED authority', () => {
+test('registerExecution: refuses to create an execution requesting APPROVAL_REQUIRED authority', async () => {
   const store = new InMemoryExecutionStore()
-  assert.throws(() => registerExecution(store, req({ authorityOperations: ['metro_launch.public_launch'] }), 'LOCAL_TOOL_EXECUTOR'), AuthorityRejectedExecutionError)
+  await assert.rejects(() => registerExecution(store, req({ authorityOperations: ['metro_launch.public_launch'] }), 'LOCAL_TOOL_EXECUTOR'), AuthorityRejectedExecutionError)
 })
 
 // ---------------------------------------------------------------------------
 // Methodology validation
 // ---------------------------------------------------------------------------
 
-test('registerExecution: refuses an unregistered methodology', () => {
+test('registerExecution: refuses an unregistered methodology', async () => {
   const store = new InMemoryExecutionStore()
-  assert.throws(() => registerExecution(store, req({ methodologyId: 'made_up', methodologyVersion: 'v99', idempotencyKey: 'idem-methodology' }), 'LOCAL_TOOL_EXECUTOR'), UnknownMethodologyError)
+  await assert.rejects(() => registerExecution(store, req({ methodologyId: 'made_up', methodologyVersion: 'v99', idempotencyKey: 'idem-methodology' }), 'LOCAL_TOOL_EXECUTOR'), UnknownMethodologyError)
 })
 
-test('registerExecution: refuses a methodology not allowed for this specialist', () => {
+test('registerExecution: refuses a methodology not allowed for this specialist', async () => {
   const store = new InMemoryExecutionStore()
-  assert.throws(() => registerExecution(store, req({ specialist: 'checkoff_editor', idempotencyKey: 'idem-owner-mismatch' }), 'LOCAL_TOOL_EXECUTOR'), /may be executed by/)
+  await assert.rejects(() => registerExecution(store, req({ specialist: 'checkoff_editor', idempotencyKey: 'idem-owner-mismatch' }), 'LOCAL_TOOL_EXECUTOR'), /may be executed by/)
 })
 
 // ---------------------------------------------------------------------------
@@ -79,18 +79,18 @@ test('runExecution: a successful specialist execution is accepted and marked COM
 
   const outcome = await runExecution(store, request, executor)
   assert.ok('accepted' in outcome && outcome.accepted)
-  assert.equal(store.get(request.executionId)?.status, 'COMPLETE')
+  assert.equal((await store.get(request.executionId))?.status, 'COMPLETE')
 })
 
 // ---------------------------------------------------------------------------
 // Evidence validation
 // ---------------------------------------------------------------------------
 
-test('acceptExecutionResult: missing required evidence -> NEEDS_MORE_EVIDENCE, never COMPLETE', () => {
+test('acceptExecutionResult: missing required evidence -> NEEDS_MORE_EVIDENCE, never COMPLETE', async () => {
   const store = new InMemoryExecutionStore()
   const request = req()
-  registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
-  const outcome = acceptExecutionResult(
+  await registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
+  const outcome = await acceptExecutionResult(
     store,
     { executionId: request.executionId, projectId: request.projectId, destinationId: request.destinationId, metroId: request.metroId, playbookKey: request.playbookKey, stage: request.stage, methodologyId: request.methodologyId, methodologyVersion: request.methodologyVersion },
     fakeEnvelope({ taskId: request.executionId, objective: request.objective, evidence: {}, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
@@ -104,11 +104,11 @@ test('acceptExecutionResult: missing required evidence -> NEEDS_MORE_EVIDENCE, n
 // stage/methodology version must all be rejected.
 // ---------------------------------------------------------------------------
 
-test('acceptExecutionResult: rejects a result submitted against the wrong project', () => {
+test('acceptExecutionResult: rejects a result submitted against the wrong project', async () => {
   const store = new InMemoryExecutionStore()
   const request = req()
-  registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
-  assert.throws(
+  await registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
+  await assert.rejects(
     () =>
       acceptExecutionResult(
         store,
@@ -119,11 +119,11 @@ test('acceptExecutionResult: rejects a result submitted against the wrong projec
   )
 })
 
-test('acceptExecutionResult: rejects a result submitted against the wrong destination', () => {
+test('acceptExecutionResult: rejects a result submitted against the wrong destination', async () => {
   const store = new InMemoryExecutionStore()
   const request = req({ destinationId: 'destination-willcox', metroId: null, idempotencyKey: 'idem-dest' })
-  registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
-  assert.throws(
+  await registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
+  await assert.rejects(
     () =>
       acceptExecutionResult(
         store,
@@ -134,11 +134,11 @@ test('acceptExecutionResult: rejects a result submitted against the wrong destin
   )
 })
 
-test('acceptExecutionResult: rejects a result submitted against the wrong stage', () => {
+test('acceptExecutionResult: rejects a result submitted against the wrong stage', async () => {
   const store = new InMemoryExecutionStore()
   const request = req()
-  registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
-  assert.throws(
+  await registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
+  await assert.rejects(
     () =>
       acceptExecutionResult(
         store,
@@ -149,11 +149,11 @@ test('acceptExecutionResult: rejects a result submitted against the wrong stage'
   )
 })
 
-test('acceptExecutionResult: rejects a result claiming a different methodology version', () => {
+test('acceptExecutionResult: rejects a result claiming a different methodology version', async () => {
   const store = new InMemoryExecutionStore()
   const request = req()
-  registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
-  assert.throws(
+  await registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
+  await assert.rejects(
     () =>
       acceptExecutionResult(
         store,
@@ -168,24 +168,24 @@ test('acceptExecutionResult: rejects a result claiming a different methodology v
 // Idempotency / duplicate submission (spec section 12/16)
 // ---------------------------------------------------------------------------
 
-test('registerExecution: same idempotencyKey returns the SAME execution, never a duplicate', () => {
+test('registerExecution: same idempotencyKey returns the SAME execution, never a duplicate', async () => {
   const store = new InMemoryExecutionStore()
   const request = req()
-  const first = registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
-  const second = registerExecution(store, req({ executionId: 'exec-should-be-ignored' }), 'LOCAL_TOOL_EXECUTOR')
+  const first = await registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
+  const second = await registerExecution(store, req({ executionId: 'exec-should-be-ignored' }), 'LOCAL_TOOL_EXECUTOR')
   assert.equal(first.request.executionId, second.request.executionId)
-  assert.equal(store.all().length, 1)
+  assert.equal((await store.all()).length, 1)
 })
 
-test('acceptExecutionResult: the same completed execution submitted a second time is a no-op, never re-advances', () => {
+test('acceptExecutionResult: the same completed execution submitted a second time is a no-op, never re-advances', async () => {
   const store = new InMemoryExecutionStore()
   const request = req()
-  registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
+  await registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
   const identity = { executionId: request.executionId, projectId: request.projectId, destinationId: request.destinationId, metroId: request.metroId, playbookKey: request.playbookKey, stage: request.stage, methodologyId: request.methodologyId, methodologyVersion: request.methodologyVersion }
   const envelope = fakeEnvelope({ taskId: request.executionId, objective: request.objective, evidence: { categoryCounts: [1] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
 
-  const first = acceptExecutionResult(store, identity, envelope)
-  const second = acceptExecutionResult(store, identity, envelope)
+  const first = await acceptExecutionResult(store, identity, envelope)
+  const second = await acceptExecutionResult(store, identity, envelope)
 
   assert.equal(first.accepted, true)
   assert.equal(second.accepted, false)
@@ -207,40 +207,41 @@ test('runExecution: an executor that cannot handle the request is recorded as EX
   assert.equal((outcome as { status: string }).status, 'EXECUTOR_UNAVAILABLE')
 })
 
-test('markExecutorUnavailable then retryExecution: a failed/unavailable execution can be reissued', () => {
+test('markExecutorUnavailable then retryExecution: a failed/unavailable execution can be reissued', async () => {
   const store = new InMemoryExecutionStore()
   const request = req()
-  registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
-  markExecutorUnavailable(store, request.executionId, 'provider outage')
-  assert.equal(store.get(request.executionId)?.status, 'EXECUTOR_UNAVAILABLE')
+  await registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
+  await markExecutorUnavailable(store, request.executionId, 'provider outage')
+  assert.equal((await store.get(request.executionId))?.status, 'EXECUTOR_UNAVAILABLE')
 
-  const retried = retryExecution(store, request.executionId)
+  const retried = await retryExecution(store, request.executionId)
   assert.equal(retried.status, 'PENDING')
+  assert.equal(retried.retriedAt.length, 1)
 })
 
-test('retryExecution: refuses to retry an already-COMPLETE execution', () => {
+test('retryExecution: refuses to retry an already-COMPLETE execution', async () => {
   const store = new InMemoryExecutionStore()
   const request = req()
-  registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
-  acceptExecutionResult(
+  await registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
+  await acceptExecutionResult(
     store,
     { executionId: request.executionId, projectId: request.projectId, destinationId: request.destinationId, metroId: request.metroId, playbookKey: request.playbookKey, stage: request.stage, methodologyId: request.methodologyId, methodologyVersion: request.methodologyVersion },
     fakeEnvelope({ taskId: request.executionId, objective: request.objective, evidence: { categoryCounts: [1] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
   )
-  assert.throws(() => retryExecution(store, request.executionId), /already COMPLETE/)
+  await assert.rejects(() => retryExecution(store, request.executionId), /already COMPLETE/)
 })
 
-test('a FAILED execution (evidence validation failure) does not corrupt the store — the record stays retrievable, not COMPLETE', () => {
+test('a FAILED execution (evidence validation failure) does not corrupt the store — the record stays retrievable, not COMPLETE', async () => {
   const store = new InMemoryExecutionStore()
   const request = req()
-  registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
+  await registerExecution(store, request, 'LOCAL_TOOL_EXECUTOR')
   const badEnvelope = fakeEnvelope({ taskId: '', objective: request.objective, evidence: { categoryCounts: [1] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
-  const outcome = acceptExecutionResult(
+  const outcome = await acceptExecutionResult(
     store,
     { executionId: request.executionId, projectId: request.projectId, destinationId: request.destinationId, metroId: request.metroId, playbookKey: request.playbookKey, stage: request.stage, methodologyId: request.methodologyId, methodologyVersion: request.methodologyVersion },
     badEnvelope
   )
   assert.equal(outcome.accepted, false)
   assert.notEqual(outcome.record.status, 'COMPLETE')
-  assert.equal(store.get(request.executionId)?.status, outcome.record.status)
+  assert.equal((await store.get(request.executionId))?.status, outcome.record.status)
 })

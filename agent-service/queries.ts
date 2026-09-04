@@ -29,6 +29,7 @@ import {
   mapProjectRow,
   mapTaskRow,
   mapTaskEventRow,
+  mapTaskEventDetailRow,
   mapDecisionRow,
   mapInteractionRow,
   mapDecisionEventRow,
@@ -37,6 +38,7 @@ import {
   type ProjectRow,
   type TaskRow,
   type TaskEventRow,
+  type TaskEventDetailRow,
   type DecisionRow,
   type InteractionRow,
   type DecisionEventRow,
@@ -52,6 +54,7 @@ import type {
   NeedsActionTaskSummary,
   NeedsActionReason,
   TaskEventSummary,
+  TaskEventDetail,
   DecisionSummary,
   InteractionSummary,
   DecisionEventSummary,
@@ -524,4 +527,58 @@ export async function getRecentDecisionEvents(since: Date): Promise<DecisionEven
 export async function getAllTasks(): Promise<TaskSummary[]> {
   const rows = await query<TaskRow>(`SELECT ${TASK_SELECT} ${TASK_FROM} ORDER BY t.created_at`)
   return rows.map(mapTaskRow)
+}
+
+// ---------------------------------------------------------------------------
+// Chief Phase 2E — the two read primitives dbExecutionStore.ts needs on
+// top of everything above: look a task up by its (source_type, source_ref)
+// idempotency identity (the same pair createTask's ON CONFLICT already
+// enforces uniqueness on), and read one task's full event history WITH
+// metadata (task_events.metadata is JSONB — every other query in this file
+// drops it via mapTaskEventRow, since no caller before Phase 2E needed the
+// structured payload back).
+// ---------------------------------------------------------------------------
+
+export async function getTaskBySource(sourceType: string, sourceRef: string): Promise<TaskSummary | null> {
+  const rows = await query<TaskRow>(`SELECT ${TASK_SELECT} ${TASK_FROM} WHERE t.source_type = $1 AND t.source_ref = $2`, [sourceType, sourceRef])
+  return rows.length > 0 ? mapTaskRow(rows[0]) : null
+}
+
+export async function getTasksBySourceType(sourceType: string): Promise<TaskSummary[]> {
+  const rows = await query<TaskRow>(`SELECT ${TASK_SELECT} ${TASK_FROM} WHERE t.source_type = $1 ORDER BY t.created_at`, [sourceType])
+  return rows.map(mapTaskRow)
+}
+
+/**
+ * A registration-time idempotencyKey is written into a PLAYBOOK_STAGE
+ * event's metadata (see recordPlaybookStage) but is not itself the
+ * task's own (source_type, source_ref) identity — dbExecutionStore.ts's
+ * findByIdempotencyKey needs to search ACROSS tasks for it, unlike every
+ * other idempotency check in this file which is already scoped to one
+ * known task_id.
+ */
+export async function findTaskIdByRegistrationIdempotencyKey(idempotencyKey: string): Promise<string | null> {
+  const rows = await query<{ task_id: string }>(
+    `SELECT task_id FROM agent.task_events WHERE event_type = 'PLAYBOOK_STAGE' AND metadata ->> 'idempotencyKey' = $1 ORDER BY changed_at ASC LIMIT 1`,
+    [idempotencyKey]
+  )
+  return rows.length > 0 ? rows[0].task_id : null
+}
+
+export async function getTaskEventsForTask(taskId: string): Promise<TaskEventDetail[]> {
+  const rows = await query<TaskEventDetailRow>(
+    `SELECT
+       te.id, te.event_type, te.from_status, te.to_status, te.changed_at, te.note, te.metadata,
+       t.id AS task_id, t.title AS task_title,
+       p.id AS project_id, p.project_key AS project_key, p.name AS project_name,
+       o.id AS owner_id, o.owner_key AS owner_key, o.display_name AS owner_display_name
+     FROM agent.task_events te
+     JOIN agent.tasks t ON t.id = te.task_id
+     LEFT JOIN agent.projects p ON p.id = t.project_id
+     LEFT JOIN agent.owners o ON o.id = te.changed_by_owner_id
+     WHERE te.task_id = $1
+     ORDER BY te.changed_at ASC`,
+    [taskId]
+  )
+  return rows.map(mapTaskEventDetailRow)
 }

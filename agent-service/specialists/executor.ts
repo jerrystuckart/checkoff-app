@@ -58,7 +58,10 @@ export interface ExecutionRecord {
   readonly startedAt: string
   completedAt: string | null
   envelope: SpecialistResultEnvelope | null
+  /** Result-submission attempts (acceptExecutionResult calls), successful or not — spec section 12 "duplicate remote result" tests key off this staying at 1 for a true duplicate. */
   attempts: number
+  /** Retry lineage (spec section 12) — every retryExecution() call appends its timestamp here. The SAME executionId is reused across retries (never a new id), so this array IS the full retry history for one logical execution. */
+  retriedAt: string[]
   errorReason: string | null
 }
 
@@ -146,32 +149,42 @@ export function assertExecutionIdentity(record: ExecutionRecord, check: Executio
 // runtime store for the manual-fallback CLI workflow.
 // ---------------------------------------------------------------------------
 
+// Phase 2E revision: EVERY method is async, deliberately, even though
+// InMemoryExecutionStore's own implementation never actually awaits
+// anything. A production execution MUST survive a service/machine/CLI
+// restart and days/weeks of WAITING (Phase 2E spec section 1) — that is
+// only true if persistence is real I/O the caller awaits before treating
+// a write as durable, not a synchronous in-process side effect a
+// DB-backed adapter would have to fake. See dbExecutionStore.ts for the
+// production implementation (agent.tasks/agent.task_events-backed);
+// InMemoryExecutionStore remains the test/dev adapter, unchanged in
+// behavior, just now returning resolved Promises.
 export interface ExecutionStore {
-  get(executionId: string): ExecutionRecord | undefined
-  put(record: ExecutionRecord): void
-  findByIdempotencyKey(idempotencyKey: string): ExecutionRecord | undefined
-  all(): ExecutionRecord[]
+  get(executionId: string): Promise<ExecutionRecord | undefined>
+  put(record: ExecutionRecord): Promise<void>
+  findByIdempotencyKey(idempotencyKey: string): Promise<ExecutionRecord | undefined>
+  all(): Promise<ExecutionRecord[]>
 }
 
 export class InMemoryExecutionStore implements ExecutionStore {
   private byId = new Map<string, ExecutionRecord>()
   private byIdempotencyKey = new Map<string, string>() // idempotencyKey -> executionId
 
-  get(executionId: string): ExecutionRecord | undefined {
+  async get(executionId: string): Promise<ExecutionRecord | undefined> {
     return this.byId.get(executionId)
   }
 
-  put(record: ExecutionRecord): void {
+  async put(record: ExecutionRecord): Promise<void> {
     this.byId.set(record.request.executionId, record)
     this.byIdempotencyKey.set(record.request.idempotencyKey, record.request.executionId)
   }
 
-  findByIdempotencyKey(idempotencyKey: string): ExecutionRecord | undefined {
+  async findByIdempotencyKey(idempotencyKey: string): Promise<ExecutionRecord | undefined> {
     const executionId = this.byIdempotencyKey.get(idempotencyKey)
     return executionId ? this.byId.get(executionId) : undefined
   }
 
-  all(): ExecutionRecord[] {
+  async all(): Promise<ExecutionRecord[]> {
     return [...this.byId.values()]
   }
 }
@@ -182,8 +195,13 @@ export class InMemoryExecutionStore implements ExecutionStore {
 // execution, it returns the existing one (spec section 12/16).
 // ---------------------------------------------------------------------------
 
-export function registerExecution(store: ExecutionStore, request: SpecialistExecutionRequest, executorType: ExecutorType | null, now: () => string = () => new Date().toISOString()): ExecutionRecord {
-  const existing = store.findByIdempotencyKey(request.idempotencyKey)
+export async function registerExecution(
+  store: ExecutionStore,
+  request: SpecialistExecutionRequest,
+  executorType: ExecutorType | null,
+  now: () => string = () => new Date().toISOString()
+): Promise<ExecutionRecord> {
+  const existing = await store.findByIdempotencyKey(request.idempotencyKey)
   if (existing) return existing
 
   assertExecutionAuthorized(request) // throws AuthorityRejectedExecutionError / UnknownAuthorityOperationError
@@ -197,9 +215,10 @@ export function registerExecution(store: ExecutionStore, request: SpecialistExec
     completedAt: null,
     envelope: null,
     attempts: 0,
+    retriedAt: [],
     errorReason: executorType === null ? 'EXECUTOR_UNAVAILABLE at registration — no executor type provided' : null,
   }
-  store.put(record)
+  await store.put(record)
   return record
 }
 
@@ -216,8 +235,13 @@ export interface AcceptResultOutcome {
   reasons: string[]
 }
 
-export function acceptExecutionResult(store: ExecutionStore, check: ExecutionIdentityCheck, envelope: SpecialistResultEnvelope, now: () => string = () => new Date().toISOString()): AcceptResultOutcome {
-  const record = store.get(check.executionId)
+export async function acceptExecutionResult(
+  store: ExecutionStore,
+  check: ExecutionIdentityCheck,
+  envelope: SpecialistResultEnvelope,
+  now: () => string = () => new Date().toISOString()
+): Promise<AcceptResultOutcome> {
+  const record = await store.get(check.executionId)
   if (!record) throw new Error(`No execution registered with id "${check.executionId}" — an execution must be registered (registerExecution) before a result can be accepted.`)
 
   if (record.status === 'COMPLETE') {
@@ -232,7 +256,7 @@ export function acceptExecutionResult(store: ExecutionStore, check: ExecutionIde
   if (!validation.valid) {
     record.status = validation.missingEvidenceKeys.length > 0 ? 'NEEDS_MORE_EVIDENCE' : 'FAILED'
     record.errorReason = validation.reasons.join('; ')
-    store.put(record)
+    await store.put(record)
     return { accepted: false, duplicate: false, record, reasons: validation.reasons }
   }
 
@@ -240,7 +264,7 @@ export function acceptExecutionResult(store: ExecutionStore, check: ExecutionIde
   record.envelope = envelope
   record.completedAt = now()
   record.errorReason = null
-  store.put(record)
+  await store.put(record)
   return { accepted: true, duplicate: false, record, reasons: [] }
 }
 
@@ -251,25 +275,26 @@ export function acceptExecutionResult(store: ExecutionStore, check: ExecutionIde
 // a completed execution is refused, same discipline as duplicate submission).
 // ---------------------------------------------------------------------------
 
-export function retryExecution(store: ExecutionStore, executionId: string, now: () => string = () => new Date().toISOString()): ExecutionRecord {
-  const record = store.get(executionId)
+export async function retryExecution(store: ExecutionStore, executionId: string, now: () => string = () => new Date().toISOString()): Promise<ExecutionRecord> {
+  const record = await store.get(executionId)
   if (!record) throw new Error(`No execution registered with id "${executionId}".`)
   if (record.status === 'COMPLETE') {
     throw new Error(`Execution "${executionId}" is already COMPLETE — retrying a completed execution is refused (it would risk advancing the parent playbook twice).`)
   }
   record.status = 'PENDING'
   record.errorReason = null
-  store.put(record)
+  record.retriedAt = [...record.retriedAt, now()]
+  await store.put(record)
   return record
 }
 
-export function markExecutorUnavailable(store: ExecutionStore, executionId: string, reason: string): ExecutionRecord {
-  const record = store.get(executionId)
+export async function markExecutorUnavailable(store: ExecutionStore, executionId: string, reason: string): Promise<ExecutionRecord> {
+  const record = await store.get(executionId)
   if (!record) throw new Error(`No execution registered with id "${executionId}".`)
   if (record.status === 'COMPLETE') throw new Error(`Execution "${executionId}" is already COMPLETE — cannot mark EXECUTOR_UNAVAILABLE.`)
   record.status = 'EXECUTOR_UNAVAILABLE'
   record.errorReason = reason
-  store.put(record)
+  await store.put(record)
   return record
 }
 
@@ -295,15 +320,15 @@ export interface SpecialistExecutor {
  */
 export async function runExecution(store: ExecutionStore, request: SpecialistExecutionRequest, executor: SpecialistExecutor, now: () => string = () => new Date().toISOString()): Promise<AcceptResultOutcome | ExecutionRecord> {
   if (!executor.canExecute(request)) {
-    const record = registerExecution(store, request, null, now)
+    const record = await registerExecution(store, request, null, now)
     return markExecutorUnavailable(store, record.request.executionId, `${executor.executorType} cannot execute specialist=${request.specialist} methodology=${request.methodologyId}/${request.methodologyVersion}`)
   }
 
-  const record = registerExecution(store, request, executor.executorType, now)
+  const record = await registerExecution(store, request, executor.executorType, now)
   if (record.status === 'COMPLETE') return record // idempotent replay
 
   record.status = 'IN_PROGRESS'
-  store.put(record)
+  await store.put(record)
 
   const outcome = await executor.execute(request)
   if ('unavailable' in outcome) {

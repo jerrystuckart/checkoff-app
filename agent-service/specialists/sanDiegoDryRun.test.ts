@@ -62,7 +62,7 @@ test('San Diego dry run: M1 geography delegation is accepted end-to-end through 
 
   const outcome = await runExecution(store, request, executor)
   assert.ok('accepted' in outcome && outcome.accepted, 'M1 result must be accepted before M2 can start')
-  assert.equal(store.get(request.executionId)?.status, 'COMPLETE')
+  assert.equal((await store.get(request.executionId))?.status, 'COMPLETE')
 })
 
 test('San Diego dry run: M4 first pass fails on Shopping-below-minimum AND a geographic hole -> loop demands TARGETED_RESEARCH', async () => {
@@ -94,7 +94,7 @@ test('San Diego dry run: M4 first pass fails on Shopping-below-minimum AND a geo
 
   const outcome = await runExecution(store, request, executor)
   assert.ok('accepted' in outcome && outcome.accepted)
-  const record = store.get(request.executionId)!
+  const record = (await store.get(request.executionId))!
   const evidence = record.envelope!.evidence as { categoryCounts: { categoryName: string; count: number }[]; neighborhoodCounts: { neighborhoodName: string; count: number }[] }
 
   const auditEvidence: CoverageAuditEvidence = { categoryCounts: evidence.categoryCounts, neighborhoodCounts: evidence.neighborhoodCounts, plan: PLAN, allNeighborhoods: NEIGHBORHOODS }
@@ -154,7 +154,7 @@ test('San Diego dry run: M5 targeted Shopping + La Jolla research -> M4 recount 
   const m4Outcome = await runExecution(store, m4Recount, executor)
   assert.ok('accepted' in m4Outcome && m4Outcome.accepted)
 
-  const record = store.get(m4Recount.executionId)!
+  const record = (await store.get(m4Recount.executionId))!
   const evidence = record.envelope!.evidence as { categoryCounts: { categoryName: string; count: number }[]; neighborhoodCounts: { neighborhoodName: string; count: number }[] }
   const gaps = auditCoverage({ categoryCounts: evidence.categoryCounts, neighborhoodCounts: evidence.neighborhoodCounts, plan: PLAN, allNeighborhoods: NEIGHBORHOODS })
   const loop = deriveMetroLoopAction(gaps)
@@ -181,7 +181,7 @@ test('San Diego dry run: M6 verification fails one Shopping candidate -> replace
   )
   const m6Outcome = await runExecution(store, m6, executor)
   assert.ok('accepted' in m6Outcome && m6Outcome.accepted)
-  const closures = (store.get(m6.executionId)!.envelope!.evidence as { knownClosures: string[] }).knownClosures
+  const closures = ((await store.get(m6.executionId))!.envelope!.evidence as { knownClosures: string[] }).knownClosures
   assert.equal(closures.length, 1, 'verification removed exactly one Shopping candidate, creating a fresh deficit')
 
   // Replacement loop: back to M5, scoped specifically to the deficit verification just created.
@@ -189,7 +189,7 @@ test('San Diego dry run: M6 verification fails one Shopping candidate -> replace
     stage: 'M5_TARGETED_DEEP_DIVES',
     executionId: 'sd-m5-replacement',
     idempotencyKey: 'sd-m5-replacement-idem',
-    objective: 'replacement research: Shopping (Warwick\'s Books removed for closure)',
+    objective: "replacement research: Shopping (Warwick's Books removed for closure)",
     authorityOperations: ['metro_launch.research'],
     requiredEvidenceKeys: ['newCandidates'],
   })
@@ -242,7 +242,7 @@ test('San Diego dry run: checkoff_editor handoff only runs AFTER verification, a
 
   const outcome = await runExecution(store, request, executor)
   assert.ok('accepted' in outcome && outcome.accepted)
-  assert.equal(store.get(request.executionId)?.status, 'COMPLETE')
+  assert.equal((await store.get(request.executionId))?.status, 'COMPLETE')
 })
 
 test('San Diego dry run: full execution/run record trail is inspectable and every stage is distinctly identified', async () => {
@@ -254,7 +254,7 @@ test('San Diego dry run: full execution/run record trail is inspectable and ever
     executor.script(request.executionId, fakeEnvelope({ taskId: request.executionId, objective: request.objective, evidence: { note: `${stage} done` }, methodologyId: 'metro_launch', methodologyVersion: 'v1' }))
     await runExecution(store, request, executor)
   }
-  const records = store.all()
+  const records = await store.all()
   assert.equal(records.length, 3)
   assert.deepEqual(
     records.map((r) => r.request.stage).sort(),

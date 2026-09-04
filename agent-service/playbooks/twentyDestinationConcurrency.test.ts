@@ -61,7 +61,7 @@ test('20 concurrent destination dossiers stay fully isolated — no champion, DV
   assert.equal(new Set(dossiers.map((d) => d.people.champions[0]?.contactId)).size, 20)
 })
 
-test('20 concurrent DVA-1 executions in the SAME execution store never let one destination\'s result satisfy another\'s execution', () => {
+test('20 concurrent DVA-1 executions in the SAME execution store never let one destination\'s result satisfy another\'s execution', async () => {
   const store = new InMemoryExecutionStore()
   const requests: SpecialistExecutionRequest[] = DESTINATION_IDS.map((id) => ({
     specialist: 'destination_strategist',
@@ -82,15 +82,15 @@ test('20 concurrent DVA-1 executions in the SAME execution store never let one d
   }))
 
   for (const request of requests) {
-    registerExecution(store, request, 'MANUAL_EXECUTOR')
+    await registerExecution(store, request, 'MANUAL_EXECUTOR')
   }
-  assert.equal(store.all().length, 20)
+  assert.equal((await store.all()).length, 20)
 
   // Cross-contamination attempt FIRST, before destination 05's own execution
   // is ever completed: destination 06's identity must never satisfy 05's
   // still-open execution.
   const crossRequest = requests[5]
-  assert.throws(
+  await assert.rejects(
     () =>
       acceptExecutionResult(
         store,
@@ -99,18 +99,18 @@ test('20 concurrent DVA-1 executions in the SAME execution store never let one d
       ),
     /Execution identity mismatch/
   )
-  assert.notEqual(store.get(crossRequest.executionId)?.status, 'COMPLETE', 'the rejected cross-destination attempt must not have completed 05\'s execution')
+  assert.notEqual((await store.get(crossRequest.executionId))?.status, 'COMPLETE', "the rejected cross-destination attempt must not have completed 05's execution")
 
   // Now accept each destination's OWN result correctly, including 05's.
   for (const request of requests) {
-    const outcome = acceptExecutionResult(
+    const outcome = await acceptExecutionResult(
       store,
       { executionId: request.executionId, projectId: request.projectId, destinationId: request.destinationId, metroId: null, playbookKey: request.playbookKey, stage: request.stage, methodologyId: request.methodologyId, methodologyVersion: request.methodologyVersion },
       fakeEnvelope({ taskId: request.executionId, objective: request.objective, evidence: { artifact: dva1For(request.destinationId!) }, methodologyId: 'destination/dva1', methodologyVersion: 'v1' })
     )
     assert.equal(outcome.accepted, true)
   }
-  assert.ok(store.all().every((r) => r.status === 'COMPLETE'))
+  assert.ok((await store.all()).every((r) => r.status === 'COMPLETE'))
 })
 
 test('portfolio ranking over 20 destinations surfaces only the ones with a real next action — never a flat 20-item dump', () => {

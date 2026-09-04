@@ -20,8 +20,10 @@ test('destination_relationship_manager exists and owns the ongoing human relatio
   const specialist = getSpecialist('destination_relationship_manager')
   assert.ok(specialist.owns.some((o) => o.toLowerCase().includes('reply')))
   assert.ok(specialist.owns.some((o) => o.toLowerCase().includes('meeting')))
-  assert.ok(specialist.capabilities.includes('gmail'))
-  assert.ok(specialist.capabilities.includes('google_calendar'))
+  assert.ok(specialist.capabilities.includes('gmail_read'))
+  assert.ok(specialist.capabilities.includes('gmail_send'))
+  assert.ok(specialist.capabilities.includes('google_calendar_freebusy'))
+  assert.ok(specialist.capabilities.includes('google_calendar_event_create'))
 })
 
 test('destination_activation no longer claims ownership of the outreach/reply lifecycle — that moved to destination_relationship_manager', () => {

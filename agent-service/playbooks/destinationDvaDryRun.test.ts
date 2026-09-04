@@ -36,10 +36,10 @@ function dvaReq(overrides: Partial<SpecialistExecutionRequest>): SpecialistExecu
   }
 }
 
-test('DVA/DAP dry run: DVA-1 runs through MANUAL_EXECUTOR (the only working path today) and gates to propose DVA-2', () => {
+test('DVA/DAP dry run: DVA-1 runs through MANUAL_EXECUTOR (the only working path today) and gates to propose DVA-2', async () => {
   const store = new InMemoryExecutionStore()
   const request = dvaReq({ executionId: 'gl-dva1', idempotencyKey: 'gl-dva1-idem' })
-  const { assignmentPackage } = beginManualExecution(store, request)
+  const { assignmentPackage } = await beginManualExecution(store, request)
 
   assert.equal(assignmentPackage.methodologyId, 'destination/dva1')
   assert.ok(assignmentPackage.instructions.includes('destination/dva1/v1'))
@@ -55,7 +55,7 @@ test('DVA/DAP dry run: DVA-1 runs through MANUAL_EXECUTOR (the only working path
     recommendationText: 'Strong seasonal tourism identity, accessible chamber contact.',
   }
 
-  const outcome = submitManualResult(store, request.executionId, fakeEnvelope({ taskId: request.executionId, objective: request.objective, evidence: { artifact: dva1Artifact }, methodologyId: 'destination/dva1', methodologyVersion: 'v1' }))
+  const outcome = await submitManualResult(store, request.executionId, fakeEnvelope({ taskId: request.executionId, objective: request.objective, evidence: { artifact: dva1Artifact }, methodologyId: 'destination/dva1', methodologyVersion: 'v1' }))
   assert.equal(outcome.accepted, true)
 
   const gate = evaluateDVA1Gate(dva1Artifact)
@@ -64,7 +64,7 @@ test('DVA/DAP dry run: DVA-1 runs through MANUAL_EXECUTOR (the only working path
   assert.ok(gate.reason.toLowerCase().includes('jerry'), 'DVA-1 -> DVA-2 always still names the Jerry-approval requirement')
 })
 
-test('DVA/DAP dry run: DVA-2 correctly consumes THIS destination\'s DVA-1 artifact and routes GREEN toward DAP', () => {
+test('DVA/DAP dry run: DVA-2 correctly consumes THIS destination\'s DVA-1 artifact and routes GREEN toward DAP', async () => {
   const store = new InMemoryExecutionStore()
   const dva1Artifact: DVA1Artifact = {
     provider: 'dva1_claude_project',
@@ -78,7 +78,7 @@ test('DVA/DAP dry run: DVA-2 correctly consumes THIS destination\'s DVA-1 artifa
   }
 
   const dva2Request = dvaReq({ stage: 'D3_DVA2', executionId: 'gl-dva2', idempotencyKey: 'gl-dva2-idem', methodologyId: 'destination/dva2', methodologyVersion: 'v1', authorityOperations: ['destination_hub.draft_dva2'] })
-  beginManualExecution(store, dva2Request)
+  await beginManualExecution(store, dva2Request)
 
   const dva2Artifact: DVA2Artifact = {
     provider: 'dva2_claude_project',
@@ -96,7 +96,7 @@ test('DVA/DAP dry run: DVA-2 correctly consumes THIS destination\'s DVA-1 artifa
   const validation = validateDva2Input(dva1Artifact, dva2Artifact)
   assert.equal(validation.valid, true)
 
-  const outcome = submitManualResult(store, dva2Request.executionId, fakeEnvelope({ taskId: dva2Request.executionId, objective: dva2Request.objective, evidence: { artifact: dva2Artifact }, methodologyId: 'destination/dva2', methodologyVersion: 'v1' }))
+  const outcome = await submitManualResult(store, dva2Request.executionId, fakeEnvelope({ taskId: dva2Request.executionId, objective: dva2Request.objective, evidence: { artifact: dva2Artifact }, methodologyId: 'destination/dva2', methodologyVersion: 'v1' }))
   assert.equal(outcome.accepted, true)
 
   const routing = routeDVA2Recommendation(dva2Artifact)
@@ -133,12 +133,12 @@ test('DVA/DAP dry run: HARD ISOLATION — a DVA-2 artifact naming a DIFFERENT de
   assert.match(validation.reason, /Destination mismatch/)
 })
 
-test('DVA/DAP dry run: HARD ISOLATION — the executor runtime itself refuses a DVA-2 result submitted against the wrong destination execution', () => {
+test('DVA/DAP dry run: HARD ISOLATION — the executor runtime itself refuses a DVA-2 result submitted against the wrong destination execution', async () => {
   const store = new InMemoryExecutionStore()
   const request = dvaReq({ stage: 'D3_DVA2', executionId: 'gl-dva2-runtime', idempotencyKey: 'gl-dva2-runtime-idem', methodologyId: 'destination/dva2', methodologyVersion: 'v1', destinationId: 'destination-grand-lake', authorityOperations: ['destination_hub.draft_dva2'] })
-  beginManualExecution(store, request)
+  await beginManualExecution(store, request)
 
-  assert.throws(
+  await assert.rejects(
     () =>
       acceptExecutionResult(
         store,
@@ -186,7 +186,7 @@ test('DVA/DAP dry run: RED with no stated disposition defaults to HOLD, never si
   assert.equal(routing.requiresJerry, false)
 })
 
-test('DVA/DAP dry run: DAP correctly consumes this destination\'s GREEN DVA-2 and extracts operational fields', () => {
+test('DVA/DAP dry run: DAP correctly consumes this destination\'s GREEN DVA-2 and extracts operational fields', async () => {
   const store = new InMemoryExecutionStore()
   const dva2Artifact: DVA2Artifact = {
     provider: 'dva2_claude_project',
@@ -202,7 +202,7 @@ test('DVA/DAP dry run: DAP correctly consumes this destination\'s GREEN DVA-2 an
   }
 
   const dapRequest = dvaReq({ stage: 'D4_DAP', executionId: 'gl-dap', idempotencyKey: 'gl-dap-idem', methodologyId: 'destination/dap', methodologyVersion: 'v1', authorityOperations: ['destination_hub.draft_dap'] })
-  beginManualExecution(store, dapRequest)
+  await beginManualExecution(store, dapRequest)
 
   const dapArtifact: DAPArtifact = {
     provider: 'dap_claude_project',
@@ -235,7 +235,7 @@ test('DVA/DAP dry run: DAP correctly consumes this destination\'s GREEN DVA-2 an
   assert.equal(validation.valid, true)
   assert.equal(dapEntryConditionMet(dva2Artifact), true)
 
-  const outcome = submitManualResult(store, dapRequest.executionId, fakeEnvelope({ taskId: dapRequest.executionId, objective: dapRequest.objective, evidence: { artifact: dapArtifact }, methodologyId: 'destination/dap', methodologyVersion: 'v1' }))
+  const outcome = await submitManualResult(store, dapRequest.executionId, fakeEnvelope({ taskId: dapRequest.executionId, objective: dapRequest.objective, evidence: { artifact: dapArtifact }, methodologyId: 'destination/dap', methodologyVersion: 'v1' }))
   assert.equal(outcome.accepted, true)
   assert.equal(dapArtifact.extracted.recommendedChampion, 'Grand Lake Area Chamber director')
 })

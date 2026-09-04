@@ -457,3 +457,27 @@ export {
 
 export type { ManualAssignmentPackage } from './specialists/manualExecutor'
 export { buildManualAssignmentPackage, beginManualExecution, submitManualResult } from './specialists/manualExecutor'
+
+// ---------------------------------------------------------------------------
+// Chief Phase 2E — Production Execution Persistence + First Live
+// Autonomous Executors
+// ---------------------------------------------------------------------------
+
+export { DbExecutionStore, taskStatusForExecutionStatus, SPECIALIST_EXECUTION_SOURCE_TYPE } from './specialists/dbExecutionStore'
+export type { DbExecutionStoreDeps } from './specialists/dbExecutionStore'
+
+export type { ProviderAdapter, ProviderCompletionInput, ProviderCompletionResult, AnthropicAdapterOptions, EnvelopeParseResult } from './specialists/remoteAiExecutor'
+export { AnthropicMessagesAdapter, RemoteAiExecutor, parseModelEnvelope } from './specialists/remoteAiExecutor'
+
+export { buildResearchVerifierPrompt, buildCheckoffEditorPrompt, researchExecutionTypeFor } from './specialists/promptBuilders'
+
+export { selectExecutor, runExecutionRouted } from './specialists/routing'
+
+export type { ResearchExecutionType, VerificationConfidence, ResearchCandidateEvidence, ResearchEvidenceValidationResult } from './specialists/researchEvidence'
+export { validateResearchCandidate, validateResearchCandidates } from './specialists/researchEvidence'
+
+export type { IngestMethodologyInput, IngestMethodologyReport } from './specialists/methodologyIngestion'
+export { computeContentHash, computeFileHash, ingestMethodology, verifyMethodologyIntegrity, MethodologyAlreadyCompleteError } from './specialists/methodologyIngestion'
+
+export type { DestinationRelationshipResumeEventKind, DestinationRelationshipResumeEvent, ResumeAction } from './playbooks/destinationExecutorGap'
+export { deriveResumeAction } from './playbooks/destinationExecutorGap'

@@ -103,7 +103,7 @@ export const SPECIALIST_REGISTRY: Readonly<Record<SpecialistKey, SpecialistDefin
       'next-requested-material coordination',
       'escalation of negotiations/important replies to Jerry',
     ],
-    capabilities: ['gmail', 'google_contacts', 'google_calendar', 'checkoff_operational_state'],
+    capabilities: ['gmail_read', 'gmail_send', 'google_contacts', 'google_calendar_freebusy', 'google_calendar_event_create', 'checkoff_operational_state'],
     canChangeStrategicScope: false,
   },
   destination_activation: {

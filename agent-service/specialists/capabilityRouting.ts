@@ -20,6 +20,23 @@ export type Capability =
   | 'documents_presentation_assets'
   | 'checkoff_operational_state'
   | 'content_editorial'
+  /**
+   * Chief Phase 2E — outbound relationship execution PREP (spec section
+   * 11). These are granular capability DECLARATIONS only: no Gmail/
+   * Calendar integration exists anywhere in this codebase yet (see
+   * DESTINATION_EXECUTOR_GAPS's 'gmail_calendar_execution' entry).
+   * Splitting the old generic 'gmail'/'google_calendar' entries into
+   * read/send and freebusy/create lets a future capability-routing check
+   * distinguish "read a reply" (plausibly AUTO once wired) from "send an
+   * email" or "create a calendar event" (both already APPROVAL_REQUIRED
+   * in standingAuthority.ts, unconditionally, with no exception path) —
+   * the authority level itself is UNCHANGED by this split.
+   */
+  | 'gmail_read'
+  | 'gmail_send'
+  | 'google_contacts'
+  | 'google_calendar_freebusy'
+  | 'google_calendar_event_create'
 
 export function capabilitiesFor(specialist: SpecialistKey): string[] {
   return SPECIALIST_REGISTRY[specialist].capabilities

@@ -54,10 +54,10 @@ export function buildManualAssignmentPackage(request: SpecialistExecutionRequest
  * assignment package. Idempotent via the same idempotencyKey discipline
  * as registerExecution.
  */
-export function beginManualExecution(store: ExecutionStore, request: SpecialistExecutionRequest): { record: ExecutionRecord; assignmentPackage: ManualAssignmentPackage } {
-  const record = registerExecution(store, request, 'MANUAL_EXECUTOR')
+export async function beginManualExecution(store: ExecutionStore, request: SpecialistExecutionRequest): Promise<{ record: ExecutionRecord; assignmentPackage: ManualAssignmentPackage }> {
+  const record = await registerExecution(store, request, 'MANUAL_EXECUTOR')
   if (record.status === 'PENDING') record.status = 'IN_PROGRESS' // handed off, awaiting the human/other-AI
-  store.put(record)
+  await store.put(record)
   return { record, assignmentPackage: buildManualAssignmentPackage(request) }
 }
 
@@ -67,8 +67,8 @@ export function beginManualExecution(store: ExecutionStore, request: SpecialistE
  * (acceptExecutionResult) — a manual result claiming "done" is never
  * itself accepted as evidence.
  */
-export function submitManualResult(store: ExecutionStore, executionId: string, envelope: SpecialistResultEnvelope): AcceptResultOutcome {
-  const record = store.get(executionId)
+export async function submitManualResult(store: ExecutionStore, executionId: string, envelope: SpecialistResultEnvelope): Promise<AcceptResultOutcome> {
+  const record = await store.get(executionId)
   if (!record) throw new Error(`No execution registered with id "${executionId}" — call beginManualExecution first.`)
   return acceptExecutionResult(
     store,
