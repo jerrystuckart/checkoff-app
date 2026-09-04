@@ -367,11 +367,15 @@ export type {
   DiscoveryCandidate,
   ExternalArtifactRef,
   DVA1Tier,
+  CurrentStrategyFit,
   DVA1Artifact,
   DVA1GateDecision,
-  DVA2Recommendation,
+  DVA2RecommendedPriority,
+  DVA2RecommendedNextStep,
+  DVA2WorthPursuing,
   DVA2Artifact,
   DVA2GateDecision,
+  DAPRightNowTask,
   DAPExtractedFields,
   DAPArtifact,
   DestinationContentInventory,
@@ -395,6 +399,9 @@ export {
   buildPartnerFriendlyReview,
   WILLCOX_RETRIEVED_OFFER_PATTERN,
   proposalViolatesRetrievedRules,
+  FOUNDER_PRICING_MODEL,
+  founderYear1Price,
+  founderRenewalPrice,
   deriveDestinationLoopAction,
   coarseStatusForStage as destinationCoarseStatusForStage,
 } from './playbooks/destinationHubLifecycle'
@@ -469,7 +476,7 @@ export type { DbExecutionStoreDeps } from './specialists/dbExecutionStore'
 export type { ProviderAdapter, ProviderCompletionInput, ProviderCompletionResult, AnthropicAdapterOptions, EnvelopeParseResult } from './specialists/remoteAiExecutor'
 export { AnthropicMessagesAdapter, RemoteAiExecutor, parseModelEnvelope } from './specialists/remoteAiExecutor'
 
-export { buildResearchVerifierPrompt, buildCheckoffEditorPrompt, researchExecutionTypeFor } from './specialists/promptBuilders'
+export { buildResearchVerifierPrompt, buildCheckoffEditorPrompt, buildDestinationStrategistPrompt, researchExecutionTypeFor } from './specialists/promptBuilders'
 
 export { selectExecutor, runExecutionRouted } from './specialists/routing'
 

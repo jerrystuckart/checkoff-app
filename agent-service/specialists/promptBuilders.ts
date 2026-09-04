@@ -7,8 +7,10 @@
 // executing and return ONLY the documented JSON shape — never free
 // prose Chief would have to re-interpret.
 
+import { readFileSync } from 'node:fs'
 import type { SpecialistExecutionRequest } from './executor'
 import type { ResearchExecutionType } from './researchEvidence'
+import { getMethodology } from './methodologyRegistry'
 
 const ENVELOPE_JSON_SHAPE = `{
   "taskId": "<echo the executionId you were given, exactly>",
@@ -110,6 +112,107 @@ export function buildCheckoffEditorPrompt(request: SpecialistExecutionRequest): 
   ].join('\n\n')
 
   const userPrompt = [`Objective: ${request.objective}`, `Verified factual candidate + supporting evidence: ${JSON.stringify(request.inputs)}`].join('\n')
+
+  return { systemPrompt, userPrompt }
+}
+
+// ---------------------------------------------------------------------------
+// destination_strategist — DVA-1 / DVA-2 / DAP (Phase 2G). Unlike the two
+// prompts above (which describe the methodology in this codebase's own
+// words), this one embeds the REAL, ingested methodology text VERBATIM —
+// per the explicit "do not paraphrase or summarize the ingested content
+// anywhere in code" rule (methodologyIngestion.ts). The model receives
+// the exact rubric Jerry's own Claude Projects use, not a re-derived
+// summary of it.
+// ---------------------------------------------------------------------------
+
+const DVA_ARTIFACT_ENVELOPE_SHAPE: Record<string, string> = {
+  'destination/dva1': `evidence.artifact must be exactly:
+{
+  "provider": "dva1_claude_project",
+  "destinationId": "<echo exactly>",
+  "destinationName": "<the destination name>",
+  "artifactRef": "<a stable id you generate for this run, e.g. dva1-<destinationId>-<date>>",
+  "executedAt": "<ISO timestamp>",
+  "contentHash": null,
+  "score": <the Overall Opportunity Score, 0-100, from the rubric's own "Calculate" section>,
+  "recommendationText": "<the Section 12 Recommendation, one sentence>",
+  "currentStrategyFit": "FITS_CURRENT_STRATEGY" | "STRONG_BUT_LATER_STAGE" | "WEAK_STRATEGIC_FIT"  // from Section 13, exactly one of these three
+}`,
+  'destination/dva2': `evidence.artifact must be exactly:
+{
+  "provider": "dva2_claude_project",
+  "destinationId": "<echo exactly>",
+  "destinationName": "<the destination name>",
+  "artifactRef": "<a stable id you generate for this run>",
+  "executedAt": "<ISO timestamp>",
+  "contentHash": null,
+  "worthPursuing": "YES" | "MAYBE" | "NO",  // Section 23
+  "recommendedPriority": "HIGH_PRIORITY_CREATE_DAP" | "VIABLE_CREATE_DAP_WHEN_CAPACITY_ALLOWS" | "PROMISING_BUT_PREMATURE_MONITOR" | "DO_NOT_PURSUE_CURRENTLY",  // Section 23
+  "recommendedNextStep": "BUILD_DAP_NOW" | "HOLD_DAP_UNTIL_ISSUE_RESOLVED" | "STOP_PURSUIT",  // Section 24 (DAP Handoff)
+  "rationale": "<why>",
+  "knownRisks": ["<risk>", ...],
+  "evidenceGaps": ["<from Section 24's 'Questions DAP Must Resolve', only if recommendedNextStep is HOLD_DAP_UNTIL_ISSUE_RESOLVED>"],
+  "consumedDva1ArtifactRef": "<the DVA-1 artifactRef you were given as input — echo exactly>"
+}`,
+  'destination/dap': `evidence.artifact must be exactly:
+{
+  "provider": "dap_claude_project",
+  "destinationId": "<echo exactly>",
+  "destinationName": "<the destination name>",
+  "artifactRef": "<a stable id you generate for this run>",
+  "executedAt": "<ISO timestamp>",
+  "contentHash": null,
+  "consumedDva2ArtifactRef": "<the DVA-2 artifactRef you were given as input — echo exactly>",
+  "extracted": {
+    "recommendedChampion": "<from Section 12>",
+    "secondaryChampions": ["..."],
+    "decisionMakers": ["<from Section 11>"],
+    "stakeholderOrganizations": ["..."],
+    "fundingBudgetClues": ["<from Section 2/3>"],
+    "likelyBuyer": "<or null>",
+    "estimatedSalesDifficulty": "LOW" | "MEDIUM" | "HIGH" | null,
+    "timingConsiderations": ["<from Section 3>"],
+    "politicalStakeholderComplexity": "LOW" | "MEDIUM" | "HIGH" | null,
+    "objectionsHurdles": ["<from Section 7>"],
+    "destinationPainPoints": ["<carried from DVA-2>"],
+    "checkoffValueProposition": "<from Section 7>",
+    "recommendedEntryStrategy": "<from Section 7>",
+    "relationshipSequence": ["<from Section 4>"],
+    "recommendedOfferDirection": "<from Section 2, or null — never recalculate pricing>",
+    "rightNowTask": {
+      "currentStage": "<Section 21>",
+      "currentGoal": "<Section 21>",
+      "highestPriorityTask": "<Section 21 — exactly ONE task>",
+      "targetDate": "<Section 21, a real date>",
+      "estimatedTime": "<Section 21>",
+      "expectedResult": "<Section 21>",
+      "whyItMatters": "<Section 21>"
+    }
+  }
+}`,
+}
+
+function readMethodologyFileVerbatim(methodologyId: string, methodologyVersion: string): string {
+  const methodology = getMethodology(methodologyId, methodologyVersion) // throws UnknownMethodologyError if unregistered — never silently proceeds with no rubric
+  return readFileSync(`${__dirname}/../../${methodology.docPath}`, 'utf8')
+}
+
+export function buildDestinationStrategistPrompt(request: SpecialistExecutionRequest): { systemPrompt: string; userPrompt: string } {
+  const methodologyText = readMethodologyFileVerbatim(request.methodologyId, request.methodologyVersion)
+  const artifactShape = DVA_ARTIFACT_ENVELOPE_SHAPE[request.methodologyId]
+  if (!artifactShape) {
+    throw new Error(`buildDestinationStrategistPrompt: no known artifact envelope shape for methodology "${request.methodologyId}" — this function only supports destination/dva1, destination/dva2, destination/dap.`)
+  }
+
+  const systemPrompt = [
+    `You are executing CheckOff's "destination_strategist" specialist role. Below is the EXACT, VERBATIM methodology you must follow — every rule, section, and constraint in it is authoritative. Do not skip sections, do not invent a different process, do not add or remove requirements.`,
+    `--- BEGIN METHODOLOGY (${request.methodologyId}/${request.methodologyVersion}) ---\n${methodologyText}\n--- END METHODOLOGY ---`,
+    `After producing the full report the methodology describes, extract the structured decision fields into evidence.artifact using this exact shape:\n${artifactShape}`,
+    envelopeInstructions(request),
+  ].join('\n\n')
+
+  const userPrompt = [`Objective: ${request.objective}`, `Input context (destination identity + any prior-stage artifact reference): ${JSON.stringify(request.inputs)}`].join('\n')
 
   return { systemPrompt, userPrompt }
 }

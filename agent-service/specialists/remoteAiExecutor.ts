@@ -8,7 +8,7 @@
 
 import type { SpecialistExecutor, SpecialistExecutionRequest } from './executor'
 import type { SpecialistResultEnvelope, SpecialistKey } from './types'
-import { buildResearchVerifierPrompt, buildCheckoffEditorPrompt } from './promptBuilders'
+import { buildResearchVerifierPrompt, buildCheckoffEditorPrompt, buildDestinationStrategistPrompt } from './promptBuilders'
 import { getMethodology, methodologyExists } from './methodologyRegistry'
 
 // ---------------------------------------------------------------------------
@@ -192,7 +192,15 @@ export function parseModelEnvelope(text: string): EnvelopeParseResult {
 // RemoteAiExecutor — the SpecialistExecutor implementation
 // ---------------------------------------------------------------------------
 
-const WIRED_SPECIALISTS = new Set(['research_verifier', 'checkoff_editor'])
+// Phase 2G: destination_strategist joins research_verifier/checkoff_editor
+// now that its DVA-1/DVA-2/DAP methodologies are ingested and marked
+// complete (methodologyRegistry.ts). canExecute()'s own
+// `getMethodology(...).complete` check is what actually gates this per
+// methodology/version — being "wired" here only means this executor
+// knows how to BUILD a prompt for the specialist at all; a specific
+// methodology (e.g. a not-yet-ingested v3) still correctly reports
+// EXECUTOR_UNAVAILABLE via that completeness check.
+const WIRED_SPECIALISTS = new Set(['research_verifier', 'checkoff_editor', 'destination_strategist'])
 
 export class RemoteAiExecutor implements SpecialistExecutor {
   readonly executorType = 'REMOTE_AI_EXECUTOR' as const
@@ -232,7 +240,8 @@ export class RemoteAiExecutor implements SpecialistExecutor {
       return { unavailable: true, reason: `no configured provider available for specialist=${request.specialist} (live web research required: ${request.specialist === 'research_verifier'})` }
     }
 
-    const { systemPrompt, userPrompt } = request.specialist === 'research_verifier' ? buildResearchVerifierPrompt(request) : buildCheckoffEditorPrompt(request)
+    const { systemPrompt, userPrompt } =
+      request.specialist === 'research_verifier' ? buildResearchVerifierPrompt(request) : request.specialist === 'checkoff_editor' ? buildCheckoffEditorPrompt(request) : buildDestinationStrategistPrompt(request)
     const requiresLiveWebResearch = request.specialist === 'research_verifier'
 
     const failures: string[] = []

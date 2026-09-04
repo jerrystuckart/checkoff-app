@@ -6,7 +6,7 @@
 // destination mixing is a type-level near-impossible, not just a
 // convention.
 
-import type { DVA1Artifact, DVA2Artifact, DAPArtifact } from './destinationHubLifecycle'
+import type { DVA1Artifact, DVA2Artifact, DAPArtifact, DVA2RecommendedNextStep } from './destinationHubLifecycle'
 import type { RelationshipStage, DestinationContactContext, SalesAssetLevel } from './destinationRelationship'
 
 // ---------------------------------------------------------------------------
@@ -35,7 +35,7 @@ export function assertAllSameDestination(destinationId: string, items: Destinati
 
 export interface EvaluationSection {
   dva1: { status: 'NOT_STARTED' | 'RECEIVED'; score: number | null; artifactRef: string | null }
-  dva2: { status: 'NOT_STARTED' | 'RECEIVED'; recommendation: 'GREEN' | 'YELLOW' | 'RED' | null; artifactRef: string | null }
+  dva2: { status: 'NOT_STARTED' | 'RECEIVED'; recommendedNextStep: DVA2RecommendedNextStep | null; artifactRef: string | null }
   dap: { status: 'NOT_STARTED' | 'RECEIVED'; artifactRef: string | null }
 }
 
@@ -123,7 +123,7 @@ export function assembleDossier(inputs: DossierInputs): DestinationDossier {
     destinationName: inputs.destinationName,
     evaluation: {
       dva1: { status: inputs.dva1 ? 'RECEIVED' : 'NOT_STARTED', score: inputs.dva1?.score ?? null, artifactRef: inputs.dva1?.artifactRef ?? null },
-      dva2: { status: inputs.dva2 ? 'RECEIVED' : 'NOT_STARTED', recommendation: inputs.dva2?.recommendation ?? null, artifactRef: inputs.dva2?.artifactRef ?? null },
+      dva2: { status: inputs.dva2 ? 'RECEIVED' : 'NOT_STARTED', recommendedNextStep: inputs.dva2?.recommendedNextStep ?? null, artifactRef: inputs.dva2?.artifactRef ?? null },
       dap: { status: inputs.dap ? 'RECEIVED' : 'NOT_STARTED', artifactRef: inputs.dap?.artifactRef ?? null },
     },
     people: {
@@ -167,7 +167,7 @@ export interface PortfolioEntry {
   destinationId: string
   destinationName: string
   dva1Status: 'NOT_STARTED' | 'RECEIVED'
-  dva2Recommendation: 'GREEN' | 'YELLOW' | 'RED' | null
+  dva2RecommendedNextStep: DVA2RecommendedNextStep | null
   dapStatus: 'NOT_STARTED' | 'RECEIVED'
   relationshipStage: RelationshipStage | null
   requiredAssetLevel: SalesAssetLevel | null
@@ -213,7 +213,7 @@ export function rankPortfolioActions(entries: PortfolioEntry[], now: Date = new 
       actions.push({ destinationId: e.destinationId, destinationName: e.destinationName, reason: 'Timing/budget window opening.', priority: 3 })
       continue
     }
-    if (e.dva2Recommendation === 'GREEN' && e.dapStatus === 'NOT_STARTED') {
+    if (e.dva2RecommendedNextStep === 'BUILD_DAP_NOW' && e.dapStatus === 'NOT_STARTED') {
       actions.push({ destinationId: e.destinationId, destinationName: e.destinationName, reason: 'GREEN DVA-2 — needs DAP.', priority: 4 })
       continue
     }

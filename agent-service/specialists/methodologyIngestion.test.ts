@@ -20,7 +20,7 @@ test('ingestMethodology: copies the source file verbatim to the target path and 
     const content = '# DVA-1 Real Instructions\n\nThis is exactly what Jerry pasted.'
     writeFileSync(sourcePath, content, 'utf8')
 
-    const report = ingestMethodology({ sourceFilePath: sourcePath, methodologyId: 'destination/dva1', version: 'v2', providedBy: 'Jerry (test)', repoRoot })
+    const report = ingestMethodology({ sourceFilePath: sourcePath, methodologyId: 'destination/dva1', version: 'vtest1', providedBy: 'Jerry (test)', repoRoot })
 
     const written = readFileSync(report.targetPath, 'utf8')
     assert.equal(written, content, 'target file must be byte-identical to the source — never reinterpreted')
@@ -33,7 +33,7 @@ test('ingestMethodology: refuses an empty source file', () => {
   withTempRepoRoot((repoRoot) => {
     const sourcePath = join(repoRoot, 'empty.md')
     writeFileSync(sourcePath, '   \n', 'utf8')
-    assert.throws(() => ingestMethodology({ sourceFilePath: sourcePath, methodologyId: 'destination/dva1', version: 'v3', providedBy: 'test', repoRoot }), /empty/)
+    assert.throws(() => ingestMethodology({ sourceFilePath: sourcePath, methodologyId: 'destination/dva1', version: 'vtest2', providedBy: 'test', repoRoot }), /empty/)
   })
 })
 
@@ -59,7 +59,7 @@ test('ingestMethodology: an unregistered (methodologyId, version) pair is allowe
   withTempRepoRoot((repoRoot) => {
     const sourcePath = join(repoRoot, 'source.md')
     writeFileSync(sourcePath, 'brand new methodology', 'utf8')
-    assert.doesNotThrow(() => ingestMethodology({ sourceFilePath: sourcePath, methodologyId: 'destination/dva1', version: 'v2', providedBy: 'test', repoRoot }))
+    assert.doesNotThrow(() => ingestMethodology({ sourceFilePath: sourcePath, methodologyId: 'destination/dva1', version: 'vtest3', providedBy: 'test', repoRoot }))
   })
 })
 
@@ -67,7 +67,7 @@ test('ingestMethodology: an unregistered (methodologyId, version) pair is allowe
 // verifyMethodologyIntegrity — against the REAL repo registry/files
 // ---------------------------------------------------------------------------
 
-test('verifyMethodologyIntegrity: passes against the real repo (every current entry has contentHash: null — nothing to check yet)', () => {
+test('verifyMethodologyIntegrity: passes against the real repo — every hash-pinned entry (Phase 2G DVA-1/DVA-2/DAP v2 ingestions) matches the file on disk', () => {
   const result = verifyMethodologyIntegrity()
   assert.equal(result.valid, true)
   assert.deepEqual(result.mismatches, [])

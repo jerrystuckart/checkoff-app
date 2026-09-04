@@ -25,6 +25,7 @@ function dva1For(destId: string): DVA1Artifact {
     contentHash: null,
     score: 70 + (parseInt(destId.slice(-2), 10) % 25), // spread across tiers, deterministic
     recommendationText: 'x',
+    currentStrategyFit: 'FITS_CURRENT_STRATEGY',
   }
 }
 
@@ -119,7 +120,7 @@ test('portfolio ranking over 20 destinations surfaces only the ones with a real 
     destinationId: id,
     destinationName: `Destination ${id}`,
     dva1Status: 'RECEIVED',
-    dva2Recommendation: null,
+    dva2RecommendedNextStep: null,
     dapStatus: 'NOT_STARTED',
     relationshipStage: null,
     requiredAssetLevel: null,

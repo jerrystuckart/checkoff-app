@@ -154,9 +154,21 @@ test('RemoteAiExecutor: checkoff_editor does not require live web research capab
   assert.equal(executor.canExecute(editorReq), true)
 })
 
-test('RemoteAiExecutor: canExecute is false for destination_strategist while its DVA methodology is incomplete (gate-semantics-only, not invented)', () => {
+test('RemoteAiExecutor: canExecute is false for destination_strategist against v1 (still gate-semantics-only, superseded)', () => {
   const executor = new RemoteAiExecutor([new FakeAdapter(true, true)])
   const dvaReq = req({ specialist: 'destination_strategist', methodologyId: 'destination/dva1', methodologyVersion: 'v1', authorityOperations: ['destination_hub.dva1_screen'] })
+  assert.equal(executor.canExecute(dvaReq), false)
+})
+
+test('RemoteAiExecutor: canExecute is TRUE for destination_strategist against v2 (Phase 2G — real ingested methodology, complete) once a provider is configured', () => {
+  const executor = new RemoteAiExecutor([new FakeAdapter(true, true)])
+  const dvaReq = req({ specialist: 'destination_strategist', methodologyId: 'destination/dva1', methodologyVersion: 'v2', authorityOperations: ['destination_hub.dva1_screen'] })
+  assert.equal(executor.canExecute(dvaReq), true)
+})
+
+test('RemoteAiExecutor: canExecute is false for destination_strategist/v2 with NO configured provider — methodology-ready is not the same as executor-ready', () => {
+  const executor = new RemoteAiExecutor([])
+  const dvaReq = req({ specialist: 'destination_strategist', methodologyId: 'destination/dva1', methodologyVersion: 'v2', authorityOperations: ['destination_hub.dva1_screen'] })
   assert.equal(executor.canExecute(dvaReq), false)
 })
 

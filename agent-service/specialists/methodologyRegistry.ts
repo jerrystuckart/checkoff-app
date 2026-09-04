@@ -75,24 +75,53 @@ export const METHODOLOGY_REGISTRY: readonly MethodologyDefinition[] = Object.fre
     version: 'v1',
     allowedSpecialists: ['destination_strategist'],
     docPath: 'agent-service/specialists/methodologies/destination/dva1/v1.md',
-    complete: false, // gate semantics only — full DVA-1 question set/rubric lives in an external Claude Project, not yet exported
+    complete: false, // superseded by v2 (Phase 2G) — kept for historical comparison only, never deleted
     contentHash: null,
+  },
+  {
+    // Phase 2G — the real, verbatim DVA-1 Claude Project instructions,
+    // ingested via methodologyIngestion.ts. See
+    // methodologies/destination/INGESTION_LOG.md for full provenance and
+    // methodologies/destination/dva1/v2.legacy-operator-instructions.md
+    // for which passages are workflow-only vs substantive rubric.
+    methodologyId: 'destination/dva1',
+    version: 'v2',
+    allowedSpecialists: ['destination_strategist'],
+    docPath: 'agent-service/specialists/methodologies/destination/dva1/v2.md',
+    complete: true,
+    contentHash: '59f193e1d7b119558530cc0b842465cd8d8849d3a711f19df7eb4938f5698bf2',
   },
   {
     methodologyId: 'destination/dva2',
     version: 'v1',
     allowedSpecialists: ['destination_strategist'],
     docPath: 'agent-service/specialists/methodologies/destination/dva2/v1.md',
-    complete: false,
+    complete: false, // superseded by v2 (Phase 2G) — kept for historical comparison only, never deleted
     contentHash: null,
+  },
+  {
+    methodologyId: 'destination/dva2',
+    version: 'v2',
+    allowedSpecialists: ['destination_strategist'],
+    docPath: 'agent-service/specialists/methodologies/destination/dva2/v2.md',
+    complete: true,
+    contentHash: 'c59a2d0e3179c6f0d75d0472e98cd922bbd3b2c052745ad598ab58dc5745ce3b',
   },
   {
     methodologyId: 'destination/dap',
     version: 'v1',
     allowedSpecialists: ['destination_strategist'],
     docPath: 'agent-service/specialists/methodologies/destination/dap/v1.md',
-    complete: false,
+    complete: false, // superseded by v2 (Phase 2G) — kept for historical comparison only, never deleted
     contentHash: null,
+  },
+  {
+    methodologyId: 'destination/dap',
+    version: 'v2',
+    allowedSpecialists: ['destination_strategist'],
+    docPath: 'agent-service/specialists/methodologies/destination/dap/v2.md',
+    complete: true,
+    contentHash: '1efda4620073fbb52132663dfa674937c93b53b4408128d1f4ade0392fce3cfe',
   },
 ])
 

@@ -1,29 +1,71 @@
 // Chief Phase 2F — the Destination Hub orchestration driver (spec
 // section 14). Proves the SAME driver architecture generalizes beyond
-// metro_launch: candidate -> D0 discovery -> D1 pre-screen -> D2 DVA-1
-// -> [NEEDS_JERRY: DVA-2 never auto-starts] -> D3 DVA-2 -> GREEN ->
-// [NEEDS_JERRY: DAP never auto-starts] -> D4 DAP -> D5 pipeline READY ->
-// D6 stakeholder research -> D7 relationship ready/assets-prep ->
-// [NEEDS_JERRY: sending outreach is APPROVAL_REQUIRED] — the driver
-// stops there, before any real outbound action, by design every time.
+// metro_launch: candidate -> D0 discovery -> D1 pre-screen -> D2 DVA-1 ->
+// D3 DVA-2 -> D4 DAP -> D5 pipeline READY -> D6 stakeholder research ->
+// D7 relationship ready/assets-prep -> [NEEDS_JERRY: sending outreach is
+// APPROVAL_REQUIRED] — the driver stops there, before any real outbound
+// action, by design every time.
 //
-// Real DVA-1/DVA-2/DAP execution remains EXECUTOR_UNAVAILABLE through
-// RemoteAiExecutor until Jerry ingests the real methodologies
-// (methodologyIngestion.ts) — this driver is exercised here with
-// synthetic data via TestExecutor/MANUAL_EXECUTOR, exactly as spec
-// section 14 asks ("even if real DVA execution remains blocked").
+// REVISED Phase 2G (real methodology ingestion): DVA-1->DVA-2 and
+// DVA-2->DAP are NO LONGER blanket Jerry-approval gates. Per the real
+// ingested instructions (methodologies/destination/{dva1,dva2}/v2.md),
+// "awaiting Jerry's approval" in the source text described the old
+// manual multi-Claude-Project hand-off, not a substantive founder-
+// judgment rule — see each methodology's own
+// v2.legacy-operator-instructions.md. Routine, qualified progression
+// (evaluateDVA1Gate's requiresJerry=false / routeDVA2Recommendation's
+// requiresJerry=false) now advances automatically within the SAME driver
+// pass; Jerry is asked only for the genuine judgment calls the real
+// methodology actually names (DVA-1's STRONG_BUT_LATER_STAGE Current-
+// Strategy Fit; DVA-2's HOLD_DAP_UNTIL_ISSUE_RESOLVED with no further
+// research path). `state.dva2Approved`/`state.dapApproved` remain as the
+// OVERRIDE mechanism for those genuine hold cases — never required for
+// the routine case.
+//
+// Once real DVA-1/DVA-2/DAP methodologies are ingested and marked
+// complete (done, Phase 2G), RemoteAiExecutor can run them for real once
+// a qualified AI provider is configured — see the Phase 2G final report
+// for exact readiness state. This driver is exercised here with
+// synthetic data via TestExecutor/MANUAL_EXECUTOR.
 //
 // Reuses, never reimplements: destinationHubLifecycle.ts's pure
-// gate/validation functions (Phase 2C), destinationRelationship.ts's
-// stage graph + asset-level model (Phase 2C correction), and the SAME
-// executor/routing/playbookRun primitives the metro driver uses.
+// gate/validation functions (Phase 2C, revised Phase 2G),
+// destinationRelationship.ts's stage graph + asset-level model, and the
+// SAME executor/routing/playbookRun primitives the metro driver uses.
 
 import { screenDiscoveryCandidate, evaluateDVA1Gate, validateDva2Input, routeDVA2Recommendation, validateDapInput, dapEntryConditionMet, type DiscoveryCandidate, type DVA1Artifact, type DVA2Artifact, type DAPArtifact } from '../playbooks/destinationHubLifecycle'
 import { requiredAssetLevel } from '../playbooks/destinationRelationship'
 import { runExecutionRouted } from './routing'
-import type { ExecutionStore, SpecialistExecutor, SpecialistExecutionRequest } from './executor'
+import type { ExecutionStore, SpecialistExecutor, SpecialistExecutionRequest, AcceptResultOutcome, ExecutionRecord } from './executor'
 import { getOrCreateRun, type PlaybookRunStore, type PlaybookRunRecord } from './playbookRun'
 import type { DriverGuardrails } from './driverGuardrails'
+import type { SpecialistResultEnvelope } from './types'
+
+// ---------------------------------------------------------------------------
+// runExecutionRouted's return type (AcceptResultOutcome | ExecutionRecord)
+// has THREE distinct real shapes a caller must handle: a freshly-accepted
+// result (`accepted` in outcome), an EXECUTOR_UNAVAILABLE/BLOCKED
+// ExecutionRecord, and — the case the destination driver actually hits in
+// practice, since D2/D3/D4 deliberately reuse the SAME executionId across
+// resumed calls (unlike the metro driver's always-fresh per-call labels)
+// — an IDEMPOTENT REPLAY: the execution was already COMPLETE on a prior
+// call, so runExecution() short-circuits and hands back the bare
+// ExecutionRecord instead of a fresh AcceptResultOutcome. Missing this
+// case would make a resumed, already-completed stage look like a fresh
+// failure. This helper normalizes all three.
+// ---------------------------------------------------------------------------
+
+type ResolvedOutcome = { kind: 'ACCEPTED'; envelope: SpecialistResultEnvelope } | { kind: 'UNAVAILABLE'; reason: string } | { kind: 'FAILED'; reason: string }
+
+function resolveOutcome(outcome: AcceptResultOutcome | ExecutionRecord): ResolvedOutcome {
+  if ('status' in outcome) {
+    if (outcome.status === 'EXECUTOR_UNAVAILABLE') return { kind: 'UNAVAILABLE', reason: outcome.errorReason ?? 'EXECUTOR_UNAVAILABLE' }
+    if (outcome.status === 'COMPLETE' && outcome.envelope) return { kind: 'ACCEPTED', envelope: outcome.envelope }
+    return { kind: 'FAILED', reason: outcome.errorReason ?? `execution status ${outcome.status}` }
+  }
+  if (outcome.accepted) return { kind: 'ACCEPTED', envelope: outcome.record.envelope! }
+  return { kind: 'FAILED', reason: outcome.reasons.join('; ') || 'evidence validation failed' }
+}
 
 export const DESTINATION_HUB_DRIVER_PLAYBOOK_KEY = 'destination_hub_lifecycle'
 
@@ -73,6 +115,25 @@ function block(run: PlaybookRunRecord, reason: string): PlaybookRunRecord {
   return run
 }
 
+/**
+ * A routine, no-Jerry-needed hold — distinct from escalate() (needs
+ * Jerry) and block() (genuinely stuck). Used when a real methodology
+ * outcome (e.g. DVA-2's STOP_PURSUIT, or HOLD_DAP_UNTIL_ISSUE_RESOLVED
+ * with a research path already identified) means there is nothing more
+ * for the driver to auto-do right now, but nothing is wrong either —
+ * without this, the bounded step loop would otherwise spin through
+ * idempotent no-op re-runs of the same stage up to its step cap.
+ */
+function wait(run: PlaybookRunRecord, reason: string): PlaybookRunRecord {
+  run.status = 'WAITING'
+  run.jerryReason = null
+  run.decisionPacket = null
+  const state = readState(run)
+  state.lastWaitReason = reason
+  run.state = state
+  return run
+}
+
 async function stepD0(run: PlaybookRunRecord, candidate: DiscoveryCandidate & { destinationId: string; destinationName: string }): Promise<PlaybookRunRecord> {
   const state = readState(run)
   state.candidate = candidate
@@ -100,7 +161,7 @@ async function stepD2Dva1(deps: DestinationDriverDeps, run: PlaybookRunRecord): 
     inputs: { destinationId: state.candidate?.destinationId, destinationName: state.candidate?.destinationName },
     requiredEvidenceKeys: ['artifact'],
     methodologyId: 'destination/dva1',
-    methodologyVersion: 'v1',
+    methodologyVersion: 'v2',
     executionId: eid(run.runId, 'D2'),
     projectId: run.projectId,
     destinationId: state.candidate?.destinationId ?? null,
@@ -109,35 +170,39 @@ async function stepD2Dva1(deps: DestinationDriverDeps, run: PlaybookRunRecord): 
     authorityOperations: ['destination_hub.dva1_screen'],
     idempotencyKey: eid(run.runId, 'D2'),
   }
-  const outcome = await runExecutionRouted(deps.execStore, request, deps.executors, deps.now)
-  if ('status' in outcome && outcome.status === 'EXECUTOR_UNAVAILABLE') return block(run, outcome.errorReason ?? 'DVA-1 executor unavailable')
-  if (!('accepted' in outcome) || !outcome.accepted) {
-    return escalate(run, 'DVA-1 execution did not produce valid evidence.', { decisionNeeded: 'Review DVA-1 execution failure.', why: 'reasons' in outcome ? outcome.reasons.join('; ') : 'unknown' })
-  }
+  const resolved = resolveOutcome(await runExecutionRouted(deps.execStore, request, deps.executors, deps.now))
+  if (resolved.kind === 'UNAVAILABLE') return block(run, resolved.reason)
+  if (resolved.kind === 'FAILED') return escalate(run, 'DVA-1 execution did not produce valid evidence.', { decisionNeeded: 'Review DVA-1 execution failure.', why: resolved.reason })
 
-  const dva1 = outcome.record.envelope!.evidence.artifact as DVA1Artifact
+  const dva1 = resolved.envelope.evidence.artifact as DVA1Artifact
   state.dva1 = dva1
   run.state = state
   const gate = evaluateDVA1Gate(dva1)
-  // RETRIEVED, exact: DVA-2 never starts automatically, regardless of tier.
-  // Advance the STAGE to D3_DVA2 now (when proposeDva2), so that once
-  // Jerry approves (recordJerryDecision sets state.dva2Approved), the
-  // driver resumes at D3_DVA2 — never re-runs stepD2Dva1 and re-asks the
-  // same already-answered question a second time.
-  if (gate.proposeDva2) run.currentStage = 'D3_DVA2'
-  return escalate(run, `DVA-1 complete for ${dva1.destinationName}: score ${dva1.score} (${gate.tier}).`, {
-    decisionNeeded: gate.proposeDva2 ? 'Approve moving forward to DVA-2.' : 'DVA-1 score is below threshold — confirm whether to archive or proceed anyway.',
+
+  if (!gate.requiresJerry) {
+    // Routine — either qualifies and fits current strategy (auto-advance,
+    // per the real methodology's own framing: "routine qualified
+    // progression should not require Jerry just to move a file to the
+    // next stage") or is archived (also routine, nothing to decide).
+    if (gate.proposeDva2) run.currentStage = 'D3_DVA2'
+    return run
+  }
+  if (state.dva2Approved) {
+    // Jerry already reviewed this genuine STRONG_BUT_LATER_STAGE hold and
+    // explicitly chose to proceed anyway — never re-ask.
+    run.currentStage = 'D3_DVA2'
+    return run
+  }
+  return escalate(run, `DVA-1 complete for ${dva1.destinationName}: score ${dva1.score} (${gate.tier}), Current-Strategy Fit: ${gate.currentStrategyFit}.`, {
+    decisionNeeded: 'This destination qualifies for DVA-2 but is explicitly a later-stage opportunity — confirm whether to pursue now or hold.',
     why: gate.reason,
-    chiefRecommendation: gate.proposeDva2 ? 'Proceed to DVA-2.' : 'Archive — score below the DVA-1 threshold.',
+    chiefRecommendation: 'Hold — CheckOff is prioritizing smaller weekend destinations for the current expansion wave.',
     evidence: dva1,
   })
 }
 
 async function stepD3Dva2(deps: DestinationDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
   const state = readState(run)
-  if (!state.dva2Approved) {
-    return escalate(run, 'DVA-2 requires explicit Jerry approval before it starts — no exception, regardless of DVA-1 tier.', { decisionNeeded: 'Approve DVA-2.', why: 'Retrieved rule: DVA-2 never starts automatically.' })
-  }
   const request: SpecialistExecutionRequest = {
     specialist: 'destination_strategist',
     playbookKey: DESTINATION_HUB_DRIVER_PLAYBOOK_KEY,
@@ -146,7 +211,7 @@ async function stepD3Dva2(deps: DestinationDriverDeps, run: PlaybookRunRecord): 
     inputs: { destinationId: state.candidate?.destinationId, consumedDva1ArtifactRef: state.dva1?.artifactRef },
     requiredEvidenceKeys: ['artifact'],
     methodologyId: 'destination/dva2',
-    methodologyVersion: 'v1',
+    methodologyVersion: 'v2',
     executionId: eid(run.runId, 'D3'),
     projectId: run.projectId,
     destinationId: state.candidate?.destinationId ?? null,
@@ -155,13 +220,11 @@ async function stepD3Dva2(deps: DestinationDriverDeps, run: PlaybookRunRecord): 
     authorityOperations: ['destination_hub.draft_dva2'],
     idempotencyKey: eid(run.runId, 'D3'),
   }
-  const outcome = await runExecutionRouted(deps.execStore, request, deps.executors, deps.now)
-  if ('status' in outcome && outcome.status === 'EXECUTOR_UNAVAILABLE') return block(run, outcome.errorReason ?? 'DVA-2 executor unavailable')
-  if (!('accepted' in outcome) || !outcome.accepted) {
-    return escalate(run, 'DVA-2 execution did not produce valid evidence.', { decisionNeeded: 'Review DVA-2 execution failure.', why: 'reasons' in outcome ? outcome.reasons.join('; ') : 'unknown' })
-  }
+  const resolved = resolveOutcome(await runExecutionRouted(deps.execStore, request, deps.executors, deps.now))
+  if (resolved.kind === 'UNAVAILABLE') return block(run, resolved.reason)
+  if (resolved.kind === 'FAILED') return escalate(run, 'DVA-2 execution did not produce valid evidence.', { decisionNeeded: 'Review DVA-2 execution failure.', why: resolved.reason })
 
-  const dva2 = outcome.record.envelope!.evidence.artifact as DVA2Artifact
+  const dva2 = resolved.envelope.evidence.artifact as DVA2Artifact
   // HARD ISOLATION — never accept a DVA-2 that consumed the wrong DVA-1.
   const validation = validateDva2Input(state.dva1!, dva2)
   if (!validation.valid) return block(run, `DVA-2 identity validation failed: ${validation.reason}`)
@@ -169,26 +232,32 @@ async function stepD3Dva2(deps: DestinationDriverDeps, run: PlaybookRunRecord): 
   state.dva2 = dva2
   run.state = state
   const routing = routeDVA2Recommendation(dva2)
-  if (routing.pipelineState !== 'READY') {
-    return escalate(run, `DVA-2 recommendation for ${dva2.destinationName}: ${dva2.recommendation}.`, { decisionNeeded: 'Review DVA-2 outcome — not GREEN.', why: routing.reason, evidence: dva2 })
+
+  if (!routing.requiresJerry) {
+    // BUILD_DAP_NOW -> routine auto-advance. STOP_PURSUIT or a
+    // researchable HOLD -> routine, nothing for Jerry to decide, but
+    // also nothing more to auto-do right now — WAIT cleanly rather than
+    // spinning through idempotent no-op re-runs of this same stage.
+    if (routing.pipelineState === 'READY') {
+      run.currentStage = 'D4_DAP'
+      return run
+    }
+    return wait(run, routing.reason)
   }
-  // GREEN — advance the stage now, same "never re-ask an already-answered
-  // question" discipline as stepD2Dva1 above.
-  run.currentStage = 'D4_DAP'
-  return escalate(run, `DVA-2 GREEN for ${dva2.destinationName} — eligible to advance toward DAP.`, {
-    decisionNeeded: 'Approve moving forward to DAP.',
+  if (state.dapApproved) {
+    run.currentStage = 'D4_DAP'
+    return run
+  }
+  return escalate(run, `DVA-2 for ${dva2.destinationName}: ${dva2.recommendedNextStep} (priority: ${dva2.recommendedPriority}).`, {
+    decisionNeeded: 'DVA-2 recommends holding until a specific issue is resolved, with no further research path identified — needs your judgment.',
     why: routing.reason,
-    chiefRecommendation: 'Proceed to DAP.',
     evidence: dva2,
   })
 }
 
 async function stepD4Dap(deps: DestinationDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
   const state = readState(run)
-  if (!state.dapApproved) {
-    return escalate(run, 'DAP requires explicit Jerry approval before it starts.', { decisionNeeded: 'Approve DAP.', why: 'DAP only starts after Jerry approves the DVA-2 GREEN handoff.' })
-  }
-  if (!dapEntryConditionMet(state.dva2!)) return block(run, 'DAP entry condition not met — DVA-2 is not GREEN.')
+  if (!dapEntryConditionMet(state.dva2!)) return block(run, 'DAP entry condition not met — DVA-2 Recommended Next Step is not "Build DAP now".')
 
   const request: SpecialistExecutionRequest = {
     specialist: 'destination_strategist',
@@ -198,7 +267,7 @@ async function stepD4Dap(deps: DestinationDriverDeps, run: PlaybookRunRecord): P
     inputs: { destinationId: state.candidate?.destinationId, consumedDva2ArtifactRef: state.dva2?.artifactRef },
     requiredEvidenceKeys: ['artifact'],
     methodologyId: 'destination/dap',
-    methodologyVersion: 'v1',
+    methodologyVersion: 'v2',
     executionId: eid(run.runId, 'D4'),
     projectId: run.projectId,
     destinationId: state.candidate?.destinationId ?? null,
@@ -207,13 +276,11 @@ async function stepD4Dap(deps: DestinationDriverDeps, run: PlaybookRunRecord): P
     authorityOperations: ['destination_hub.draft_dap'],
     idempotencyKey: eid(run.runId, 'D4'),
   }
-  const outcome = await runExecutionRouted(deps.execStore, request, deps.executors, deps.now)
-  if ('status' in outcome && outcome.status === 'EXECUTOR_UNAVAILABLE') return block(run, outcome.errorReason ?? 'DAP executor unavailable')
-  if (!('accepted' in outcome) || !outcome.accepted) {
-    return escalate(run, 'DAP execution did not produce valid evidence.', { decisionNeeded: 'Review DAP execution failure.', why: 'reasons' in outcome ? outcome.reasons.join('; ') : 'unknown' })
-  }
+  const resolved = resolveOutcome(await runExecutionRouted(deps.execStore, request, deps.executors, deps.now))
+  if (resolved.kind === 'UNAVAILABLE') return block(run, resolved.reason)
+  if (resolved.kind === 'FAILED') return escalate(run, 'DAP execution did not produce valid evidence.', { decisionNeeded: 'Review DAP execution failure.', why: resolved.reason })
 
-  const dap = outcome.record.envelope!.evidence.artifact as DAPArtifact
+  const dap = resolved.envelope.evidence.artifact as DAPArtifact
   const validation = validateDapInput(state.dva2!, dap)
   if (!validation.valid) return block(run, `DAP identity validation failed: ${validation.reason}`)
 

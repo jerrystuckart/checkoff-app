@@ -19,12 +19,35 @@
 // Claude Projects Jerry already runs. This file models the ORCHESTRATION
 // CONTRACT around them (artifact references, gate thresholds/routing,
 // cross-destination validation) — never a competing question set or
-// scoring rubric. See the DVA-1/DVA-2/DAP section below for exactly what
-// is retrieved-and-kept (gate semantics) vs. what stays entirely
-// external (the actual analysis). See destinationExecutorGap.ts for the
-// explicit, honest statement of what Chief cannot yet do (invoke a
-// Claude Project programmatically) rather than pretending this is
-// automated end-to-end.
+// scoring rubric.
+//
+// REVISED AGAIN 2026-09-04 (Phase 2G — real methodology ingestion): the
+// three Claude Projects' actual, verbatim instructions are now ingested
+// at agent-service/specialists/methodologies/destination/{dva1,dva2,dap}/v2.md
+// (see methodologies/destination/INGESTION_LOG.md for provenance/hashes).
+// This corrected two real conflicts with the Phase 2C reconstruction,
+// which had been built from an Open Brain PARAPHRASE, not the source text:
+//
+//   1. DVA-1: "DVA-2 never starts automatically; Jerry must approve every
+//      time" was the paraphrase's framing of what the real instructions
+//      describe as a manual multi-Claude-Project workflow (see
+//      dva1/v2.legacy-operator-instructions.md), NOT a substantive rule.
+//      The real substantive gate is Section 13 ("Current-Strategy Fit") —
+//      a destination can score Elite yet be explicitly later-stage/
+//      strategically premature, and THAT is what should hold for Jerry,
+//      not routine qualified progression. See evaluateDVA1Gate() below.
+//
+//   2. DVA-2: the paraphrase's GREEN/YELLOW/RED vocabulary does not exist
+//      anywhere in the real instructions. The actual decision fields are
+//      "Recommended priority" (4 values) and "Recommended Next Step" (3
+//      values, Section 24) — see routeDVA2Recommendation() below and
+//      dva2/v2.legacy-operator-instructions.md for the full correction
+//      record.
+//
+// The DAP-takes-a-completed-DVA-2-as-input rule, the DVA-1 90/80/65 score
+// thresholds, and the Willcox commercial-model/proposal-rules retrievals
+// were all CONFIRMED (not contradicted) by the real ingested text — see
+// each v2.legacy-operator-instructions.md for the full audit.
 
 import { evaluateAuthority } from './standingAuthority'
 
@@ -165,6 +188,19 @@ export interface ExternalArtifactRef {
 export type DVA1Tier = 'ELITE' | 'EXCELLENT' | 'BORDERLINE' | 'ARCHIVE'
 
 /**
+ * Section 13 of the real DVA-1 instructions (methodologies/destination/
+ * dva1/v2.md) — a classification SEPARATE from the numeric score. A
+ * destination can score Elite (90-100) and still be
+ * STRONG_BUT_LATER_STAGE: CheckOff is deliberately targeting smaller
+ * weekend destinations for its first ~20-25 Hubs, so a large/complex/
+ * distant/enterprise-level opportunity is real but operationally
+ * premature today. This is the actual substantive gate the Phase 2C
+ * "Jerry must always approve" paraphrase was standing in for — see
+ * dva1/v2.legacy-operator-instructions.md for the full correction.
+ */
+export type CurrentStrategyFit = 'FITS_CURRENT_STRATEGY' | 'STRONG_BUT_LATER_STAGE' | 'WEAK_STRATEGIC_FIT'
+
+/**
  * Structured fields Chief EXTRACTS from the DVA-1 markdown artifact —
  * Chief never computes `score`; it is read off the artifact the DVA-1
  * Claude Project produced.
@@ -173,9 +209,11 @@ export interface DVA1Artifact extends ExternalArtifactRef {
   provider: 'dva1_claude_project'
   score: number
   recommendationText: string
+  /** Section 13 — required. Never inferred from `score`; the methodology treats these as genuinely independent dimensions. */
+  currentStrategyFit: CurrentStrategyFit
 }
 
-/** Gate semantics only (the 4 threshold bands are retrieved, exact) — not a scoring methodology. Chief interprets a score DVA-1 already produced; it never derives one. */
+/** Gate semantics only (the 4 threshold bands are retrieved, exact — DVA-1 v2.md's own "Calculate" section, unchanged by ingestion) — not a scoring methodology. Chief interprets a score DVA-1 already produced; it never derives one. */
 export function classifyDVA1Score(score: number): DVA1Tier {
   if (score >= 90) return 'ELITE'
   if (score >= 80) return 'EXCELLENT'
@@ -184,49 +222,88 @@ export function classifyDVA1Score(score: number): DVA1Tier {
 }
 
 /**
- * RETRIEVED, exact: "DVA-2 never starts automatically; Jerry must
- * explicitly approve moving forward in every case" — zero exceptions,
- * including for an ELITE score. Chief may only PROPOSE progression.
+ * REVISED (Phase 2G — real methodology): Jerry approval is required ONLY
+ * when the destination is a qualified score tier but the methodology
+ * itself flags it STRONG_BUT_LATER_STAGE — that is a genuine founder
+ * timing/sequencing judgment call, not a routine hand-off. A
+ * WEAK_STRATEGIC_FIT destination is routinely archived (no Jerry needed,
+ * nothing to decide). A FITS_CURRENT_STRATEGY destination at a
+ * qualifying score tier advances to DVA-2 automatically — "routine
+ * qualified progression should not require Jerry just to move a file to
+ * the next stage."
  */
-export function dva1RequiresJerryApproval(_artifact: DVA1Artifact): true {
-  void _artifact
-  return true
+export function dva1RequiresJerryApproval(artifact: DVA1Artifact): boolean {
+  const tier = classifyDVA1Score(artifact.score)
+  const qualifies = tier === 'ELITE' || tier === 'EXCELLENT' || tier === 'BORDERLINE'
+  return qualifies && artifact.currentStrategyFit === 'STRONG_BUT_LATER_STAGE'
 }
 
 export interface DVA1GateDecision {
   tier: DVA1Tier
+  currentStrategyFit: CurrentStrategyFit
   proposeDva2: boolean
+  /** True only for the genuine founder-judgment case (qualified score + STRONG_BUT_LATER_STAGE). False for routine auto-advance AND for routine archive — see dva1RequiresJerryApproval's own doc. */
+  requiresJerry: boolean
   reason: string
 }
 
-/** Chief's own gate decision after receiving a DVA-1 artifact — always requires Jerry before DVA-2 actually starts, regardless of tier. */
+/**
+ * Chief's own gate decision after receiving a DVA-1 artifact. Per the
+ * real ingested methodology (not the Phase 2C paraphrase): a qualifying
+ * score (Borderline or better) AND FITS_CURRENT_STRATEGY auto-advances to
+ * DVA-2 without Jerry. The SAME qualifying score with
+ * STRONG_BUT_LATER_STAGE holds for Jerry's judgment instead of advancing.
+ * WEAK_STRATEGIC_FIT or a below-threshold (Archive) score routinely does
+ * not propose DVA-2, and needs no Jerry decision either.
+ */
 export function evaluateDVA1Gate(artifact: DVA1Artifact): DVA1GateDecision {
   const tier = classifyDVA1Score(artifact.score)
-  const proposeDva2 = tier === 'ELITE' || tier === 'EXCELLENT' || tier === 'BORDERLINE'
-  return {
-    tier,
-    proposeDva2,
-    reason: proposeDva2
-      ? `Score ${artifact.score} (${tier}) meets the threshold to propose DVA-2 — Jerry must still explicitly approve before it starts.`
-      : `Score ${artifact.score} (${tier}) — below threshold, DVA-2 not proposed.`,
+  const qualifies = tier === 'ELITE' || tier === 'EXCELLENT' || tier === 'BORDERLINE'
+  const fit = artifact.currentStrategyFit
+  const requiresJerry = dva1RequiresJerryApproval(artifact)
+  const proposeDva2 = qualifies && fit !== 'WEAK_STRATEGIC_FIT' && !requiresJerry
+
+  let reason: string
+  if (!qualifies) {
+    reason = `Score ${artifact.score} (${tier}) — below the DVA-2 threshold, not proposed.`
+  } else if (fit === 'WEAK_STRATEGIC_FIT') {
+    reason = `Score ${artifact.score} (${tier}) qualifies, but Current-Strategy Fit is WEAK — archived, not proposed.`
+  } else if (fit === 'STRONG_BUT_LATER_STAGE') {
+    reason = `Score ${artifact.score} (${tier}) qualifies and Current-Strategy Fit is real, but this is explicitly a later-stage opportunity — holding for Jerry's timing/sequencing judgment rather than advancing automatically.`
+  } else {
+    reason = `Score ${artifact.score} (${tier}) qualifies and fits the current expansion strategy — routine progression, advancing to DVA-2 automatically.`
   }
+
+  return { tier, currentStrategyFit: fit, proposeDva2, requiresJerry, reason }
 }
 
 // ---------------------------------------------------------------------------
-// DVA-2 — Deep Opportunity Analysis. GREEN/YELLOW/RED is the retrieved
-// output shape; Chief routes on it, never re-derives it.
+// DVA-2 — Deep Opportunity Analysis. REVISED (Phase 2G): the real
+// ingested methodology (methodologies/destination/dva2/v2.md) defines NO
+// GREEN/YELLOW/RED vocabulary anywhere. Its actual decision fields are
+// Section 23's "Recommended priority" (4 values) and Section 24's
+// "Recommended Next Step" (3 values) — the latter is what Chief routes
+// on, since it's the rubric's own explicit DAP hand-off instruction. See
+// dva2/v2.legacy-operator-instructions.md for the full correction record.
 // ---------------------------------------------------------------------------
 
-export type DVA2Recommendation = 'GREEN' | 'YELLOW' | 'RED'
+/** Section 23 — "Recommended priority." */
+export type DVA2RecommendedPriority = 'HIGH_PRIORITY_CREATE_DAP' | 'VIABLE_CREATE_DAP_WHEN_CAPACITY_ALLOWS' | 'PROMISING_BUT_PREMATURE_MONITOR' | 'DO_NOT_PURSUE_CURRENTLY'
+
+/** Section 24 (DAP Handoff) — "Recommended Next Step." The field Chief actually gates on. */
+export type DVA2RecommendedNextStep = 'BUILD_DAP_NOW' | 'HOLD_DAP_UNTIL_ISSUE_RESOLVED' | 'STOP_PURSUIT'
+
+/** Section 23 — "Is this worth actively pursuing?" */
+export type DVA2WorthPursuing = 'YES' | 'MAYBE' | 'NO'
 
 export interface DVA2Artifact extends ExternalArtifactRef {
   provider: 'dva2_claude_project'
-  recommendation: DVA2Recommendation
+  worthPursuing: DVA2WorthPursuing
+  recommendedPriority: DVA2RecommendedPriority
+  recommendedNextStep: DVA2RecommendedNextStep
   rationale: string
   knownRisks: string[]
-  /** Only meaningful when recommendation is RED — which disposition the artifact's own analysis actually supports. Chief never invents this; absence defaults to the safest, most reversible option (see routeDVA2Recommendation). */
-  suggestedDisposition?: 'HOLD' | 'WAVE_2' | 'DECLINE'
-  /** Set by DVA-2 (or by Chief when the artifact leaves something unclear) when more research is needed before a YELLOW can resolve. */
+  /** Section 24 — "Questions DAP Must Resolve or Sequence Around," when `recommendedNextStep` is HOLD_DAP_UNTIL_ISSUE_RESOLVED. */
   evidenceGaps?: string[]
   /** Which DVA-1 artifact this DVA-2 run consumed — checked by validateDva2Input. */
   consumedDva1ArtifactRef: string
@@ -256,42 +333,59 @@ export interface DVA2GateDecision {
 }
 
 /**
- * GREEN -> eligible to advance toward DAP (still requires Jerry per the
- * DVA-2->DAP handoff, same "never auto-advance" discipline as DVA-1).
- * YELLOW -> if the artifact names evidence gaps, more research first
- * (not necessarily Jerry); once gaps are resolved (or none were named),
- * Jerry reviews. RED -> route by the artifact's OWN suggested
- * disposition; absent that, default to HOLD (the safest, reversible
- * choice) rather than ever auto-DECLINE — "do not permanently discard
+ * Routes on `recommendedNextStep` — the rubric's own explicit hand-off
+ * field (Section 24), not a re-derived judgment.
+ *
+ * BUILD_DAP_NOW -> routine qualified progression, auto-advances to DAP
+ * (same "do not require Jerry just to move a file to the next stage"
+ * principle as DVA-1->DVA-2; destination_hub.draft_dap is already AUTO
+ * in standingAuthority.ts).
+ *
+ * HOLD_DAP_UNTIL_ISSUE_RESOLVED -> if the artifact names evidence gaps
+ * (Section 24's "Questions DAP Must Resolve"), more research first, not
+ * necessarily Jerry; with no further gaps named, it needs Jerry's
+ * judgment call.
+ *
+ * STOP_PURSUIT -> HOLD, never DECLINE — "do not permanently discard
  * potentially useful future destinations merely because timing is wrong
- * today."
+ * today" still holds; this is routine, no Jerry needed.
  */
 export function routeDVA2Recommendation(artifact: DVA2Artifact): DVA2GateDecision {
-  if (artifact.recommendation === 'GREEN') {
-    return { pipelineState: 'READY', requiresJerry: true, reason: 'GREEN — eligible to advance toward DAP; Jerry must still approve the DAP handoff.' }
+  if (artifact.recommendedNextStep === 'BUILD_DAP_NOW') {
+    return { pipelineState: 'READY', requiresJerry: false, reason: 'Recommended Next Step: Build DAP now — routine qualified progression, advancing to DAP automatically.' }
   }
-  if (artifact.recommendation === 'YELLOW') {
+  if (artifact.recommendedNextStep === 'HOLD_DAP_UNTIL_ISSUE_RESOLVED') {
     const gaps = artifact.evidenceGaps ?? []
     if (gaps.length > 0) {
-      return { pipelineState: 'WAITING', requiresJerry: false, reason: `YELLOW with ${gaps.length} evidence gap(s) — more research needed before Jerry review: ${gaps.join(', ')}` }
+      return { pipelineState: 'WAITING', requiresJerry: false, reason: `Hold until issue resolved — ${gaps.length} question(s) DAP must resolve first, research needed before Jerry review: ${gaps.join(', ')}` }
     }
-    return { pipelineState: 'WAITING', requiresJerry: true, reason: 'YELLOW with no further evidence gaps identified — needs Jerry\'s judgment call.' }
+    return { pipelineState: 'WAITING', requiresJerry: true, reason: 'Hold until issue resolved, with no further evidence gaps identified — needs Jerry\'s judgment call.' }
   }
-  // RED
-  const disposition = artifact.suggestedDisposition ?? 'HOLD'
-  if (disposition === 'DECLINE' && !artifact.suggestedDisposition) {
-    // unreachable given the ?? above, kept as a defensive statement of intent
-  }
-  return {
-    pipelineState: disposition,
-    requiresJerry: disposition === 'DECLINE',
-    reason: `RED — ${artifact.suggestedDisposition ? `artifact-supported disposition: ${disposition}` : `no disposition stated in the artifact; defaulting to the safest, reversible option (HOLD) rather than discarding`}.`,
-  }
+  // STOP_PURSUIT
+  return { pipelineState: 'HOLD', requiresJerry: false, reason: 'Recommended Next Step: Stop pursuit — held (never permanently discarded); routine, no Jerry decision needed.' }
 }
 
 // ---------------------------------------------------------------------------
 // DAP — Destination Action Plan. Commercial + relationship deep dive.
 // ---------------------------------------------------------------------------
+
+/**
+ * Section 21 ("RIGHT NOW") of the real DAP instructions
+ * (methodologies/destination/dap/v2.md) — the single most operationally
+ * important field in the whole artifact, by the rubric's own explicit
+ * design ("Only ONE task should appear here... the purpose is to make
+ * the next work session obvious"). Not present in the Phase 2D
+ * gate-semantics-only placeholder; added by the Phase 2G ingestion.
+ */
+export interface DAPRightNowTask {
+  currentStage: string
+  currentGoal: string
+  highestPriorityTask: string
+  targetDate: string
+  estimatedTime: string
+  expectedResult: string
+  whyItMatters: string
+}
 
 export interface DAPExtractedFields {
   recommendedChampion: string | null
@@ -309,6 +403,8 @@ export interface DAPExtractedFields {
   recommendedEntryStrategy: string | null
   relationshipSequence: string[]
   recommendedOfferDirection: string | null
+  /** Section 21 — required. See DAPRightNowTask's own doc. */
+  rightNowTask: DAPRightNowTask
 }
 
 export interface DAPArtifact extends ExternalArtifactRef {
@@ -329,9 +425,9 @@ export function validateDapInput(dva2: DVA2Artifact, dap: DAPArtifact): { valid:
   return { valid: true, reason: 'DAP correctly consumed this destination\'s own DVA-2 artifact.' }
 }
 
-/** RETRIEVED: DAP takes a completed DVA-2 as its input — never started independently. */
+/** RETRIEVED: DAP takes a completed DVA-2 as its input — never started independently. Gated on the real "Recommended Next Step" field (Section 24), not the old GREEN paraphrase. */
 export function dapEntryConditionMet(dva2: DVA2Artifact): boolean {
-  return dva2.recommendation === 'GREEN'
+  return dva2.recommendedNextStep === 'BUILD_DAP_NOW'
 }
 
 // ---------------------------------------------------------------------------
@@ -408,6 +504,29 @@ export function proposalViolatesRetrievedRules(proposalText: string, offer: Dest
   return offer.forbiddenPhrases.filter((phrase) => lower.includes(phrase))
 }
 
+/**
+ * The real Founder pricing model (DVA-2 v2.md Section 17, restated in
+ * DAP v2.md Section 2) surfaced by the Phase 2G ingestion — refines,
+ * does not contradict, WILLCOX_RETRIEVED_OFFER_PATTERN above. IMPORTANT:
+ * the renewal benefit is a PERCENTAGE discount against the then-current
+ * standard price, never a permanently frozen dollar amount — the
+ * methodology is explicit about this distinction.
+ */
+export const FOUNDER_PRICING_MODEL = Object.freeze({
+  year1DiscountPct: 0.35,
+  renewalDiscountPct: 0.25,
+  renewalConditionedOn: 'continuously active Founding Partner' as const,
+  note: 'Percentage discount against the applicable standard price at the time — never a frozen dollar amount, even if standard pricing later changes.',
+})
+
+export function founderYear1Price(standardChampionPriceUsd: number): number {
+  return Math.round(standardChampionPriceUsd * (1 - FOUNDER_PRICING_MODEL.year1DiscountPct))
+}
+
+export function founderRenewalPrice(currentStandardChampionPriceUsd: number): number {
+  return Math.round(currentStandardChampionPriceUsd * (1 - FOUNDER_PRICING_MODEL.renewalDiscountPct))
+}
+
 // ---------------------------------------------------------------------------
 // Evidence gap -> research loop (spec section 13's "Example Destination
 // loop": discovery -> DVA-1 -> evidence gap -> research -> DVA-2 ->
@@ -425,7 +544,11 @@ export function deriveDestinationLoopAction(stage: DestinationHubStage, missingE
 
 export function coarseStatusForStage(stage: DestinationHubStage): 'READY' | 'IN_PROGRESS' | 'WAITING' | 'NEEDS_JERRY' | 'DONE' {
   if (stage === 'D0_DISCOVERY') return 'READY'
-  if (stage === 'D2_DVA1') return 'NEEDS_JERRY' // DVA-2 never auto-starts — retrieved, exact rule
+  // D2_DVA1's real coarse status depends on the received artifact
+  // (evaluateDVA1Gate's requiresJerry — only true for a qualified score
+  // paired with STRONG_BUT_LATER_STAGE, per the Phase 2G ingestion) and
+  // can no longer be determined from the stage name alone; this
+  // stage-only helper falls through to the general IN_PROGRESS case.
   if (stage === 'D14_CLOSE_AGREEMENT' || stage === 'D15_HUB_ACTIVATION') return 'NEEDS_JERRY'
   if (stage === 'D13_RELATIONSHIP_FOLLOWUP' || stage === 'D7_RELATIONSHIP_OUTREACH') return 'WAITING'
   if (stage === 'D16_LOCAL_BUSINESS_ACTIVATION') return 'WAITING' // hands off to Business Photo Outreach

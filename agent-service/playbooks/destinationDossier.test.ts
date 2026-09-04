@@ -14,6 +14,7 @@ function dva1For(destId: string, name: string): DVA1Artifact {
     contentHash: null,
     score: 90,
     recommendationText: 'x',
+    currentStrategyFit: 'FITS_CURRENT_STRATEGY',
   }
 }
 
@@ -98,7 +99,7 @@ function portfolioEntry(overrides: Partial<PortfolioEntry> = {}): PortfolioEntry
     destinationId: 'dest-a',
     destinationName: 'Destination A',
     dva1Status: 'RECEIVED',
-    dva2Recommendation: null,
+    dva2RecommendedNextStep: null,
     dapStatus: 'NOT_STARTED',
     relationshipStage: null,
     requiredAssetLevel: null,
