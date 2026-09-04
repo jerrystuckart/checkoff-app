@@ -302,3 +302,82 @@ test('RemoteAiExecutor: checkoff_editor does not request live web research', asy
   await executor.execute(req({ specialist: 'checkoff_editor', methodologyId: 'checkoff_editor', methodologyVersion: 'v1', authorityOperations: [] }))
   assert.equal(adapter.capturedRequiresLiveWebResearch, false)
 })
+
+// ---------------------------------------------------------------------------
+// Real usage/cost capture — production-integrity pass. RemoteAiExecutor
+// must turn whatever usage an adapter reports into a real providerUsage
+// on the envelope (available/costed), and honestly mark it unavailable
+// (never $0) when the adapter didn't report usage.
+// ---------------------------------------------------------------------------
+
+test('RemoteAiExecutor: attaches real providerUsage (tokens + estimated cost) to the accepted envelope when the adapter reports usage', async () => {
+  const adapter = new FakeAdapter(true, true, { text: validEnvelopeJson(), model: 'gpt-4.1', usage: { inputTokens: 1000, outputTokens: 500, totalTokens: 1500 } })
+  Object.defineProperty(adapter, 'providerKey', { value: 'openai' })
+  const executor = new RemoteAiExecutor([adapter])
+  const outcome = await executor.execute(req())
+  assert.ok(!('unavailable' in outcome))
+  if (!('unavailable' in outcome)) {
+    assert.ok(outcome.providerUsage)
+    assert.equal(outcome.providerUsage?.available, true)
+    assert.equal(outcome.providerUsage?.provider, 'openai')
+    assert.equal(outcome.providerUsage?.model, 'gpt-4.1')
+    assert.equal(outcome.providerUsage?.inputTokens, 1000)
+    assert.equal(outcome.providerUsage?.outputTokens, 500)
+    assert.ok(outcome.providerUsage?.costUsd !== null && (outcome.providerUsage?.costUsd as number) > 0)
+  }
+})
+
+test('RemoteAiExecutor: marks providerUsage unavailable — never a fabricated $0 — when the adapter reports no usage', async () => {
+  const adapter = new FakeAdapter(true, true, { text: validEnvelopeJson() })
+  const executor = new RemoteAiExecutor([adapter])
+  const outcome = await executor.execute(req())
+  assert.ok(!('unavailable' in outcome))
+  if (!('unavailable' in outcome)) {
+    assert.ok(outcome.providerUsage)
+    assert.equal(outcome.providerUsage?.available, false)
+    assert.equal(outcome.providerUsage?.costUsd, null)
+  }
+})
+
+test('RemoteAiExecutor: execution still completes successfully even when usage data is unexpectedly absent — never blocks on missing usage', async () => {
+  const adapter = new FakeAdapter(true, true, { text: validEnvelopeJson(), usage: null })
+  const executor = new RemoteAiExecutor([adapter])
+  const outcome = await executor.execute(req())
+  assert.ok(!('unavailable' in outcome))
+})
+
+test('RemoteAiExecutor: even a structurally-malformed (unparseable) provider response still carries providerUsage — the call cost money regardless of output quality', async () => {
+  const adapter = new FakeAdapter(true, true, { text: 'not json at all', model: 'gpt-4.1', usage: { inputTokens: 200, outputTokens: 50, totalTokens: 250 } })
+  Object.defineProperty(adapter, 'providerKey', { value: 'openai' })
+  const executor = new RemoteAiExecutor([adapter])
+  const outcome = await executor.execute(req())
+  assert.ok(!('unavailable' in outcome))
+  if (!('unavailable' in outcome)) {
+    assert.equal(outcome.providerUsage?.available, true)
+    assert.ok((outcome.providerUsage?.costUsd as number) > 0)
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Runtime date injection — the SAME `now` clock RemoteAiExecutor is
+// constructed with must reach the prompt (via promptBuilders.ts's
+// runtimeDateContextLine), so what the model is told matches what the
+// driver stamps as executedAt.
+// ---------------------------------------------------------------------------
+
+test('RemoteAiExecutor: threads its injected now() clock into the prompt sent to the adapter', async () => {
+  let capturedSystemPrompt = ''
+  const capturingAdapter: ProviderAdapter = {
+    providerKey: 'openai',
+    supportsLiveWebResearch: true,
+    isConfigured: () => true,
+    complete: async (input) => {
+      capturedSystemPrompt = input.systemPrompt
+      return { text: validEnvelopeJson() }
+    },
+  }
+  const FIXED_NOW = '2026-09-08T12:00:00.000Z'
+  const executor = new RemoteAiExecutor([capturingAdapter], () => FIXED_NOW)
+  await executor.execute(req())
+  assert.match(capturedSystemPrompt, new RegExp(FIXED_NOW.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
+})

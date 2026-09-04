@@ -9,6 +9,7 @@ import {
   routeDVA2Recommendation,
   validateDapInput,
   dapEntryConditionMet,
+  detectStaleOperationalDates,
   contentInventoryIsCommercialOnly,
   buildPartnerFriendlyReview,
   proposalViolatesRetrievedRules,
@@ -258,6 +259,41 @@ test('validateDapInput: INVALID when DAP claims a stale/wrong DVA-2 artifact', (
   const staleDap = dap({ consumedDva2ArtifactRef: 'artifact-dva2-a-OLD' })
   const result = validateDapInput(dva2(), staleDap)
   assert.equal(result.valid, false)
+})
+
+// ---------------------------------------------------------------------------
+// detectStaleOperationalDates — production-integrity pass. A real live
+// proof caught the model proposing plan dates anchored to a stale
+// internal calendar (mid-2024) during an execution actually running in
+// 2026.
+// ---------------------------------------------------------------------------
+
+test('detectStaleOperationalDates: flags a rightNowTask.targetDate proposed by the model during a 2024-anchored hallucination while the run is actually in 2026', () => {
+  const staleDap = dap({ extracted: { ...dap().extracted, rightNowTask: { ...dap().extracted.rightNowTask, targetDate: '2024-06-11' } } })
+  const result = detectStaleOperationalDates(staleDap, '2026-09-08T12:00:00.000Z')
+  assert.equal(result.stale, true)
+  assert.ok(result.staleDates.includes('2024-06-11'))
+  assert.match(result.reason ?? '', /2024-06-11/)
+})
+
+test('detectStaleOperationalDates: flags stale leading dates inside relationshipSequence entries too, not just rightNowTask', () => {
+  const staleDap = dap({ extracted: { ...dap().extracted, relationshipSequence: ['2024-06-11: warm intro', '2024-06-25: follow up'] } })
+  const result = detectStaleOperationalDates(staleDap, '2026-09-08T12:00:00.000Z')
+  assert.equal(result.stale, true)
+  assert.deepEqual(result.staleDates, ['2024-06-11', '2024-06-25'])
+})
+
+test('detectStaleOperationalDates: does NOT flag a targetDate that is genuinely near the actual runtime date', () => {
+  const freshDap = dap({ extracted: { ...dap().extracted, rightNowTask: { ...dap().extracted.rightNowTask, targetDate: '2026-09-15' } } })
+  const result = detectStaleOperationalDates(freshDap, '2026-09-08T12:00:00.000Z')
+  assert.equal(result.stale, false)
+  assert.deepEqual(result.staleDates, [])
+})
+
+test('detectStaleOperationalDates: a date just a few days in the past is NOT treated as materially stale (avoids false positives near a stage boundary)', () => {
+  const nearDap = dap({ extracted: { ...dap().extracted, rightNowTask: { ...dap().extracted.rightNowTask, targetDate: '2026-09-05' } } })
+  const result = detectStaleOperationalDates(nearDap, '2026-09-08T12:00:00.000Z')
+  assert.equal(result.stale, false)
 })
 
 test('dapEntryConditionMet: only Recommended Next Step = Build DAP now satisfies the DAP entry condition', () => {

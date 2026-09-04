@@ -33,7 +33,20 @@
 // destinationRelationship.ts's stage graph + asset-level model, and the
 // SAME executor/routing/playbookRun primitives the metro driver uses.
 
-import { screenDiscoveryCandidate, evaluateDVA1Gate, validateDva2Input, routeDVA2Recommendation, validateDapInput, dapEntryConditionMet, type DiscoveryCandidate, type DVA1Artifact, type DVA2Artifact, type DAPArtifact, type ExternalArtifactRef } from '../playbooks/destinationHubLifecycle'
+import {
+  screenDiscoveryCandidate,
+  evaluateDVA1Gate,
+  validateDva2Input,
+  routeDVA2Recommendation,
+  validateDapInput,
+  dapEntryConditionMet,
+  detectStaleOperationalDates,
+  type DiscoveryCandidate,
+  type DVA1Artifact,
+  type DVA2Artifact,
+  type DAPArtifact,
+  type ExternalArtifactRef,
+} from '../playbooks/destinationHubLifecycle'
 import { requiredAssetLevel } from '../playbooks/destinationRelationship'
 import { runExecutionRouted } from './routing'
 import type { ExecutionStore, SpecialistExecutor, SpecialistExecutionRequest, AcceptResultOutcome, ExecutionRecord } from './executor'
@@ -111,6 +124,21 @@ function eid(runId: string, stage: string): string {
  */
 function stampExecutedAt<T extends ExternalArtifactRef>(artifact: T, deps: DestinationDriverDeps): T {
   return { ...artifact, executedAt: (deps.now ?? (() => new Date().toISOString()))() }
+}
+
+/**
+ * Production-integrity pass — upstream artifact facts are immutable.
+ * state.dva1/state.dva2 are handed to a LATER stage's request only as a
+ * deep-cloned snapshot, never the live reference, so nothing downstream
+ * (a buggy specialist implementation, a future driver change) can ever
+ * mutate the canonical run.state object those values live in. The
+ * driver's own step functions already never write to a field other than
+ * their own stage's (stepD3Dva2 only ever assigns state.dva2, never
+ * state.dva1) — this is the defense-in-depth complement to that
+ * structural guarantee, not a replacement for it.
+ */
+function deepCloneJson<T>(value: T): T {
+  return structuredClone(value)
 }
 
 async function persist(run: PlaybookRunRecord, deps: DestinationDriverDeps): Promise<PlaybookRunRecord> {
@@ -234,7 +262,7 @@ async function stepD3Dva2(deps: DestinationDriverDeps, run: PlaybookRunRecord): 
     // reading the real artifact, producing internally inconsistent
     // output. Passing the full artifact (including fullReportMarkdown)
     // gives the model the actual prior-stage evidence to build on.
-    inputs: { destinationId: state.candidate?.destinationId, consumedDva1ArtifactRef: state.dva1?.artifactRef, consumedDva1Artifact: state.dva1 ?? null },
+    inputs: { destinationId: state.candidate?.destinationId, consumedDva1ArtifactRef: state.dva1?.artifactRef, consumedDva1Artifact: state.dva1 ? deepCloneJson(state.dva1) : null },
     requiredEvidenceKeys: ['artifact'],
     methodologyId: 'destination/dva2',
     methodologyVersion: 'v2',
@@ -294,7 +322,7 @@ async function stepD4Dap(deps: DestinationDriverDeps, run: PlaybookRunRecord): P
     // DAP's own methodology text says "Use only the information
     // contained in the DVA-2 report provided" — it MUST receive the
     // actual report, not a bare artifactRef string it cannot dereference.
-    inputs: { destinationId: state.candidate?.destinationId, consumedDva2ArtifactRef: state.dva2?.artifactRef, consumedDva2Artifact: state.dva2 ?? null },
+    inputs: { destinationId: state.candidate?.destinationId, consumedDva2ArtifactRef: state.dva2?.artifactRef, consumedDva2Artifact: state.dva2 ? deepCloneJson(state.dva2) : null },
     requiredEvidenceKeys: ['artifact'],
     methodologyId: 'destination/dap',
     methodologyVersion: 'v2',
@@ -316,6 +344,21 @@ async function stepD4Dap(deps: DestinationDriverDeps, run: PlaybookRunRecord): P
 
   state.dap = dap
   run.state = state
+
+  // Production-integrity pass — even with runtimeDateContextLine telling
+  // the model the real date, a live proof showed it can still anchor its
+  // OWN plan dates (rightNowTask, relationshipSequence) to a stale
+  // internal calendar. Catch that here rather than silently advancing
+  // past a plan Jerry could act on with dates already in the past.
+  const staleCheck = detectStaleOperationalDates(dap, (deps.now ?? (() => new Date().toISOString()))())
+  if (staleCheck.stale) {
+    return escalate(run, `DAP for ${dap.destinationName} proposed operational dates that are materially stale relative to the actual runtime date.`, {
+      decisionNeeded: 'Review DAP\'s proposed dates before acting on this plan — they appear to be based on a stale model calendar assumption, not the real current date.',
+      why: staleCheck.reason,
+      evidence: { rightNowTask: dap.extracted.rightNowTask, staleDates: staleCheck.staleDates },
+    })
+  }
+
   run.currentStage = 'D5_PIPELINE_STATE'
   return run
 }

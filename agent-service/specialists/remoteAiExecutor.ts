@@ -7,9 +7,10 @@
 // Never falls back to fabricating a result.
 
 import type { SpecialistExecutor, SpecialistExecutionRequest } from './executor'
-import type { SpecialistResultEnvelope, SpecialistKey } from './types'
+import type { SpecialistResultEnvelope, SpecialistKey, ProviderUsageInfo } from './types'
 import { buildResearchVerifierPrompt, buildCheckoffEditorPrompt, buildDestinationStrategistPrompt } from './promptBuilders'
 import { getMethodology, methodologyExists } from './methodologyRegistry'
+import { estimateCostUsd, type TokenUsage } from './usagePricing'
 
 // ---------------------------------------------------------------------------
 // Provider PREFERENCE policy (spec section 10) — data-driven, not a
@@ -63,6 +64,10 @@ export interface ProviderCompletionInput {
 
 export interface ProviderCompletionResult {
   text: string
+  /** The exact model id actually used for this call — required for cost estimation (usagePricing.ts keys its table by model id). Optional so a minimal/legacy adapter still type-checks; treated as "unknown model" (no cost estimate) when absent. */
+  model?: string | null
+  /** Real token usage as reported by the provider's own response, when available. Absent/null is expected sometimes (a provider response that omits it) — never treated as an error. */
+  usage?: TokenUsage | null
 }
 
 export interface ProviderAdapter {
@@ -136,12 +141,19 @@ export class AnthropicMessagesAdapter implements ProviderAdapter {
       throw new Error(`Anthropic Messages API returned ${response.status}: ${errText}`)
     }
 
-    const json = (await response.json()) as { content?: Array<{ type: string; text?: string }> }
+    const json = (await response.json()) as { content?: Array<{ type: string; text?: string }>; usage?: { input_tokens?: number; output_tokens?: number } }
     const text = (json.content ?? [])
       .filter((block) => block.type === 'text' && typeof block.text === 'string')
       .map((block) => block.text)
       .join('\n')
-    return { text }
+    const usage: TokenUsage | null = json.usage
+      ? {
+          inputTokens: typeof json.usage.input_tokens === 'number' ? json.usage.input_tokens : null,
+          outputTokens: typeof json.usage.output_tokens === 'number' ? json.usage.output_tokens : null,
+          totalTokens: typeof json.usage.input_tokens === 'number' && typeof json.usage.output_tokens === 'number' ? json.usage.input_tokens + json.usage.output_tokens : null,
+        }
+      : null
+    return { text, model: this.model, usage }
   }
 }
 
@@ -242,6 +254,30 @@ function methodologyRequiresLiveWebResearch(request: SpecialistExecutionRequest)
   return false
 }
 
+/**
+ * Turns a raw ProviderCompletionResult into the envelope's ProviderUsageInfo
+ * — real usage when the adapter reported it, honestly marked unavailable
+ * (never a fabricated/zero cost) when it didn't. This NEVER throws or
+ * blocks the execution; a provider that omits usage data just means
+ * `available: false`.
+ */
+function buildProviderUsageInfo(providerKey: string, completion: ProviderCompletionResult): ProviderUsageInfo {
+  const usage = completion.usage ?? null
+  const model = completion.model ?? null
+  const available = !!usage && usage.inputTokens != null && usage.outputTokens != null
+  const cost = available ? estimateCostUsd(providerKey, model, usage as TokenUsage) : null
+  return {
+    provider: providerKey,
+    model,
+    inputTokens: usage?.inputTokens ?? null,
+    outputTokens: usage?.outputTokens ?? null,
+    totalTokens: usage?.totalTokens ?? null,
+    costUsd: cost?.costUsd ?? null,
+    pricingVersion: cost?.pricingVersion ?? null,
+    available,
+  }
+}
+
 export class RemoteAiExecutor implements SpecialistExecutor {
   readonly executorType = 'REMOTE_AI_EXECUTOR' as const
 
@@ -255,7 +291,11 @@ export class RemoteAiExecutor implements SpecialistExecutor {
    * preference — e.g. quality-preferred provider first) — this class
    * itself has no vendor opinion.
    */
-  constructor(private readonly adapters: ProviderAdapter[]) {}
+  constructor(
+    private readonly adapters: ProviderAdapter[],
+    /** DI clock (tests inject a fixed value) — the SAME runtime date injected into every prompt via runtimeDateContextLine, so what the model is told matches what the driver actually stamps as executedAt. */
+    private readonly now: () => string = () => new Date().toISOString()
+  ) {}
 
   private qualifiedAdapters(request: SpecialistExecutionRequest): ProviderAdapter[] {
     const needsLiveWeb = methodologyRequiresLiveWebResearch(request)
@@ -280,13 +320,18 @@ export class RemoteAiExecutor implements SpecialistExecutor {
       return { unavailable: true, reason: `no configured provider available for specialist=${request.specialist} (live web research required: ${methodologyRequiresLiveWebResearch(request)})` }
     }
 
+    const nowIso = this.now()
     const { systemPrompt, userPrompt } =
-      request.specialist === 'research_verifier' ? buildResearchVerifierPrompt(request) : request.specialist === 'checkoff_editor' ? buildCheckoffEditorPrompt(request) : buildDestinationStrategistPrompt(request)
+      request.specialist === 'research_verifier'
+        ? buildResearchVerifierPrompt(request, nowIso)
+        : request.specialist === 'checkoff_editor'
+          ? buildCheckoffEditorPrompt(request, nowIso)
+          : buildDestinationStrategistPrompt(request, nowIso)
     const requiresLiveWebResearch = methodologyRequiresLiveWebResearch(request)
 
     const failures: string[] = []
     for (const adapter of qualified) {
-      let completion: { text: string }
+      let completion: ProviderCompletionResult
       try {
         completion = await adapter.complete({ systemPrompt, userPrompt, requiresLiveWebResearch, specialist: request.specialist, methodologyId: request.methodologyId })
       } catch (err) {
@@ -295,6 +340,8 @@ export class RemoteAiExecutor implements SpecialistExecutor {
         failures.push(`${adapter.providerKey}: ${err instanceof Error ? err.message : String(err)}`)
         continue
       }
+
+      const providerUsage = buildProviderUsageInfo(adapter.providerKey, completion)
 
       const parsed = parseModelEnvelope(completion.text)
       if (!parsed.ok || !parsed.envelope) {
@@ -307,6 +354,8 @@ export class RemoteAiExecutor implements SpecialistExecutor {
         // provider DID respond; retrying a structurally-bad response is a
         // job for the driver's own bounded-retry policy, not provider
         // fallback, which exists for TRANSIENT failures specifically).
+        // Usage/cost is still recorded — the call cost money even though
+        // its output was unusable, and that must not be lost.
         return {
           taskId: request.executionId,
           objective: request.objective,
@@ -322,9 +371,10 @@ export class RemoteAiExecutor implements SpecialistExecutor {
           methodologyId: request.methodologyId,
           methodologyVersion: request.methodologyVersion,
           providerKey: adapter.providerKey,
+          providerUsage,
         }
       }
-      return { ...parsed.envelope, providerKey: adapter.providerKey }
+      return { ...parsed.envelope, providerKey: adapter.providerKey, providerUsage }
     }
 
     // Every qualified adapter failed transiently.

@@ -75,3 +75,19 @@ test('OpenAiAdapter: a non-2xx response throws with the response body included',
   const adapter = new OpenAiAdapter({ apiKey: 'sk-test-fake', fetchImpl: fakeFetch })
   await assert.rejects(() => adapter.complete({ systemPrompt: 's', userPrompt: 'u', requiresLiveWebResearch: false, specialist: 'research_verifier', methodologyId: 'metro_launch' }), /429/)
 })
+
+test('OpenAiAdapter: parses real usage.input_tokens/output_tokens/total_tokens from the Responses API and returns the model used', async () => {
+  const fakeFetch = (async () =>
+    new Response(JSON.stringify({ output_text: '{"ok":true}', usage: { input_tokens: 1234, output_tokens: 567, total_tokens: 1801 } }), { status: 200 })) as unknown as typeof fetch
+  const adapter = new OpenAiAdapter({ apiKey: 'sk-test-fake', fetchImpl: fakeFetch })
+  const result = await adapter.complete({ systemPrompt: 's', userPrompt: 'u', requiresLiveWebResearch: false, specialist: 'research_verifier', methodologyId: 'metro_launch' })
+  assert.equal(result.model, 'gpt-4.1')
+  assert.deepEqual(result.usage, { inputTokens: 1234, outputTokens: 567, totalTokens: 1801 })
+})
+
+test('OpenAiAdapter: returns usage: null (never fabricated numbers) when the API response omits usage entirely', async () => {
+  const fakeFetch = (async () => new Response(JSON.stringify({ output_text: '{"ok":true}' }), { status: 200 })) as unknown as typeof fetch
+  const adapter = new OpenAiAdapter({ apiKey: 'sk-test-fake', fetchImpl: fakeFetch })
+  const result = await adapter.complete({ systemPrompt: 's', userPrompt: 'u', requiresLiveWebResearch: false, specialist: 'research_verifier', methodologyId: 'metro_launch' })
+  assert.equal(result.usage, null)
+})

@@ -28,6 +28,26 @@ const ENVELOPE_JSON_SHAPE = `{
   "methodologyVersion": "<echo exactly>"
 }`
 
+/**
+ * Production-integrity pass — every REMOTE_AI prompt gets an explicit,
+ * authoritative runtime date, appended as its own system-prompt segment
+ * (never edited into the verbatim methodology text, and never mixed into
+ * the ENVELOPE_JSON_SHAPE). A real live proof caught models defaulting
+ * to a stale internal "current date" (e.g. mid-2024) when reasoning
+ * about future dates/timing, even though the actual executedAt metadata
+ * is correctly runtime-stamped regardless (see destinationHubDriver.ts's
+ * stampExecutedAt) — this segment targets the SEPARATE problem of the
+ * model's own date reasoning inside narrative/planning content it
+ * produces (e.g. DAP's rightNowTask.targetDate, relationshipSequence).
+ */
+function runtimeDateContextLine(now: string): string {
+  return (
+    `RUNTIME CONTEXT: the actual current date/time is ${now}. This is authoritative and supersedes any date, season, or "current year" ` +
+    `assumption you might otherwise draw from training data. Any future dates, deadlines, or timing recommendations you produce must be ` +
+    `consistent with this actual date — never propose a date that is already in the past relative to it.`
+  )
+}
+
 function methodologyPreamble(request: SpecialistExecutionRequest): string {
   return (
     `You are executing CheckOff's "${request.specialist}" specialist role under the versioned methodology ` +
@@ -79,10 +99,11 @@ const RESEARCH_EXECUTION_TYPE_INSTRUCTIONS: Record<ResearchExecutionType, string
     'candidates for exactly that deficit — same discipline as BROAD_DISCOVERY otherwise.',
 }
 
-export function buildResearchVerifierPrompt(request: SpecialistExecutionRequest): { systemPrompt: string; userPrompt: string } {
+export function buildResearchVerifierPrompt(request: SpecialistExecutionRequest, now: string = new Date().toISOString()): { systemPrompt: string; userPrompt: string } {
   const executionType = researchExecutionTypeFor(request)
   const systemPrompt = [
     methodologyPreamble(request),
+    runtimeDateContextLine(now),
     'You have live web search available and must use it — do not rely on training-data memory for what currently exists, is open, ' +
       'or is located where. Every evidence.candidates[] entry must include: name, category, neighborhood, source (a real URL or ' +
       'named source), claimSupported (what that source actually supports), freshnessDate (if the source states one, else null), ' +
@@ -96,9 +117,10 @@ export function buildResearchVerifierPrompt(request: SpecialistExecutionRequest)
   return { systemPrompt, userPrompt }
 }
 
-export function buildCheckoffEditorPrompt(request: SpecialistExecutionRequest): { systemPrompt: string; userPrompt: string } {
+export function buildCheckoffEditorPrompt(request: SpecialistExecutionRequest, now: string = new Date().toISOString()): { systemPrompt: string; userPrompt: string } {
   const systemPrompt = [
     methodologyPreamble(request),
+    runtimeDateContextLine(now),
     'You transform an ALREADY-VERIFIED factual candidate into final CheckOff item wording. You do NOT research new facts, and you ' +
       'must NEVER invent or embellish a menu item/product/experience beyond what the supplied factual source states.',
     'Required voice: a compelling hook in approximately the first 5-7 words; action/experience first; the business/place ' +
@@ -201,7 +223,7 @@ function readMethodologyFileVerbatim(methodologyId: string, methodologyVersion: 
   return readFileSync(`${__dirname}/../../${methodology.docPath}`, 'utf8')
 }
 
-export function buildDestinationStrategistPrompt(request: SpecialistExecutionRequest): { systemPrompt: string; userPrompt: string } {
+export function buildDestinationStrategistPrompt(request: SpecialistExecutionRequest, now: string = new Date().toISOString()): { systemPrompt: string; userPrompt: string } {
   const methodologyText = readMethodologyFileVerbatim(request.methodologyId, request.methodologyVersion)
   const artifactShape = DVA_ARTIFACT_ENVELOPE_SHAPE[request.methodologyId]
   if (!artifactShape) {
@@ -210,6 +232,7 @@ export function buildDestinationStrategistPrompt(request: SpecialistExecutionReq
 
   const systemPrompt = [
     `You are executing CheckOff's "destination_strategist" specialist role. Below is the EXACT, VERBATIM methodology you must follow — every rule, section, and constraint in it is authoritative. Do not skip sections, do not invent a different process, do not add or remove requirements.`,
+    runtimeDateContextLine(now),
     `--- BEGIN METHODOLOGY (${request.methodologyId}/${request.methodologyVersion}) ---\n${methodologyText}\n--- END METHODOLOGY ---`,
     `Produce the FULL report the methodology describes, with every required section. Then put that complete report VERBATIM into evidence.artifact.fullReportMarkdown (never summarized or omitted — it is the authoritative artifact) and extract the structured decision fields alongside it into evidence.artifact using this exact shape:\n${artifactShape}`,
     envelopeInstructions(request),

@@ -29,6 +29,7 @@
 
 import type { ProviderAdapter, ProviderCompletionInput, ProviderCompletionResult } from './remoteAiExecutor'
 import { resolveOpenAiModel } from './modelRouting'
+import type { TokenUsage } from './usagePricing'
 
 export interface OpenAiAdapterOptions {
   apiKey?: string
@@ -119,19 +120,31 @@ export class OpenAiAdapter implements ProviderAdapter {
     const json = (await response.json()) as {
       output_text?: string
       output?: Array<{ type: string; content?: Array<{ type: string; text?: string }> }>
+      usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number }
     }
+
+    // Real token usage, when the API returned it — never fabricated when
+    // absent. Production-integrity pass: this is what lets Chief compute
+    // a real per-execution cost instead of a hand-waved estimate.
+    const usage: TokenUsage | null = json.usage
+      ? {
+          inputTokens: typeof json.usage.input_tokens === 'number' ? json.usage.input_tokens : null,
+          outputTokens: typeof json.usage.output_tokens === 'number' ? json.usage.output_tokens : null,
+          totalTokens: typeof json.usage.total_tokens === 'number' ? json.usage.total_tokens : null,
+        }
+      : null
 
     // The Responses API exposes a convenience `output_text` on most SDKs/
     // gateway shims; fall back to walking `output[].content[].text` for a
     // raw API response that doesn't include it.
     if (typeof json.output_text === 'string' && json.output_text.length > 0) {
-      return { text: json.output_text }
+      return { text: json.output_text, model, usage }
     }
     const text = (json.output ?? [])
       .flatMap((item) => item.content ?? [])
       .filter((c) => c.type === 'output_text' && typeof c.text === 'string')
       .map((c) => c.text as string)
       .join('\n')
-    return { text }
+    return { text, model, usage }
   }
 }

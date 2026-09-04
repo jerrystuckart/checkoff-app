@@ -326,6 +326,167 @@ test('destination driver: executedAt is ALWAYS the driver\'s own clock, even whe
 })
 
 // ---------------------------------------------------------------------------
+// Stale operational dates in DAP's own plan (rightNowTask/relationshipSequence)
+// must stop the driver and escalate to Jerry, even though executedAt
+// metadata is independently correct (the two are different problems —
+// see destinationHubLifecycle.ts's detectStaleOperationalDates doc).
+// ---------------------------------------------------------------------------
+
+test('destination driver: a DAP proposing 2024-dated rightNowTask during a real 2026 execution is flagged and escalated, not silently accepted', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const destinationId = 'destination-stale-dates'
+  const destinationName = 'Stale Dates'
+  scriptDva1(executor, destinationId, destinationName, 90, 'FITS_CURRENT_STRATEGY')
+  scriptDva2(executor, destinationId, destinationName, 'BUILD_DAP_NOW')
+  executor.scriptWhen(
+    (r) => r.stage === 'D4_DAP' && r.destinationId === destinationId,
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: {
+          artifact: {
+            provider: 'dap_claude_project',
+            destinationId,
+            destinationName,
+            artifactRef: `dap-${destinationId}`,
+            executedAt: '2024-06-11T00:00:00Z', // will be overwritten by stampExecutedAt regardless
+            contentHash: null,
+            consumedDva2ArtifactRef: `dva2-${destinationId}`,
+            extracted: {
+              recommendedChampion: `${destinationName} Chamber director`,
+              secondaryChampions: [],
+              decisionMakers: [],
+              stakeholderOrganizations: [],
+              fundingBudgetClues: [],
+              likelyBuyer: null,
+              estimatedSalesDifficulty: null,
+              timingConsiderations: [],
+              politicalStakeholderComplexity: null,
+              objectionsHurdles: [],
+              destinationPainPoints: [],
+              checkoffValueProposition: 'synthetic',
+              recommendedEntryStrategy: 'synthetic',
+              relationshipSequence: ['2024-06-11: warm intro'],
+              recommendedOfferDirection: null,
+              rightNowTask: {
+                currentStage: 'Relationship Building',
+                currentGoal: 'synthetic',
+                highestPriorityTask: 'synthetic',
+                targetDate: '2024-06-11', // stale — the model anchored to the wrong year
+                estimatedTime: '30 minutes',
+                expectedResult: 'synthetic',
+                whyItMatters: 'synthetic',
+              },
+            },
+          },
+        },
+        methodologyId: 'destination/dap',
+        methodologyVersion: 'v2',
+      })
+  )
+
+  const run = await driveDestinationHub({ runStore, execStore, executors: [executor], now: () => '2026-09-08T12:00:00.000Z' }, 'stale-dates-synthetic', { candidate: candidate(destinationId, destinationName) })
+
+  assert.equal(run.status, 'NEEDS_JERRY')
+  assert.equal(run.currentStage, 'D4_DAP', 'must not advance to D5 with a plan dated in the past')
+  assert.match(run.jerryReason ?? '', /materially stale/)
+  const state = run.state as { dap?: { extracted: { rightNowTask: { targetDate: string } } } }
+  assert.equal(state.dap?.extracted.rightNowTask.targetDate, '2024-06-11', 'the stale artifact is still persisted for review, just gated behind Jerry')
+})
+
+test('destination driver: a DAP with dates consistent with the real runtime date advances normally, no false-positive stale flag', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const destinationId = 'destination-fresh-dates'
+  const destinationName = 'Fresh Dates'
+  scriptDva1(executor, destinationId, destinationName, 90, 'FITS_CURRENT_STRATEGY')
+  scriptDva2(executor, destinationId, destinationName, 'BUILD_DAP_NOW')
+  scriptDap(executor, destinationId, destinationName) // uses targetDate: 2026-09-12, already fresh relative to 'now' below
+
+  const run = await driveDestinationHub({ runStore, execStore, executors: [executor], now: () => '2026-09-08T12:00:00.000Z' }, 'fresh-dates-synthetic', { candidate: candidate(destinationId, destinationName) })
+
+  assert.equal(run.status, 'NEEDS_JERRY')
+  assert.equal(run.currentStage, 'RELATIONSHIP_ASSETS_PREP', 'a fresh-dated DAP should advance normally to the outreach-approval boundary')
+  assert.doesNotMatch(run.jerryReason ?? '', /materially stale/)
+})
+
+// ---------------------------------------------------------------------------
+// Upstream artifact facts are immutable — downstream (D3/D4) execution
+// can never mutate state.dva1/state.dva2, even indirectly through the
+// object handed to a later stage's request inputs.
+// ---------------------------------------------------------------------------
+
+test('destination driver: state.dva1 is untouched by D3/D4 execution, even when the DVA-2/DAP model output disagrees with it', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const destinationId = 'destination-immutable-upstream'
+  const destinationName = 'Immutable Upstream'
+  const CANONICAL_SCORE = 92
+  scriptDva1(executor, destinationId, destinationName, CANONICAL_SCORE, 'FITS_CURRENT_STRATEGY')
+  scriptDva2(executor, destinationId, destinationName, 'BUILD_DAP_NOW')
+  scriptDap(executor, destinationId, destinationName)
+
+  const run = await driveDestinationHub({ runStore, execStore, executors: [executor] }, 'immutable-upstream-synthetic', { candidate: candidate(destinationId, destinationName) })
+
+  const state = run.state as { dva1?: { score: number; currentStrategyFit: string } }
+  assert.equal(state.dva1?.score, CANONICAL_SCORE, 'D3/D4 executing must never change the canonical DVA-1 score already on record')
+  assert.equal(state.dva1?.currentStrategyFit, 'FITS_CURRENT_STRATEGY')
+})
+
+test('destination driver: the DVA-1 artifact object passed into D3\'s request.inputs.consumedDva1Artifact is a deep-cloned snapshot, not a live reference to state.dva1', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const destinationId = 'destination-clone-check'
+  const destinationName = 'Clone Check'
+  scriptDva1(executor, destinationId, destinationName, 88, 'FITS_CURRENT_STRATEGY')
+
+  let capturedConsumedDva1Artifact: { score?: number } | null = null
+  executor.scriptWhen(
+    (r) => r.stage === 'D3_DVA2' && r.destinationId === destinationId,
+    (r) => {
+      capturedConsumedDva1Artifact = (r.inputs as { consumedDva1Artifact?: { score?: number } }).consumedDva1Artifact ?? null
+      // Simulate a buggy/malicious specialist mutating what it was given.
+      if (capturedConsumedDva1Artifact) capturedConsumedDva1Artifact.score = 1
+      return fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: {
+          artifact: {
+            provider: 'dva2_claude_project',
+            destinationId,
+            destinationName,
+            artifactRef: `dva2-${destinationId}`,
+            executedAt: '2026-09-05T01:00:00Z',
+            contentHash: null,
+            worthPursuing: 'YES',
+            recommendedPriority: 'HIGH_PRIORITY_CREATE_DAP',
+            recommendedNextStep: 'BUILD_DAP_NOW',
+            rationale: 'synthetic',
+            knownRisks: [],
+            evidenceGaps: [],
+            consumedDva1ArtifactRef: `dva1-${destinationId}`,
+          },
+        },
+        methodologyId: 'destination/dva2',
+        methodologyVersion: 'v2',
+      })
+    }
+  )
+
+  const run = await driveDestinationHub({ runStore, execStore, executors: [executor] }, 'clone-check-synthetic', { candidate: candidate(destinationId, destinationName), maxSteps: 4 })
+
+  assert.ok(capturedConsumedDva1Artifact, 'D3 must have executed and captured its inputs')
+  const state = run.state as { dva1?: { score: number } }
+  assert.equal(state.dva1?.score, 88, 'mutating the object handed to D3 must never corrupt the canonical run.state.dva1')
+})
+
+// ---------------------------------------------------------------------------
 // DVA-2 and DAP must receive the REAL prior-stage artifact, not just a
 // bare artifactRef string (Phase 2H — a real live proof showed the model
 // reinventing "DVA-1 Recap"/DVA-2 price numbers from scratch because the

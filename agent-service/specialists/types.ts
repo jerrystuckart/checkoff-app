@@ -89,6 +89,31 @@ export interface SpecialistResultEnvelope {
    * so no existing envelope construction breaks.
    */
   providerKey?: string | null
+  /**
+   * Production-integrity pass — real per-execution token usage and
+   * estimated USD cost, when the provider adapter reported it. null
+   * whenever usage data is unexpectedly absent (a provider response
+   * that omitted its usage field, a non-REMOTE_AI executor) — this NEVER
+   * blocks the execution from completing; it just means cost tracking
+   * has a genuine gap for that one call, recorded honestly rather than
+   * guessed as $0. See usagePricing.ts / usageAggregation.ts.
+   */
+  providerUsage?: ProviderUsageInfo | null
+}
+
+export interface ProviderUsageInfo {
+  provider: string
+  /** The exact model id actually used for this call (post-routing) — never the routing target's name, the real one. */
+  model: string | null
+  inputTokens: number | null
+  outputTokens: number | null
+  totalTokens: number | null
+  /** Estimated from usagePricing.ts's versioned table — null when the model isn't in the table or token counts are missing, never a guessed $0. */
+  costUsd: number | null
+  /** Which USAGE_PRICING_TABLE_VERSION produced costUsd — lets a stored record be understood even after the table is later updated. */
+  pricingVersion: string | null
+  /** False whenever the provider's response didn't include usable usage data — the execution still completes; this just marks the gap. */
+  available: boolean
 }
 
 export interface EnvelopeValidationResult {

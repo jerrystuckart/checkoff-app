@@ -446,6 +446,65 @@ export function dapEntryConditionMet(dva2: DVA2Artifact): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Stale operational date detection — production-integrity pass. A real
+// live proof caught the model's own date reasoning anchored to a stale
+// internal "current date" (e.g. mid-2024) when producing rightNowTask/
+// relationshipSequence, even after runtimeDateContextLine (promptBuilders.ts)
+// explicitly told it the real date — models don't reliably self-correct
+// just from being told once. This is a genuine safety net, not a
+// substitute for the prompt-level fix: it catches whatever the prompt
+// instruction failed to prevent, before Jerry ever sees a plan dated in
+// the past.
+// ---------------------------------------------------------------------------
+
+export interface StaleDateCheckResult {
+  stale: boolean
+  staleDates: string[]
+  reason: string | null
+}
+
+const LEADING_ISO_DATE = /^(\d{4}-\d{2}-\d{2})/
+
+/** How many days in the past (relative to the real runtime date) counts as "materially" stale, rather than a benign same-day/rounding difference. */
+const STALE_DATE_THRESHOLD_DAYS = 14
+
+function daysBefore(candidateIso: string, nowIso: string): number | null {
+  const candidate = new Date(candidateIso)
+  const now = new Date(nowIso)
+  if (Number.isNaN(candidate.getTime()) || Number.isNaN(now.getTime())) return null
+  return (now.getTime() - candidate.getTime()) / (1000 * 60 * 60 * 24)
+}
+
+/**
+ * Scans a DAP artifact's operational dates (rightNowTask.targetDate, and
+ * the leading date on each relationshipSequence entry) against the real
+ * runtime date. Returns every date more than STALE_DATE_THRESHOLD_DAYS in
+ * the past — a plan dated in the past is not actionable, regardless of
+ * how internally consistent the rest of the report is.
+ */
+export function detectStaleOperationalDates(dap: DAPArtifact, nowIso: string): StaleDateCheckResult {
+  const candidates: string[] = []
+  if (dap.extracted.rightNowTask?.targetDate) candidates.push(dap.extracted.rightNowTask.targetDate)
+  for (const entry of dap.extracted.relationshipSequence ?? []) {
+    const match = entry.match(LEADING_ISO_DATE)
+    if (match) candidates.push(match[1])
+  }
+
+  const staleDates: string[] = []
+  for (const candidate of candidates) {
+    const diff = daysBefore(candidate, nowIso)
+    if (diff !== null && diff > STALE_DATE_THRESHOLD_DAYS) staleDates.push(candidate)
+  }
+
+  if (staleDates.length === 0) return { stale: false, staleDates: [], reason: null }
+  return {
+    stale: true,
+    staleDates,
+    reason: `${staleDates.length} operational date(s) in the DAP plan are more than ${STALE_DATE_THRESHOLD_DAYS} days in the past relative to the actual runtime date (${nowIso}): ${staleDates.join(', ')} — likely a stale internal calendar assumption, not a deliberate backdated plan.`,
+  }
+}
+
+// ---------------------------------------------------------------------------
 // D9 — Content build. RETRIEVED requirement (explicit in this task, and
 // consistent with Willcox's own real content — birding/agritourism/wine
 // trail already exist alongside businesses): destination content is
