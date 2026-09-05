@@ -8,6 +8,8 @@ import {
   allGatesPass,
   coarseStatusForStage,
   verifyAuthorityCoverage,
+  validateNeighborhoodDefinition,
+  validateNeighborhoodDefinitions,
   type CoverageAuditEvidence,
   type MetroGateEvidence,
 } from './metroLaunch'
@@ -210,4 +212,94 @@ test('coarseStatusForStage: M11/M12 (outreach) are WAITING — hands off to Busi
 
 test('metro launch playbook: every declared authority operation is registered', () => {
   assert.doesNotThrow(() => verifyAuthorityCoverage())
+})
+
+// ---------------------------------------------------------------------------
+// Structural bug fix regressions (San Diego run, 2026-09-05):
+// GEOGRAPHIC_HOLE requires a valid `kind`, and "meaningful depth" (not
+// just zero-vs-nonzero) is now a configurable, blocking gap.
+// ---------------------------------------------------------------------------
+
+test('auditCoverage: an important_neighborhood with real kind and zero items is a GEOGRAPHIC_HOLE (blocking)', () => {
+  const evidence: CoverageAuditEvidence = {
+    categoryCounts: [],
+    neighborhoodCounts: [],
+    plan: { targets: [] },
+    allNeighborhoods: [{ name: 'Oceanside', kind: 'important_neighborhood', ring1RadiusM: 1500, ring2RadiusM: 3000 }],
+  }
+  const gaps = auditCoverage(evidence)
+  assert.ok(gaps.some((g) => g.kind === 'GEOGRAPHIC_HOLE' && g.name === 'Oceanside'))
+  assert.equal(deriveMetroLoopAction(gaps).action, 'TARGETED_RESEARCH')
+})
+
+test('auditCoverage: a neighborhood object missing kind entirely produces no GEOGRAPHIC_HOLE — this is exactly the bug validateNeighborhoodDefinitions must prevent from ever reaching here', () => {
+  const evidence: CoverageAuditEvidence = {
+    categoryCounts: [],
+    neighborhoodCounts: [],
+    plan: { targets: [] },
+    // Cast: reproducing the literal shape the live M1 bug produced (no `kind` at all).
+    allNeighborhoods: [{ name: 'Oceanside' } as unknown as CoverageAuditEvidence['allNeighborhoods'][number]],
+  }
+  const gaps = auditCoverage(evidence)
+  assert.equal(gaps.length, 0, 'a malformed neighborhood silently disables the hole check — this is why evidence validation must reject it before it ever reaches auditCoverage')
+})
+
+test('auditCoverage: token coverage (1-2 items) in a configured depth-target area is a blocking GEOGRAPHIC_BELOW_MINIMUM gap', () => {
+  const evidence: CoverageAuditEvidence = {
+    categoryCounts: [],
+    neighborhoodCounts: [
+      { neighborhoodName: 'Carlsbad', count: 2 },
+      { neighborhoodName: 'Oceanside', count: 0 },
+    ],
+    plan: { targets: [] },
+    allNeighborhoods: [],
+    depthTargets: [
+      { neighborhoodName: 'Carlsbad', minimumItems: 5 },
+      { neighborhoodName: 'Oceanside', minimumItems: 5 },
+    ],
+  }
+  const gaps = auditCoverage(evidence)
+  const carlsbad = gaps.find((g) => g.kind === 'GEOGRAPHIC_BELOW_MINIMUM' && g.name === 'Carlsbad')
+  const oceanside = gaps.find((g) => g.kind === 'GEOGRAPHIC_BELOW_MINIMUM' && g.name === 'Oceanside')
+  assert.ok(carlsbad, 'Carlsbad at 2/5 must be flagged — this is exactly the "token coverage" the plain zero-check missed')
+  assert.equal(carlsbad?.detail, '2/5 minimum for meaningful depth')
+  assert.ok(oceanside)
+  assert.equal(deriveMetroLoopAction(gaps).action, 'TARGETED_RESEARCH')
+})
+
+test('auditCoverage: a depth target that is met produces no gap', () => {
+  const evidence: CoverageAuditEvidence = {
+    categoryCounts: [],
+    neighborhoodCounts: [{ neighborhoodName: 'Carlsbad', count: 5 }],
+    plan: { targets: [] },
+    allNeighborhoods: [],
+    depthTargets: [{ neighborhoodName: 'Carlsbad', minimumItems: 5 }],
+  }
+  const gaps = auditCoverage(evidence)
+  assert.equal(gaps.filter((g) => g.kind === 'GEOGRAPHIC_BELOW_MINIMUM').length, 0)
+})
+
+test('validateNeighborhoodDefinition: rejects a missing kind', () => {
+  const result = validateNeighborhoodDefinition({ name: 'Oceanside' })
+  assert.equal(result.valid, false)
+  assert.ok(result.reasons.some((r) => r.includes('kind')))
+})
+
+test('validateNeighborhoodDefinition: rejects an invalid kind value (model inventing its own taxonomy)', () => {
+  const result = validateNeighborhoodDefinition({ name: 'Oceanside', kind: 'Coastal North County' })
+  assert.equal(result.valid, false)
+})
+
+test('validateNeighborhoodDefinition: accepts a real kind value with no ring radii required (driver assigns defaults)', () => {
+  const result = validateNeighborhoodDefinition({ name: 'Oceanside', kind: 'important_neighborhood' })
+  assert.equal(result.valid, true)
+})
+
+test('validateNeighborhoodDefinitions: one malformed entry among several valid ones still fails the whole batch', () => {
+  const result = validateNeighborhoodDefinitions([
+    { name: 'Downtown', kind: 'core_urban' },
+    { name: 'Oceanside' }, // missing kind — exactly the real M1 bug
+  ])
+  assert.equal(result.valid, false)
+  assert.ok(result.reasons.some((r) => r.includes('Oceanside')))
 })

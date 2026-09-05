@@ -10,11 +10,11 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { driveMetroLaunch, executionId, m0DecisionsResolved, type MetroM0Decisions } from './metroLaunchDriver'
+import { driveMetroLaunch, executionId, m0DecisionsResolved, buildAuditEvidence, type MetroM0Decisions } from './metroLaunchDriver'
 import { InMemoryPlaybookRunStore, getOrCreateRun, playbookRunId } from './playbookRun'
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
-import type { CategoryCoveragePlan } from '../playbooks/metroLaunch'
+import { auditCoverage, type CategoryCoveragePlan } from '../playbooks/metroLaunch'
 
 const PLAN: CategoryCoveragePlan = {
   targets: [
@@ -340,4 +340,168 @@ test('driveMetroLaunch: M1 request inputs carry the M0 geographicScope decision,
 
   await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN, maxSteps: 2 })
   assert.equal(capturedGeographicScope, RESOLVED_M0.geographicScope)
+})
+
+// ---------------------------------------------------------------------------
+// Structural bug fix regressions (San Diego run, 2026-09-05)
+// ---------------------------------------------------------------------------
+
+test('buildAuditEvidence: regression — real free-text categories from the San Diego run no longer produce false 0/minimum counts', () => {
+  const state = {
+    plan: PLAN, // Food & drink min 5, Shopping min 4
+    neighborhoods: [],
+    candidates: [
+      { name: 'A', category: 'Restaurant (Japanese/izakaya)', neighborhood: 'Downtown', claimSupported: 'x', source: 'https://x', needsVerification: true },
+      { name: 'B', category: 'Food Hall', neighborhood: 'Downtown', claimSupported: 'x', source: 'https://x', needsVerification: true },
+      { name: 'C', category: 'Café / coffee shop', neighborhood: 'Downtown', claimSupported: 'x', source: 'https://x', needsVerification: true },
+      { name: 'D', category: 'Restaurant (Mexican regional)', neighborhood: 'Downtown', claimSupported: 'x', source: 'https://x', needsVerification: true },
+      { name: 'E', category: 'Taco shop', neighborhood: 'Downtown', claimSupported: 'x', source: 'https://x', needsVerification: true },
+      { name: 'F', category: 'Shopping Mall', neighborhood: 'Downtown', claimSupported: 'x', source: 'https://x', needsVerification: true },
+      { name: 'G', category: 'Outlet Center', neighborhood: 'Downtown', claimSupported: 'x', source: 'https://x', needsVerification: true },
+      { name: 'H', category: 'Antique District', neighborhood: 'Downtown', claimSupported: 'x', source: 'https://x', needsVerification: true },
+      { name: 'I', category: 'Shopping District', neighborhood: 'Downtown', claimSupported: 'x', source: 'https://x', needsVerification: true },
+    ],
+  }
+  const { evidence, unclassifiedCategories } = buildAuditEvidence(state)
+  const foodCount = evidence.categoryCounts.find((c) => c.categoryName === 'Food & drink')?.count ?? 0
+  const shoppingCount = evidence.categoryCounts.find((c) => c.categoryName === 'Shopping')?.count ?? 0
+  assert.equal(foodCount, 5, 'all 5 descriptive restaurant/food labels must normalize to Food & drink')
+  assert.equal(shoppingCount, 4, 'all 4 descriptive shopping labels must normalize to Shopping')
+  assert.equal(unclassifiedCategories.length, 0)
+
+  // With the fix, auditCoverage sees real counts — neither category is falsely below minimum.
+  const gaps = auditCoverage(evidence)
+  assert.equal(gaps.some((g) => g.kind === 'CATEGORY_BELOW_MINIMUM'), false)
+})
+
+test('buildAuditEvidence: an unmappable category is reported as unclassified, never silently forced into a canonical bucket', () => {
+  const state = {
+    plan: PLAN,
+    neighborhoods: [],
+    candidates: [{ name: 'Z', category: 'Upscale Contemporary', neighborhood: 'Downtown', claimSupported: 'x', source: 'https://x', needsVerification: true }],
+  }
+  const { unclassifiedCategories } = buildAuditEvidence(state)
+  assert.equal(unclassifiedCategories.length, 1)
+  assert.equal(unclassifiedCategories[0].raw, 'Upscale Contemporary')
+})
+
+test('buildAuditEvidence: neighborhood counts use fuzzy substring matching, so "Carlsbad (North County)" counts toward a "Carlsbad" depth target', () => {
+  const state = {
+    plan: { targets: [] },
+    neighborhoods: [],
+    depthTargets: [{ neighborhoodName: 'Carlsbad', minimumItems: 5 }],
+    candidates: [
+      { name: 'A', category: 'Food & drink', neighborhood: 'Carlsbad (North County)', claimSupported: 'x', source: 'https://x', needsVerification: true },
+      { name: 'B', category: 'Food & drink', neighborhood: 'Carlsbad', claimSupported: 'x', source: 'https://x', needsVerification: true },
+    ],
+  }
+  const { evidence } = buildAuditEvidence(state)
+  const carlsbadCount = evidence.neighborhoodCounts.find((n) => n.neighborhoodName === 'Carlsbad')?.count
+  assert.equal(carlsbadCount, 2)
+})
+
+test('driveMetroLaunch: a configured depth target with only token coverage triggers real M5 targeted research (the Carlsbad/Oceanside "meaningful depth" fix)', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const gapDepthRequests: unknown[] = []
+
+  executor.scriptWhen(
+    (r) => r.stage === 'M1_GEOGRAPHY_MAP',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { neighborhoods: [{ name: 'Downtown', kind: 'core_urban', ring1RadiusM: 1500, ring2RadiusM: 3000 }] },
+        methodologyId: 'metro_launch',
+        methodologyVersion: 'v1',
+      })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M3_BROAD_DISCOVERY',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: {
+          candidates: [
+            { name: 'FoodA', category: 'Food & drink', neighborhood: 'Downtown', claimSupported: 'x', source: 'https://x', needsVerification: true },
+            { name: 'ShopA', category: 'Shopping', neighborhood: 'Carlsbad', claimSupported: 'x', source: 'https://x', needsVerification: true }, // token coverage: 1 item
+          ],
+        },
+        methodologyId: 'metro_launch',
+        methodologyVersion: 'v1',
+      })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M5_TARGETED_DEEP_DIVES',
+    (r) => {
+      gapDepthRequests.push(r.inputs)
+      return fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { candidates: [{ name: 'CarlsbadFix', category: 'Shopping', neighborhood: 'Carlsbad', claimSupported: 'x', source: 'https://x', needsVerification: true }] },
+        methodologyId: 'metro_launch',
+        methodologyVersion: 'v1',
+      })
+    }
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M6_QUALITY_VERIFICATION',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { verifiedCandidateNames: [] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: 'x' }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+  )
+
+  const projectId = 'san-diego-depth-target-test'
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  seeded!.state = { m0Decisions: RESOLVED_M0 }
+  await runStore.put(seeded!)
+
+  const plan: CategoryCoveragePlan = { targets: [{ categoryName: 'Food & drink', minimumViable: 1, healthyTarget: 1, qualityNotes: [] }, { categoryName: 'Shopping', minimumViable: 1, healthyTarget: 1, qualityNotes: [] }] }
+  const run = await driveMetroLaunch(
+    { runStore, execStore, executors: [executor] },
+    projectId,
+    { categoryPlan: plan, depthTargets: [{ neighborhoodName: 'Carlsbad', minimumItems: 2 }], maxSteps: 30 }
+  )
+
+  assert.ok(gapDepthRequests.some((i) => JSON.stringify(i).includes('Carlsbad')), 'the depth-target gap must have triggered a real M5 targeted-research execution for Carlsbad')
+  assert.equal(run.status, 'NEEDS_JERRY') // reaches the launch-readiness boundary, which always escalates
+})
+
+test('driveMetroLaunch: M1 output missing a valid neighborhood "kind" fails evidence validation and retries rather than silently disabling geographic-hole detection', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  let m1Attempts = 0
+
+  executor.scriptWhen(
+    (r) => r.stage === 'M1_GEOGRAPHY_MAP',
+    (r) => {
+      m1Attempts += 1
+      // Reproduces the real bug: a neighborhood record shaped like a candidate, missing `kind` entirely.
+      return fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { neighborhoods: [{ name: 'Oceanside', category: 'Coastal North County', source: 'https://x', claimSupported: 'x' }] },
+        methodologyId: 'metro_launch',
+        methodologyVersion: 'v1',
+      })
+    }
+  )
+
+  const projectId = 'san-diego-malformed-m1-test'
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  seeded!.state = { m0Decisions: RESOLVED_M0 }
+  await runStore.put(seeded!)
+
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN, maxSteps: 30 })
+
+  assert.ok(m1Attempts > 1, 'a malformed neighborhood must trigger at least one real retry, not be accepted on the first attempt')
+  assert.equal(run.status, 'NEEDS_JERRY')
+  assert.match(run.jerryReason ?? '', /evidence validation/)
 })

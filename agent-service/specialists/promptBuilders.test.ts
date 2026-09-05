@@ -75,6 +75,28 @@ test('researchExecutionTypeFor / buildResearchVerifierPrompt / buildCheckoffEdit
   assert.match(buildCheckoffEditorPrompt(editorReq).systemPrompt, /checkoffizedItem/)
 })
 
+// ---------------------------------------------------------------------------
+// Structural bug fix regression (San Diego run, 2026-09-05): the M1
+// geography stage's prompt must describe evidence.neighborhoods[]'s
+// required shape, not just evidence.candidates[] — this is exactly what
+// was missing and let live output omit `kind` entirely.
+// ---------------------------------------------------------------------------
+
+test('buildResearchVerifierPrompt: requiredEvidenceKeys including "neighborhoods" adds the neighborhood-kind contract to the prompt', () => {
+  const geoReq: SpecialistExecutionRequest = { ...req(), specialist: 'research_verifier', methodologyId: 'metro_launch', methodologyVersion: 'v1', stage: 'M1_GEOGRAPHY_MAP', requiredEvidenceKeys: ['neighborhoods'], inputs: { executionType: 'BROAD_DISCOVERY' } }
+  const { systemPrompt } = buildResearchVerifierPrompt(geoReq)
+  assert.match(systemPrompt, /evidence\.neighborhoods\[\]/)
+  assert.match(systemPrompt, /core_urban/)
+  assert.match(systemPrompt, /important_neighborhood/)
+  assert.match(systemPrompt, /destination_worthy_outer/)
+})
+
+test('buildResearchVerifierPrompt: a candidates-only request (no "neighborhoods" required) does not mention the neighborhood-kind contract', () => {
+  const req3: SpecialistExecutionRequest = { ...req(), specialist: 'research_verifier', methodologyId: 'metro_launch', methodologyVersion: 'v1', stage: 'M3_BROAD_DISCOVERY', requiredEvidenceKeys: ['candidates'], inputs: { executionType: 'BROAD_DISCOVERY' } }
+  const { systemPrompt } = buildResearchVerifierPrompt(req3)
+  assert.equal(systemPrompt.includes('core_urban'), false)
+})
+
 test('buildDestinationRelationshipManagerPrompt: embeds the destination_commercial methodology verbatim and requests only a draft object — never pricing/commitment', () => {
   const relReq: SpecialistExecutionRequest = { ...req(), specialist: 'destination_relationship_manager', methodologyId: 'destination_commercial', methodologyVersion: 'v1', stage: 'ASSETS_PREP', playbookKey: 'destination_relationship', authorityOperations: ['destination_relationship.draft_outreach'] }
   const { systemPrompt } = buildDestinationRelationshipManagerPrompt(relReq)

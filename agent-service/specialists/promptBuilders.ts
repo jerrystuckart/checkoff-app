@@ -101,6 +101,15 @@ const RESEARCH_EXECUTION_TYPE_INSTRUCTIONS: Record<ResearchExecutionType, string
 
 export function buildResearchVerifierPrompt(request: SpecialistExecutionRequest, now: string = new Date().toISOString()): { systemPrompt: string; userPrompt: string } {
   const executionType = researchExecutionTypeFor(request)
+  // Structural bug fix (San Diego run, 2026-09-05): this prompt used to
+  // describe ONLY evidence.candidates[]'s shape, even for the M1
+  // geography stage (which requires evidence.neighborhoods[] instead) —
+  // so live output filled neighborhoods[] with candidate-shaped records
+  // missing `kind` entirely, silently disabling auditCoverage's
+  // GEOGRAPHIC_HOLE gate. requiredEvidenceKeys is the caller's own
+  // declaration of what this execution needs, so branch on it here
+  // rather than inventing a second prompt-builder function.
+  const wantsNeighborhoods = request.requiredEvidenceKeys.includes('neighborhoods')
   const systemPrompt = [
     methodologyPreamble(request),
     runtimeDateContextLine(now),
@@ -108,6 +117,17 @@ export function buildResearchVerifierPrompt(request: SpecialistExecutionRequest,
       'or is located where. Every evidence.candidates[] entry must include: name, category, neighborhood, source (a real URL or ' +
       'named source), claimSupported (what that source actually supports), freshnessDate (if the source states one, else null), ' +
       'verificationConfidence (LOW/MEDIUM/HIGH), and needsVerification (boolean).',
+    ...(wantsNeighborhoods
+      ? [
+          'This execution ALSO requires evidence.neighborhoods[] — a SEPARATE array describing the metro\'s own geography ' +
+            '(areas/districts/neighborhoods), never individual businesses or experiences. Every evidence.neighborhoods[] entry ' +
+            'MUST include: name (the area/neighborhood name) and kind, where kind is EXACTLY one of these 4 values — no others, ' +
+            'never invent your own label: "core_urban" (a dense central district), "important_neighborhood" (a well-known, ' +
+            'destination-worthy area outside the core), "suburb" (a residential/commuter area with limited destination pull), or ' +
+            '"destination_worthy_outer" (a farther-out area still worth building real coverage for). An entry with a missing or ' +
+            'invented kind value is rejected outright, not accepted with a guess.',
+        ]
+      : []),
     RESEARCH_EXECUTION_TYPE_INSTRUCTIONS[executionType],
     envelopeInstructions(request),
   ].join('\n\n')

@@ -5,7 +5,7 @@
 // reviews before separately triggering execution (see the Phase 2C
 // final report's exact next-command answer).
 
-import type { MetroDefinition, CategoryCoveragePlan } from './metroLaunch'
+import type { MetroDefinition, CategoryCoveragePlan, GeographicDepthTarget } from './metroLaunch'
 
 export const SAN_DIEGO_METRO_DEFINITION: MetroDefinition = {
   metroName: 'San Diego',
@@ -57,6 +57,22 @@ export const SAN_DIEGO_CATEGORY_PLAN: CategoryCoveragePlan = {
     { categoryName: 'Misc', minimumViable: 3, healthyTarget: 8, qualityNotes: ['Quirky/unusual/hidden-style experiences — a real CheckOff differentiator, not filler'] },
   ],
 }
+
+/**
+ * Structural fix from the first real San Diego run (2026-09-05): plain
+ * zero-vs-nonzero GEOGRAPHIC_HOLE detection let Carlsbad (3-4 candidates)
+ * and Oceanside (~0 real candidates, one vague regional mention) both
+ * read as "covered" even though neither had anything close to real
+ * depth — exactly what Jerry's brief called out by name. These are the
+ * minimums for THIS San Diego run; a future metro supplies its own via
+ * the same `--geo-depth-plan` CLI flag / DriveMetroLaunchOptions.depthTargets.
+ */
+export const SAN_DIEGO_GEOGRAPHIC_DEPTH_TARGETS: GeographicDepthTarget[] = [
+  { neighborhoodName: 'Carlsbad', minimumItems: 5 },
+  { neighborhoodName: 'Oceanside', minimumItems: 5 },
+  { neighborhoodName: 'Chula Vista', minimumItems: 4 },
+  { neighborhoodName: 'Coronado', minimumItems: 3 },
+]
 
 export interface ManifestSection {
   title: string

@@ -12,6 +12,7 @@
 // recommends.
 
 import { evaluateAuthority } from '../playbooks/standingAuthority'
+import { validateNeighborhoodDefinitions } from '../playbooks/metroLaunch'
 import type { DelegationRequest, SpecialistResultEnvelope, EnvelopeValidationResult } from './types'
 import type { SpecialistKey } from './types'
 import { getSpecialist } from './registry'
@@ -45,6 +46,16 @@ export function validateResultEnvelope(request: DelegationRequest, result: Speci
   })
   if (missingEvidenceKeys.length > 0) {
     reasons.push(`missing required evidence: ${missingEvidenceKeys.join(', ')}`)
+  }
+  // Structural bug fix (San Diego run, 2026-09-05): a `neighborhoods`
+  // evidence key being PRESENT is not enough — auditCoverage's
+  // GEOGRAPHIC_HOLE gate silently no-ops on an entry missing a valid
+  // `kind`, so a malformed M1 result must fail evidence validation here
+  // (triggering the driver's existing bounded retry) rather than being
+  // accepted as valid evidence.
+  if (Array.isArray(result.evidence.neighborhoods)) {
+    const geoValidation = validateNeighborhoodDefinitions(result.evidence.neighborhoods as Array<{ name?: unknown; kind?: unknown }>)
+    if (!geoValidation.valid) reasons.push(...geoValidation.reasons)
   }
   if (result.taskId === '' || result.objective === '') {
     reasons.push('taskId and objective are required and must be non-empty')

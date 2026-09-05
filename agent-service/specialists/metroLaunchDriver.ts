@@ -17,7 +17,19 @@
 // tests, or a single real step in production where an execution takes
 // real wall-clock time.
 
-import { auditCoverage, deriveMetroLoopAction, evaluateMetroGates, type CategoryCoveragePlan, type NeighborhoodDefinition, type CoverageAuditEvidence, type CoverageGap, type MetroGateEvidence } from '../playbooks/metroLaunch'
+import {
+  auditCoverage,
+  deriveMetroLoopAction,
+  evaluateMetroGates,
+  DEFAULT_NEIGHBORHOOD_RING_RADII_M,
+  type CategoryCoveragePlan,
+  type NeighborhoodDefinition,
+  type GeographicDepthTarget,
+  type CoverageAuditEvidence,
+  type CoverageGap,
+  type MetroGateEvidence,
+} from '../playbooks/metroLaunch'
+import { countByCanonicalCategory, type UnclassifiedCategory } from '../playbooks/categoryNormalization'
 import { runExecutionRouted } from './routing'
 import type { ExecutionStore, SpecialistExecutor, SpecialistExecutionRequest } from './executor'
 import { getOrCreateRun, type PlaybookRunStore, type PlaybookRunRecord } from './playbookRun'
@@ -42,6 +54,7 @@ interface MetroDriverState {
   [key: string]: unknown
   m0Decisions?: MetroM0Decisions
   plan?: CategoryCoveragePlan
+  depthTargets?: GeographicDepthTarget[]
   neighborhoods?: NeighborhoodDefinition[]
   candidates?: (RawCandidate & { needsVerification: boolean })[]
   gaps?: CoverageGap[]
@@ -49,6 +62,8 @@ interface MetroDriverState {
   hasRunM6?: boolean
   checkoffizedItems?: Array<{ name: string; checkoffizedItem: string }>
   awaitingExecutionLabels?: string[] // labels of executions this run is currently waiting on, for the current stage
+  /** Raw candidate categories buildAuditEvidence could not map to the canonical taxonomy — flagged for review, never silently binned. Recomputed fresh every M4 pass, never accumulated. */
+  unclassifiedCategories?: UnclassifiedCategory[]
 }
 
 function readState(run: PlaybookRunRecord): MetroDriverState {
@@ -187,18 +202,31 @@ async function stepM1(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
   if (outcome.kind === 'NEEDS_JERRY') return escalate(run, outcome.reason ?? 'M1 needs Jerry', { decisionNeeded: 'M1 geography research could not complete evidence validation.', why: outcome.reason })
 
   const state = readState(run)
-  state.neighborhoods = (outcome.envelope?.evidence.neighborhoods as NeighborhoodDefinition[]) ?? []
+  // Evidence validation (delegation.ts's validateResultEnvelope, via
+  // validateNeighborhoodDefinitions) already guaranteed every entry has
+  // a real name + valid kind before this envelope was ever ACCEPTED —
+  // ring radii are NOT requested of the model (see NeighborhoodEvidenceInput
+  // doc in metroLaunch.ts), so this is where a real NeighborhoodDefinition
+  // is completed with metro-appropriate defaults.
+  const rawNeighborhoods = (outcome.envelope?.evidence.neighborhoods as Array<Partial<NeighborhoodDefinition>>) ?? []
+  state.neighborhoods = rawNeighborhoods.map((n) => ({
+    name: n.name as string,
+    kind: n.kind as NeighborhoodDefinition['kind'],
+    ring1RadiusM: typeof n.ring1RadiusM === 'number' && n.ring1RadiusM > 0 ? n.ring1RadiusM : DEFAULT_NEIGHBORHOOD_RING_RADII_M.ring1,
+    ring2RadiusM: typeof n.ring2RadiusM === 'number' && n.ring2RadiusM > 0 ? n.ring2RadiusM : DEFAULT_NEIGHBORHOOD_RING_RADII_M.ring2,
+  }))
   run.state = state
   run.currentStage = 'M2_CATEGORY_COVERAGE_PLAN'
   return run
 }
 
-async function stepM2(deps: MetroDriverDeps, run: PlaybookRunRecord, defaultPlan: CategoryCoveragePlan): Promise<PlaybookRunRecord> {
+async function stepM2(deps: MetroDriverDeps, run: PlaybookRunRecord, defaultPlan: CategoryCoveragePlan, depthTargets: GeographicDepthTarget[]): Promise<PlaybookRunRecord> {
   // Deterministic — no specialist call needed once a plan is supplied
   // (per the Phase 2F task: "metro_builder or performs deterministic
   // target setup where already encoded").
   const state = readState(run)
   state.plan = defaultPlan
+  state.depthTargets = depthTargets
   run.state = state
   run.currentStage = 'M3_BROAD_DISCOVERY'
   return run
@@ -235,25 +263,60 @@ async function stepM3(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
   return run
 }
 
-function buildAuditEvidence(state: MetroDriverState): CoverageAuditEvidence {
-  const categoryCounts = new Map<string, number>()
-  const neighborhoodCounts = new Map<string, number>()
-  for (const c of state.candidates ?? []) {
-    if (c.category) categoryCounts.set(c.category, (categoryCounts.get(c.category) ?? 0) + 1)
-    if (c.neighborhood) neighborhoodCounts.set(c.neighborhood, (neighborhoodCounts.get(c.neighborhood) ?? 0) + 1)
-  }
+/**
+ * A candidate's free-text neighborhood field is exactly as variable as
+ * its category ("Carlsbad" vs "Carlsbad (North County)") — substring
+ * containment (case-insensitive) against a KNOWN target name is the
+ * same deterministic-normalization discipline as categoryNormalization.ts,
+ * just simpler because target neighborhood names are the driver's own
+ * configured proper nouns, not free-form model output.
+ */
+function countCandidatesNearNeighborhood(candidates: ReadonlyArray<{ neighborhood?: string | null }>, targetName: string): number {
+  const needle = targetName.toLowerCase()
+  return candidates.filter((c) => (c.neighborhood ?? '').toLowerCase().includes(needle)).length
+}
+
+export interface BuildAuditEvidenceResult {
+  evidence: CoverageAuditEvidence
+  /** Candidate categories that couldn't be confidently mapped to the canonical taxonomy — surfaced for review, never silently binned into a bad bucket or allowed to invent a new category. */
+  unclassifiedCategories: UnclassifiedCategory[]
+}
+
+export function buildAuditEvidence(state: MetroDriverState): BuildAuditEvidenceResult {
+  const candidates = state.candidates ?? []
+  const allNeighborhoods = state.neighborhoods ?? []
+  const depthTargets = state.depthTargets ?? []
+
+  // Categories: normalized to the canonical taxonomy BEFORE auditCoverage
+  // ever sees them — this is the San Diego run's bug #1 fix. Raw labels
+  // are never discarded; countByCanonicalCategory reports them via
+  // `unclassified` rather than forcing them into a bucket.
+  const { counts: categoryCounts, unclassified: unclassifiedCategories } = countByCanonicalCategory(candidates.map((c) => c.category))
+
+  // Neighborhoods: fuzzy substring match (bug #2's "meaningful depth"
+  // companion fix) against every named area auditCoverage actually
+  // checks — the plain M1 neighborhood list AND any configured depth targets.
+  const targetNames = new Set<string>([...allNeighborhoods.map((n) => n.name), ...depthTargets.map((d) => d.neighborhoodName)])
+  const neighborhoodCounts = [...targetNames].map((neighborhoodName) => ({ neighborhoodName, count: countCandidatesNearNeighborhood(candidates, neighborhoodName) }))
+
   return {
-    categoryCounts: [...categoryCounts.entries()].map(([categoryName, count]) => ({ categoryName, count })),
-    neighborhoodCounts: [...neighborhoodCounts.entries()].map(([neighborhoodName, count]) => ({ neighborhoodName, count })),
-    plan: state.plan ?? { targets: [] },
-    allNeighborhoods: state.neighborhoods ?? [],
+    evidence: {
+      categoryCounts,
+      neighborhoodCounts,
+      plan: state.plan ?? { targets: [] },
+      allNeighborhoods,
+      depthTargets,
+    },
+    unclassifiedCategories,
   }
 }
 
 async function stepM4(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
   const guardrails = deps.guardrails ?? DEFAULT_DRIVER_GUARDRAILS
   const state = readState(run)
-  const gaps = auditCoverage(buildAuditEvidence(state))
+  const { evidence, unclassifiedCategories } = buildAuditEvidence(state)
+  state.unclassifiedCategories = unclassifiedCategories
+  const gaps = auditCoverage(evidence)
   const loop = deriveMetroLoopAction(gaps)
 
   if (loop.action === 'PROCEED_TO_VERIFICATION') {
@@ -511,6 +574,8 @@ const TERMINAL_STAGE = 'LAUNCH_READINESS_BOUNDARY_DONE'
 
 export interface DriveMetroLaunchOptions {
   categoryPlan: CategoryCoveragePlan
+  /** Configurable "meaningful depth" floors for specific named areas (e.g. Carlsbad/Oceanside) — see GeographicDepthTarget doc in metroLaunch.ts. Defaults to none (plain zero-check only). */
+  depthTargets?: GeographicDepthTarget[]
   /** Bounds how many stage-steps ONE call will perform — prevents an unbounded synchronous loop even with guardrails misconfigured. */
   maxSteps?: number
 }
@@ -546,7 +611,7 @@ export async function driveMetroLaunch(deps: MetroDriverDeps, projectId: string,
         run = await stepM1(deps, run)
         break
       case 'M2_CATEGORY_COVERAGE_PLAN':
-        run = await stepM2(deps, run, options.categoryPlan)
+        run = await stepM2(deps, run, options.categoryPlan, options.depthTargets ?? [])
         break
       case 'M3_BROAD_DISCOVERY':
         run = await stepM3(deps, run)

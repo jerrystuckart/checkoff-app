@@ -92,13 +92,65 @@ export interface MetroDefinition {
 // M1 — Geography / Neighborhood map
 // ---------------------------------------------------------------------------
 
+export type NeighborhoodKind = 'core_urban' | 'important_neighborhood' | 'suburb' | 'destination_worthy_outer'
+
+export const VALID_NEIGHBORHOOD_KINDS: readonly NeighborhoodKind[] = ['core_urban', 'important_neighborhood', 'suburb', 'destination_worthy_outer']
+
 export interface NeighborhoodDefinition {
   name: string
-  kind: 'core_urban' | 'important_neighborhood' | 'suburb' | 'destination_worthy_outer'
+  kind: NeighborhoodKind
   /** Metro-appropriate ring radii, in meters — v2 playbook's explicit Denver lesson: schema defaults (20mi/40mi) are unsafe for tightly-packed metros. */
   ring1RadiusM: number
   ring2RadiusM: number
 }
+
+/**
+ * Structural bug fix (found in the first real San Diego M1 run,
+ * 2026-09-05): promptBuilders.ts's research_verifier prompt never
+ * actually told the model what a `neighborhoods[]` entry should
+ * contain, so live output filled it with candidate-shaped records
+ * missing `kind` entirely — silently disabling auditCoverage's
+ * GEOGRAPHIC_HOLE detection for the whole run, since
+ * `n.kind === 'core_urban' || n.kind === 'important_neighborhood'` is
+ * never true for an object with no `kind` at all.
+ *
+ * This is THE validator delegation.ts's validateResultEnvelope calls
+ * before ever accepting an M1 envelope — a malformed neighborhood must
+ * fail evidence validation (triggering the existing bounded-retry path
+ * in metroLaunchDriver.ts's runStepWithRetry) rather than being
+ * silently accepted as valid. Ring radii are NOT required here — they
+ * are metro-appropriate defaults the driver assigns deterministically
+ * (see DEFAULT_NEIGHBORHOOD_RING_RADII_M), not something a live research
+ * call has any reliable way to determine.
+ */
+export interface NeighborhoodEvidenceInput {
+  name?: unknown
+  kind?: unknown
+}
+
+export interface NeighborhoodValidationResult {
+  valid: boolean
+  reasons: string[]
+}
+
+export function validateNeighborhoodDefinition(n: NeighborhoodEvidenceInput): NeighborhoodValidationResult {
+  const reasons: string[] = []
+  if (typeof n.name !== 'string' || n.name.trim() === '') reasons.push('neighborhood.name is required')
+  if (typeof n.kind !== 'string' || !VALID_NEIGHBORHOOD_KINDS.includes(n.kind as NeighborhoodKind)) {
+    reasons.push(
+      `neighborhood.kind must be exactly one of ${VALID_NEIGHBORHOOD_KINDS.join('/')} — got ${JSON.stringify(n.kind)}. A missing/invalid kind silently disables geographic-hole detection, so it is rejected rather than accepted.`
+    )
+  }
+  return { valid: reasons.length === 0, reasons }
+}
+
+export function validateNeighborhoodDefinitions(neighborhoods: NeighborhoodEvidenceInput[]): NeighborhoodValidationResult {
+  const allReasons = neighborhoods.flatMap((n, i) => validateNeighborhoodDefinition(n).reasons.map((r) => `neighborhoods[${i}] (${typeof n.name === 'string' ? n.name : 'unnamed'}): ${r}`))
+  return { valid: allReasons.length === 0, reasons: allReasons }
+}
+
+/** Dense-metro default ring radii (meters) applied when the driver builds a full NeighborhoodDefinition from validated M1 evidence — not asked of the model itself (see NeighborhoodEvidenceInput doc above). */
+export const DEFAULT_NEIGHBORHOOD_RING_RADII_M = { ring1: 1500, ring2: 3000 } as const
 
 /** Programmatic, not eyeballed — the v2 playbook's own verified invariant for every neighborhood set so far. */
 export function verifyNoRingOverlap(neighborhoods: Array<{ name: string; lat: number; lng: number; ring2RadiusM: number }>): { ok: boolean; overlaps: Array<[string, string]> } {
@@ -157,16 +209,33 @@ export interface NeighborhoodCount {
   count: number
 }
 
+/**
+ * A configurable "meaningful depth" floor for a specific named area —
+ * distinct from the plain GEOGRAPHIC_HOLE zero-check below. The first
+ * real San Diego run showed exactly why zero-vs-nonzero isn't enough:
+ * Carlsbad had 3-4 candidates and Oceanside had essentially one vague
+ * mention, both "nonzero" but nowhere near real coverage. Reusable for
+ * any future metro — a caller supplies whichever named areas need a
+ * real floor (not every neighborhood needs one; most are fine with the
+ * plain zero-check).
+ */
+export interface GeographicDepthTarget {
+  neighborhoodName: string
+  minimumItems: number
+}
+
 export interface CoverageAuditEvidence {
   categoryCounts: CategoryCount[]
   neighborhoodCounts: NeighborhoodCount[]
   plan: CategoryCoveragePlan
   /** Every core_urban/important_neighborhood area should have at least one item — a truly empty one is a geographic hole. */
   allNeighborhoods: NeighborhoodDefinition[]
+  /** Optional per-area minimums beyond the plain zero-check — see GeographicDepthTarget doc. */
+  depthTargets?: GeographicDepthTarget[]
 }
 
 export interface CoverageGap {
-  kind: 'CATEGORY_BELOW_MINIMUM' | 'CATEGORY_BELOW_TARGET' | 'GEOGRAPHIC_HOLE' | 'CATEGORY_OVERREPRESENTED'
+  kind: 'CATEGORY_BELOW_MINIMUM' | 'CATEGORY_BELOW_TARGET' | 'GEOGRAPHIC_HOLE' | 'GEOGRAPHIC_BELOW_MINIMUM' | 'CATEGORY_OVERREPRESENTED'
   name: string
   detail: string
 }
@@ -199,6 +268,13 @@ export function auditCoverage(evidence: CoverageAuditEvidence): CoverageGap[] {
     }
   }
 
+  for (const target of evidence.depthTargets ?? []) {
+    const count = countByNeighborhood.get(target.neighborhoodName) ?? 0
+    if (count < target.minimumItems) {
+      gaps.push({ kind: 'GEOGRAPHIC_BELOW_MINIMUM', name: target.neighborhoodName, detail: `${count}/${target.minimumItems} minimum for meaningful depth` })
+    }
+  }
+
   return gaps
 }
 
@@ -211,11 +287,11 @@ export type MetroLoopAction = 'TARGETED_RESEARCH' | 'PROCEED_TO_VERIFICATION'
  * point, called after every M4 pass.
  */
 export function deriveMetroLoopAction(gaps: CoverageGap[]): { action: MetroLoopAction; blockingGaps: CoverageGap[]; note: string } {
-  const blockingGaps = gaps.filter((g) => g.kind === 'CATEGORY_BELOW_MINIMUM' || g.kind === 'GEOGRAPHIC_HOLE')
+  const blockingGaps = gaps.filter((g) => g.kind === 'CATEGORY_BELOW_MINIMUM' || g.kind === 'GEOGRAPHIC_HOLE' || g.kind === 'GEOGRAPHIC_BELOW_MINIMUM')
   if (blockingGaps.length > 0) {
     return { action: 'TARGETED_RESEARCH', blockingGaps, note: `${blockingGaps.length} blocking gap(s) — targeted research needed before proceeding.` }
   }
-  return { action: 'PROCEED_TO_VERIFICATION', blockingGaps: [], note: 'No category-minimum or geographic-hole gaps remain.' }
+  return { action: 'PROCEED_TO_VERIFICATION', blockingGaps: [], note: 'No category-minimum, geographic-hole, or geographic-depth gaps remain.' }
 }
 
 // ---------------------------------------------------------------------------
@@ -267,11 +343,11 @@ export interface MetroGateEvidence {
 export function evaluateMetroGates(evidence: MetroGateEvidence): GateResult[] {
   const results: GateResult[] = []
 
-  const geoHoles = evidence.coverageGaps.filter((g) => g.kind === 'GEOGRAPHIC_HOLE')
+  const geoHoles = evidence.coverageGaps.filter((g) => g.kind === 'GEOGRAPHIC_HOLE' || g.kind === 'GEOGRAPHIC_BELOW_MINIMUM')
   results.push({
     key: 'GEOGRAPHY_GATE',
     verdict: geoHoles.length === 0 ? 'PASS' : 'FAIL',
-    reason: geoHoles.length === 0 ? 'No unintentionally empty target neighborhood/area.' : `${geoHoles.length} empty target area(s): ${geoHoles.map((g) => g.name).join(', ')}`,
+    reason: geoHoles.length === 0 ? 'No unintentionally empty or below-minimum-depth target area.' : `${geoHoles.length} area(s) empty or below meaningful-depth minimum: ${geoHoles.map((g) => g.name).join(', ')}`,
   })
 
   const belowMin = evidence.coverageGaps.filter((g) => g.kind === 'CATEGORY_BELOW_MINIMUM' && !evidence.approvedCategoryExceptions.includes(g.name))

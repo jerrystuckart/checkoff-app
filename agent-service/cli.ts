@@ -48,8 +48,8 @@ import { driveDestinationHub } from './specialists/destinationHubDriver'
 import { RemoteAiExecutor } from './specialists/remoteAiExecutor'
 import { AnthropicMessagesAdapter } from './specialists/remoteAiExecutor'
 import { OpenAiAdapter } from './specialists/openAiAdapter'
-import { SAN_DIEGO_CATEGORY_PLAN } from './playbooks/sanDiegoManifest'
-import type { CategoryCoveragePlan } from './playbooks/metroLaunch'
+import { SAN_DIEGO_CATEGORY_PLAN, SAN_DIEGO_GEOGRAPHIC_DEPTH_TARGETS } from './playbooks/sanDiegoManifest'
+import type { CategoryCoveragePlan, GeographicDepthTarget } from './playbooks/metroLaunch'
 import type { DiscoveryCandidate } from './playbooks/destinationHubLifecycle'
 
 const STORE_PATH = resolve(process.cwd(), '.chief-executions.json')
@@ -133,6 +133,8 @@ async function main() {
     if (playbookKey === 'metro_launch') {
       const planFlagIdx = flags.indexOf('--category-plan')
       const categoryPlan: CategoryCoveragePlan = planFlagIdx >= 0 ? readJson(flags[planFlagIdx + 1]) : SAN_DIEGO_CATEGORY_PLAN
+      const geoDepthFlagIdx = flags.indexOf('--geo-depth-plan')
+      const depthTargets: GeographicDepthTarget[] = geoDepthFlagIdx >= 0 ? readJson(flags[geoDepthFlagIdx + 1]) : SAN_DIEGO_GEOGRAPHIC_DEPTH_TARGETS
       const m0FlagIdx = flags.indexOf('--m0')
       if (m0FlagIdx >= 0) {
         const m0: MetroM0Decisions = readJson(flags[m0FlagIdx + 1])
@@ -145,10 +147,18 @@ async function main() {
           // getOrCreateRun (also called inside driveMetroLaunch) is idempotent.
           const seeded = await getOrCreateRun(runStore, playbookKey, projectId, 'M0_METRO_DEFINITION')
           seeded.state = { ...seeded.state, m0Decisions: m0 }
+          // DbPlaybookRunStore's recordPlaybookStage is idempotency-keyed on
+          // (status, currentStage, loopIteration, totalRetries, updatedAt) —
+          // getOrCreateRun's own put() and this one would otherwise share
+          // the exact same updatedAt (and thus idempotency key), so this
+          // second put (the one actually carrying m0Decisions) would be
+          // silently deduped as a no-op replay of the first, empty-state
+          // snapshot. Bumping updatedAt makes it a distinct snapshot.
+          seeded.updatedAt = new Date().toISOString()
           await runStore.put(seeded)
         }
       }
-      const run = await driveMetroLaunch({ runStore, execStore: store, executors }, projectId, { categoryPlan })
+      const run = await driveMetroLaunch({ runStore, execStore: store, executors }, projectId, { categoryPlan, depthTargets })
       console.log(JSON.stringify(run, null, 2))
       return
     }
@@ -268,7 +278,7 @@ async function main() {
 
   console.error(
     'Usage: tsx agent-service/cli.ts [--file] <' +
-      'run <metro_launch|destination_hub_lifecycle> <projectKey> [--category-plan f.json] [--m0 f.json] [--candidate f.json] | ' +
+      'run <metro_launch|destination_hub_lifecycle> <projectKey> [--category-plan f.json] [--geo-depth-plan f.json] [--m0 f.json] [--candidate f.json] | ' +
       'status <playbookKey> <projectKey> | pause <playbookKey> <projectKey> | resume <playbookKey> <projectKey> | ' +
       'decide <playbookKey> <projectKey> <decision.json> | ' +
       'delegate <request.json> | execution show <id> | execution list | execution submit-result <id> <result.json> | execution retry <id>>'

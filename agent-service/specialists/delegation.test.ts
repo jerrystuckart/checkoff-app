@@ -91,6 +91,37 @@ test('ownerKeyFor: every specialist resolves to its own distinct real owner key'
   assert.equal(new Set(keys).size, 5)
 })
 
+// ---------------------------------------------------------------------------
+// M1 geography evidence shape (structural bug fix, San Diego run 2026-09-05)
+// ---------------------------------------------------------------------------
+
+test('validateResultEnvelope: rejects M1 geography evidence whose neighborhoods are missing kind — this is the real live-provider bug reproduced', () => {
+  const request = buildDelegationRequest('research_verifier', 'metro_launch', 'M1_GEOGRAPHY_MAP', 'geography research', {}, ['neighborhoods'], 'metro_launch', 'v1')
+  const result = validateResultEnvelope(
+    request,
+    envelope({
+      evidence: {
+        neighborhoods: [
+          { name: 'Gaslamp Quarter', category: 'Downtown/Urban Core', source: 'https://example.com', claimSupported: 'x', freshnessDate: null, verificationConfidence: 'HIGH' },
+        ],
+      },
+    })
+  )
+  assert.equal(result.valid, false)
+  assert.ok(result.reasons.some((r) => r.includes('kind')))
+})
+
+test('validateResultEnvelope: accepts M1 geography evidence with a valid kind on every neighborhood', () => {
+  const request = buildDelegationRequest('research_verifier', 'metro_launch', 'M1_GEOGRAPHY_MAP', 'geography research', {}, ['neighborhoods'], 'metro_launch', 'v1')
+  const result = validateResultEnvelope(
+    request,
+    envelope({
+      evidence: { neighborhoods: [{ name: 'Gaslamp Quarter', kind: 'core_urban' }] },
+    })
+  )
+  assert.equal(result.valid, true)
+})
+
 test('buildDelegationRequest: idempotent — same inputs produce a structurally identical request', () => {
   const a = buildDelegationRequest('metro_builder', 'metro_launch', 'M3_BROAD_DISCOVERY', 'research food category', { metro: 'San Diego' }, ['candidates'], 'metro_launch', 'v1')
   const b = buildDelegationRequest('metro_builder', 'metro_launch', 'M3_BROAD_DISCOVERY', 'research food category', { metro: 'San Diego' }, ['candidates'], 'metro_launch', 'v1')
