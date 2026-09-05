@@ -31,7 +31,36 @@
 // unless authorization is revoked.
 
 import { createServer } from 'node:http'
+import * as fs from 'node:fs'
+import * as path from 'node:path'
 import { GOOGLE_OAUTH_SCOPES } from './specialists/googleCredentialProvider'
+
+// ─── minimal .env loader ───────────────────────────────────────────────
+// Same convention as agent-service/db.ts / verifyOpenBrainLive.ts /
+// scripts/geocode-items.js: no dotenv dependency, .env is already
+// gitignored, and a value already present in process.env (e.g. exported
+// by the shell) is never overwritten. This script is a standalone
+// entrypoint (invoked directly via `tsx`, not through db.ts's import-time
+// side effect) so it must load .env itself — without this, GOOGLE_CLIENT_ID/
+// GOOGLE_CLIENT_SECRET being present in the project-root .env file is
+// invisible to it no matter how correctly they're set there.
+export function loadEnvFile(relPath: string): void {
+  const envPath = path.join(__dirname, '..', relPath)
+  if (!fs.existsSync(envPath)) return
+  for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const eq = trimmed.indexOf('=')
+    if (eq === -1) continue
+    const key = trimmed.slice(0, eq).trim()
+    let val = trimmed.slice(eq + 1).trim()
+    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+      val = val.slice(1, -1)
+    }
+    if (!(key in process.env)) process.env[key] = val
+  }
+}
+loadEnvFile('.env')
 
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth'
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token'
@@ -78,8 +107,10 @@ export async function exchangeCodeForTokens(params: { code: string; clientId: st
 async function main() {
   const clientId = process.env.GOOGLE_CLIENT_ID
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET
+  console.log(`GOOGLE_CLIENT_ID: ${clientId ? 'detected' : 'NOT detected'}`)
+  console.log(`GOOGLE_CLIENT_SECRET: ${clientSecret ? 'detected' : 'NOT detected'}`)
   if (!clientId || !clientSecret) {
-    console.error('GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set in .env before running this script.')
+    console.error('\nGOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be set in .env before running this script.')
     console.error('Create an OAuth 2.0 Client ID in Google Cloud Console first (Desktop app or Web application type).')
     process.exitCode = 1
     return

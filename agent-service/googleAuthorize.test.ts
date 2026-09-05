@@ -1,7 +1,53 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildAuthorizationUrl, exchangeCodeForTokens } from './googleAuthorize'
+import { writeFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import { buildAuthorizationUrl, exchangeCodeForTokens, loadEnvFile } from './googleAuthorize'
 import { GOOGLE_OAUTH_SCOPES } from './specialists/googleCredentialProvider'
+
+// ---------------------------------------------------------------------------
+// loadEnvFile — regression coverage for a real bug: googleAuthorize.ts is a
+// standalone entrypoint (no dependency on db.ts, whose import loads .env as
+// a side effect for every other script in this repo), so it must load
+// .env itself or GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET set correctly in
+// the project-root .env are invisible to it.
+// ---------------------------------------------------------------------------
+
+test('loadEnvFile: populates process.env from a .env-shaped file, relative to the project root', () => {
+  const fixtureRelPath = `.env.googleAuthorize.test-fixture-${process.pid}`
+  const fixtureAbsPath = join(__dirname, '..', fixtureRelPath)
+  const varName = `CHIEF_TEST_LOAD_ENV_${process.pid}`
+  delete process.env[varName]
+  writeFileSync(fixtureAbsPath, `${varName}=detected-value\n# a comment\n\nOTHER_VAR="quoted value"\n`, 'utf8')
+  try {
+    loadEnvFile(fixtureRelPath)
+    assert.equal(process.env[varName], 'detected-value')
+    assert.equal(process.env.OTHER_VAR, 'quoted value')
+  } finally {
+    delete process.env[varName]
+    delete process.env.OTHER_VAR
+    rmSync(fixtureAbsPath, { force: true })
+  }
+})
+
+test('loadEnvFile: never overwrites a value already present in process.env (e.g. exported by the shell)', () => {
+  const fixtureRelPath = `.env.googleAuthorize.test-fixture-overwrite-${process.pid}`
+  const fixtureAbsPath = join(__dirname, '..', fixtureRelPath)
+  const varName = `CHIEF_TEST_NO_OVERWRITE_${process.pid}`
+  process.env[varName] = 'already-set-by-shell'
+  writeFileSync(fixtureAbsPath, `${varName}=from-dot-env-file\n`, 'utf8')
+  try {
+    loadEnvFile(fixtureRelPath)
+    assert.equal(process.env[varName], 'already-set-by-shell')
+  } finally {
+    delete process.env[varName]
+    rmSync(fixtureAbsPath, { force: true })
+  }
+})
+
+test('loadEnvFile: a missing file is a no-op, never throws', () => {
+  assert.doesNotThrow(() => loadEnvFile(`.env.definitely-does-not-exist-${process.pid}`))
+})
 
 test('buildAuthorizationUrl: requests offline access + forces consent, so a refresh token is actually returned', () => {
   const url = buildAuthorizationUrl('client-123', 'http://localhost:8721/oauth2callback')
