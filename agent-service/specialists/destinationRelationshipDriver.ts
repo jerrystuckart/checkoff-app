@@ -85,6 +85,11 @@ interface RelationshipDriverState {
   outreachApproved?: boolean
   outreachSentSimulated?: boolean
   outreachSentReal?: boolean
+  /** The real Gmail thread/message id once the first outreach is actually sent — reused by every later send in this relationship (approved follow-ups included) so nothing starts a stray new thread. */
+  outreachThreadId?: string
+  outreachMessageId?: string
+  /** A drafted follow-up awaiting Jerry's approval — distinct from draftedOutreach (the original first-touch content, which stays untouched as historical record once a follow-up is drafted). */
+  followUpDraft?: OutreachDraft | null
   followUp?: FollowUpState
   onePagerMarkdown?: string | null
   lastClassification?: ClassifiedReply
@@ -296,7 +301,11 @@ async function performApprovedSend(deps: RelationshipDriverDeps, run: PlaybookRu
   const state = readState(run)
   if (!state.draftedOutreach || !state.primaryContact) return
   if (deps.gmail.isConfigured()) {
-    const sent = await deps.gmail.sendMessage({ to: state.primaryContact.email, from: outreachFromEmail(), subject: state.draftedOutreach.subject, bodyText: state.draftedOutreach.bodyText })
+    // Preserve an existing thread if one already exists for this contact
+    // (e.g. a re-send after a transient failure) — a genuinely fresh
+    // first touch has none yet, which is correct: Gmail starts a new
+    // thread exactly once, on the real first send.
+    const sent = await deps.gmail.sendMessage({ to: state.primaryContact.email, from: outreachFromEmail(), subject: state.draftedOutreach.subject, bodyText: state.draftedOutreach.bodyText, threadId: state.outreachThreadId })
     state.outreachSentReal = true
     // Phase 2J — thread continuity: preserve the real Gmail thread id so
     // this contact's reply (and any future follow-up Chief sends) stays
@@ -314,6 +323,61 @@ async function performApprovedSend(deps: RelationshipDriverDeps, run: PlaybookRu
     state.outreachSentSimulated = true
   }
   run.state = state
+}
+
+/**
+ * Sends an already-Jerry-approved follow-up (state.followUpDraft) — the
+ * one send path driveDestinationRelationship()'s own forward loop does
+ * NOT cover, since that loop only advances RELATIONSHIP_READY ->
+ * ASSETS_PREP -> INITIAL_OUTREACH (the FIRST touch); a follow-up is
+ * drafted directly onto an already-WAITING_FOR_REPLY run (see
+ * reconcileWilliamsRealOutreach.ts / draftElkhartLakeFollowUp.ts), which
+ * the main loop's default case leaves untouched. Requires a real,
+ * existing outreachThreadId (a follow-up only ever exists because a
+ * first touch was already sent) and ALWAYS threads onto it — a follow-up
+ * that started a stray new thread would defeat the entire point of
+ * "preserve the existing thread." Never called unless
+ * run.state.outreachApproved is true for THIS follow-up (the caller —
+ * recordJerryDecision, same discipline as the first-touch approval gate
+ * — sets it); this function itself performs no approval check beyond
+ * requiring a follow-up draft and an existing thread to exist, exactly
+ * mirroring performApprovedSend's own contract.
+ */
+export async function sendApprovedFollowUp(deps: RelationshipDriverDeps, projectId: string): Promise<PlaybookRunRecord> {
+  const run = await deps.runStore.get(`${DESTINATION_RELATIONSHIP_DRIVER_PLAYBOOK_KEY}:${projectId}`)
+  if (!run) throw new Error(`No destination_relationship run found for ${projectId} — cannot send a follow-up that was never drafted.`)
+  const state = readState(run)
+  if (!state.followUpDraft) throw new Error(`No approved follow-up draft on file for ${projectId}.`)
+  if (!state.primaryContact) throw new Error(`No primaryContact on file for ${projectId} — cannot send.`)
+  if (!state.outreachThreadId) throw new Error(`No existing outreachThreadId on file for ${projectId} — a follow-up must always reply in the original thread, never start a new one.`)
+
+  const draft = state.followUpDraft
+  const sentAt = nowIso(deps)
+  if (deps.gmail.isConfigured()) {
+    const sent = await deps.gmail.sendMessage({ to: state.primaryContact.email, from: outreachFromEmail(), subject: draft.subject, bodyText: draft.bodyText, threadId: state.outreachThreadId })
+    state.outreachMessageId = sent.messageId
+    state.outreachThreadId = sent.threadId
+    state.outreachSentReal = true
+  } else {
+    state.outreachSentSimulated = true
+  }
+
+  const priorFollowUp: FollowUpState = state.followUp ?? { attemptsMade: 0, lastContactAt: null, requestedWaitUntil: null, parked: false }
+  const updatedFollowUp: FollowUpState = { ...priorFollowUp, attemptsMade: priorFollowUp.attemptsMade + 1, lastContactAt: sentAt }
+  const nextFollowUpAt = computeNextFollowUpAt(updatedFollowUp, sentAt)
+
+  state.followUp = updatedFollowUp
+  state.followUpDraft = null
+  appendHistory(state, `${sentAt.slice(0, 10)}: follow-up sent (attempt ${updatedFollowUp.attemptsMade}). Next follow-up checkpoint: ${nextFollowUpAt ?? 'none — max attempts reached, relationship parks if it stays silent'}.`)
+
+  run.state = state
+  run.status = 'WAITING'
+  run.jerryReason = null
+  run.decisionPacket = null
+  run.currentStage = 'WAITING_FOR_REPLY'
+  run.updatedAt = sentAt
+  await deps.runStore.put(run)
+  return run
 }
 
 export async function driveDestinationRelationship(deps: RelationshipDriverDeps, projectId: string, options: DriveDestinationRelationshipOptions): Promise<PlaybookRunRecord> {

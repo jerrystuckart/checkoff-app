@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { driveDestinationRelationship, applyRelationshipResumeEvent, type RelationshipDriverDeps, type DriveDestinationRelationshipOptions } from './destinationRelationshipDriver'
+import { driveDestinationRelationship, applyRelationshipResumeEvent, sendApprovedFollowUp, type RelationshipDriverDeps, type DriveDestinationRelationshipOptions } from './destinationRelationshipDriver'
 import { InMemoryPlaybookRunStore, playbookRunId, recordJerryDecision } from './playbookRun'
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
@@ -635,4 +635,83 @@ test('stepAssetsPrep escalates (never silently proceeds) when evidence.artifact 
   assert.equal(run.status, 'NEEDS_JERRY')
   assert.match(run.jerryReason ?? '', /did not contain a recognizable draft/)
   assert.equal((run.state as any).draftedOutreach, undefined)
+})
+
+// ---------------------------------------------------------------------------
+// Phase 2R — sendApprovedFollowUp(). A real overdue follow-up (Williams,
+// Elkhart Lake) is drafted directly onto an already-WAITING_FOR_REPLY
+// run, which driveDestinationRelationship()'s own forward loop never
+// revisits (its switch only advances RELATIONSHIP_READY -> ASSETS_PREP
+// -> INITIAL_OUTREACH). This is the dedicated send path for that case —
+// it must ALWAYS reuse the existing thread, never start a new one.
+// ---------------------------------------------------------------------------
+
+async function seedWaitingRunWithFollowUp(d: RelationshipDriverDeps, destinationId: string, overrides: Record<string, unknown> = {}) {
+  const runId = playbookRunId('destination_relationship', destinationId)
+  const run = {
+    runId,
+    projectId: destinationId,
+    playbookKey: 'destination_relationship',
+    status: 'NEEDS_JERRY' as const,
+    currentStage: 'WAITING_FOR_REPLY',
+    loopIteration: 0,
+    totalRetries: 0,
+    pendingExecutionIds: [],
+    state: {
+      destinationName: 'Test Destination',
+      primaryContact: { contactId: 'contact-1', name: 'Jane Doe', email: 'jane@example.com', role: 'Director' },
+      draftedOutreach: { subject: 'Original first touch', bodyText: 'Original body', channel: 'email' },
+      outreachSentReal: true,
+      outreachThreadId: 'real-thread-abc',
+      outreachMessageId: 'real-message-abc',
+      followUpDraft: { subject: 'Re: Original first touch', bodyText: 'Just following up.', channel: 'email' },
+      ...overrides,
+    },
+    jerryReason: 'follow-up ready',
+    decisionPacket: { decisionNeeded: 'approve follow-up' },
+    startedAt: '2026-09-01T00:00:00Z',
+    updatedAt: '2026-09-01T00:00:00Z',
+  }
+  await d.runStore.put(run)
+  return runId
+}
+
+test('sendApprovedFollowUp: sends the follow-up draft (not the original first-touch content) threaded onto the existing Gmail thread, using jerry@getcheckoff.com', async () => {
+  const gmail = new FakeGmailAdapter()
+  const d = deps({ executors: [], gmail })
+  await seedWaitingRunWithFollowUp(d, 'destination-follow-up-test')
+
+  const run = await sendApprovedFollowUp(d, 'destination-follow-up-test')
+
+  assert.equal(gmail.sentMessages.length, 1)
+  assert.equal(gmail.sentMessages[0].to, 'jane@example.com')
+  assert.equal(gmail.sentMessages[0].from, 'jerry@getcheckoff.com')
+  assert.equal(gmail.sentMessages[0].subject, 'Re: Original first touch', 'must send the FOLLOW-UP content, never the original first-touch text again')
+  assert.equal(gmail.sentMessages[0].threadId, 'real-thread-abc', 'must reply in the existing thread, never start a new one')
+
+  assert.equal(run.status, 'WAITING')
+  assert.equal(run.currentStage, 'WAITING_FOR_REPLY')
+  const state = run.state as any
+  assert.equal(state.followUpDraft, null, 'the sent follow-up draft is cleared, never re-sent again')
+  assert.equal(state.outreachThreadId, 'real-thread-abc')
+  assert.equal(state.followUp.attemptsMade, 1)
+  assert.ok(state.followUp.lastContactAt)
+})
+
+test('sendApprovedFollowUp: refuses to send when no existing thread is on file — a follow-up must never start a stray new thread', async () => {
+  const gmail = new FakeGmailAdapter()
+  const d = deps({ executors: [], gmail })
+  await seedWaitingRunWithFollowUp(d, 'destination-no-thread-test', { outreachThreadId: undefined })
+
+  await assert.rejects(() => sendApprovedFollowUp(d, 'destination-no-thread-test'), /must always reply in the original thread/)
+  assert.equal(gmail.sentMessages.length, 0)
+})
+
+test('sendApprovedFollowUp: refuses to send when no follow-up draft exists', async () => {
+  const gmail = new FakeGmailAdapter()
+  const d = deps({ executors: [], gmail })
+  await seedWaitingRunWithFollowUp(d, 'destination-no-draft-test', { followUpDraft: null })
+
+  await assert.rejects(() => sendApprovedFollowUp(d, 'destination-no-draft-test'), /No approved follow-up draft/)
+  assert.equal(gmail.sentMessages.length, 0)
 })
