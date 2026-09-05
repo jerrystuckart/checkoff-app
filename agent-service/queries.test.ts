@@ -99,14 +99,13 @@ test('getBlockedTasks: only widget-marketing remains blocked after the chief-rea
 // real, contact-verified, drafted approval represented the SAME
 // underlying send decision, so the hub-lifecycle run was marked DONE
 // (superseded), leaving exactly one approval gate per destination.
-test('getNeedsJerryTasks: exactly three real drafted-outreach escalations exist, one per destination — no duplicate Buena Vista entry (Phase 2R)', { skip }, async () => {
+// Phase 2S: Jerry explicitly approved and Chief sent all three drafted
+// outbound emails — each run returned to WAITING_FOR_REPLY, clearing its
+// NEEDS_JERRY. Updating this acceptance criterion again to match, not
+// weakening it.
+test('getNeedsJerryTasks: zero — all three approved drafts (Williams, Elkhart Lake, Buena Vista) were sent (Phase 2S)', { skip }, async () => {
   const needsJerry = await getNeedsJerryTasks()
-  assert.equal(needsJerry.length, 3)
-  const titles = needsJerry.map((t) => t.title)
-  assert.ok(titles.some((t) => t.includes('destination_relationship') && t.includes('destination-buena-vista')))
-  assert.equal(titles.some((t) => t.includes('destination_hub_lifecycle')), false, 'the hub-lifecycle gate was superseded and must not still appear')
-  assert.ok(titles.some((t) => t.includes('destination-elkhart-lake-wi')))
-  assert.ok(titles.some((t) => t.includes('destination-williams-az')))
+  assert.equal(needsJerry.length, 0)
 })
 
 test('getRecentTaskChanges: returns the Bootstrap v1 CREATED events within a wide window', { skip }, async () => {

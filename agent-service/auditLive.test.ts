@@ -122,14 +122,20 @@ test('live acceptance: widget marketing is BLOCKED', { skip }, async () => {
 // send decision, so the hub-lifecycle run was marked DONE (superseded).
 // Updating this acceptance criterion again to match, not weakening it:
 // exactly one approval gate per destination, no duplicates.
-test('live acceptance: the Willcox NEEDS_JERRY was resolved (Phase 2N); exactly three real drafted-outreach escalations exist, no duplicate Buena Vista entry (Phase 2R)', { skip }, async () => {
+// Phase 2S: Jerry explicitly approved and Chief sent all three drafted
+// outbound emails (Williams follow-up, Elkhart Lake follow-up, Buena
+// Vista first touch) — each run correctly returned to WAITING_FOR_REPLY,
+// clearing its NEEDS_JERRY. Updating this acceptance criterion again to
+// match, not weakening it: zero NEEDS_JERRY now that every drafted send
+// this round was actually approved and sent.
+test('live acceptance: zero NEEDS_JERRY — all three approved drafts (Williams, Elkhart Lake, Buena Vista) were sent (Phase 2S)', { skip }, async () => {
   const report = await getChiefAuditReport()
-  assert.equal(report.summary.attentionByCode.TASK_NEEDS_JERRY ?? 0, 3)
+  assert.equal(report.summary.attentionByCode.TASK_NEEDS_JERRY ?? 0, 0)
   assert.equal(findAttention(report, 'Willcox — confirm pricing with Desiree', 'TASK_NEEDS_JERRY'), undefined)
   assert.equal(findAttention(report, 'destination_hub_lifecycle — destination-buena-vista', 'TASK_NEEDS_JERRY'), undefined, 'the hub-lifecycle gate was superseded and must not still appear')
-  assert.ok(findAttention(report, 'destination_relationship — destination-buena-vista', 'TASK_NEEDS_JERRY'))
-  assert.ok(findAttention(report, 'destination_relationship — destination-elkhart-lake-wi', 'TASK_NEEDS_JERRY'))
-  assert.ok(findAttention(report, 'destination_relationship — destination-williams-az', 'TASK_NEEDS_JERRY'))
+  assert.equal(findAttention(report, 'destination_relationship — destination-buena-vista', 'TASK_NEEDS_JERRY'), undefined, 'sent — no longer awaiting approval')
+  assert.equal(findAttention(report, 'destination_relationship — destination-elkhart-lake-wi', 'TASK_NEEDS_JERRY'), undefined, 'sent — no longer awaiting approval')
+  assert.equal(findAttention(report, 'destination_relationship — destination-williams-az', 'TASK_NEEDS_JERRY'), undefined, 'sent — no longer awaiting approval')
 })
 
 test('live acceptance: the Phase 2M Willcox NEEDS_JERRY task is genuinely DONE, not merely absent for an unrelated reason', { skip }, async () => {

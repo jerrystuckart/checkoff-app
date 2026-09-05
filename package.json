@@ -24,6 +24,7 @@
     "agent:reconcile-williams-real-outreach": "tsx agent-service/reconcileWilliamsRealOutreach.ts",
     "agent:reconcile-buena-vista-ballot-and-champion": "tsx agent-service/reconcileBuenaVistaBallotAndChampion.ts",
     "agent:reconcile-buena-vista-duplicate-approval": "tsx agent-service/reconcileBuenaVistaDuplicateApproval.ts",
+    "agent:send-approved-three-outreach": "tsx agent-service/sendApprovedThreeOutreach.ts",
     "agent:test": "tsx --test agent-service/*.test.ts agent-service/playbooks/*.test.ts agent-service/specialists/*.test.ts",
     "agent:test:mutations": "AGENT_SERVICE_ALLOW_MUTATION_TESTS=1 tsx --test agent-service/*.test.ts agent-service/playbooks/*.test.ts agent-service/specialists/*.test.ts",
     "agent:typecheck": "tsc --noEmit -p agent-service/tsconfig.json",
