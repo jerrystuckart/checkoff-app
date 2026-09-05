@@ -94,6 +94,13 @@ export class DbGmailCheckpointStore implements GmailCheckpointStore {
         changedByOwnerKey: GMAIL_CHECKPOINT_OWNER_KEY,
         ownerKey: GMAIL_CHECKPOINT_OWNER_KEY,
         description: 'Durable checkpoint for the Gmail inbound event source (gmailInboundMonitor.ts) — last-checked time and processed-message-id idempotency set.',
+        // agent.tasks' own tasks_next_action_required invariant (transitions.ts
+        // validateStateRequirements) requires a meaningful nextAction for
+        // any status other than BACKLOG/DONE/CANCELED — a real live proof
+        // against Postgres caught this being omitted (the fully-mocked
+        // FakeAgentDb in dbGmailCheckpointStore.test.ts didn't enforce the
+        // same invariant, so the unit tests alone didn't catch it).
+        nextAction: 'poll Gmail on the next scheduled interval',
         sourceType: GMAIL_CHECKPOINT_SOURCE_TYPE,
         sourceRef: GMAIL_CHECKPOINT_SINGLETON_REF,
       })

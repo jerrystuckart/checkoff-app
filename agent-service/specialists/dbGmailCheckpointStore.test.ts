@@ -13,6 +13,7 @@ import { RELATIONSHIP_PLAYBOOK_KEY } from '../playbooks/destinationRelationship'
 import { playbookRunId, getOrCreateRun } from './playbookRun'
 import type { TaskSummary, TaskEventDetail, TaskStatus } from '../types'
 import type { CreateTaskInput, CreateTaskResult, TransitionTaskInput, TransitionTaskResult, RecordPlaybookStageInput, RecordPlaybookStageResult } from '../mutations'
+import { validateStateRequirements } from '../transitions'
 import type { GmailCheckpoint } from './gmailInboundMonitor'
 
 // ---------------------------------------------------------------------------
@@ -81,6 +82,23 @@ class FakeAgentDb {
       const existing = this.tasks.find((t) => t.sourceType === input.sourceType && t.sourceRef === input.sourceRef)
       if (existing) return { task: this.toTaskSummary(existing), created: false }
     }
+    // Real agent.tasks invariant enforcement (transitions.ts) — a live
+    // proof against real Postgres caught createTask({status:'IN_PROGRESS'})
+    // missing nextAction, which an earlier version of this fake did NOT
+    // catch because it never validated anything. Calling the REAL
+    // validateStateRequirements here (not a hand-rolled re-check) makes
+    // this mock faithful to the actual constraint set going forward.
+    validateStateRequirements({
+      status: input.status,
+      nextAction: input.nextAction ?? null,
+      nextCheckAt: input.nextCheckAt ?? null,
+      blockedByTaskId: input.blockedByTaskId ?? null,
+      blockerNote: input.blockerNote ?? null,
+      jerryRequest: input.jerryRequest ?? null,
+      ownerId: input.ownerKey ? 'fake-owner-id' : null,
+      startedAt: input.status === 'IN_PROGRESS' ? new Date() : null,
+      completedAt: null,
+    })
     const row: FakeTaskRow = { id: this.nextId('task'), title: input.title, status: input.status, sourceType: input.sourceType ?? null, sourceRef: input.sourceRef ?? null, blockerNote: input.blockerNote ?? null, jerryRequest: input.jerryRequest ?? null, updatedAt: new Date() }
     this.tasks.push(row)
     return { task: this.toTaskSummary(row), created: true }
