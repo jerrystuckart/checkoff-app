@@ -35,9 +35,19 @@ test('live acceptance: Grand Lake is WAITING and due for check', { skip }, async
   assert.ok(findAttention(report, 'Grand Lake', 'WAITING_DUE_FOR_CHECK'))
 })
 
-test('live acceptance: Rim Country is WAITING and due for check', { skip }, async () => {
+// Phase 2O: Jerry explicitly declined Rim Country and its follow-up task
+// was transitioned to CANCELED (reconcileLegacyDestinationArtifacts.ts)
+// — updating this acceptance criterion to match, not weakening it: a
+// declined destination must NOT still surface as WAITING attention, and
+// it must genuinely be CANCELED, not merely absent for an unrelated reason.
+test('live acceptance: Rim Country no longer appears as WAITING (declined, Phase 2O)', { skip }, async () => {
   const report = await getChiefAuditReport()
-  assert.ok(findAttention(report, 'Rim Country', 'WAITING_DUE_FOR_CHECK'))
+  assert.equal(findAttention(report, 'Rim Country', 'WAITING_DUE_FOR_CHECK'), undefined)
+})
+
+test('live acceptance: Rim Country\'s follow-up task is genuinely CANCELED, not merely absent for an unrelated reason', { skip }, async () => {
+  const rows = await query<{ status: string }>("SELECT status FROM agent.tasks WHERE source_type = 'bootstrap_v1' AND source_ref = 'destination-rim-country-followup'")
+  assert.equal(rows[0]?.status, 'CANCELED')
 })
 
 test('live acceptance: Denver Featured outreach is WAITING and due for check', { skip }, async () => {
@@ -103,14 +113,17 @@ test('live acceptance: widget marketing is BLOCKED', { skip }, async () => {
 // Phase 2M created ONE genuine NEEDS_JERRY task (Willcox pricing
 // confirmation). Phase 2N then reconciled Jerry's own real Gmail reply to
 // Desiree, which is genuine completion proof — reconcileWillcoxJerryReply.ts
-// transitioned that task to DONE. Updating this acceptance criterion
-// again to match, not weakening it: zero NEEDS_JERRY now that the real
-// underlying need has actually been met, and the Willcox task must be
-// genuinely DONE, not merely absent for an unrelated reason.
-test('live acceptance: zero NEEDS_JERRY after Jerry\'s real Willcox reply was reconciled (Phase 2N)', { skip }, async () => {
+// transitioned that task to DONE. Phase 2P then ran Buena Vista's real
+// DAP (runBuenaVistaDap.ts), and the hub-lifecycle driver itself
+// escalated to NEEDS_JERRY asking Jerry to approve initial outreach — a
+// genuine new escalation, not a regression. Updating this acceptance
+// criterion again to match, not weakening it: the Willcox task stays
+// genuinely DONE, and exactly the Buena Vista escalation now exists.
+test('live acceptance: the Willcox NEEDS_JERRY was resolved (Phase 2N); exactly the Buena Vista DAP outreach-approval escalation exists now (Phase 2P)', { skip }, async () => {
   const report = await getChiefAuditReport()
-  assert.equal(report.summary.attentionByCode.TASK_NEEDS_JERRY ?? 0, 0)
+  assert.equal(report.summary.attentionByCode.TASK_NEEDS_JERRY ?? 0, 1)
   assert.equal(findAttention(report, 'Willcox — confirm pricing with Desiree', 'TASK_NEEDS_JERRY'), undefined)
+  assert.ok(findAttention(report, 'destination-buena-vista', 'TASK_NEEDS_JERRY'))
 })
 
 test('live acceptance: the Phase 2M Willcox NEEDS_JERRY task is genuinely DONE, not merely absent for an unrelated reason', { skip }, async () => {
@@ -139,12 +152,15 @@ test('live acceptance: every project in health output is ACTIVE or ON_HOLD', { s
 // acceptance data, not fixtures.
 // ---------------------------------------------------------------------------
 
-test('live acceptance: each real Destination has its OWN distinct project — Willcox, Buena Vista, Grand Lake, and Rim Country are four separate project_key rows, not the umbrella', { skip }, async () => {
+// Phase 2O added two more real per-destination projects (Williams AZ,
+// Elkhart Lake WI) alongside the Phase 2M four — updating the expected
+// list to match, not weakening the uniqueness check.
+test('live acceptance: each real Destination has its OWN distinct project — six separate project_key rows, not the umbrella', { skip }, async () => {
   const rows = await query<{ project_key: string }>(
     `SELECT project_key FROM agent.projects WHERE project_type = 'DESTINATION_HUB' AND project_key <> 'destination_hubs_wave_1' ORDER BY project_key`
   )
   const keys = rows.map((r) => r.project_key)
-  assert.deepEqual(keys, ['destination-buena-vista', 'destination-grand-lake', 'destination-rim-country', 'destination-willcox'])
+  assert.deepEqual(keys, ['destination-buena-vista', 'destination-elkhart-lake-wi', 'destination-grand-lake', 'destination-rim-country', 'destination-willcox', 'destination-williams-az'])
   assert.equal(new Set(keys).size, keys.length, 'no duplicate project_key rows from a re-run of the backfill migration')
 })
 
@@ -155,7 +171,7 @@ test('live acceptance: the umbrella destination_hubs_wave_1 project still exists
   assert.equal(rows[0]?.count, '0', 'the umbrella project must never be the canonical relationship scope for a specific destination once a real project exists for it')
 })
 
-test('live acceptance: Desiree Gerth is a verified contact scoped to Willcox only, with no contact manufactured for Buena Vista/Grand Lake/Rim Country', { skip }, async () => {
+test('live acceptance: Desiree Gerth is a verified contact scoped to Willcox only', { skip }, async () => {
   // DISTINCT: Phase 2N added a second (outbound) interaction on the same
   // contact/project pair — Jerry's real reply — so this must not be
   // read as "two different destinations for the same person."
@@ -167,9 +183,25 @@ test('live acceptance: Desiree Gerth is a verified contact scoped to Willcox onl
   )
   assert.equal(desiree.length, 1)
   assert.equal(desiree[0].project_key, 'destination-willcox')
+})
 
+// Phase 2P added two more REAL, live-verified contacts (Kathleen
+// Eickhoff / Elkhart Lake, Patrick Randall / Grand Lake) once Elkhart
+// Lake and Grand Lake had their real, already-sent outreach reconciled
+// — updating the expected count to match, not weakening the
+// no-manufactured-contact check: Buena Vista, Williams AZ, and Rim
+// Country must still have none.
+test('live acceptance: exactly the three real, verified contacts exist — none manufactured for Buena Vista, Williams AZ, or Rim Country', { skip }, async () => {
   const totalContacts = await query<{ count: string }>(`SELECT count(*)::text FROM agent.contacts`)
-  assert.equal(totalContacts[0]?.count, '1', 'no contact was manufactured for Buena Vista/Grand Lake/Rim Country — none exists in real data')
+  assert.equal(totalContacts[0]?.count, '3')
+
+  const noContact = await query<{ count: string }>(
+    `SELECT count(*)::text FROM agent.contacts c
+       JOIN agent.interactions i ON i.contact_id = c.id
+       JOIN agent.projects p ON p.id = i.project_id
+      WHERE p.project_key IN ('destination-buena-vista', 'destination-williams-az', 'destination-rim-country')`
+  )
+  assert.equal(noContact[0]?.count, '0')
 })
 
 // ---------------------------------------------------------------------------

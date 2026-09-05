@@ -40,20 +40,25 @@ test('getActiveProjects: returns the 4 ACTIVE bootstrap projects, excludes the 3
   assert.ok(!keys.includes('tucson_metro'), 'tucson_metro is ON_HOLD, must be excluded')
 })
 
-test('getWaitingTasks: includes Grand Lake, Rim Country, and Denver Featured outreach', { skip }, async () => {
+// Phase 2O: Rim Country was explicitly declined by Jerry and its
+// follow-up task transitioned to CANCELED (see
+// reconcileLegacyDestinationArtifacts.ts) — updating this acceptance
+// criterion to match, not weakening it: Rim Country must NOT still
+// appear as WAITING once declined.
+test('getWaitingTasks: includes Grand Lake and Denver Featured outreach; Rim Country no longer appears (declined, Phase 2O)', { skip }, async () => {
   const tasks = await getWaitingTasks()
   const titles = tasks.map((t) => t.title)
   assert.ok(titles.some((t) => t.includes('Grand Lake')), 'expected Grand Lake follow-up')
-  assert.ok(titles.some((t) => t.includes('Rim Country')), 'expected Rim Country follow-up')
   assert.ok(titles.some((t) => t.includes('Denver Featured outreach')), 'expected Denver Featured outreach tracking')
+  assert.equal(titles.some((t) => t.includes('Rim Country — reconcile')), false, 'the Rim Country follow-up was CANCELED once declined — must not appear as WAITING')
 })
 
 test('getTasksDueForCheck / waiting due-for-check filter: bootstrap WAITING tasks are due now', { skip }, async () => {
   const dueNow = await getTasksDueForCheck()
-  assert.ok(dueNow.length >= 3, `expected at least the 3 bootstrap WAITING tasks due for check, found ${dueNow.length}`)
+  assert.ok(dueNow.length >= 2, `expected at least the 2 remaining bootstrap WAITING tasks due for check (Rim Country's is CANCELED), found ${dueNow.length}`)
 
   const waitingDue = await getWaitingTasks({ dueForCheckOnly: true })
-  assert.ok(waitingDue.length >= 3)
+  assert.ok(waitingDue.length >= 2)
   assert.ok(waitingDue.every((t) => t.isDueForCheck), 'every returned task must actually be due for check')
 })
 
@@ -81,9 +86,15 @@ test('getBlockedTasks: only widget-marketing remains blocked after the chief-rea
 // (reconcileWillcoxJerryReply.ts) — updating this acceptance criterion
 // again to match, not weakening it: zero NEEDS_JERRY now that the real
 // need has actually been met.
-test('getNeedsJerryTasks: zero — the Phase 2M Willcox task was resolved by Jerry\'s real reply (Phase 2N)', { skip }, async () => {
+// Phase 2P: running the Buena Vista DAP for real (runBuenaVistaDap.ts)
+// completed the destination_hub_lifecycle run through D6 and the driver
+// itself escalated to NEEDS_JERRY asking Jerry to approve initial
+// outreach — a genuine new escalation, not a regression. Updating this
+// acceptance criterion again to match, not weakening it.
+test('getNeedsJerryTasks: exactly the Buena Vista DAP outreach-approval escalation (Phase 2P)', { skip }, async () => {
   const needsJerry = await getNeedsJerryTasks()
-  assert.equal(needsJerry.length, 0)
+  assert.equal(needsJerry.length, 1)
+  assert.ok(needsJerry[0].title.includes('destination-buena-vista'))
 })
 
 test('getRecentTaskChanges: returns the Bootstrap v1 CREATED events within a wide window', { skip }, async () => {
