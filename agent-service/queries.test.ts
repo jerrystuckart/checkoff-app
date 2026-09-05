@@ -93,14 +93,18 @@ test('getBlockedTasks: only widget-marketing remains blocked after the chief-rea
 // acceptance criterion again to match, not weakening it.
 // Phase 2Q verified/drafted real outreach for three more relationship
 // runs (Elkhart Lake follow-up, Williams follow-up, Buena Vista first
-// touch), each correctly stopping at NEEDS_JERRY — updating the expected
-// count again to match, not weakening the check.
-test('getNeedsJerryTasks: four real drafted-outreach escalations exist (Phase 2P/2Q)', { skip }, async () => {
+// touch), each correctly stopping at NEEDS_JERRY. Phase 2R then
+// normalized the duplicate Buena Vista escalation: the hub-lifecycle
+// run's generic "ready for outreach" gate and the relationship run's
+// real, contact-verified, drafted approval represented the SAME
+// underlying send decision, so the hub-lifecycle run was marked DONE
+// (superseded), leaving exactly one approval gate per destination.
+test('getNeedsJerryTasks: exactly three real drafted-outreach escalations exist, one per destination — no duplicate Buena Vista entry (Phase 2R)', { skip }, async () => {
   const needsJerry = await getNeedsJerryTasks()
-  assert.equal(needsJerry.length, 4)
+  assert.equal(needsJerry.length, 3)
   const titles = needsJerry.map((t) => t.title)
-  assert.ok(titles.some((t) => t.includes('destination_hub_lifecycle') && t.includes('destination-buena-vista')))
   assert.ok(titles.some((t) => t.includes('destination_relationship') && t.includes('destination-buena-vista')))
+  assert.equal(titles.some((t) => t.includes('destination_hub_lifecycle')), false, 'the hub-lifecycle gate was superseded and must not still appear')
   assert.ok(titles.some((t) => t.includes('destination-elkhart-lake-wi')))
   assert.ok(titles.some((t) => t.includes('destination-williams-az')))
 })

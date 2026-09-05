@@ -116,12 +116,17 @@ test('live acceptance: widget marketing is BLOCKED', { skip }, async () => {
 // then verified/drafted real first-touch or follow-up outreach for
 // Elkhart Lake, Williams, and Buena Vista's relationship runs — each
 // correctly stops at NEEDS_JERRY (draft ready, sending requires Jerry).
-// Updating this acceptance criterion again to match, not weakening it.
-test('live acceptance: the Willcox NEEDS_JERRY was resolved (Phase 2N); four real drafted-outreach escalations exist now (Phase 2P/2Q)', { skip }, async () => {
+// Phase 2R then normalized the duplicate Buena Vista escalation — the
+// hub-lifecycle run's generic "ready for outreach" gate and the
+// relationship run's real, drafted approval were the SAME underlying
+// send decision, so the hub-lifecycle run was marked DONE (superseded).
+// Updating this acceptance criterion again to match, not weakening it:
+// exactly one approval gate per destination, no duplicates.
+test('live acceptance: the Willcox NEEDS_JERRY was resolved (Phase 2N); exactly three real drafted-outreach escalations exist, no duplicate Buena Vista entry (Phase 2R)', { skip }, async () => {
   const report = await getChiefAuditReport()
-  assert.equal(report.summary.attentionByCode.TASK_NEEDS_JERRY ?? 0, 4)
+  assert.equal(report.summary.attentionByCode.TASK_NEEDS_JERRY ?? 0, 3)
   assert.equal(findAttention(report, 'Willcox — confirm pricing with Desiree', 'TASK_NEEDS_JERRY'), undefined)
-  assert.ok(findAttention(report, 'destination_hub_lifecycle — destination-buena-vista', 'TASK_NEEDS_JERRY'))
+  assert.equal(findAttention(report, 'destination_hub_lifecycle — destination-buena-vista', 'TASK_NEEDS_JERRY'), undefined, 'the hub-lifecycle gate was superseded and must not still appear')
   assert.ok(findAttention(report, 'destination_relationship — destination-buena-vista', 'TASK_NEEDS_JERRY'))
   assert.ok(findAttention(report, 'destination_relationship — destination-elkhart-lake-wi', 'TASK_NEEDS_JERRY'))
   assert.ok(findAttention(report, 'destination_relationship — destination-williams-az', 'TASK_NEEDS_JERRY'))
