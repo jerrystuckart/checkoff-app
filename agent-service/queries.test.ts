@@ -91,10 +91,18 @@ test('getBlockedTasks: only widget-marketing remains blocked after the chief-rea
 // itself escalated to NEEDS_JERRY asking Jerry to approve initial
 // outreach — a genuine new escalation, not a regression. Updating this
 // acceptance criterion again to match, not weakening it.
-test('getNeedsJerryTasks: exactly the Buena Vista DAP outreach-approval escalation (Phase 2P)', { skip }, async () => {
+// Phase 2Q verified/drafted real outreach for three more relationship
+// runs (Elkhart Lake follow-up, Williams follow-up, Buena Vista first
+// touch), each correctly stopping at NEEDS_JERRY — updating the expected
+// count again to match, not weakening the check.
+test('getNeedsJerryTasks: four real drafted-outreach escalations exist (Phase 2P/2Q)', { skip }, async () => {
   const needsJerry = await getNeedsJerryTasks()
-  assert.equal(needsJerry.length, 1)
-  assert.ok(needsJerry[0].title.includes('destination-buena-vista'))
+  assert.equal(needsJerry.length, 4)
+  const titles = needsJerry.map((t) => t.title)
+  assert.ok(titles.some((t) => t.includes('destination_hub_lifecycle') && t.includes('destination-buena-vista')))
+  assert.ok(titles.some((t) => t.includes('destination_relationship') && t.includes('destination-buena-vista')))
+  assert.ok(titles.some((t) => t.includes('destination-elkhart-lake-wi')))
+  assert.ok(titles.some((t) => t.includes('destination-williams-az')))
 })
 
 test('getRecentTaskChanges: returns the Bootstrap v1 CREATED events within a wide window', { skip }, async () => {

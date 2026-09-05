@@ -111,19 +111,20 @@ test('live acceptance: widget marketing is BLOCKED', { skip }, async () => {
 })
 
 // Phase 2M created ONE genuine NEEDS_JERRY task (Willcox pricing
-// confirmation). Phase 2N then reconciled Jerry's own real Gmail reply to
-// Desiree, which is genuine completion proof — reconcileWillcoxJerryReply.ts
-// transitioned that task to DONE. Phase 2P then ran Buena Vista's real
-// DAP (runBuenaVistaDap.ts), and the hub-lifecycle driver itself
-// escalated to NEEDS_JERRY asking Jerry to approve initial outreach — a
-// genuine new escalation, not a regression. Updating this acceptance
-// criterion again to match, not weakening it: the Willcox task stays
-// genuinely DONE, and exactly the Buena Vista escalation now exists.
-test('live acceptance: the Willcox NEEDS_JERRY was resolved (Phase 2N); exactly the Buena Vista DAP outreach-approval escalation exists now (Phase 2P)', { skip }, async () => {
+// confirmation), resolved DONE in Phase 2N. Phase 2P ran Buena Vista's
+// real DAP, escalating the hub-lifecycle run to NEEDS_JERRY. Phase 2Q
+// then verified/drafted real first-touch or follow-up outreach for
+// Elkhart Lake, Williams, and Buena Vista's relationship runs — each
+// correctly stops at NEEDS_JERRY (draft ready, sending requires Jerry).
+// Updating this acceptance criterion again to match, not weakening it.
+test('live acceptance: the Willcox NEEDS_JERRY was resolved (Phase 2N); four real drafted-outreach escalations exist now (Phase 2P/2Q)', { skip }, async () => {
   const report = await getChiefAuditReport()
-  assert.equal(report.summary.attentionByCode.TASK_NEEDS_JERRY ?? 0, 1)
+  assert.equal(report.summary.attentionByCode.TASK_NEEDS_JERRY ?? 0, 4)
   assert.equal(findAttention(report, 'Willcox — confirm pricing with Desiree', 'TASK_NEEDS_JERRY'), undefined)
-  assert.ok(findAttention(report, 'destination-buena-vista', 'TASK_NEEDS_JERRY'))
+  assert.ok(findAttention(report, 'destination_hub_lifecycle — destination-buena-vista', 'TASK_NEEDS_JERRY'))
+  assert.ok(findAttention(report, 'destination_relationship — destination-buena-vista', 'TASK_NEEDS_JERRY'))
+  assert.ok(findAttention(report, 'destination_relationship — destination-elkhart-lake-wi', 'TASK_NEEDS_JERRY'))
+  assert.ok(findAttention(report, 'destination_relationship — destination-williams-az', 'TASK_NEEDS_JERRY'))
 })
 
 test('live acceptance: the Phase 2M Willcox NEEDS_JERRY task is genuinely DONE, not merely absent for an unrelated reason', { skip }, async () => {
@@ -191,17 +192,22 @@ test('live acceptance: Desiree Gerth is a verified contact scoped to Willcox onl
 // — updating the expected count to match, not weakening the
 // no-manufactured-contact check: Buena Vista, Williams AZ, and Rim
 // Country must still have none.
-test('live acceptance: exactly the three real, verified contacts exist — none manufactured for Buena Vista, Williams AZ, or Rim Country', { skip }, async () => {
+// Phase 2Q added two more REAL, live-verified contacts once Buena Vista
+// (Bryan Jordan, DestinationiQ) and Williams AZ (Jessica Mitchell
+// Remington, Wander West Destinations) had their outreach verified/
+// reconciled — updating the expected count to match, not weakening the
+// no-manufactured-contact check: Rim Country must still have none.
+test('live acceptance: exactly the five real, verified contacts exist — none manufactured for Rim Country', { skip }, async () => {
   const totalContacts = await query<{ count: string }>(`SELECT count(*)::text FROM agent.contacts`)
-  assert.equal(totalContacts[0]?.count, '3')
+  assert.equal(totalContacts[0]?.count, '5')
 
-  const noContact = await query<{ count: string }>(
+  const rimCountryContacts = await query<{ count: string }>(
     `SELECT count(*)::text FROM agent.contacts c
        JOIN agent.interactions i ON i.contact_id = c.id
        JOIN agent.projects p ON p.id = i.project_id
-      WHERE p.project_key IN ('destination-buena-vista', 'destination-williams-az', 'destination-rim-country')`
+      WHERE p.project_key = 'destination-rim-country'`
   )
-  assert.equal(noContact[0]?.count, '0')
+  assert.equal(rimCountryContacts[0]?.count, '0')
 })
 
 // ---------------------------------------------------------------------------

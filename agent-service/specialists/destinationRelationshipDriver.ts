@@ -224,7 +224,20 @@ async function stepAssetsPrep(deps: RelationshipDriverDeps, run: PlaybookRunReco
   }
   if (resolved.kind === 'FAILED') return escalate(run, 'Outreach drafting did not produce valid evidence.', { decisionNeeded: 'Review outreach-drafting failure.', why: resolved.reason })
 
-  const draft = (resolved.envelope.evidence.artifact as { draft: OutreachDraft }).draft
+  // A real live proof caught this: the destination_commercial v1
+  // methodology has no schema pinning evidence.artifact's exact shape
+  // for a DRAFT_OUTREACH request, and the model naturally returns the
+  // draft itself as evidence.artifact ({channel, subject, bodyText}) —
+  // NOT nested under an extra .draft key. Reading only the nested shape
+  // silently produced `state.draftedOutreach = undefined` on every real
+  // run, which the driver then advanced past without noticing (nothing
+  // downstream checked for a missing draft). Accept both shapes rather
+  // than assuming one — never silently accept an artifact that has
+  // neither.
+  const rawArtifact = resolved.envelope.evidence.artifact as { draft?: OutreachDraft; subject?: string; bodyText?: string; channel?: string }
+  const draft: OutreachDraft | undefined = rawArtifact.draft ?? (rawArtifact.subject && rawArtifact.bodyText ? { subject: rawArtifact.subject, bodyText: rawArtifact.bodyText, channel: rawArtifact.channel ?? 'email' } : undefined)
+  if (!draft) return escalate(run, 'Outreach drafting produced evidence, but it did not contain a recognizable draft (subject/bodyText).', { decisionNeeded: 'Review the raw drafting evidence — it does not match either expected shape.', why: JSON.stringify(rawArtifact).slice(0, 500) })
+
   state.draftedOutreach = draft
   run.state = state
   return moveTo(run, 'INITIAL_OUTREACH')

@@ -594,3 +594,45 @@ test('Phase 2J: the driver keeps an injected contactDirectory current — upsert
   contacts = await contactDirectory.listActiveContacts()
   assert.ok(contacts[0].threadId, 'the real Gmail thread id must be recorded once the outreach is actually sent')
 })
+
+// Phase 2Q — a real live proof against RemoteAiExecutor caught this: the
+// destination_commercial v1 methodology has no schema pinning
+// evidence.artifact's exact shape for a DRAFT_OUTREACH request, and a
+// real model naturally returns the draft itself as evidence.artifact
+// ({channel, subject, bodyText}) — NOT nested under an extra `draft` key
+// the way every TestExecutor fixture in this file scripts it. Reading
+// only the nested shape silently produced state.draftedOutreach ===
+// undefined on every real run while the driver still advanced to
+// NEEDS_JERRY as if a draft existed. stepAssetsPrep must accept EITHER
+// shape, and must escalate (never silently proceed) if neither is present.
+test('stepAssetsPrep accepts a FLAT evidence.artifact ({channel, subject, bodyText}) — the real shape a live AI executor actually returns, not just the nested {draft: {...}} every fixture here scripts', async () => {
+  const executor = new TestExecutor()
+  executor.scriptWhen(
+    (r) => r.specialist === 'destination_relationship_manager' && r.destinationId === 'destination-flat-shape-test',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { artifact: { channel: 'email', subject: 'Flat-shape draft', bodyText: 'This is the real, flat shape a live model returns.' } }, methodologyId: 'destination_commercial', methodologyVersion: 'v1' })
+  )
+  const d = deps({ executors: [executor] })
+  const run = await driveDestinationRelationship(d, 'destination-flat-shape-test', options('destination-flat-shape-test', 'Flat Shape Test'))
+
+  assert.equal(run.status, 'NEEDS_JERRY')
+  assert.equal(run.currentStage, 'INITIAL_OUTREACH')
+  const state = run.state as any
+  assert.ok(state.draftedOutreach, 'a flat evidence.artifact must still populate state.draftedOutreach')
+  assert.equal(state.draftedOutreach.subject, 'Flat-shape draft')
+  assert.equal(state.draftedOutreach.bodyText, 'This is the real, flat shape a live model returns.')
+  assert.equal(state.draftedOutreach.channel, 'email')
+})
+
+test('stepAssetsPrep escalates (never silently proceeds) when evidence.artifact matches NEITHER the nested nor the flat draft shape', async () => {
+  const executor = new TestExecutor()
+  executor.scriptWhen(
+    (r) => r.specialist === 'destination_relationship_manager' && r.destinationId === 'destination-bad-shape-test',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { artifact: { somethingElse: 'not a draft at all' } }, methodologyId: 'destination_commercial', methodologyVersion: 'v1' })
+  )
+  const d = deps({ executors: [executor] })
+  const run = await driveDestinationRelationship(d, 'destination-bad-shape-test', options('destination-bad-shape-test', 'Bad Shape Test'))
+
+  assert.equal(run.status, 'NEEDS_JERRY')
+  assert.match(run.jerryReason ?? '', /did not contain a recognizable draft/)
+  assert.equal((run.state as any).draftedOutreach, undefined)
+})
