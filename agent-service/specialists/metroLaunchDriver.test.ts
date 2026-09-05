@@ -505,3 +505,76 @@ test('driveMetroLaunch: M1 output missing a valid neighborhood "kind" fails evid
   assert.equal(run.status, 'NEEDS_JERRY')
   assert.match(run.jerryReason ?? '', /evidence validation/)
 })
+
+test('driveMetroLaunch: re-entering a stage whose execution is already COMPLETE (idempotent replay) is accepted, not retried and escalated', async () => {
+  // Reproduces the real San Diego resume bug: after manually resetting
+  // run.currentStage back to M1_GEOGRAPHY_MAP (to force fresh geography
+  // research under the fixed prompt/validation) while M1's execution
+  // record from the ORIGINAL run was already COMPLETE, runStepWithRetry
+  // wrongly treated the idempotent-replay ExecutionRecord as a failure.
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  let m1CallCount = 0
+
+  executor.scriptWhen(
+    (r) => r.stage === 'M1_GEOGRAPHY_MAP',
+    (r) => {
+      m1CallCount += 1
+      return fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { neighborhoods: [{ name: 'Downtown', kind: 'core_urban', ring1RadiusM: 1500, ring2RadiusM: 3000 }] },
+        methodologyId: 'metro_launch',
+        methodologyVersion: 'v1',
+      })
+    }
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M3_BROAD_DISCOVERY',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { candidates: [{ name: 'X', category: 'Food & drink', neighborhood: 'Downtown', claimSupported: 'x', source: 'https://x', needsVerification: true }] },
+        methodologyId: 'metro_launch',
+        methodologyVersion: 'v1',
+      })
+  )
+
+  executor.scriptWhen(
+    (r) => r.stage === 'M6_QUALITY_VERIFICATION',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { verifiedCandidateNames: ['X'] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: 'x' }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+  )
+
+  const smallPlan: CategoryCoveragePlan = { targets: [{ categoryName: 'Food & drink', minimumViable: 1, healthyTarget: 1, qualityNotes: [] }] }
+  const projectId = 'san-diego-idempotent-resume-test'
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  seeded!.state = { m0Decisions: RESOLVED_M0 }
+  await runStore.put(seeded!)
+
+  // First pass: drives all the way through M1 for real (COMPLETE recorded).
+  await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: smallPlan, maxSteps: 2 })
+  assert.equal(m1CallCount, 1)
+
+  // Simulate the manual reset: back to M1, same executionId will be reused.
+  const afterM1 = await runStore.get(playbookRunId('metro_launch', projectId))
+  afterM1!.currentStage = 'M1_GEOGRAPHY_MAP'
+  afterM1!.status = 'RUNNING'
+  await runStore.put(afterM1!)
+
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: smallPlan, maxSteps: 30 })
+
+  assert.equal(m1CallCount, 1, 'the idempotent-COMPLETE execution must never be re-invoked — same executionId, same accepted result')
+  // NEEDS_JERRY here is expected (the launch-readiness boundary always
+  // escalates, by design) — what this test actually guards against is
+  // escalating EARLIER, for the wrong reason (a retry-guardrail failure
+  // on M1's idempotent replay).
+  assert.doesNotMatch(run.jerryReason ?? '', /retry guardrail/)
+  assert.match(run.jerryReason ?? '', /launch-readiness boundary/)
+})

@@ -134,6 +134,20 @@ async function runStepWithRetry(deps: MetroDriverDeps, run: PlaybookRunRecord, r
     if ('accepted' in outcome && outcome.accepted) {
       return { kind: 'ACCEPTED', envelope: outcome.record.envelope ?? undefined }
     }
+    // Bug fix (found resuming the real San Diego run after a manual
+    // state reset for M1): runExecution's own idempotent-replay path
+    // returns a bare ExecutionRecord (not an AcceptResultOutcome) when
+    // the SAME executionId already has a COMPLETE record — e.g. a stage
+    // deliberately re-entered after resetting run.currentStage. Neither
+    // 'status' in outcome nor 'accepted' in outcome matches that shape,
+    // so without this check a genuinely-already-accepted execution was
+    // wrongly treated as a fresh failure needing retry (harmlessly, since
+    // the idempotent path never re-invokes the executor — but it still
+    // burned the retry guardrail and escalated on a call that had, in
+    // fact, already succeeded).
+    if ('status' in outcome && outcome.status === 'COMPLETE') {
+      return { kind: 'ACCEPTED', envelope: outcome.envelope ?? undefined }
+    }
     // Not accepted and not unavailable -> evidence/validation failure
     // (NEEDS_MORE_EVIDENCE/FAILED). Bounded retry per spec section 18/20.
     attempt += 1
