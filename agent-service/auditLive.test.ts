@@ -100,9 +100,16 @@ test('live acceptance: widget marketing is BLOCKED', { skip }, async () => {
   assert.ok(findAttention(report, "Market What's Good", 'TASK_BLOCKED'))
 })
 
-test('live acceptance: zero NEEDS_JERRY currently', { skip }, async () => {
+// Phase 2M: the real Willcox forwarded-message proof (Desiree Gerth,
+// pricing confirmation needed before the Chamber board vote — see
+// reconcileDestinationPortfolioNeedsJerry.ts) created ONE genuine
+// NEEDS_JERRY task. Updating this acceptance criterion to match, not
+// weakening it: exactly one NEEDS_JERRY, and it must be the real Willcox
+// item, not some other unrelated escalation.
+test('live acceptance: exactly the Phase 2M Willcox pricing-confirmation NEEDS_JERRY exists', { skip }, async () => {
   const report = await getChiefAuditReport()
-  assert.equal(report.summary.attentionByCode.TASK_NEEDS_JERRY ?? 0, 0)
+  assert.equal(report.summary.attentionByCode.TASK_NEEDS_JERRY ?? 0, 1)
+  assert.ok(findAttention(report, 'Willcox — confirm pricing with Desiree', 'TASK_NEEDS_JERRY'))
 })
 
 test('live acceptance: completed Phase 0B and Chief read-layer tasks do not appear as attention items', { skip }, async () => {
@@ -116,6 +123,42 @@ test('live acceptance: completed Phase 0B and Chief read-layer tasks do not appe
 test('live acceptance: every project in health output is ACTIVE or ON_HOLD', { skip }, async () => {
   const report = await getChiefAuditReport()
   assert.ok(report.projectHealth.length > 0)
+})
+
+// ---------------------------------------------------------------------------
+// Phase 2M — per-destination portfolio backfill (supabase/migrations/
+// 20260905_agent_destination_portfolio_backfill.sql). Real production
+// acceptance data, not fixtures.
+// ---------------------------------------------------------------------------
+
+test('live acceptance: each real Destination has its OWN distinct project — Willcox, Buena Vista, Grand Lake, and Rim Country are four separate project_key rows, not the umbrella', { skip }, async () => {
+  const rows = await query<{ project_key: string }>(
+    `SELECT project_key FROM agent.projects WHERE project_type = 'DESTINATION_HUB' AND project_key <> 'destination_hubs_wave_1' ORDER BY project_key`
+  )
+  const keys = rows.map((r) => r.project_key)
+  assert.deepEqual(keys, ['destination-buena-vista', 'destination-grand-lake', 'destination-rim-country', 'destination-willcox'])
+  assert.equal(new Set(keys).size, keys.length, 'no duplicate project_key rows from a re-run of the backfill migration')
+})
+
+test('live acceptance: the umbrella destination_hubs_wave_1 project still exists but owns none of the four reparented tasks', { skip }, async () => {
+  const rows = await query<{ count: string }>(
+    `SELECT count(*)::text FROM agent.tasks t JOIN agent.projects p ON p.id = t.project_id WHERE p.project_key = 'destination_hubs_wave_1' AND t.id IN ('65527405-1714-40ad-9924-4238955fbd9d', 'ed241e54-e21f-413f-aeb1-4e7e9b65fdd8', '0812519a-6302-4a79-8807-622d8725d81e', 'dd9bbd68-f234-4a74-969d-929ca318ee6b')`
+  )
+  assert.equal(rows[0]?.count, '0', 'the umbrella project must never be the canonical relationship scope for a specific destination once a real project exists for it')
+})
+
+test('live acceptance: Desiree Gerth is a verified contact scoped to Willcox only, with no contact manufactured for Buena Vista/Grand Lake/Rim Country', { skip }, async () => {
+  const desiree = await query<{ email: string; project_key: string }>(
+    `SELECT c.email, p.project_key FROM agent.contacts c
+       JOIN agent.interactions i ON i.contact_id = c.id
+       JOIN agent.projects p ON p.id = i.project_id
+      WHERE c.email = 'dez@strivevineyards.com'`
+  )
+  assert.equal(desiree.length, 1)
+  assert.equal(desiree[0].project_key, 'destination-willcox')
+
+  const totalContacts = await query<{ count: string }>(`SELECT count(*)::text FROM agent.contacts`)
+  assert.equal(totalContacts[0]?.count, '1', 'no contact was manufactured for Buena Vista/Grand Lake/Rim Country — none exists in real data')
 })
 
 after(async () => {

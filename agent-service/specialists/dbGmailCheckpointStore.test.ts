@@ -383,3 +383,82 @@ test('DbContactDirectory: two DIFFERENT legacy destinations sharing no data neve
   assert.equal(byDestination.get('destination-willcox-az'), 'lisa@willcoxchamber.org')
   assert.equal(byDestination.get('destination-grand-lake-co'), 'sam@grandlake.example.com')
 })
+
+// ---------------------------------------------------------------------------
+// Phase 2M — portfolio integrity, using the REAL per-destination project
+// keys established by the backfill migration (supabase/migrations/
+// 20260905_agent_destination_portfolio_backfill.sql): destination-willcox,
+// destination-buena-vista, destination-grand-lake, destination-rim-country,
+// with the legacy umbrella destination_hubs_wave_1 preserved only as a
+// grouping construct, never a relationship scope.
+// ---------------------------------------------------------------------------
+
+test('Phase 2M portfolio: a Willcox contact (Desiree Gerth) cannot associate to Grand Lake — association is always scoped to its own destination project', async () => {
+  const db = new FakeAgentDb()
+  db.legacyDestinationContacts = [
+    { contactId: 'contact-desiree', email: 'dez@strivevineyards.com', projectKey: 'destination-willcox' },
+    { contactId: 'contact-grand-lake', email: 'sam@grandlake.example.com', projectKey: 'destination-grand-lake' },
+  ]
+
+  const directory = new DbContactDirectory(db.contactDirectoryDeps())
+  const contacts = await directory.listActiveContacts()
+
+  const { associateInboundEmail } = await import('../playbooks/gmailRelationshipLogic')
+  const email = { from: 'Desiree Gerth <dez@strivevineyards.com>', to: ['jerry@getcheckoff.com'], threadId: null, subject: 'Willcox pricing', bodyText: 'pricing question', receivedAt: '2026-09-05T14:14:21Z', replyTo: null }
+  const result = associateInboundEmail(email, contacts)
+  assert.equal(result.associated, true)
+  if (result.associated) {
+    assert.equal(result.destinationId, 'destination-willcox')
+    assert.notEqual(result.destinationId, 'destination-grand-lake')
+  }
+})
+
+test('Phase 2M portfolio: the legacy umbrella project (destination_hubs_wave_1) never appears as a resolvable destinationId — only real per-destination project keys do', async () => {
+  const db = new FakeAgentDb()
+  // Simulate what getDestinationContactEmails() would return AFTER the
+  // Phase 2M reparenting — contacts are joined via interactions/tasks
+  // whose project_id now points at the per-destination project, never
+  // the umbrella. The umbrella key should never even be a candidate.
+  db.legacyDestinationContacts = [{ contactId: 'contact-desiree', email: 'dez@strivevineyards.com', projectKey: 'destination-willcox' }]
+
+  const directory = new DbContactDirectory(db.contactDirectoryDeps())
+  const contacts = await directory.listActiveContacts()
+  assert.equal(contacts.some((c) => c.destinationId === 'destination_hubs_wave_1'), false, 'the umbrella project must never become a relationship identity')
+  assert.ok(contacts.some((c) => c.destinationId === 'destination-willcox'))
+})
+
+test('Phase 2M portfolio: one real person CAN be a known contact at two destinations, but only because two DISTINCT relationship-evidence rows say so explicitly — never inferred from a shared email alone', async () => {
+  const db = new FakeAgentDb()
+  // Ryan Gerth (hypothetically) has explicit, separate relationship
+  // evidence at both Willcox and a second destination — two distinct
+  // (contactId, projectKey) rows, each independently sourced.
+  db.legacyDestinationContacts = [
+    { contactId: 'contact-ryan-willcox', email: 'ryan@example.com', projectKey: 'destination-willcox' },
+    { contactId: 'contact-ryan-buena-vista', email: 'ryan@example.com', projectKey: 'destination-buena-vista' },
+  ]
+
+  const directory = new DbContactDirectory(db.contactDirectoryDeps())
+  const contacts = await directory.listActiveContacts()
+  assert.equal(contacts.length, 2, 'both explicit rows are preserved — this is not treated as a duplicate or collapsed')
+
+  // But an inbound email from that SAME address, with no threadId to
+  // disambiguate, is still refused as ambiguous — a shared identity
+  // across destinations is never silently resolved to just one of them.
+  const { associateInboundEmail } = await import('../playbooks/gmailRelationshipLogic')
+  const email = { from: 'ryan@example.com', to: ['jerry@getcheckoff.com'], threadId: null, subject: 'hello', bodyText: 'hi', receivedAt: '2026-09-05T00:00:00Z', replyTo: null }
+  const result = associateInboundEmail(email, contacts)
+  assert.equal(result.associated, false, 'a shared identity across two destinations must never be silently resolved to one of them')
+})
+
+test('Phase 2M portfolio: a driver-derived run for one destination (e.g. Grand Lake) never leaks its contact into another destination (e.g. Rim Country) once both exist side by side', async () => {
+  const db = new FakeAgentDb()
+  await seedRelationshipRun(db, 'destination-grand-lake', { primaryContact: { contactId: 'contact-gl', email: 'sam@grandlake.example.com' } })
+  db.legacyDestinationContacts = [{ contactId: 'contact-rc', email: 'pat@rimcountry.example.com', projectKey: 'destination-rim-country' }]
+
+  const directory = new DbContactDirectory(db.contactDirectoryDeps())
+  const contacts = await directory.listActiveContacts()
+  assert.equal(contacts.length, 2)
+  const byDestination = new Map(contacts.map((c) => [c.destinationId, c.email]))
+  assert.equal(byDestination.get('destination-grand-lake'), 'sam@grandlake.example.com')
+  assert.equal(byDestination.get('destination-rim-country'), 'pat@rimcountry.example.com')
+})

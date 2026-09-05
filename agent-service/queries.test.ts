@@ -75,9 +75,15 @@ test('getBlockedTasks: only widget-marketing remains blocked after the chief-rea
   )
 })
 
-test('getNeedsJerryTasks: zero from current Bootstrap v1 state', { skip }, async () => {
+// Phase 2M: reconcileDestinationPortfolioNeedsJerry.ts created one real
+// NEEDS_JERRY task (Willcox pricing confirmation, from the real Desiree
+// Gerth forwarded-message proof) — updating this acceptance criterion to
+// match, not weakening it: exactly the Willcox item, nothing from
+// Bootstrap v1 itself.
+test('getNeedsJerryTasks: exactly the Phase 2M Willcox pricing-confirmation task, nothing from Bootstrap v1 itself', { skip }, async () => {
   const needsJerry = await getNeedsJerryTasks()
-  assert.equal(needsJerry.length, 0, 'Bootstrap v1 seeds no NEEDS_JERRY tasks')
+  assert.equal(needsJerry.length, 1)
+  assert.ok(needsJerry[0].title.includes('Willcox — confirm pricing with Desiree'))
 })
 
 test('getRecentTaskChanges: returns the Bootstrap v1 CREATED events within a wide window', { skip }, async () => {

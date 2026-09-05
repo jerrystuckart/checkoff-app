@@ -347,3 +347,42 @@ test('reevaluateUnassociatedForwardedMessages: with no forwarding-address entrie
   assert.equal(result.candidatesConsidered, 0)
   assert.equal(calls.length, 0)
 })
+
+test('Phase 2M portfolio: a message that stays unassociated (no contact yet) becomes associable once the contact directory is backfilled, and is never reprocessed again afterward — mirrors the real Willcox backfill sequence', async () => {
+  const checkpointStore = new InMemoryGmailCheckpointStore()
+  await checkpointStore.put({ lastCheckedAtIso: '2026-09-04T09:00:00Z', processedMessageIds: ['fwd-1'], unassociated: [willcoxUnassociatedEntry()] })
+  const gmail = new FakeGmail()
+  gmail.fullMessages['fwd-1'] = fullMsg({
+    id: 'fwd-1',
+    from: 'CheckOff Forwarder <forwarder@getcheckoff.com>',
+    to: ['jerrystuckart@gmail.com'],
+    replyTo: 'dez@strivevineyards.com',
+    subject: 'Fwd: Willcox pricing',
+    bodyText: 'No forwarded-header block here — recovered only via Reply-To, exactly like the real message.',
+  })
+
+  // BEFORE backfill: no known contact directory entry yet — stays unassociated.
+  const emptyDirectory = new InMemoryContactDirectory([])
+  const { apply: apply1, calls: calls1 } = recorder()
+  const before = await reevaluateUnassociatedForwardedMessages(gmail, checkpointStore, emptyDirectory, apply1)
+  assert.equal(before.resumeEventsEmitted, 0)
+  assert.equal(calls1.length, 0)
+  assert.equal((await checkpointStore.get()).unassociated.length, 1, 'still unassociated before the contact backfill')
+
+  // AFTER backfill: the contact directory now has Desiree Gerth scoped to Willcox.
+  const desireeContact: KnownRelationshipContact = { destinationId: 'destination-willcox-az', contactId: 'contact-desiree', email: 'dez@strivevineyards.com', threadId: null }
+  const backfilledDirectory = new InMemoryContactDirectory([desireeContact])
+  const { apply: apply2, calls: calls2 } = recorder()
+  const after = await reevaluateUnassociatedForwardedMessages(gmail, checkpointStore, backfilledDirectory, apply2)
+  assert.equal(after.resumeEventsEmitted, 1)
+  assert.equal(calls2.length, 1)
+  assert.equal(calls2[0].destinationId, 'destination-willcox-az')
+  assert.equal((await checkpointStore.get()).unassociated.length, 0, 'resolved after backfill')
+
+  // A THIRD run must never resume it again — idempotency survives across
+  // a contact-directory change, not just within one directory's lifetime.
+  const { apply: apply3, calls: calls3 } = recorder()
+  const third = await reevaluateUnassociatedForwardedMessages(gmail, checkpointStore, backfilledDirectory, apply3)
+  assert.equal(third.candidatesConsidered, 0)
+  assert.equal(calls3.length, 0)
+})
