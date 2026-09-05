@@ -92,6 +92,37 @@ export function executionId(runId: string, stage: string, label: string): string
   return `${runId}::${stage}::${label}`
 }
 
+/**
+ * Real-run finding (San Diego, 2026-09-05): executionId/idempotencyKey
+ * are deterministic per (runId, stage, label) — correct for the normal
+ * case (never double-run a stage), but it means a genuinely fixed
+ * evidence CONTRACT (e.g. requiring `kind` on every M1 neighborhood,
+ * added this same day) has no way to invalidate an already-COMPLETE
+ * execution recorded under the OLD, looser contract. runExecution's
+ * idempotent-replay path (by design — see its own doc comment) returns
+ * that stale envelope forever, bypassing the new validation entirely,
+ * for any run that revisits M1 after being reset.
+ *
+ * The fix is NOT to weaken idempotency (that protects real, expensive
+ * work from ever re-running by accident) — it's to make the evidence
+ * CONTRACT part of the identity being deduplicated. Bumping this
+ * constant is the deliberate, explicit way to invalidate every
+ * previously-COMPLETE M1 execution the next time a reset run reaches
+ * M1 again: the resulting executionId has never been seen before, so
+ * registerExecution's findByIdempotencyKey lookup genuinely misses and
+ * a fresh (real, paid) research call happens under the new contract —
+ * while every OTHER already-COMPLETE execution (M3, M5, M6, ...) is
+ * completely undisturbed, and a brand-new project's very first M1 call
+ * is unaffected either way (it has no prior record regardless of this
+ * version). Bump this ONLY when the M1 evidence shape/requirements
+ * actually change again — not for unrelated driver changes.
+ */
+export const M1_GEOGRAPHY_EVIDENCE_CONTRACT_VERSION = 2 // v2 (2026-09-05): neighborhoods[] now requires a valid `kind` — see validateNeighborhoodDefinitions.
+
+export function m1GeographyExecutionLabel(): string {
+  return `geography-contract-v${M1_GEOGRAPHY_EVIDENCE_CONTRACT_VERSION}`
+}
+
 async function persist(run: PlaybookRunRecord, deps: MetroDriverDeps): Promise<PlaybookRunRecord> {
   run.updatedAt = (deps.now ?? (() => new Date().toISOString()))()
   await deps.runStore.put(run)
@@ -203,13 +234,13 @@ async function stepM1(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
     requiredEvidenceKeys: ['neighborhoods'],
     methodologyId: 'metro_launch',
     methodologyVersion: 'v1',
-    executionId: executionId(run.runId, 'M1', 'geography'),
+    executionId: executionId(run.runId, 'M1', m1GeographyExecutionLabel()),
     projectId: run.projectId,
     destinationId: null,
     metroId: run.projectId,
     allowedCapabilities: ['live_web_research'],
     authorityOperations: ['metro_launch.research'],
-    idempotencyKey: executionId(run.runId, 'M1', 'geography'),
+    idempotencyKey: executionId(run.runId, 'M1', m1GeographyExecutionLabel()),
   }
   const outcome = await runStepWithRetry(deps, run, request)
   if (outcome.kind === 'BLOCKED') return block(run, outcome.reason ?? 'M1 blocked')

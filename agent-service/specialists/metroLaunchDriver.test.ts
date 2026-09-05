@@ -10,7 +10,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { driveMetroLaunch, executionId, m0DecisionsResolved, buildAuditEvidence, type MetroM0Decisions } from './metroLaunchDriver'
+import { driveMetroLaunch, executionId, m0DecisionsResolved, buildAuditEvidence, m1GeographyExecutionLabel, type MetroM0Decisions } from './metroLaunchDriver'
 import { InMemoryPlaybookRunStore, getOrCreateRun, playbookRunId } from './playbookRun'
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
@@ -209,7 +209,7 @@ test('driveMetroLaunch: RESUME — a second call against the same run store cont
   const partial = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN, maxSteps: 3 })
   assert.equal(partial.status, 'RUNNING')
   assert.notEqual(partial.currentStage, 'LAUNCH_READINESS_BOUNDARY')
-  const m1ExecutionIdUsed = executionId(playbookRunId('metro_launch', projectId), 'M1', 'geography')
+  const m1ExecutionIdUsed = executionId(playbookRunId('metro_launch', projectId), 'M1', m1GeographyExecutionLabel())
   assert.equal((await execStore.get(m1ExecutionIdUsed))?.status, 'COMPLETE')
 
   // Second call — a BRAND NEW driveMetroLaunch invocation, same stores,
@@ -345,6 +345,11 @@ test('driveMetroLaunch: M1 request inputs carry the M0 geographicScope decision,
 // ---------------------------------------------------------------------------
 // Structural bug fix regressions (San Diego run, 2026-09-05)
 // ---------------------------------------------------------------------------
+
+test('m1GeographyExecutionLabel: is stable (same call twice = same id, so normal idempotency is unaffected)', () => {
+  assert.equal(m1GeographyExecutionLabel(), m1GeographyExecutionLabel())
+  assert.match(m1GeographyExecutionLabel(), /^geography-contract-v\d+$/)
+})
 
 test('buildAuditEvidence: regression — real free-text categories from the San Diego run no longer produce false 0/minimum counts', () => {
   const state = {
