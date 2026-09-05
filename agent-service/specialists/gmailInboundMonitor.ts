@@ -21,7 +21,8 @@
 // alternative — not adopted now because the simpler thing is sufficient.
 
 import type { GmailAdapter, GmailMessageSummary } from './googleAdapters'
-import { associateInboundEmail, type InboundEmail, type KnownRelationshipContact, type KnownContactDirectory, type MutableContactDirectory } from '../playbooks/gmailRelationshipLogic'
+import { associateInboundEmail, extractEmailAddress, type InboundEmail, type KnownRelationshipContact, type KnownContactDirectory, type MutableContactDirectory } from '../playbooks/gmailRelationshipLogic'
+import { isKnownForwardingAddress } from '../playbooks/gmailForwardUnwrapping'
 import type { RelationshipResumeEventInput, ResumeEventResult } from './destinationRelationshipDriver'
 
 // ---------------------------------------------------------------------------
@@ -163,7 +164,7 @@ export interface PollGmailResult {
 }
 
 function toGmailMessage(msg: GmailMessageSummary, now: () => string): InboundEmail {
-  return { from: msg.from, to: msg.to, threadId: msg.threadId, subject: msg.subject, bodyText: msg.snippet, receivedAt: msg.receivedAt ?? now() }
+  return { from: msg.from, to: msg.to, threadId: msg.threadId, subject: msg.subject, bodyText: msg.snippet, receivedAt: msg.receivedAt ?? now(), replyTo: msg.replyTo }
 }
 
 /**
@@ -242,4 +243,97 @@ export async function pollGmailForNewMessages(
   })
 
   return { newMessagesFound, resumeEventsEmitted, ambiguousOrUnassociatedCount, error: null }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2L — targeted reprocessing of messages relayed through a known
+// CheckOff forwarding address. A real overnight proof caught this gap:
+// pollGmailForNewMessages()'s search-result `snippet` is too short to
+// ever contain a forwarded-header block, so a Resend-relayed message
+// (transport sender forwarder@getcheckoff.com / jerry@getcheckoff.com)
+// always landed in `unassociated` even when the real original sender was
+// recoverable. This function does NOT blindly replay the whole
+// unassociated backlog — it re-evaluates ONLY the entries whose
+// transport sender is a known forwarding address, fetching each one's
+// FULL body via getFullMessage() (the only way to see a forwarded-header
+// block) and re-running association against the current contact
+// directory. Idempotent: a message is removed from `unassociated` the
+// moment it resolves, so re-running this function is a no-op for
+// anything already resolved — it can never resume the same relationship
+// twice.
+// ---------------------------------------------------------------------------
+
+export interface ReprocessedForwardedMessage {
+  messageId: string
+  transportSender: string
+  originalSender: string | null
+  subject: string
+  outcome: 'ASSOCIATED' | 'STILL_UNASSOCIATED' | 'REJECTED_BY_DRIVER'
+  destinationId: string | null
+  contactId: string | null
+  reason: string | null
+}
+
+export interface ReprocessForwardedResult {
+  candidatesConsidered: number
+  resumeEventsEmitted: number
+  results: ReprocessedForwardedMessage[]
+}
+
+/**
+ * Re-evaluates only the currently-unassociated messages whose transport
+ * sender is a known forwarding address (gmailForwardUnwrapping.ts). Never
+ * touches processedMessageIds — these messages were already correctly
+ * marked processed by the original poll; this only revisits the
+ * association *decision* recorded for them, using their real full body.
+ */
+export async function reevaluateUnassociatedForwardedMessages(
+  gmail: GmailAdapter,
+  checkpointStore: GmailCheckpointStore,
+  contactDirectory: KnownContactDirectory,
+  applyResumeEvent: (destinationId: string, event: RelationshipResumeEventInput) => Promise<ResumeEventResult>,
+  now: () => string = () => new Date().toISOString()
+): Promise<ReprocessForwardedResult> {
+  const checkpoint = await checkpointStore.get()
+  const candidates = checkpoint.unassociated.filter((u) => isKnownForwardingAddress(extractEmailAddress(u.from)))
+  if (candidates.length === 0) return { candidatesConsidered: 0, resumeEventsEmitted: 0, results: [] }
+
+  const contacts = await contactDirectory.listActiveContacts()
+  const results: ReprocessedForwardedMessage[] = []
+  let resumeEventsEmitted = 0
+  const resolvedMessageIds = new Set<string>()
+
+  for (const candidate of candidates) {
+    const full = await gmail.getFullMessage(candidate.messageId)
+    const inboundEmail: InboundEmail = { from: full.from, to: full.to, threadId: full.threadId, subject: full.subject, bodyText: full.bodyText, receivedAt: full.receivedAt ?? now(), replyTo: full.replyTo }
+    const association = associateInboundEmail(inboundEmail, contacts)
+
+    if (!association.associated) {
+      results.push({ messageId: candidate.messageId, transportSender: association.transportSender, originalSender: association.originalSender, subject: full.subject, outcome: 'STILL_UNASSOCIATED', destinationId: null, contactId: null, reason: association.reason })
+      continue
+    }
+
+    const result = await applyResumeEvent(association.destinationId, {
+      kind: 'GMAIL_REPLY_RECEIVED',
+      destinationId: association.destinationId,
+      contactId: association.contactId,
+      occurredAt: full.receivedAt ?? now(),
+      payload: {},
+      email: inboundEmail,
+    })
+
+    if (result.rejected) {
+      results.push({ messageId: candidate.messageId, transportSender: association.transportSender, originalSender: association.originalSender, subject: full.subject, outcome: 'REJECTED_BY_DRIVER', destinationId: association.destinationId, contactId: association.contactId, reason: result.reason })
+    } else {
+      resumeEventsEmitted++
+      resolvedMessageIds.add(candidate.messageId)
+      results.push({ messageId: candidate.messageId, transportSender: association.transportSender, originalSender: association.originalSender, subject: full.subject, outcome: 'ASSOCIATED', destinationId: association.destinationId, contactId: association.contactId, reason: null })
+    }
+  }
+
+  if (resolvedMessageIds.size > 0) {
+    await checkpointStore.put({ ...checkpoint, unassociated: checkpoint.unassociated.filter((u) => !resolvedMessageIds.has(u.messageId)) })
+  }
+
+  return { candidatesConsidered: candidates.length, resumeEventsEmitted, results }
 }

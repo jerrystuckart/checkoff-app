@@ -9,6 +9,8 @@
 // inbound email that could plausibly belong to more than one destination
 // is REFUSED, never guessed.
 
+import { isKnownForwardingAddress, unwrapForwardedSender } from './gmailForwardUnwrapping'
+
 export type ReplyClassification = 'POSITIVE_INTEREST' | 'QUESTION' | 'INFORMATION_REQUEST' | 'INTRODUCTION_REFERRAL' | 'MEETING_INTEREST' | 'BUDGET_PRICING' | 'OBJECTION' | 'NO_INTEREST' | 'UNCLEAR'
 
 export interface ClassifiedReply {
@@ -83,15 +85,22 @@ export interface MutableContactDirectory extends KnownContactDirectory {
 }
 
 export interface InboundEmail {
+  /** The Gmail-visible ("transport"/envelope) sender — unchanged raw evidence, NEVER overwritten even when an original sender is recovered from forwarding. */
   from: string
   to: string[]
   threadId: string | null
   subject: string
   bodyText: string
   receivedAt: string
+  /** Reply-To header, when present — a real Resend-relay signal for the true original sender, distinct from (and weaker than) a recovered forwarded-header block. Optional so every existing direct-Gmail fixture/call site keeps compiling and behaving identically. */
+  replyTo?: string | null
 }
 
-export type AssociationResult = { associated: true; destinationId: string; contactId: string; matchedBy: 'THREAD_ID' | 'EMAIL_ADDRESS' } | { associated: false; reason: string }
+export type AssociationMatchedBy = 'THREAD_ID' | 'ORIGINAL_SENDER' | 'ORIGINAL_RECIPIENT' | 'REPLY_TO' | 'TRANSPORT_SENDER'
+
+export type AssociationResult =
+  | { associated: true; destinationId: string; contactId: string; matchedBy: AssociationMatchedBy; transportSender: string; originalSender: string | null }
+  | { associated: false; reason: string; transportSender: string; originalSender: string | null }
 
 /** Pulls the bare address out of a "Name <addr@example.com>" or plain "addr@example.com" From header. */
 export function extractEmailAddress(fromHeader: string): string {
@@ -104,29 +113,72 @@ export function hasPriorCorrespondence(searchResults: ReadonlyArray<{ id: string
 }
 
 /**
- * THREAD_ID match is authoritative when present (it can only ever belong
- * to the conversation it was created under). Falls back to exact sender-
- * email match. Any match against MORE THAN ONE known contact — same
- * thread id or same email address reused across two different
- * destinations — is refused rather than guessed; a human must resolve
- * that ambiguity, it is never silently attached to whichever destination
- * happened to be checked first.
+ * Association precedence (Phase 2L, per a real overnight miss —
+ * CheckOff correspondence relayed through forwarder@getcheckoff.com/
+ * jerry@getcheckoff.com was being logged as ordinary unmatched noise):
+ *   1. known Gmail thread id — authoritative when present, checked first, unchanged.
+ *   2. the recovered ORIGINAL sender/recipients (From/To/Cc extracted
+ *      from a forwarded-header block in the body) — only attempted when
+ *      the transport sender is a known forwarding address
+ *      (gmailForwardUnwrapping.ts).
+ *   3. Reply-To, when it differs from the transport sender (a weaker,
+ *      sender-only recovery signal — used only if no header block was found).
+ *   4. the raw/transport sender itself — the ONLY candidate for a normal,
+ *      non-forwarded message (this is the entire pre-Phase-2L behavior,
+ *      unchanged for anything that isn't a known forwarding address).
+ * Each tier is tried in order; the FIRST tier with any match wins — a
+ * single match associates, more than one match at that tier is refused
+ * as ambiguous and NEVER falls through to a weaker tier (a stronger
+ * signal being ambiguous is not grounds to trust a weaker one instead).
+ * The forwarding address itself is NEVER a match candidate — matching
+ * against it would make the wrapper identity look like the relationship
+ * contact, exactly what this rewrite exists to prevent.
  */
 export function associateInboundEmail(email: InboundEmail, knownContacts: readonly KnownRelationshipContact[]): AssociationResult {
+  const transportSender = extractEmailAddress(email.from)
+
   if (email.threadId) {
     const byThread = knownContacts.filter((c) => c.threadId === email.threadId)
-    if (byThread.length === 1) return { associated: true, destinationId: byThread[0].destinationId, contactId: byThread[0].contactId, matchedBy: 'THREAD_ID' }
+    if (byThread.length === 1) return { associated: true, destinationId: byThread[0].destinationId, contactId: byThread[0].contactId, matchedBy: 'THREAD_ID', transportSender, originalSender: null }
     if (byThread.length > 1) {
-      return { associated: false, reason: `threadId ${email.threadId} matches ${byThread.length} known relationship contacts across ${new Set(byThread.map((c) => c.destinationId)).size} destination(s) — ambiguous, refusing to guess.` }
+      return { associated: false, reason: `threadId ${email.threadId} matches ${byThread.length} known relationship contacts across ${new Set(byThread.map((c) => c.destinationId)).size} destination(s) — ambiguous, refusing to guess.`, transportSender, originalSender: null }
     }
   }
 
-  const senderEmail = extractEmailAddress(email.from)
-  const byEmail = knownContacts.filter((c) => c.email.toLowerCase() === senderEmail)
-  if (byEmail.length === 1) return { associated: true, destinationId: byEmail[0].destinationId, contactId: byEmail[0].contactId, matchedBy: 'EMAIL_ADDRESS' }
-  if (byEmail.length > 1) {
-    return { associated: false, reason: `sender ${senderEmail} matches ${byEmail.length} known relationship contacts across ${new Set(byEmail.map((c) => c.destinationId)).size} different destinations — never cross-associating, refusing to guess.` }
+  const isForwarded = isKnownForwardingAddress(transportSender)
+  const unwrap = isForwarded ? unwrapForwardedSender({ transportFrom: email.from, replyTo: email.replyTo ?? null, bodyText: email.bodyText }) : null
+
+  type Tier = { matchedBy: AssociationMatchedBy; candidates: string[] }
+  const tiers: Tier[] = []
+  if (unwrap?.recoveredVia === 'FORWARDED_HEADER_BLOCK') {
+    if (unwrap.originalFrom) tiers.push({ matchedBy: 'ORIGINAL_SENDER', candidates: [unwrap.originalFrom] })
+    if (unwrap.originalTo.length > 0 || unwrap.originalCc.length > 0) tiers.push({ matchedBy: 'ORIGINAL_RECIPIENT', candidates: [...unwrap.originalTo, ...unwrap.originalCc] })
+  } else if (unwrap?.recoveredVia === 'REPLY_TO' && unwrap.originalFrom) {
+    tiers.push({ matchedBy: 'REPLY_TO', candidates: [unwrap.originalFrom] })
+  }
+  // The transport sender is a real candidate ONLY when it is NOT itself a
+  // known forwarding/wrapper address — a forwarding address must never
+  // become "the relationship contact" by matching against itself.
+  if (!isForwarded) tiers.push({ matchedBy: 'TRANSPORT_SENDER', candidates: [transportSender] })
+
+  for (const tier of tiers) {
+    const normalized = new Set(tier.candidates.map((c) => extractEmailAddress(c)))
+    const matches = knownContacts.filter((c) => normalized.has(c.email.toLowerCase()))
+    if (matches.length === 1) return { associated: true, destinationId: matches[0].destinationId, contactId: matches[0].contactId, matchedBy: tier.matchedBy, transportSender, originalSender: unwrap?.originalFrom ?? null }
+    if (matches.length > 1) {
+      return {
+        associated: false,
+        reason: `${tier.matchedBy.toLowerCase().replace('_', ' ')} candidate(s) (${[...normalized].join(', ')}) match ${matches.length} known relationship contacts across ${new Set(matches.map((c) => c.destinationId)).size} different destinations — never cross-associating, refusing to guess.`,
+        transportSender,
+        originalSender: unwrap?.originalFrom ?? null,
+      }
+    }
   }
 
-  return { associated: false, reason: `no known relationship contact matches sender ${senderEmail} or threadId ${email.threadId ?? '(none)'}.` }
+  return {
+    associated: false,
+    reason: `no known relationship contact matches transport sender ${transportSender}${unwrap?.originalFrom ? `, recovered original sender ${unwrap.originalFrom}` : ''}, or threadId ${email.threadId ?? '(none)'}.`,
+    transportSender,
+    originalSender: unwrap?.originalFrom ?? null,
+  }
 }

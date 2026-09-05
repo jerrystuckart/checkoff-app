@@ -17,7 +17,7 @@ import { driveDestinationRelationship, applyRelationshipResumeEvent, type Relati
 import { InMemoryPlaybookRunStore, playbookRunId, recordJerryDecision } from './playbookRun'
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
-import type { GmailAdapter, GmailMessageSummary, GmailSendAsIdentity, GmailSendInput, GoogleCalendarAdapter, FreeBusyWindow, GoogleContactsAdapter, ContactSummary } from './googleAdapters'
+import type { GmailAdapter, GmailFullMessage, GmailMessageSummary, GmailSendAsIdentity, GmailSendInput, GoogleCalendarAdapter, FreeBusyWindow, GoogleContactsAdapter, ContactSummary } from './googleAdapters'
 import type { DAPArtifact, DVA1Artifact, DVA2Artifact } from '../playbooks/destinationHubLifecycle'
 
 class FakeGmailAdapter implements GmailAdapter {
@@ -30,6 +30,9 @@ class FakeGmailAdapter implements GmailAdapter {
   }
   async searchMessages(): Promise<GmailMessageSummary[]> {
     return this.searchResults
+  }
+  async getFullMessage(messageId: string): Promise<GmailFullMessage> {
+    throw new Error(`FakeGmailAdapter.getFullMessage(${messageId}) not used by this test`)
   }
   async listSendAsIdentities(): Promise<GmailSendAsIdentity[]> {
     return this.sendAsIdentities

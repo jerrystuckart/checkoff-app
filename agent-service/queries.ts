@@ -497,6 +497,41 @@ export async function getRecentInteractions(since: Date): Promise<InteractionSum
   return rows.map(mapInteractionRow)
 }
 
+export interface DestinationContactEmail {
+  contactId: string
+  email: string
+  projectKey: string
+}
+
+/**
+ * Phase 2L — pre-Phase-2I destination relationship evidence. agent.contacts
+ * has no direct project/destination FK; the only link is via
+ * agent.interactions.contact_id+project_id or agent.tasks.contact_id+
+ * project_id (both already-existing operational data for real destinations
+ * like Willcox/Grand Lake/Rim Country/Buena Vista that predate the
+ * destination_relationship playbook driver). Used to extend
+ * DbContactDirectory (dbGmailCheckpointStore.ts) so inbound-email
+ * association can resolve a known contact even when no
+ * destination_relationship run exists yet for that destination — never
+ * manufactures a contact, only surfaces ones that already exist.
+ */
+export async function getDestinationContactEmails(): Promise<DestinationContactEmail[]> {
+  const rows = await query<{ contact_id: string; email: string; project_key: string }>(
+    `SELECT DISTINCT c.id AS contact_id, c.email, p.project_key
+       FROM agent.contacts c
+       JOIN agent.interactions i ON i.contact_id = c.id
+       JOIN agent.projects p ON p.id = i.project_id
+      WHERE p.project_type = 'DESTINATION_HUB' AND c.email IS NOT NULL
+     UNION
+     SELECT DISTINCT c.id AS contact_id, c.email, p.project_key
+       FROM agent.contacts c
+       JOIN agent.tasks t ON t.contact_id = c.id
+       JOIN agent.projects p ON p.id = t.project_id
+      WHERE p.project_type = 'DESTINATION_HUB' AND c.email IS NOT NULL`
+  )
+  return rows.map((r) => ({ contactId: r.contact_id, email: r.email, projectKey: r.project_key }))
+}
+
 /** agent.decision_events since a given instant — the decision-lifecycle half of Chief Brief's "recent changes" (chiefBrief.ts); mirrors getRecentTaskChanges. */
 export async function getRecentDecisionEvents(since: Date): Promise<DecisionEventSummary[]> {
   const rows = await query<DecisionEventRow>(

@@ -15,6 +15,7 @@ import type { TaskSummary, TaskEventDetail, TaskStatus } from '../types'
 import type { CreateTaskInput, CreateTaskResult, TransitionTaskInput, TransitionTaskResult, RecordPlaybookStageInput, RecordPlaybookStageResult } from '../mutations'
 import { validateStateRequirements } from '../transitions'
 import type { GmailCheckpoint } from './gmailInboundMonitor'
+import type { DestinationContactEmail } from '../queries'
 
 // ---------------------------------------------------------------------------
 // FakeAgentDb — shared backing store, same shape/contract as
@@ -43,6 +44,8 @@ interface FakeEventRow {
 class FakeAgentDb {
   tasks: FakeTaskRow[] = []
   events: FakeEventRow[] = []
+  /** Phase 2L — legacy pre-Phase-2I destination contacts (agent.contacts joined via agent.interactions/agent.tasks). Tests populate this directly; never derived from the fake task rows above, matching how the real query reads a genuinely separate join. */
+  legacyDestinationContacts: DestinationContactEmail[] = []
   private seq = 0
 
   private nextId(prefix: string): string {
@@ -142,8 +145,10 @@ class FakeAgentDb {
     return new DbPlaybookRunStore({ createTask: this.createTask, transitionTask: this.transitionTask, recordPlaybookStage: this.recordPlaybookStage, getTaskBySource: this.getTaskBySource, getTaskEventsForTask: this.getTaskEventsForTask })
   }
 
+  getDestinationContactEmails = async (): Promise<DestinationContactEmail[]> => this.legacyDestinationContacts
+
   contactDirectoryDeps(): DbContactDirectoryDeps {
-    return { getTasksBySourceType: this.getTasksBySourceType, runStore: this.playbookRunStore() }
+    return { getTasksBySourceType: this.getTasksBySourceType, runStore: this.playbookRunStore(), getDestinationContactEmails: this.getDestinationContactEmails }
   }
 }
 
@@ -317,4 +322,64 @@ test('DbContactDirectory: a referred contact with no email on file yet is skippe
   const contacts = await directory.listActiveContacts()
   assert.equal(contacts.length, 1)
   assert.equal(contacts.some((c) => c.contactId === 'contact-2'), false)
+})
+
+// ---------------------------------------------------------------------------
+// Phase 2L — legacy pre-Phase-2I contacts (real destinations like Willcox
+// predate the destination_relationship driver; their contacts only exist
+// via agent.interactions/agent.tasks joins, surfaced by
+// getDestinationContactEmails()).
+// ---------------------------------------------------------------------------
+
+test('DbContactDirectory: a pre-Phase-2I destination with NO relationship run yet is still discoverable via legacy contact evidence', async () => {
+  const db = new FakeAgentDb()
+  db.legacyDestinationContacts = [{ contactId: 'contact-lisa', email: 'lisa@willcoxchamber.org', projectKey: 'destination-willcox-az' }]
+
+  const directory = new DbContactDirectory(db.contactDirectoryDeps())
+  const contacts = await directory.listActiveContacts()
+  assert.equal(contacts.length, 1)
+  assert.equal(contacts[0].destinationId, 'destination-willcox-az')
+  assert.equal(contacts[0].contactId, 'contact-lisa')
+  assert.equal(contacts[0].email, 'lisa@willcoxchamber.org')
+  assert.equal(contacts[0].threadId, null)
+})
+
+test('DbContactDirectory: legacy contacts merge with driver-derived contacts from OTHER destinations without cross-contaminating', async () => {
+  const db = new FakeAgentDb()
+  await seedRelationshipRun(db, 'destination-hood-river-or', { primaryContact: { contactId: 'contact-hr', email: 'jane@hoodriver.example.com' } })
+  db.legacyDestinationContacts = [{ contactId: 'contact-lisa', email: 'lisa@willcoxchamber.org', projectKey: 'destination-willcox-az' }]
+
+  const directory = new DbContactDirectory(db.contactDirectoryDeps())
+  const contacts = await directory.listActiveContacts()
+  assert.equal(contacts.length, 2)
+  const byDestination = new Map(contacts.map((c) => [c.destinationId, c]))
+  assert.equal(byDestination.get('destination-hood-river-or')?.email, 'jane@hoodriver.example.com')
+  assert.equal(byDestination.get('destination-willcox-az')?.email, 'lisa@willcoxchamber.org')
+})
+
+test('DbContactDirectory: a driver-derived contact takes precedence over a legacy one for the SAME (destination, contactId) — never a stale duplicate', async () => {
+  const db = new FakeAgentDb()
+  await seedRelationshipRun(db, 'destination-willcox-az', { primaryContact: { contactId: 'contact-lisa', email: 'lisa-updated@willcoxchamber.org' }, contactThreadIds: { 'contact-lisa': 'thread-live' } })
+  db.legacyDestinationContacts = [{ contactId: 'contact-lisa', email: 'lisa-stale@willcoxchamber.org', projectKey: 'destination-willcox-az' }]
+
+  const directory = new DbContactDirectory(db.contactDirectoryDeps())
+  const contacts = await directory.listActiveContacts()
+  assert.equal(contacts.length, 1)
+  assert.equal(contacts[0].email, 'lisa-updated@willcoxchamber.org')
+  assert.equal(contacts[0].threadId, 'thread-live')
+})
+
+test('DbContactDirectory: two DIFFERENT legacy destinations sharing no data never cross-associate — each stays scoped to its own projectKey', async () => {
+  const db = new FakeAgentDb()
+  db.legacyDestinationContacts = [
+    { contactId: 'contact-lisa', email: 'lisa@willcoxchamber.org', projectKey: 'destination-willcox-az' },
+    { contactId: 'contact-gl', email: 'sam@grandlake.example.com', projectKey: 'destination-grand-lake-co' },
+  ]
+
+  const directory = new DbContactDirectory(db.contactDirectoryDeps())
+  const contacts = await directory.listActiveContacts()
+  assert.equal(contacts.length, 2)
+  const byDestination = new Map(contacts.map((c) => [c.destinationId, c.email]))
+  assert.equal(byDestination.get('destination-willcox-az'), 'lisa@willcoxchamber.org')
+  assert.equal(byDestination.get('destination-grand-lake-co'), 'sam@grandlake.example.com')
 })

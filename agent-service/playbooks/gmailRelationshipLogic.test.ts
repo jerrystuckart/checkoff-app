@@ -72,7 +72,7 @@ test('associateInboundEmail: falls back to sender email when threadId is absent'
   const known: KnownRelationshipContact[] = [{ destinationId: 'destination-hood-river-or', contactId: 'contact-1', email: 'jane@example.com', threadId: null }]
   const result = associateInboundEmail(email({ threadId: null }), known)
   assert.ok(result.associated)
-  if (result.associated) assert.equal(result.matchedBy, 'EMAIL_ADDRESS')
+  if (result.associated) assert.equal(result.matchedBy, 'TRANSPORT_SENDER')
 })
 
 test('associateInboundEmail: an email matching NO known contact is rejected, not guessed', () => {
@@ -101,4 +101,100 @@ test('associateInboundEmail: an ambiguous threadId match across two destinations
   ]
   const result = associateInboundEmail(email({ threadId: 'thread-shared' }), known)
   assert.equal(result.associated, false)
+})
+
+// ---------------------------------------------------------------------------
+// Phase 2L — forwarded-message unwrapping (Resend relay). A real
+// overnight proof caught CheckOff correspondence relayed through
+// forwarder@getcheckoff.com/jerry@getcheckoff.com being logged as
+// ordinary unmatched noise instead of associated to the real destination.
+// ---------------------------------------------------------------------------
+
+const WILLCOX_CONTACT: KnownRelationshipContact = { destinationId: 'destination-willcox-az', contactId: 'contact-lisa', email: 'lisa@willcoxchamber.org', threadId: null }
+
+function forwardedWillcoxEmail(overrides: Partial<InboundEmail> = {}): InboundEmail {
+  return {
+    from: 'CheckOff Forwarder <forwarder@getcheckoff.com>',
+    to: ['jerry@getcheckoff.com'],
+    threadId: null,
+    subject: 'Fwd: Willcox Destination Hub — pricing follow-up',
+    bodyText: [
+      'Hey Jerry, fyi see below.',
+      '',
+      '---------- Forwarded message ---------',
+      'From: Desiree Gerth <desiree@example.com>',
+      'Date: Thu, Sep 4, 2026 at 6:12 PM',
+      'Subject: Willcox Destination Hub — pricing follow-up',
+      'To: Lisa Ramirez <lisa@willcoxchamber.org>, Jerry Stuckart <jerry@getcheckoff.com>',
+      '',
+      'Hi Lisa, following up on the pricing details we discussed for the Willcox Hub...',
+    ].join('\n'),
+    receivedAt: '2026-09-05T02:00:00Z',
+    ...overrides,
+  }
+}
+
+test('Willcox regression: a Resend-forwarded message (transport sender = forwarder@getcheckoff.com) associates to Willcox via the recovered original recipient, not the forwarding address', () => {
+  const result = associateInboundEmail(forwardedWillcoxEmail(), [WILLCOX_CONTACT])
+  assert.equal(result.associated, true)
+  if (result.associated) {
+    assert.equal(result.destinationId, 'destination-willcox-az')
+    assert.equal(result.contactId, 'contact-lisa')
+    assert.equal(result.matchedBy, 'ORIGINAL_RECIPIENT')
+    assert.equal(result.transportSender, 'forwarder@getcheckoff.com')
+    assert.equal(result.originalSender, 'desiree@example.com')
+  }
+})
+
+test('Willcox regression: the recovered ORIGINAL sender (Desiree) also resolves correctly when she herself is the known contact on file', () => {
+  const desireeContact: KnownRelationshipContact = { destinationId: 'destination-willcox-az', contactId: 'contact-desiree', email: 'desiree@example.com', threadId: null }
+  const result = associateInboundEmail(forwardedWillcoxEmail(), [desireeContact])
+  assert.equal(result.associated, true)
+  if (result.associated) {
+    assert.equal(result.matchedBy, 'ORIGINAL_SENDER')
+    assert.equal(result.destinationId, 'destination-willcox-az')
+  }
+})
+
+test('the forwarding address itself NEVER becomes the relationship contact — even if (hypothetically) a contact record existed with that exact email', () => {
+  const misconfiguredContact: KnownRelationshipContact = { destinationId: 'destination-someone-else', contactId: 'contact-bad', email: 'forwarder@getcheckoff.com', threadId: null }
+  const result = associateInboundEmail(forwardedWillcoxEmail(), [misconfiguredContact, WILLCOX_CONTACT])
+  assert.equal(result.associated, true)
+  if (result.associated) {
+    assert.equal(result.destinationId, 'destination-willcox-az', 'must resolve via the recovered original recipient, never via the forwarding address matching a (misconfigured) contact')
+  }
+})
+
+test('a forwarded message with jerry@getcheckoff.com as the transport sender behaves identically to forwarder@getcheckoff.com', () => {
+  const result = associateInboundEmail(forwardedWillcoxEmail({ from: 'Jerry <jerry@getcheckoff.com>' }), [WILLCOX_CONTACT])
+  assert.equal(result.associated, true)
+  if (result.associated) assert.equal(result.destinationId, 'destination-willcox-az')
+})
+
+test('an ambiguous forwarded message (recovered recipient matches two destinations) remains unassociated, never guessed', () => {
+  const otherContact: KnownRelationshipContact = { destinationId: 'destination-other', contactId: 'contact-other', email: 'lisa@willcoxchamber.org', threadId: null }
+  const result = associateInboundEmail(forwardedWillcoxEmail(), [WILLCOX_CONTACT, otherContact])
+  assert.equal(result.associated, false)
+  if (!result.associated) assert.match(result.reason, /never cross-associat/i)
+})
+
+test('a forwarded message that recovers NOTHING (no header block, no useful Reply-To) stays unassociated — never falls back to the forwarding address', () => {
+  const result = associateInboundEmail(forwardedWillcoxEmail({ bodyText: 'Just a relayed note, no forwarded header block, no Reply-To.' }), [WILLCOX_CONTACT])
+  assert.equal(result.associated, false)
+  if (!result.associated) {
+    assert.equal(result.transportSender, 'forwarder@getcheckoff.com')
+    assert.equal(result.originalSender, null)
+  }
+})
+
+test('direct (non-forwarded) Gmail messages behave EXACTLY as before — forwarding logic never engages for a normal sender', () => {
+  const result = associateInboundEmail(email(), [{ destinationId: 'destination-hood-river-or', contactId: 'contact-1', email: 'jane@example.com', threadId: null }])
+  assert.equal(result.associated, true)
+  if (result.associated) assert.equal(result.matchedBy, 'TRANSPORT_SENDER')
+})
+
+test('the SAME forwarded message can never resume the same relationship twice — association is a pure function of its content, calling it twice yields the identical result', () => {
+  const first = associateInboundEmail(forwardedWillcoxEmail(), [WILLCOX_CONTACT])
+  const second = associateInboundEmail(forwardedWillcoxEmail(), [WILLCOX_CONTACT])
+  assert.deepEqual(first, second)
 })

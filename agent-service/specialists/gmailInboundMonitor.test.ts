@@ -3,19 +3,25 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { pollGmailForNewMessages, InMemoryGmailCheckpointStore, InMemoryContactDirectory, FileGmailCheckpointStore, emptyCheckpoint, type GmailCheckpointStore } from './gmailInboundMonitor'
-import type { GmailAdapter, GmailMessageSummary, GmailSendAsIdentity } from './googleAdapters'
+import { pollGmailForNewMessages, reevaluateUnassociatedForwardedMessages, InMemoryGmailCheckpointStore, InMemoryContactDirectory, FileGmailCheckpointStore, emptyCheckpoint, type GmailCheckpointStore } from './gmailInboundMonitor'
+import type { GmailAdapter, GmailFullMessage, GmailMessageSummary, GmailSendAsIdentity } from './googleAdapters'
 import type { KnownRelationshipContact } from '../playbooks/gmailRelationshipLogic'
 import type { RelationshipResumeEventInput, ResumeEventResult } from './destinationRelationshipDriver'
 
 class FakeGmail implements GmailAdapter {
   configured = true
   messages: GmailMessageSummary[] = []
+  fullMessages: Record<string, GmailFullMessage> = {}
   isConfigured() {
     return this.configured
   }
   async searchMessages(): Promise<GmailMessageSummary[]> {
     return this.messages
+  }
+  async getFullMessage(messageId: string): Promise<GmailFullMessage> {
+    const full = this.fullMessages[messageId]
+    if (!full) throw new Error(`FakeGmail.getFullMessage: no fixture registered for ${messageId}`)
+    return full
   }
   async listSendAsIdentities(): Promise<GmailSendAsIdentity[]> {
     return []
@@ -29,7 +35,11 @@ class FakeGmail implements GmailAdapter {
 }
 
 function msg(overrides: Partial<GmailMessageSummary> = {}): GmailMessageSummary {
-  return { id: 'm1', threadId: 't1', from: 'jane@hoodriver.example.com', to: ['chief@checkoff.app'], subject: 'Re: intro', snippet: 'Sounds interesting!', receivedAt: '2026-09-08T10:00:00Z', ...overrides }
+  return { id: 'm1', threadId: 't1', from: 'jane@hoodriver.example.com', to: ['chief@checkoff.app'], subject: 'Re: intro', snippet: 'Sounds interesting!', receivedAt: '2026-09-08T10:00:00Z', replyTo: null, ...overrides }
+}
+
+function fullMsg(overrides: Partial<GmailFullMessage> = {}): GmailFullMessage {
+  return { id: 'm1', threadId: 't1', from: 'jane@hoodriver.example.com', to: ['chief@checkoff.app'], cc: [], replyTo: null, subject: 'Re: intro', bodyText: 'Sounds interesting!', receivedAt: '2026-09-08T10:00:00Z', ...overrides }
 }
 
 function recorder(): { apply: (destinationId: string, event: RelationshipResumeEventInput) => Promise<ResumeEventResult>; calls: Array<{ destinationId: string; event: RelationshipResumeEventInput }> } {
@@ -213,6 +223,7 @@ test('pollGmailForNewMessages: 20 active destinations with mixed inbound activit
       subject: `Re: ${id}`,
       snippet: i % 3 === 0 ? "I'd love to talk next week." : i % 3 === 1 ? 'Can you send more info?' : 'Sounds good, thanks!',
       receivedAt: '2026-09-08T10:00:00Z',
+      replyTo: null,
     })
   )
 
@@ -232,4 +243,107 @@ test('pollGmailForNewMessages: 20 active destinations with mixed inbound activit
     assert.equal(call!.destinationId, destinationIds[i])
   }
   assert.equal(new Set(calls.map((c) => c.destinationId)).size, 20)
+})
+
+// ---------------------------------------------------------------------------
+// Phase 2L — reevaluateUnassociatedForwardedMessages(). A real overnight
+// proof caught that pollGmailForNewMessages()'s search-result snippet is
+// too short to ever contain a forwarded-header block, so a Resend-relayed
+// message always landed in `unassociated`. This targeted reprocessing
+// function fetches the FULL body only for the forwarding-address subset
+// and re-associates them — never blindly replaying the whole backlog.
+// ---------------------------------------------------------------------------
+
+const WILLCOX_CONTACT: KnownRelationshipContact = { destinationId: 'destination-willcox-az', contactId: 'contact-lisa', email: 'lisa@willcoxchamber.org', threadId: null }
+
+function willcoxUnassociatedEntry(overrides: Partial<{ messageId: string; from: string; subject: string; reason: string; detectedAtIso: string }> = {}) {
+  return { messageId: 'fwd-1', from: 'CheckOff Forwarder <forwarder@getcheckoff.com>', subject: 'Fwd: Willcox pricing', reason: 'no known relationship contact matches transport sender forwarder@getcheckoff.com.', detectedAtIso: '2026-09-04T09:00:00Z', ...overrides }
+}
+
+test('reevaluateUnassociatedForwardedMessages: only re-evaluates entries whose transport sender is a known forwarding address — an ordinary unmatched sender is left untouched', async () => {
+  const checkpointStore = new InMemoryGmailCheckpointStore()
+  await checkpointStore.put({
+    lastCheckedAtIso: '2026-09-04T09:00:00Z',
+    processedMessageIds: ['fwd-1', 'ordinary-1'],
+    unassociated: [willcoxUnassociatedEntry(), { messageId: 'ordinary-1', from: 'newsletter@substack.com', subject: 'Weekly digest', reason: 'no known relationship contact matches transport sender newsletter@substack.com.', detectedAtIso: '2026-09-04T09:00:00Z' }],
+  })
+  const gmail = new FakeGmail()
+  gmail.fullMessages['fwd-1'] = fullMsg({
+    id: 'fwd-1',
+    from: 'CheckOff Forwarder <forwarder@getcheckoff.com>',
+    to: ['jerry@getcheckoff.com'],
+    subject: 'Fwd: Willcox pricing',
+    bodyText: ['---------- Forwarded message ---------', 'From: Desiree Gerth <desiree@example.com>', 'To: Lisa Ramirez <lisa@willcoxchamber.org>, Jerry Stuckart <jerry@getcheckoff.com>', 'Subject: Willcox pricing', '', 'Hi Lisa, following up on pricing...'].join('\n'),
+  })
+  const contactDirectory = new InMemoryContactDirectory([WILLCOX_CONTACT])
+  const { apply, calls } = recorder()
+
+  const result = await reevaluateUnassociatedForwardedMessages(gmail, checkpointStore, contactDirectory, apply)
+  assert.equal(result.candidatesConsidered, 1, 'only the forwarding-address entry is a candidate, never the ordinary newsletter noise')
+  assert.equal(result.resumeEventsEmitted, 1)
+  assert.equal(calls.length, 1)
+  assert.equal(calls[0].destinationId, 'destination-willcox-az')
+
+  const finalCheckpoint = await checkpointStore.get()
+  assert.equal(finalCheckpoint.unassociated.some((u) => u.messageId === 'fwd-1'), false, 'resolved entry is removed from unassociated')
+  assert.equal(finalCheckpoint.unassociated.some((u) => u.messageId === 'ordinary-1'), true, 'untouched entry remains exactly as it was')
+  assert.deepEqual(finalCheckpoint.processedMessageIds, ['fwd-1', 'ordinary-1'], 'processedMessageIds is never touched by reprocessing — idempotency is preserved from the original poll')
+})
+
+test('reevaluateUnassociatedForwardedMessages: the SAME forwarded message can never resume the relationship twice — a second call after resolution is a no-op', async () => {
+  const checkpointStore = new InMemoryGmailCheckpointStore()
+  await checkpointStore.put({ lastCheckedAtIso: '2026-09-04T09:00:00Z', processedMessageIds: ['fwd-1'], unassociated: [willcoxUnassociatedEntry()] })
+  const gmail = new FakeGmail()
+  gmail.fullMessages['fwd-1'] = fullMsg({
+    id: 'fwd-1',
+    from: 'CheckOff Forwarder <forwarder@getcheckoff.com>',
+    to: ['jerry@getcheckoff.com'],
+    subject: 'Fwd: Willcox pricing',
+    bodyText: ['---------- Forwarded message ---------', 'From: Desiree Gerth <desiree@example.com>', 'To: Lisa Ramirez <lisa@willcoxchamber.org>, Jerry Stuckart <jerry@getcheckoff.com>', 'Subject: Willcox pricing', '', 'Hi Lisa...'].join('\n'),
+  })
+  const contactDirectory = new InMemoryContactDirectory([WILLCOX_CONTACT])
+  const { apply, calls } = recorder()
+
+  const first = await reevaluateUnassociatedForwardedMessages(gmail, checkpointStore, contactDirectory, apply)
+  assert.equal(first.resumeEventsEmitted, 1)
+
+  const second = await reevaluateUnassociatedForwardedMessages(gmail, checkpointStore, contactDirectory, apply)
+  assert.equal(second.candidatesConsidered, 0, 'already resolved — no longer a candidate on the second call')
+  assert.equal(second.resumeEventsEmitted, 0)
+  assert.equal(calls.length, 1, 'the relationship was resumed exactly once, never twice')
+})
+
+test('reevaluateUnassociatedForwardedMessages: an ambiguous forwarded message stays unassociated after reprocessing — never guessed', async () => {
+  const checkpointStore = new InMemoryGmailCheckpointStore()
+  await checkpointStore.put({ lastCheckedAtIso: '2026-09-04T09:00:00Z', processedMessageIds: ['fwd-1'], unassociated: [willcoxUnassociatedEntry()] })
+  const gmail = new FakeGmail()
+  gmail.fullMessages['fwd-1'] = fullMsg({
+    id: 'fwd-1',
+    from: 'CheckOff Forwarder <forwarder@getcheckoff.com>',
+    subject: 'Fwd: Willcox pricing',
+    bodyText: 'Just a relayed note, no forward header block, no Reply-To.',
+  })
+  const contactDirectory = new InMemoryContactDirectory([WILLCOX_CONTACT])
+  const { apply, calls } = recorder()
+
+  const result = await reevaluateUnassociatedForwardedMessages(gmail, checkpointStore, contactDirectory, apply)
+  assert.equal(result.candidatesConsidered, 1)
+  assert.equal(result.resumeEventsEmitted, 0)
+  assert.equal(calls.length, 0)
+  assert.equal(result.results[0].outcome, 'STILL_UNASSOCIATED')
+
+  const finalCheckpoint = await checkpointStore.get()
+  assert.equal(finalCheckpoint.unassociated.length, 1, 'still-unresolved entry is retained, not silently dropped')
+})
+
+test('reevaluateUnassociatedForwardedMessages: with no forwarding-address entries in the backlog, does nothing — never touches Gmail or the checkpoint', async () => {
+  const checkpointStore = new InMemoryGmailCheckpointStore()
+  await checkpointStore.put({ lastCheckedAtIso: '2026-09-04T09:00:00Z', processedMessageIds: ['ordinary-1'], unassociated: [{ messageId: 'ordinary-1', from: 'newsletter@substack.com', subject: 'Weekly digest', reason: 'no match', detectedAtIso: '2026-09-04T09:00:00Z' }] })
+  const gmail = new FakeGmail()
+  const contactDirectory = new InMemoryContactDirectory([WILLCOX_CONTACT])
+  const { apply, calls } = recorder()
+
+  const result = await reevaluateUnassociatedForwardedMessages(gmail, checkpointStore, contactDirectory, apply)
+  assert.equal(result.candidatesConsidered, 0)
+  assert.equal(calls.length, 0)
 })

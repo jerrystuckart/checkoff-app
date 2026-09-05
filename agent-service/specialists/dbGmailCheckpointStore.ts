@@ -32,7 +32,7 @@
 //     runs.
 
 import { createTask, recordPlaybookStage } from '../mutations'
-import { getTaskBySource, getTaskEventsForTask, getTasksBySourceType } from '../queries'
+import { getTaskBySource, getTaskEventsForTask, getTasksBySourceType, getDestinationContactEmails } from '../queries'
 import { DbPlaybookRunStore, PLAYBOOK_RUN_SOURCE_TYPE } from './dbPlaybookRunStore'
 import { RELATIONSHIP_PLAYBOOK_KEY } from '../playbooks/destinationRelationship'
 import type { GmailCheckpoint, GmailCheckpointStore } from './gmailInboundMonitor'
@@ -134,9 +134,19 @@ export class DbGmailCheckpointStore implements GmailCheckpointStore {
 export interface DbContactDirectoryDeps {
   getTasksBySourceType: typeof getTasksBySourceType
   runStore: DbPlaybookRunStore
+  /**
+   * Phase 2L — legacy pre-Phase-2I relationship evidence: real
+   * destinations (Willcox, Grand Lake, Rim Country, Buena Vista, etc.)
+   * had contacts/interactions/tasks before the destination_relationship
+   * driver existed. Without this, DbContactDirectory could only resolve
+   * inbound email for destinations that already have a driver run — too
+   * narrow for real operation. Never manufactures a contact; only reads
+   * ones agent.contacts already has.
+   */
+  getDestinationContactEmails: typeof getDestinationContactEmails
 }
 
-const REAL_CONTACT_DIRECTORY_DEPS: DbContactDirectoryDeps = { getTasksBySourceType, runStore: new DbPlaybookRunStore() }
+const REAL_CONTACT_DIRECTORY_DEPS: DbContactDirectoryDeps = { getTasksBySourceType, runStore: new DbPlaybookRunStore(), getDestinationContactEmails }
 
 export class DbContactDirectory implements MutableContactDirectory {
   constructor(private readonly deps: DbContactDirectoryDeps = REAL_CONTACT_DIRECTORY_DEPS) {}
@@ -170,6 +180,18 @@ export class DbContactDirectory implements MutableContactDirectory {
         contacts.push({ destinationId: run.projectId, contactId: c.contactId, email, threadId: contactThreadIds[c.contactId] ?? null })
       }
     }
+
+    // Legacy pre-Phase-2I contacts — merged in, never overriding a
+    // driver-derived contact for the same (destinationId, contactId).
+    const seen = new Set(contacts.map((c) => `${c.destinationId}:${c.contactId}`))
+    const legacy = await this.deps.getDestinationContactEmails()
+    for (const l of legacy) {
+      const key = `${l.projectKey}:${l.contactId}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      contacts.push({ destinationId: l.projectKey, contactId: l.contactId, email: l.email, threadId: null })
+    }
+
     return contacts
   }
 

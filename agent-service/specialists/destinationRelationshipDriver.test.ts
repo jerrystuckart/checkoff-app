@@ -4,7 +4,7 @@ import { driveDestinationRelationship, applyRelationshipResumeEvent, type Relati
 import { InMemoryPlaybookRunStore, playbookRunId, recordJerryDecision } from './playbookRun'
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
-import type { GmailAdapter, GmailMessageSummary, GmailSendAsIdentity, GmailSendInput, GoogleCalendarAdapter, FreeBusyWindow, GoogleContactsAdapter, ContactSummary } from './googleAdapters'
+import type { GmailAdapter, GmailFullMessage, GmailMessageSummary, GmailSendAsIdentity, GmailSendInput, GoogleCalendarAdapter, FreeBusyWindow, GoogleContactsAdapter, ContactSummary } from './googleAdapters'
 import type { DAPArtifact, DVA1Artifact, DVA2Artifact } from '../playbooks/destinationHubLifecycle'
 
 // ---------------------------------------------------------------------------
@@ -24,6 +24,9 @@ class FakeGmailAdapter implements GmailAdapter {
   }
   async searchMessages(): Promise<GmailMessageSummary[]> {
     return this.searchResults
+  }
+  async getFullMessage(messageId: string): Promise<GmailFullMessage> {
+    throw new Error(`FakeGmailAdapter.getFullMessage(${messageId}) not used by this test`)
   }
   async listSendAsIdentities(): Promise<GmailSendAsIdentity[]> {
     return this.sendAsIdentities
@@ -219,7 +222,7 @@ test('driveDestinationRelationship: prior Gmail correspondence is detected BEFOR
   const executor = new TestExecutor()
   scriptDraftOutreach(executor, 'destination-hood-river-or')
   const gmail = new FakeGmailAdapter()
-  gmail.searchResults = [{ id: 'm1', threadId: 't1', from: 'jane@destination-hood-river-or.example.com', to: [], subject: 'Old thread', snippet: '', receivedAt: null }]
+  gmail.searchResults = [{ id: 'm1', threadId: 't1', from: 'jane@destination-hood-river-or.example.com', to: [], subject: 'Old thread', snippet: '', receivedAt: null, replyTo: null }]
   const d = deps({ executors: [executor], gmail })
   const run = await driveDestinationRelationship(d, 'destination-hood-river-or', options('destination-hood-river-or', 'Hood River, OR'))
   assert.equal((run.state as any).hasPriorCorrespondence, true)

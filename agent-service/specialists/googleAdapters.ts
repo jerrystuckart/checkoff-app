@@ -67,6 +67,20 @@ export interface GmailMessageSummary {
   subject: string
   snippet: string
   receivedAt: string | null
+  /** Reply-To header, when present — a real Resend-relay signal (Phase 2L) distinguishing the true original sender from a wrapper/forwarding transport address. */
+  replyTo: string | null
+}
+
+export interface GmailFullMessage {
+  id: string
+  threadId: string
+  from: string
+  to: string[]
+  cc: string[]
+  replyTo: string | null
+  subject: string
+  bodyText: string
+  receivedAt: string | null
 }
 
 export interface GmailSendAsIdentity {
@@ -99,6 +113,14 @@ export interface GmailAdapter {
   isConfigured(): boolean
   /** Real Gmail search syntax (e.g. `from:someone@example.com subject:Hood River`). */
   searchMessages(query: string, maxResults?: number): Promise<GmailMessageSummary[]>
+  /**
+   * AUTO, read-only — fetches the FULL message (format=full), including
+   * body text. Phase 2L: searchMessages()'s format=metadata fetch never
+   * includes the body, but forwarded-header-block recovery
+   * (gmailForwardUnwrapping.ts) needs the body text — this is the one
+   * place that walks the MIME payload to get it.
+   */
+  getFullMessage(messageId: string): Promise<GmailFullMessage>
   /** AUTO, read-only — enumerates configured send-as identities/aliases so Chief/Jerry can verify which From address is actually available before any send. Never modifies settings. */
   listSendAsIdentities(): Promise<GmailSendAsIdentity[]>
   /** AUTO (destination_relationship.draft_outreach) — creates a Gmail draft, never sends. */
@@ -132,7 +154,7 @@ export class RealGmailAdapter extends GoogleAdapterBase implements GmailAdapter 
 
     const summaries: GmailMessageSummary[] = []
     for (const { id, threadId } of ids) {
-      const headers = ['From', 'To', 'Subject', 'Date']
+      const headers = ['From', 'To', 'Subject', 'Date', 'Reply-To']
       const params = headers.map((h) => `metadataHeaders=${h}`).join('&')
       const msgRes = await this.fetchImpl(`${this.baseUrl}/gmail/v1/users/me/messages/${id}?format=metadata&${params}`, { headers: { authorization: `Bearer ${token}` } })
       if (!msgRes.ok) throw new Error(`Gmail messages.get(${id}) returned ${msgRes.status}: ${await msgRes.text().catch(() => '<no body>')}`)
@@ -149,9 +171,68 @@ export class RealGmailAdapter extends GoogleAdapterBase implements GmailAdapter 
         subject: h('Subject'),
         snippet: msg.snippet ?? '',
         receivedAt: h('Date') || null,
+        replyTo: h('Reply-To') || null,
       })
     }
     return summaries
+  }
+
+  async getFullMessage(messageId: string): Promise<GmailFullMessage> {
+    const token = await this.resolveAccessToken('RealGmailAdapter.getFullMessage')
+    const res = await this.fetchImpl(`${this.baseUrl}/gmail/v1/users/me/messages/${messageId}?format=full`, { headers: { authorization: `Bearer ${token}` } })
+    if (!res.ok) throw new Error(`Gmail messages.get(${messageId}, format=full) returned ${res.status}: ${await res.text().catch(() => '<no body>')}`)
+    type MimePart = { mimeType?: string; body?: { data?: string }; parts?: MimePart[] }
+    const msg = (await res.json()) as { id: string; threadId: string; payload?: { headers?: Array<{ name: string; value: string }> } & MimePart }
+    const h = (name: string) => msg.payload?.headers?.find((x) => x.name.toLowerCase() === name.toLowerCase())?.value ?? ''
+    const splitAddresses = (value: string) =>
+      value
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+
+    function findPartByMimeType(part: MimePart | undefined, mimeType: string): MimePart | null {
+      if (!part) return null
+      if (part.mimeType === mimeType && part.body?.data) return part
+      for (const child of part.parts ?? []) {
+        const found = findPartByMimeType(child, mimeType)
+        if (found) return found
+      }
+      return null
+    }
+
+    function decodeBase64Url(data: string): string {
+      return Buffer.from(data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+    }
+
+    function stripHtml(html: string): string {
+      return html
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    }
+
+    const textPart = findPartByMimeType(msg.payload, 'text/plain')
+    const htmlPart = textPart ? null : findPartByMimeType(msg.payload, 'text/html')
+    const topLevelData = msg.payload?.body?.data
+
+    let bodyText = ''
+    if (textPart?.body?.data) bodyText = decodeBase64Url(textPart.body.data)
+    else if (htmlPart?.body?.data) bodyText = stripHtml(decodeBase64Url(htmlPart.body.data))
+    else if (topLevelData) bodyText = decodeBase64Url(topLevelData)
+
+    return {
+      id: msg.id,
+      threadId: msg.threadId,
+      from: h('From'),
+      to: splitAddresses(h('To')),
+      cc: splitAddresses(h('Cc')),
+      replyTo: h('Reply-To') || null,
+      subject: h('Subject'),
+      bodyText,
+      receivedAt: h('Date') || null,
+    }
   }
 
   async listSendAsIdentities(): Promise<GmailSendAsIdentity[]> {
