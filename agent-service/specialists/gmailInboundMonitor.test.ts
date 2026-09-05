@@ -39,7 +39,7 @@ function msg(overrides: Partial<GmailMessageSummary> = {}): GmailMessageSummary 
 }
 
 function fullMsg(overrides: Partial<GmailFullMessage> = {}): GmailFullMessage {
-  return { id: 'm1', threadId: 't1', from: 'jane@hoodriver.example.com', to: ['chief@checkoff.app'], cc: [], replyTo: null, subject: 'Re: intro', bodyText: 'Sounds interesting!', receivedAt: '2026-09-08T10:00:00Z', ...overrides }
+  return { id: 'm1', threadId: 't1', from: 'jane@hoodriver.example.com', to: ['chief@checkoff.app'], cc: [], replyTo: null, subject: 'Re: intro', bodyText: 'Sounds interesting!', receivedAt: '2026-09-08T10:00:00Z', messageIdHeader: null, ...overrides }
 }
 
 function recorder(): { apply: (destinationId: string, event: RelationshipResumeEventInput) => Promise<ResumeEventResult>; calls: Array<{ destinationId: string; event: RelationshipResumeEventInput }> } {

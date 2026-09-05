@@ -105,6 +105,60 @@ test('RealGmailAdapter: sendMessage() posts to messages/send — a real capabili
   assert.match(decoded, /From: jerry@getcheckoff\.com/, 'the outbound RFC2822 message must explicitly set From — never rely on Gmail defaulting to the authenticated mailbox')
 })
 
+// Phase 2T — a real live proof caught that reusing threadId alone never
+// sets In-Reply-To/References, so most clients don't render the message
+// as a true reply and no quoted content appears.
+test('RealGmailAdapter: sendMessage() sets In-Reply-To and References headers when replying to a real prior message', async () => {
+  let capturedBody: { raw?: string } | undefined
+  const fakeFetch = (async (_url: unknown, init?: { body?: string }) => {
+    capturedBody = JSON.parse(init!.body as string)
+    return new Response(JSON.stringify({ id: 'msg-2', threadId: 'thread-1' }), { status: 200 })
+  }) as unknown as typeof fetch
+  const adapter = new RealGmailAdapter({ accessToken: 'fake-token', fetchImpl: fakeFetch })
+  await adapter.sendMessage({ to: 'jane@example.com', from: 'jerry@getcheckoff.com', subject: 'Re: Hello', bodyText: 'Following up.', threadId: 'thread-1', inReplyTo: '<original@mail.gmail.com>', references: '<original@mail.gmail.com>' })
+  const decoded = Buffer.from(capturedBody!.raw!.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+  assert.match(decoded, /In-Reply-To: <original@mail\.gmail\.com>/)
+  assert.match(decoded, /References: <original@mail\.gmail\.com>/)
+})
+
+test('RealGmailAdapter: sendMessage() omits In-Reply-To/References for a genuine first touch (none supplied)', async () => {
+  let capturedBody: { raw?: string } | undefined
+  const fakeFetch = (async (_url: unknown, init?: { body?: string }) => {
+    capturedBody = JSON.parse(init!.body as string)
+    return new Response(JSON.stringify({ id: 'msg-3', threadId: 'thread-2' }), { status: 200 })
+  }) as unknown as typeof fetch
+  const adapter = new RealGmailAdapter({ accessToken: 'fake-token', fetchImpl: fakeFetch })
+  await adapter.sendMessage({ to: 'jane@example.com', from: 'jerry@getcheckoff.com', subject: 'Hello', bodyText: 'Hi Jane' })
+  const decoded = Buffer.from(capturedBody!.raw!.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+  assert.doesNotMatch(decoded, /In-Reply-To:/)
+  assert.doesNotMatch(decoded, /References:/)
+})
+
+test('RealGmailAdapter: getFullMessage() extracts the real Message-ID header, distinct from Gmail\'s own internal message id', async () => {
+  const fakeFetch = (async () =>
+    new Response(
+      JSON.stringify({
+        id: 'gmail-internal-id-1',
+        threadId: 'thread-1',
+        payload: {
+          headers: [
+            { name: 'From', value: 'jane@example.com' },
+            { name: 'To', value: 'jerry@getcheckoff.com' },
+            { name: 'Subject', value: 'Hello' },
+            { name: 'Message-ID', value: '<real-rfc-id@mail.gmail.com>' },
+          ],
+          mimeType: 'text/plain',
+          body: { data: Buffer.from('Hi there').toString('base64').replace(/\+/g, '-').replace(/\//g, '_') },
+        },
+      }),
+      { status: 200 }
+    )) as unknown as typeof fetch
+  const adapter = new RealGmailAdapter({ accessToken: 'fake-token', fetchImpl: fakeFetch })
+  const full = await adapter.getFullMessage('gmail-internal-id-1')
+  assert.equal(full.messageIdHeader, '<real-rfc-id@mail.gmail.com>')
+  assert.notEqual(full.messageIdHeader, full.id, 'the RFC Message-ID header must never be conflated with Gmail\'s own internal message id')
+})
+
 test('RealGmailAdapter: listSendAsIdentities() returns real configured send-as identities, read-only', async () => {
   let capturedUrl = ''
   let capturedMethod = 'GET'

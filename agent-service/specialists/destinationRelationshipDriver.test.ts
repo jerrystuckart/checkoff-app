@@ -19,6 +19,7 @@ class FakeGmailAdapter implements GmailAdapter {
   sentMessages: GmailSendInput[] = []
   drafts: GmailSendInput[] = []
   sendAsIdentities: GmailSendAsIdentity[] = [{ sendAsEmail: 'jerry@getcheckoff.com', displayName: 'Jerry', isDefault: true, isPrimary: false, verificationStatus: 'accepted' }]
+  fullMessages: Record<string, GmailFullMessage> = {}
   isConfigured() {
     return this.configured
   }
@@ -26,7 +27,9 @@ class FakeGmailAdapter implements GmailAdapter {
     return this.searchResults
   }
   async getFullMessage(messageId: string): Promise<GmailFullMessage> {
-    throw new Error(`FakeGmailAdapter.getFullMessage(${messageId}) not used by this test`)
+    const full = this.fullMessages[messageId]
+    if (!full) throw new Error(`FakeGmailAdapter.getFullMessage(${messageId}) not used by this test`)
+    return full
   }
   async listSendAsIdentities(): Promise<GmailSendAsIdentity[]> {
     return this.sendAsIdentities
@@ -714,4 +717,71 @@ test('sendApprovedFollowUp: refuses to send when no follow-up draft exists', asy
 
   await assert.rejects(() => sendApprovedFollowUp(d, 'destination-no-draft-test'), /No approved follow-up draft/)
   assert.equal(gmail.sentMessages.length, 0)
+})
+
+// ---------------------------------------------------------------------------
+// Phase 2T — the real Williams/Elkhart Lake bug: reusing threadId alone
+// never quotes the prior message, so "the note below" wording was
+// inaccurate (there was no note below). Required regression coverage:
+// prior message quoted -> "below" wording allowed; no quote -> "below"
+// wording prohibited.
+// ---------------------------------------------------------------------------
+
+test('sendApprovedFollowUp: when the prior message IS fetched and quoted, "below" wording is allowed and the real quote is appended with proper reply headers', async () => {
+  const gmail = new FakeGmailAdapter()
+  gmail.fullMessages['real-message-abc'] = {
+    id: 'real-message-abc',
+    threadId: 'real-thread-abc',
+    from: 'Jerry Stuckart <jerry@getcheckoff.com>',
+    to: ['jane@example.com'],
+    cc: [],
+    replyTo: null,
+    subject: 'Original first touch',
+    bodyText: 'Original body',
+    receivedAt: 'Mon, Aug 17, 2026 at 1:32 PM',
+    messageIdHeader: '<original-rfc-id@mail.gmail.com>',
+  }
+  const d = deps({ executors: [], gmail })
+  await seedWaitingRunWithFollowUp(d, 'destination-quoted-test', {
+    followUpDraft: { subject: 'Re: Original first touch', bodyText: 'Just following up on the note below —', channel: 'email' },
+  })
+
+  const run = await sendApprovedFollowUp(d, 'destination-quoted-test')
+
+  assert.equal(gmail.sentMessages.length, 1)
+  const sent = gmail.sentMessages[0]
+  assert.match(sent.bodyText, /^Just following up on the note below —/)
+  assert.match(sent.bodyText, /On Mon, Aug 17, 2026 at 1:32 PM, Jerry Stuckart <jerry@getcheckoff\.com> wrote:/, 'the real prior message must actually be quoted beneath the reply')
+  assert.match(sent.bodyText, /> Original body/)
+  assert.equal(sent.inReplyTo, '<original-rfc-id@mail.gmail.com>')
+  assert.equal(sent.references, '<original-rfc-id@mail.gmail.com>')
+  assert.equal(run.status, 'WAITING')
+})
+
+test('sendApprovedFollowUp: when the prior message canNOT be fetched/quoted, "below" wording is REJECTED before anything is sent — this is the exact real bug', async () => {
+  const gmail = new FakeGmailAdapter() // fullMessages left empty -> getFullMessage throws -> no quote available
+  const d = deps({ executors: [], gmail })
+  await seedWaitingRunWithFollowUp(d, 'destination-unquoted-below-test', {
+    followUpDraft: { subject: 'Re: Original first touch', bodyText: 'Just following up on the note below — no pressure at all.', channel: 'email' },
+  })
+
+  await assert.rejects(() => sendApprovedFollowUp(d, 'destination-unquoted-below-test'), /no prior message is being quoted/)
+  assert.equal(gmail.sentMessages.length, 0, 'the exact real bug — sending unquoted "below" wording — must never happen')
+
+  const runStore = d.runStore
+  const runAfter = await runStore.get(playbookRunId('destination_relationship', 'destination-unquoted-below-test'))
+  assert.equal((runAfter?.state as any).followUpDraft?.bodyText, 'Just following up on the note below — no pressure at all.', 'the rejected draft is left in place for a human to fix, never silently discarded')
+})
+
+test('sendApprovedFollowUp: date-anchored wording (no "below" reference) sends fine even without a quote', async () => {
+  const gmail = new FakeGmailAdapter()
+  const d = deps({ executors: [], gmail })
+  await seedWaitingRunWithFollowUp(d, 'destination-date-anchored-test', {
+    followUpDraft: { subject: 'Re: Original first touch', bodyText: 'Following up on my note from August 17 — any thoughts?', channel: 'email' },
+  })
+
+  const run = await sendApprovedFollowUp(d, 'destination-date-anchored-test')
+  assert.equal(gmail.sentMessages.length, 1)
+  assert.equal(gmail.sentMessages[0].bodyText, 'Following up on my note from August 17 — any thoughts?')
+  assert.equal(run.status, 'WAITING')
 })

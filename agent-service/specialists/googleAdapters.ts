@@ -81,6 +81,8 @@ export interface GmailFullMessage {
   subject: string
   bodyText: string
   receivedAt: string | null
+  /** The real RFC 5322 Message-ID HEADER value (e.g. "<abc123@mail.gmail.com>") — distinct from `id`, Gmail's own internal message id. This is what a true reply's In-Reply-To/References headers must reference, per RFC 5322 §3.6.4. Null on the rare message with no such header. */
+  messageIdHeader: string | null
 }
 
 export interface GmailSendAsIdentity {
@@ -107,6 +109,17 @@ export interface GmailSendInput {
    * for this account.
    */
   from: string
+  /**
+   * Phase 2T — a real live proof caught that reusing `threadId` alone
+   * does NOT make Gmail (or the recipient's client) treat a message as a
+   * true reply: no quoted content, and no RFC 5322 In-Reply-To/References
+   * headers, which is what most clients actually use to render a reply
+   * chain and thread indicator. Both are the real Message-ID HEADER
+   * value of the message being replied to (GmailFullMessage.messageIdHeader
+   * — NOT Gmail's own internal message id), per RFC 5322 §3.6.4.
+   */
+  inReplyTo?: string | null
+  references?: string | null
 }
 
 export interface GmailAdapter {
@@ -133,8 +146,15 @@ function base64UrlEncode(s: string): string {
   return Buffer.from(s, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
-function buildRfc2822Message(input: { to: string; from: string; subject: string; bodyText: string }): string {
-  return [`From: ${input.from}`, `To: ${input.to}`, `Subject: ${input.subject}`, 'Content-Type: text/plain; charset="UTF-8"', '', input.bodyText].join('\r\n')
+function buildRfc2822Message(input: { to: string; from: string; subject: string; bodyText: string; inReplyTo?: string | null; references?: string | null }): string {
+  const headers = [`From: ${input.from}`, `To: ${input.to}`, `Subject: ${input.subject}`]
+  // A true reply's In-Reply-To/References headers — these, not the
+  // Gmail threadId param, are what most mail clients actually use to
+  // render "this is a reply" and thread it visually.
+  if (input.inReplyTo) headers.push(`In-Reply-To: ${input.inReplyTo}`)
+  if (input.references) headers.push(`References: ${input.references}`)
+  headers.push('Content-Type: text/plain; charset="UTF-8"')
+  return [...headers, '', input.bodyText].join('\r\n')
 }
 
 export class RealGmailAdapter extends GoogleAdapterBase implements GmailAdapter {
@@ -232,6 +252,7 @@ export class RealGmailAdapter extends GoogleAdapterBase implements GmailAdapter 
       subject: h('Subject'),
       bodyText,
       receivedAt: h('Date') || null,
+      messageIdHeader: h('Message-ID') || null,
     }
   }
 

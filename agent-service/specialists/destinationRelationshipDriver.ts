@@ -28,6 +28,7 @@ import { RELATIONSHIP_PLAYBOOK_KEY, requiredAssetLevel, assertRelationshipTransi
 import { deriveResumeAction, type DestinationRelationshipResumeEvent } from '../playbooks/destinationExecutorGap'
 import { classifyReply, associateInboundEmail, hasPriorCorrespondence, type InboundEmail, type KnownRelationshipContact, type ClassifiedReply, type MutableContactDirectory } from '../playbooks/gmailRelationshipLogic'
 import { computeNextFollowUpAt, isFollowUpDue, shouldPark, parseRequestedWait, type FollowUpState } from '../playbooks/followUpEngine'
+import { validateFollowUpWording, buildQuotedReplyBody } from '../playbooks/followUpQuoting'
 import { buildOnePagerMarkdown, assetLevelReadyToGenerate } from '../playbooks/salesAssets'
 import { buildMeetingPrepPacket, deriveMeetingFollowUp, type MeetingOutcome, type MeetingFollowUpResult } from '../playbooks/meetingPrepPacket'
 import type { GmailAdapter } from './googleAdapters'
@@ -352,9 +353,43 @@ export async function sendApprovedFollowUp(deps: RelationshipDriverDeps, project
   if (!state.outreachThreadId) throw new Error(`No existing outreachThreadId on file for ${projectId} — a follow-up must always reply in the original thread, never start a new one.`)
 
   const draft = state.followUpDraft
+
+  // Phase 2T — a real live proof caught that reusing threadId alone
+  // neither quotes the prior message nor sets real reply headers, so a
+  // follow-up saying "the note below" left the recipient with no note
+  // below at all. Best-effort: fetch the real prior message (by its real
+  // Gmail message id, already on file from the first send) and quote it
+  // with proper In-Reply-To/References headers when the adapter supports
+  // it and the fetch succeeds. If it can't be fetched, this is NOT a
+  // silent quoting failure — the wording guard below refuses to send
+  // "below"-referencing language without an actual quote attached.
+  let quotedBodyText = draft.bodyText
+  let inReplyTo: string | null = null
+  let references: string | null = null
+  let quotesPriorContent = false
+  if (deps.gmail.isConfigured() && state.outreachMessageId) {
+    try {
+      const prior = await deps.gmail.getFullMessage(state.outreachMessageId)
+      quotedBodyText = buildQuotedReplyBody(draft.bodyText, { fromDisplay: prior.from, dateDisplay: prior.receivedAt ?? 'an earlier date', bodyText: prior.bodyText })
+      inReplyTo = prior.messageIdHeader
+      references = prior.messageIdHeader
+      quotesPriorContent = true
+    } catch {
+      // Fetch failed (e.g. message deleted, permissions) — fall through
+      // with no quote. The wording guard immediately below is what
+      // actually protects against sending inaccurate "below" language
+      // in this case, not this catch block.
+    }
+  }
+
+  const wordingCheck = validateFollowUpWording(draft.bodyText, quotesPriorContent)
+  if (!wordingCheck.valid) {
+    throw new Error(`Follow-up for ${projectId} rejected before sending: ${wordingCheck.issue}`)
+  }
+
   const sentAt = nowIso(deps)
   if (deps.gmail.isConfigured()) {
-    const sent = await deps.gmail.sendMessage({ to: state.primaryContact.email, from: outreachFromEmail(), subject: draft.subject, bodyText: draft.bodyText, threadId: state.outreachThreadId })
+    const sent = await deps.gmail.sendMessage({ to: state.primaryContact.email, from: outreachFromEmail(), subject: draft.subject, bodyText: quotesPriorContent ? quotedBodyText : draft.bodyText, threadId: state.outreachThreadId, inReplyTo, references })
     state.outreachMessageId = sent.messageId
     state.outreachThreadId = sent.threadId
     state.outreachSentReal = true
