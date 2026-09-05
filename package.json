@@ -14,6 +14,7 @@
     "agent:audit": "tsx agent-service/runAudit.ts",
     "agent:reconcile-state": "tsx agent-service/reconcilePhase2AState.ts",
     "agent:reconcile-destination-portfolio-needs-jerry": "tsx agent-service/reconcileDestinationPortfolioNeedsJerry.ts",
+    "agent:reconcile-willcox-jerry-reply": "tsx agent-service/reconcileWillcoxJerryReply.ts",
     "agent:test": "tsx --test agent-service/*.test.ts agent-service/playbooks/*.test.ts agent-service/specialists/*.test.ts",
     "agent:test:mutations": "AGENT_SERVICE_ALLOW_MUTATION_TESTS=1 tsx --test agent-service/*.test.ts agent-service/playbooks/*.test.ts agent-service/specialists/*.test.ts",
     "agent:typecheck": "tsc --noEmit -p agent-service/tsconfig.json",

@@ -100,16 +100,24 @@ test('live acceptance: widget marketing is BLOCKED', { skip }, async () => {
   assert.ok(findAttention(report, "Market What's Good", 'TASK_BLOCKED'))
 })
 
-// Phase 2M: the real Willcox forwarded-message proof (Desiree Gerth,
-// pricing confirmation needed before the Chamber board vote — see
-// reconcileDestinationPortfolioNeedsJerry.ts) created ONE genuine
-// NEEDS_JERRY task. Updating this acceptance criterion to match, not
-// weakening it: exactly one NEEDS_JERRY, and it must be the real Willcox
-// item, not some other unrelated escalation.
-test('live acceptance: exactly the Phase 2M Willcox pricing-confirmation NEEDS_JERRY exists', { skip }, async () => {
+// Phase 2M created ONE genuine NEEDS_JERRY task (Willcox pricing
+// confirmation). Phase 2N then reconciled Jerry's own real Gmail reply to
+// Desiree, which is genuine completion proof — reconcileWillcoxJerryReply.ts
+// transitioned that task to DONE. Updating this acceptance criterion
+// again to match, not weakening it: zero NEEDS_JERRY now that the real
+// underlying need has actually been met, and the Willcox task must be
+// genuinely DONE, not merely absent for an unrelated reason.
+test('live acceptance: zero NEEDS_JERRY after Jerry\'s real Willcox reply was reconciled (Phase 2N)', { skip }, async () => {
   const report = await getChiefAuditReport()
-  assert.equal(report.summary.attentionByCode.TASK_NEEDS_JERRY ?? 0, 1)
-  assert.ok(findAttention(report, 'Willcox — confirm pricing with Desiree', 'TASK_NEEDS_JERRY'))
+  assert.equal(report.summary.attentionByCode.TASK_NEEDS_JERRY ?? 0, 0)
+  assert.equal(findAttention(report, 'Willcox — confirm pricing with Desiree', 'TASK_NEEDS_JERRY'), undefined)
+})
+
+test('live acceptance: the Phase 2M Willcox NEEDS_JERRY task is genuinely DONE, not merely absent for an unrelated reason', { skip }, async () => {
+  const rows = await query<{ status: string }>(
+    "SELECT status FROM agent.tasks WHERE source_type = 'gmail_forwarded_message_reclassification' AND source_ref = 'gmail:1a071eba028425e5'"
+  )
+  assert.equal(rows[0]?.status, 'DONE')
 })
 
 test('live acceptance: completed Phase 0B and Chief read-layer tasks do not appear as attention items', { skip }, async () => {
@@ -148,8 +156,11 @@ test('live acceptance: the umbrella destination_hubs_wave_1 project still exists
 })
 
 test('live acceptance: Desiree Gerth is a verified contact scoped to Willcox only, with no contact manufactured for Buena Vista/Grand Lake/Rim Country', { skip }, async () => {
+  // DISTINCT: Phase 2N added a second (outbound) interaction on the same
+  // contact/project pair — Jerry's real reply — so this must not be
+  // read as "two different destinations for the same person."
   const desiree = await query<{ email: string; project_key: string }>(
-    `SELECT c.email, p.project_key FROM agent.contacts c
+    `SELECT DISTINCT c.email, p.project_key FROM agent.contacts c
        JOIN agent.interactions i ON i.contact_id = c.id
        JOIN agent.projects p ON p.id = i.project_id
       WHERE c.email = 'dez@strivevineyards.com'`
@@ -159,6 +170,34 @@ test('live acceptance: Desiree Gerth is a verified contact scoped to Willcox onl
 
   const totalContacts = await query<{ count: string }>(`SELECT count(*)::text FROM agent.contacts`)
   assert.equal(totalContacts[0]?.count, '1', 'no contact was manufactured for Buena Vista/Grand Lake/Rim Country — none exists in real data')
+})
+
+// ---------------------------------------------------------------------------
+// Phase 2N — Jerry's real Gmail reply to Desiree reconciled into
+// operational state (reconcileWillcoxJerryReply.ts). No
+// destination_relationship playbook run was fabricated.
+// ---------------------------------------------------------------------------
+
+test('live acceptance: both the inbound (Desiree) and outbound (Jerry) messages are recorded as Willcox interactions, correctly directioned', { skip }, async () => {
+  const rows = await query<{ direction: string; source_ref: string }>(
+    `SELECT i.direction, i.source_ref FROM agent.interactions i JOIN agent.projects p ON p.id = i.project_id WHERE p.project_key = 'destination-willcox' ORDER BY i.occurred_at`
+  )
+  assert.equal(rows.length, 2)
+  assert.deepEqual(rows.map((r) => [r.direction, r.source_ref]), [
+    ['INBOUND', 'gmail:1a071eba028425e5'],
+    ['OUTBOUND', 'gmail:1a0726835de40856'],
+  ])
+})
+
+test('live acceptance: Willcox is now WAITING on the Chamber board vote, with no destination_relationship playbook run fabricated', { skip }, async () => {
+  const rows = await query<{ status: string; next_check_at: string | null }>(
+    "SELECT status, next_check_at FROM agent.tasks WHERE source_type = 'destination_relationship_checkpoint' AND source_ref = 'willcox-chamber-board-vote-2026-09-10'"
+  )
+  assert.equal(rows[0]?.status, 'WAITING')
+  assert.ok(rows[0]?.next_check_at)
+
+  const runs = await query<{ count: string }>("SELECT count(*)::text FROM agent.tasks WHERE source_type = 'playbook_run' AND source_ref LIKE '%destination-willcox%'")
+  assert.equal(runs[0]?.count, '0', 'no destination_relationship (or other playbook) run was fabricated for Willcox')
 })
 
 after(async () => {
