@@ -1,19 +1,59 @@
-// Chief Phase 2I — the real Gmail/Google Calendar/Google Contacts (People
-// API) connectors. Same DI/config discipline as openAiAdapter.ts and
-// remoteAiExecutor.ts's AnthropicMessagesAdapter: a real HTTP
-// implementation gated entirely on a configured OAuth access token —
-// isConfigured() is honestly false without one, and every method throws
-// rather than silently no-opping if called unconfigured. `fetchImpl` is
-// injectable purely so this module's own tests never make a real network
-// call.
+// Chief Phase 2I/2J — the real Gmail/Google Calendar/Google Contacts
+// (People API) connectors. Same DI/config discipline as openAiAdapter.ts
+// and remoteAiExecutor.ts's AnthropicMessagesAdapter: a real HTTP
+// implementation, isConfigured() honestly false without credentials, and
+// every method throws rather than silently no-opping if called
+// unconfigured. `fetchImpl` is injectable purely so this module's own
+// tests never make a real network call.
 //
-// THIS SESSION HAS NO GOOGLE OAUTH TOKEN CONFIGURED — these adapters are
-// real, production-ready code, but every capability they expose stays
-// unreachable (isConfigured() === false) until Jerry completes a real
-// Google OAuth flow and sets GOOGLE_OAUTH_ACCESS_TOKEN. This is the
-// intended state for Phase 2I: closing the "gmail_calendar_execution"
-// gap documented in destinationExecutorGap.ts means writing this code,
-// not fabricating credentials that don't exist.
+// Phase 2J: a bare GOOGLE_OAUTH_ACCESS_TOKEN (Phase 2I) expires in about
+// an hour — useless for a Chief meant to run unattended for days/weeks.
+// Each adapter now resolves its token through a shared
+// GoogleCredentialProvider (googleCredentialProvider.ts), which caches
+// and refreshes via the OAuth refresh_token grant — the ONE place that
+// logic lives, never duplicated per adapter. `accessToken` remains
+// available as a hard override (tests, or a caller pinning one token
+// deliberately) — when set, it bypasses the credential provider
+// entirely; a real long-running deployment should NOT set it and should
+// rely on the credential provider instead.
+//
+// THIS SESSION HAS NO GOOGLE OAUTH CREDENTIALS CONFIGURED — these
+// adapters are real, production-ready code, but every capability they
+// expose stays unreachable (isConfigured() === false) until Jerry
+// completes the one-time authorization flow (agent-service/googleAuthorize.ts).
+
+import { GoogleCredentialProvider } from './googleCredentialProvider'
+
+export interface GoogleAdapterOptions {
+  /** Hard override — bypasses the credential provider entirely. Mainly for tests/manual pinning; a real long-running Chief should rely on credentialProvider since a bare token expires. */
+  accessToken?: string
+  /** Shared credential provider (Gmail/Calendar/Contacts can all pass the SAME instance). Defaults to a provider reading GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET/GOOGLE_REFRESH_TOKEN from the environment. */
+  credentialProvider?: GoogleCredentialProvider
+  baseUrl?: string
+  fetchImpl?: typeof fetch
+}
+
+abstract class GoogleAdapterBase {
+  protected readonly accessTokenOverride: string | undefined
+  protected readonly credentialProvider: GoogleCredentialProvider
+  protected readonly fetchImpl: typeof fetch
+
+  constructor(options: GoogleAdapterOptions) {
+    this.accessTokenOverride = options.accessToken
+    this.credentialProvider = options.credentialProvider ?? new GoogleCredentialProvider({ fetchImpl: options.fetchImpl })
+    this.fetchImpl = options.fetchImpl ?? fetch
+  }
+
+  isConfigured(): boolean {
+    return !!this.accessTokenOverride || this.credentialProvider.isConfigured()
+  }
+
+  protected async resolveAccessToken(callerName: string): Promise<string> {
+    if (this.accessTokenOverride) return this.accessTokenOverride
+    if (!this.credentialProvider.isConfigured()) throw new Error(`${callerName} called without configured Google credentials — isConfigured() should have prevented this.`)
+    return this.credentialProvider.getAccessToken()
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Gmail (gmail.googleapis.com, Gmail API v1)
@@ -34,9 +74,9 @@ export interface GmailAdapter {
   /** Real Gmail search syntax (e.g. `from:someone@example.com subject:Hood River`). */
   searchMessages(query: string, maxResults?: number): Promise<GmailMessageSummary[]>
   /** AUTO (destination_relationship.draft_outreach) — creates a Gmail draft, never sends. */
-  createDraft(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ draftId: string }>
+  createDraft(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ draftId: string; messageId: string; threadId: string }>
   /** APPROVAL_REQUIRED (destination_relationship.send_email) — the driver must never call this without a recorded Jerry approval. */
-  sendMessage(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ messageId: string }>
+  sendMessage(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ messageId: string; threadId: string }>
 }
 
 function base64UrlEncode(s: string): string {
@@ -47,34 +87,16 @@ function buildRfc2822Message(input: { to: string; subject: string; bodyText: str
   return [`To: ${input.to}`, `Subject: ${input.subject}`, 'Content-Type: text/plain; charset="UTF-8"', '', input.bodyText].join('\r\n')
 }
 
-export interface GoogleAdapterOptions {
-  accessToken?: string
-  baseUrl?: string
-  fetchImpl?: typeof fetch
-}
-
-export class RealGmailAdapter implements GmailAdapter {
-  private readonly accessToken: string | undefined
+export class RealGmailAdapter extends GoogleAdapterBase implements GmailAdapter {
   private readonly baseUrl: string
-  private readonly fetchImpl: typeof fetch
 
   constructor(options: GoogleAdapterOptions = {}) {
-    this.accessToken = options.accessToken ?? process.env.GOOGLE_OAUTH_ACCESS_TOKEN
+    super(options)
     this.baseUrl = options.baseUrl ?? 'https://gmail.googleapis.com'
-    this.fetchImpl = options.fetchImpl ?? fetch
-  }
-
-  isConfigured(): boolean {
-    return !!this.accessToken
-  }
-
-  private requireToken(): string {
-    if (!this.accessToken) throw new Error('RealGmailAdapter called without a configured GOOGLE_OAUTH_ACCESS_TOKEN — isConfigured() should have prevented this.')
-    return this.accessToken
   }
 
   async searchMessages(query: string, maxResults = 10): Promise<GmailMessageSummary[]> {
-    const token = this.requireToken()
+    const token = await this.resolveAccessToken('RealGmailAdapter.searchMessages')
     const listRes = await this.fetchImpl(`${this.baseUrl}/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}`, { headers: { authorization: `Bearer ${token}` } })
     if (!listRes.ok) throw new Error(`Gmail messages.list returned ${listRes.status}: ${await listRes.text().catch(() => '<no body>')}`)
     const list = (await listRes.json()) as { messages?: Array<{ id: string; threadId: string }> }
@@ -104,8 +126,8 @@ export class RealGmailAdapter implements GmailAdapter {
     return summaries
   }
 
-  async createDraft(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ draftId: string }> {
-    const token = this.requireToken()
+  async createDraft(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ draftId: string; messageId: string; threadId: string }> {
+    const token = await this.resolveAccessToken('RealGmailAdapter.createDraft')
     const raw = base64UrlEncode(buildRfc2822Message(input))
     const res = await this.fetchImpl(`${this.baseUrl}/gmail/v1/users/me/drafts`, {
       method: 'POST',
@@ -113,12 +135,12 @@ export class RealGmailAdapter implements GmailAdapter {
       body: JSON.stringify({ message: { raw, threadId: input.threadId } }),
     })
     if (!res.ok) throw new Error(`Gmail drafts.create returned ${res.status}: ${await res.text().catch(() => '<no body>')}`)
-    const json = (await res.json()) as { id: string }
-    return { draftId: json.id }
+    const json = (await res.json()) as { id: string; message: { id: string; threadId: string } }
+    return { draftId: json.id, messageId: json.message.id, threadId: json.message.threadId }
   }
 
-  async sendMessage(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ messageId: string }> {
-    const token = this.requireToken()
+  async sendMessage(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ messageId: string; threadId: string }> {
+    const token = await this.resolveAccessToken('RealGmailAdapter.sendMessage')
     const raw = base64UrlEncode(buildRfc2822Message(input))
     const res = await this.fetchImpl(`${this.baseUrl}/gmail/v1/users/me/messages/send`, {
       method: 'POST',
@@ -126,8 +148,8 @@ export class RealGmailAdapter implements GmailAdapter {
       body: JSON.stringify({ raw, threadId: input.threadId }),
     })
     if (!res.ok) throw new Error(`Gmail messages.send returned ${res.status}: ${await res.text().catch(() => '<no body>')}`)
-    const json = (await res.json()) as { id: string }
-    return { messageId: json.id }
+    const json = (await res.json()) as { id: string; threadId: string }
+    return { messageId: json.id, threadId: json.threadId }
   }
 }
 
@@ -148,28 +170,16 @@ export interface GoogleCalendarAdapter {
   createEvent(calendarId: string, input: { summary: string; description: string; startIso: string; endIso: string; attendeeEmails: string[] }): Promise<{ eventId: string }>
 }
 
-export class RealGoogleCalendarAdapter implements GoogleCalendarAdapter {
-  private readonly accessToken: string | undefined
+export class RealGoogleCalendarAdapter extends GoogleAdapterBase implements GoogleCalendarAdapter {
   private readonly baseUrl: string
-  private readonly fetchImpl: typeof fetch
 
   constructor(options: GoogleAdapterOptions = {}) {
-    this.accessToken = options.accessToken ?? process.env.GOOGLE_OAUTH_ACCESS_TOKEN
+    super(options)
     this.baseUrl = options.baseUrl ?? 'https://www.googleapis.com'
-    this.fetchImpl = options.fetchImpl ?? fetch
-  }
-
-  isConfigured(): boolean {
-    return !!this.accessToken
-  }
-
-  private requireToken(): string {
-    if (!this.accessToken) throw new Error('RealGoogleCalendarAdapter called without a configured GOOGLE_OAUTH_ACCESS_TOKEN — isConfigured() should have prevented this.')
-    return this.accessToken
   }
 
   async freeBusy(calendarId: string, timeMinIso: string, timeMaxIso: string): Promise<FreeBusyWindow[]> {
-    const token = this.requireToken()
+    const token = await this.resolveAccessToken('RealGoogleCalendarAdapter.freeBusy')
     const res = await this.fetchImpl(`${this.baseUrl}/calendar/v3/freeBusy`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -182,7 +192,7 @@ export class RealGoogleCalendarAdapter implements GoogleCalendarAdapter {
   }
 
   async createEvent(calendarId: string, input: { summary: string; description: string; startIso: string; endIso: string; attendeeEmails: string[] }): Promise<{ eventId: string }> {
-    const token = this.requireToken()
+    const token = await this.resolveAccessToken('RealGoogleCalendarAdapter.createEvent')
     const res = await this.fetchImpl(`${this.baseUrl}/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
@@ -216,24 +226,17 @@ export interface GoogleContactsAdapter {
   searchContacts(query: string): Promise<ContactSummary[]>
 }
 
-export class RealGoogleContactsAdapter implements GoogleContactsAdapter {
-  private readonly accessToken: string | undefined
+export class RealGoogleContactsAdapter extends GoogleAdapterBase implements GoogleContactsAdapter {
   private readonly baseUrl: string
-  private readonly fetchImpl: typeof fetch
 
   constructor(options: GoogleAdapterOptions = {}) {
-    this.accessToken = options.accessToken ?? process.env.GOOGLE_OAUTH_ACCESS_TOKEN
+    super(options)
     this.baseUrl = options.baseUrl ?? 'https://people.googleapis.com'
-    this.fetchImpl = options.fetchImpl ?? fetch
-  }
-
-  isConfigured(): boolean {
-    return !!this.accessToken
   }
 
   async searchContacts(query: string): Promise<ContactSummary[]> {
-    if (!this.accessToken) throw new Error('RealGoogleContactsAdapter called without a configured GOOGLE_OAUTH_ACCESS_TOKEN — isConfigured() should have prevented this.')
-    const res = await this.fetchImpl(`${this.baseUrl}/v1/people:searchContacts?query=${encodeURIComponent(query)}&readMask=names,emailAddresses,organizations`, { headers: { authorization: `Bearer ${this.accessToken}` } })
+    const token = await this.resolveAccessToken('RealGoogleContactsAdapter.searchContacts')
+    const res = await this.fetchImpl(`${this.baseUrl}/v1/people:searchContacts?query=${encodeURIComponent(query)}&readMask=names,emailAddresses,organizations`, { headers: { authorization: `Bearer ${token}` } })
     if (!res.ok) throw new Error(`People searchContacts returned ${res.status}: ${await res.text().catch(() => '<no body>')}`)
     const json = (await res.json()) as { results?: Array<{ person: { resourceName: string; names?: Array<{ displayName?: string }>; emailAddresses?: Array<{ value?: string }>; organizations?: Array<{ name?: string }> } }> }
     return (json.results ?? []).map((r) => ({
@@ -245,6 +248,4 @@ export class RealGoogleContactsAdapter implements GoogleContactsAdapter {
   }
 }
 
-export const GOOGLE_ADAPTERS_ENV_VARS = Object.freeze({
-  GOOGLE_OAUTH_ACCESS_TOKEN: '<unset — Gmail/Calendar/Contacts stay unconfigured until Jerry completes a real Google OAuth flow>',
-})
+export { GOOGLE_OAUTH_SCOPES, GOOGLE_OAUTH_ENV_VARS } from './googleCredentialProvider'

@@ -26,7 +26,7 @@
 import type { DVA1Artifact, DVA2Artifact, DAPArtifact } from '../playbooks/destinationHubLifecycle'
 import { RELATIONSHIP_PLAYBOOK_KEY, requiredAssetLevel, assertRelationshipTransitionAllowed, isolateContactContext, type RelationshipStage, type DestinationContactContext, type SalesAssetLevel } from '../playbooks/destinationRelationship'
 import { deriveResumeAction, type DestinationRelationshipResumeEvent } from '../playbooks/destinationExecutorGap'
-import { classifyReply, associateInboundEmail, hasPriorCorrespondence, type InboundEmail, type KnownRelationshipContact, type ClassifiedReply } from '../playbooks/gmailRelationshipLogic'
+import { classifyReply, associateInboundEmail, hasPriorCorrespondence, type InboundEmail, type KnownRelationshipContact, type ClassifiedReply, type MutableContactDirectory } from '../playbooks/gmailRelationshipLogic'
 import { computeNextFollowUpAt, isFollowUpDue, shouldPark, parseRequestedWait, type FollowUpState } from '../playbooks/followUpEngine'
 import { buildOnePagerMarkdown, assetLevelReadyToGenerate } from '../playbooks/salesAssets'
 import { buildMeetingPrepPacket, deriveMeetingFollowUp, type MeetingOutcome, type MeetingFollowUpResult } from '../playbooks/meetingPrepPacket'
@@ -108,6 +108,8 @@ export interface RelationshipDriverDeps {
   contacts: GoogleContactsAdapter
   /** Jerry's own calendar id for freeBusy lookups — a real production deployment would configure this once; tests inject a fixed value. */
   jerryCalendarId: string
+  /** Optional — when supplied, the driver keeps it current itself (upserting on contact validation and on a referral) so a production Gmail poller (gmailInboundMonitor.ts) has a real, always-up-to-date directory to associate inbound mail against, without needing its own separate source of truth. */
+  contactDirectory?: MutableContactDirectory
   now?: () => string
 }
 
@@ -178,6 +180,7 @@ async function stepRelationshipReady(deps: RelationshipDriverDeps, run: Playbook
   }
   state.hasPriorCorrespondence = hasPrior
   run.state = state
+  await deps.contactDirectory?.upsertContact({ destinationId: run.projectId, contactId: state.primaryContact.contactId, email: state.primaryContact.email, threadId: (state.contactThreadIds as Record<string, string> | undefined)?.[state.primaryContact.contactId] ?? null })
   return moveTo(run, 'ASSETS_PREP')
 }
 
@@ -262,8 +265,20 @@ async function performApprovedSend(deps: RelationshipDriverDeps, run: PlaybookRu
   const state = readState(run)
   if (!state.draftedOutreach || !state.primaryContact) return
   if (deps.gmail.isConfigured()) {
-    await deps.gmail.sendMessage({ to: state.primaryContact.email, subject: state.draftedOutreach.subject, bodyText: state.draftedOutreach.bodyText })
+    const sent = await deps.gmail.sendMessage({ to: state.primaryContact.email, subject: state.draftedOutreach.subject, bodyText: state.draftedOutreach.bodyText })
     state.outreachSentReal = true
+    // Phase 2J — thread continuity: preserve the real Gmail thread id so
+    // this contact's reply (and any future follow-up Chief sends) stays
+    // in the SAME thread, and so the inbound poller can match it via
+    // threadId (the strongest association signal) rather than only
+    // sender email.
+    state.outreachThreadId = sent.threadId
+    state.outreachMessageId = sent.messageId
+    const contactEmails: Record<string, string> = (state.contactEmails as Record<string, string> | undefined) ?? {}
+    contactEmails[state.primaryContact.contactId] = state.primaryContact.email
+    state.contactEmails = contactEmails
+    state.contactThreadIds = { ...(state.contactThreadIds as Record<string, string> | undefined), [state.primaryContact.contactId]: sent.threadId }
+    await deps.contactDirectory?.upsertContact({ destinationId: run.projectId, contactId: state.primaryContact.contactId, email: state.primaryContact.email, threadId: sent.threadId })
   } else {
     state.outreachSentSimulated = true
   }
@@ -353,7 +368,8 @@ export async function applyRelationshipResumeEvent(deps: RelationshipDriverDeps,
     const primaryContact = state.primaryContact
     if (primaryContact) contactEmails[primaryContact.contactId] = primaryContact.email
     state.contactEmails = contactEmails
-    const known: KnownRelationshipContact[] = Object.entries(contactEmails).map(([contactId, contactEmail]) => ({ destinationId: projectId, contactId, email: contactEmail, threadId: contactId === primaryContact?.contactId ? event.email.threadId : null }))
+    const contactThreadIds = (state.contactThreadIds as Record<string, string> | undefined) ?? {}
+    const known: KnownRelationshipContact[] = Object.entries(contactEmails).map(([contactId, contactEmail]) => ({ destinationId: projectId, contactId, email: contactEmail, threadId: contactThreadIds[contactId] ?? null }))
     const association = associateInboundEmail(event.email, known)
     if (!association.associated) return { rejected: true, reason: association.reason }
     if (association.destinationId !== projectId) return { rejected: true, reason: `Association resolved to destination ${association.destinationId}, not the requested ${projectId} — refusing cross-destination association.` }
@@ -371,6 +387,7 @@ export async function applyRelationshipResumeEvent(deps: RelationshipDriverDeps,
       state.contactEmails = contactEmails
       appendHistory(state, `${event.introducedContact.name} introduced by ${primaryContact?.name}.`)
       run.state = state
+      await deps.contactDirectory?.upsertContact({ destinationId: projectId, contactId: event.introducedContact.contactId, email: event.introducedContact.email, threadId: null })
     }
 
     if (run.currentStage === 'WAITING_FOR_REPLY') moveTo(run, 'ENGAGED')

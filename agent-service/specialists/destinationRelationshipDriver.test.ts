@@ -24,13 +24,13 @@ class FakeGmailAdapter implements GmailAdapter {
   async searchMessages(): Promise<GmailMessageSummary[]> {
     return this.searchResults
   }
-  async createDraft(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ draftId: string }> {
+  async createDraft(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ draftId: string; messageId: string; threadId: string }> {
     this.drafts.push(input)
-    return { draftId: `draft-${this.drafts.length}` }
+    return { draftId: `draft-${this.drafts.length}`, messageId: `draft-msg-${this.drafts.length}`, threadId: input.threadId ?? `thread-${this.drafts.length}` }
   }
-  async sendMessage(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ messageId: string }> {
+  async sendMessage(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ messageId: string; threadId: string }> {
     this.sentMessages.push(input)
-    return { messageId: `msg-${this.sentMessages.length}` }
+    return { messageId: `msg-${this.sentMessages.length}`, threadId: input.threadId ?? `thread-${this.sentMessages.length}` }
   }
 }
 
@@ -495,4 +495,64 @@ test('20 concurrent destination relationships stay fully isolated — drafts, co
   }
   // Global uniqueness — any cross-contamination would collapse this below 20.
   assert.equal(new Set(runs.map((r) => r!.state && (r!.state as any).dap.destinationId)).size, 20)
+})
+
+// ---------------------------------------------------------------------------
+// Phase 2J — recognizing an already-scheduled calendar event creates the
+// meeting-prep task, exactly like a manually-triggered MEETING_SCHEDULED
+// resume event (calendarResumeCheck.ts associates, the driver does the rest).
+// ---------------------------------------------------------------------------
+
+test('Phase 2J: a recognized calendar event (attendee matches a known contact) resumes the correct relationship and creates the meeting-prep task', async () => {
+  const executor = new TestExecutor()
+  scriptDraftOutreach(executor, 'destination-hood-river-or')
+  const d = deps({ executors: [executor] })
+  const runId = playbookRunId('destination_relationship', 'destination-hood-river-or')
+  await driveDestinationRelationship(d, 'destination-hood-river-or', options('destination-hood-river-or', 'Hood River, OR'))
+  await recordJerryDecision(d.runStore, runId, { outreachApproved: true })
+  await driveDestinationRelationship(d, 'destination-hood-river-or', options('destination-hood-river-or', 'Hood River, OR'))
+  await applyRelationshipResumeEvent(d, 'destination-hood-river-or', {
+    kind: 'GMAIL_REPLY_RECEIVED',
+    destinationId: 'destination-hood-river-or',
+    contactId: 'contact-destination-hood-river-or',
+    occurredAt: '2026-09-09T00:00:00Z',
+    payload: {},
+    email: { from: 'jane@destination-hood-river-or.example.com', to: [], threadId: 'thread-1', subject: 'Re: intro', bodyText: "Let's talk next week.", receivedAt: '2026-09-09T00:00:00Z' },
+  })
+  await recordJerryDecision(d.runStore, runId, { meetingWindowChosen: '2026-09-10T17:00:00Z' })
+
+  const { associateCalendarEvent } = await import('./calendarResumeCheck')
+  const association = associateCalendarEvent({ eventId: 'evt-1', summary: 'Discovery call', attendeeEmails: ['jerry@checkoff.app', 'jane@destination-hood-river-or.example.com'], startIso: '2026-09-10T17:00:00Z' }, [
+    { destinationId: 'destination-hood-river-or', contactId: 'contact-destination-hood-river-or', email: 'jane@destination-hood-river-or.example.com', threadId: 'thread-1' },
+  ])
+  assert.ok(association.associated)
+
+  const result = association.associated
+    ? await applyRelationshipResumeEvent(d, association.destinationId, { kind: 'MEETING_SCHEDULED', destinationId: association.destinationId, contactId: association.contactId, occurredAt: '2026-09-10T17:00:00Z', payload: {}, meetingSummary: 'Discovery call' })
+    : null
+  assert.ok(result && !result.rejected)
+  if (result && !result.rejected) {
+    assert.equal(result.run.currentStage, 'MEETING_PREP')
+    assert.ok((result.run.state as any).meetingPrepPacket)
+  }
+})
+
+test('Phase 2J: the driver keeps an injected contactDirectory current — upserts the primary contact on validation, with the real thread id once sent', async () => {
+  const { InMemoryContactDirectory } = await import('./gmailInboundMonitor')
+  const contactDirectory = new InMemoryContactDirectory()
+  const executor = new TestExecutor()
+  scriptDraftOutreach(executor, 'destination-hood-river-or')
+  const d = deps({ executors: [executor], contactDirectory })
+  const runId = playbookRunId('destination_relationship', 'destination-hood-river-or')
+
+  await driveDestinationRelationship(d, 'destination-hood-river-or', options('destination-hood-river-or', 'Hood River, OR'))
+  let contacts = await contactDirectory.listActiveContacts()
+  assert.equal(contacts.length, 1)
+  assert.equal(contacts[0].email, 'jane@destination-hood-river-or.example.com')
+  assert.equal(contacts[0].threadId, null, 'no thread id exists yet — nothing has been sent')
+
+  await recordJerryDecision(d.runStore, runId, { outreachApproved: true })
+  await driveDestinationRelationship(d, 'destination-hood-river-or', options('destination-hood-river-or', 'Hood River, OR'))
+  contacts = await contactDirectory.listActiveContacts()
+  assert.ok(contacts[0].threadId, 'the real Gmail thread id must be recorded once the outreach is actually sent')
 })

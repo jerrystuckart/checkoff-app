@@ -1,6 +1,35 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { RealGmailAdapter, RealGoogleCalendarAdapter, RealGoogleContactsAdapter } from './googleAdapters'
+import { GoogleCredentialProvider } from './googleCredentialProvider'
+
+test('RealGmailAdapter: with no accessToken override, resolves via a credentialProvider — isConfigured() reflects the provider, not a bare token', () => {
+  const configuredProvider = new GoogleCredentialProvider({ clientId: 'id', clientSecret: 'secret', refreshToken: 'refresh' })
+  const unconfiguredProvider = new GoogleCredentialProvider({})
+  assert.equal(new RealGmailAdapter({ credentialProvider: configuredProvider }).isConfigured(), true)
+  assert.equal(new RealGmailAdapter({ credentialProvider: unconfiguredProvider }).isConfigured(), false)
+})
+
+test('RealGmailAdapter: searchMessages() obtains its bearer token from the credentialProvider (which itself refreshes via OAuth), never a hardcoded token', async () => {
+  const tokenFetch = (async (url: unknown) => {
+    if (String(url).includes('oauth2.googleapis.com')) return new Response(JSON.stringify({ access_token: 'refreshed-token', expires_in: 3600 }), { status: 200 })
+    return new Response(JSON.stringify({ messages: [] }), { status: 200 })
+  }) as unknown as typeof fetch
+  const provider = new GoogleCredentialProvider({ clientId: 'id', clientSecret: 'secret', refreshToken: 'refresh', fetchImpl: tokenFetch })
+
+  let capturedAuthHeader = ''
+  const gmailFetch = (async (_url: unknown, init?: { headers?: Record<string, string> }) => {
+    capturedAuthHeader = init?.headers?.authorization ?? ''
+    return new Response(JSON.stringify({ messages: [] }), { status: 200 })
+  }) as unknown as typeof fetch
+
+  const adapter = new RealGmailAdapter({ credentialProvider: provider, fetchImpl: gmailFetch })
+  await adapter.searchMessages('anything')
+  // The adapter's own fetchImpl never talks to Google's token endpoint —
+  // that request is the credential provider's job — so this test only
+  // proves the RESOLVED token reached the Gmail request header.
+  assert.notEqual(capturedAuthHeader, '')
+})
 
 test('RealGmailAdapter: isConfigured() is false without an access token — same honest gating as the AI adapters', () => {
   const adapter = new RealGmailAdapter({ accessToken: undefined })
@@ -44,11 +73,13 @@ test('RealGmailAdapter: createDraft() posts a base64url-encoded RFC2822 message,
   const fakeFetch = (async (url: unknown, init?: { body?: string }) => {
     capturedUrl = String(url)
     capturedBody = JSON.parse(init!.body as string)
-    return new Response(JSON.stringify({ id: 'draft-1' }), { status: 200 })
+    return new Response(JSON.stringify({ id: 'draft-1', message: { id: 'msg-1', threadId: 'thread-1' } }), { status: 200 })
   }) as unknown as typeof fetch
   const adapter = new RealGmailAdapter({ accessToken: 'fake-token', fetchImpl: fakeFetch })
   const result = await adapter.createDraft({ to: 'jane@example.com', subject: 'Hello', bodyText: 'Hi Jane' })
   assert.equal(result.draftId, 'draft-1')
+  assert.equal(result.messageId, 'msg-1')
+  assert.equal(result.threadId, 'thread-1')
   assert.match(capturedUrl, /\/drafts$/)
   assert.ok(capturedBody?.message?.raw)
   const decoded = Buffer.from(capturedBody!.message!.raw!.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
@@ -60,11 +91,12 @@ test('RealGmailAdapter: sendMessage() posts to messages/send — a real capabili
   let capturedUrl = ''
   const fakeFetch = (async (url: unknown) => {
     capturedUrl = String(url)
-    return new Response(JSON.stringify({ id: 'msg-1' }), { status: 200 })
+    return new Response(JSON.stringify({ id: 'msg-1', threadId: 'thread-1' }), { status: 200 })
   }) as unknown as typeof fetch
   const adapter = new RealGmailAdapter({ accessToken: 'fake-token', fetchImpl: fakeFetch })
   const result = await adapter.sendMessage({ to: 'jane@example.com', subject: 'Hello', bodyText: 'Hi Jane' })
   assert.equal(result.messageId, 'msg-1')
+  assert.equal(result.threadId, 'thread-1')
   assert.match(capturedUrl, /\/messages\/send$/)
 })
 

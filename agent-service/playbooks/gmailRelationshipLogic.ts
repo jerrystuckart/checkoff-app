@@ -72,6 +72,16 @@ export interface KnownRelationshipContact {
   threadId: string | null
 }
 
+/** Who Chief can currently resolve an inbound email/calendar attendee to. Implementations (in-memory, file-backed) live in gmailInboundMonitor.ts — kept here, in pure playbooks, so both the driver and the monitor can depend on the interface without a circular import between them. */
+export interface KnownContactDirectory {
+  listActiveContacts(): Promise<KnownRelationshipContact[]>
+}
+
+/** A directory the relationship driver itself keeps current — see destinationRelationshipDriver.ts's optional contactDirectory dep, which upserts a contact the moment it validates or learns about one (first outreach, a referral). Closes the loop so the poller doesn't need its own separate source of truth. */
+export interface MutableContactDirectory extends KnownContactDirectory {
+  upsertContact(contact: KnownRelationshipContact): Promise<void>
+}
+
 export interface InboundEmail {
   from: string
   to: string[]

@@ -113,3 +113,10 @@ assets/dev-preview/
 # a source of truth, never committed.
 .chief-executions.json
 .chief-playbook-runs.json
+
+# Chief Phase 2J monitor local state (agent-service/monitorCli.ts) — the
+# Gmail poll checkpoint and file-backed contact directory. Never a source
+# of truth (a real DB-backed version is the documented upgrade path),
+# never committed.
+.chief-gmail-checkpoint.json
+.chief-contacts.json

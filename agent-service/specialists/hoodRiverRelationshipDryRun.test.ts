@@ -30,13 +30,13 @@ class FakeGmailAdapter implements GmailAdapter {
   async searchMessages(): Promise<GmailMessageSummary[]> {
     return this.searchResults
   }
-  async createDraft(input: { to: string; subject: string }) {
+  async createDraft(input: { to: string; subject: string; threadId?: string }) {
     this.drafts.push(input)
-    return { draftId: `draft-${this.drafts.length}` }
+    return { draftId: `draft-${this.drafts.length}`, messageId: `draft-msg-${this.drafts.length}`, threadId: input.threadId ?? `thread-${this.drafts.length}` }
   }
-  async sendMessage(input: { to: string; subject: string }) {
+  async sendMessage(input: { to: string; subject: string; threadId?: string }) {
     this.sentMessages.push(input)
-    return { messageId: `msg-${this.sentMessages.length}` }
+    return { messageId: `msg-${this.sentMessages.length}`, threadId: input.threadId ?? `thread-${this.sentMessages.length}` }
   }
 }
 
