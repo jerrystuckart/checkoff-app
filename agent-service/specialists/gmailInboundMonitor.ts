@@ -71,12 +71,13 @@ export class InMemoryGmailCheckpointStore implements GmailCheckpointStore {
 }
 
 /**
- * A real, file-backed checkpoint — same "local JSON file, gitignored"
- * pattern cli.ts's FileExecutionStore already uses for a non-DB-backed
- * option. A DB-backed implementation (a new agent-service table) is the
- * natural production upgrade and is NOT built here — an honest,
- * documented gap rather than inventing schema without reviewing this
- * repo's DB migration conventions first.
+ * A file-backed checkpoint — same "local JSON file, gitignored" pattern
+ * cli.ts's FileExecutionStore uses for its non-DB-backed option. Phase 2K:
+ * the real production store is DbGmailCheckpointStore
+ * (dbGmailCheckpointStore.ts, backed by agent.tasks/agent.task_events) —
+ * this file-backed version is retained only for tests/dev, where a real
+ * Postgres connection isn't available or wanted (e.g. this module's own
+ * restart-simulation tests).
  */
 export class FileGmailCheckpointStore implements GmailCheckpointStore {
   constructor(private readonly filePath: string) {}
@@ -99,12 +100,13 @@ export class FileGmailCheckpointStore implements GmailCheckpointStore {
 
 // ---------------------------------------------------------------------------
 // Known-contact directory — who Chief can currently resolve an inbound
-// email to. Deliberately an interface, not a direct PlaybookRunStore
-// dependency: PlaybookRunStore (playbookRun.ts) has no "list all active
-// runs" method today, and adding one is a shared-interface change this
-// phase doesn't need to make. A real production caller builds this from
-// whatever store enumerates active destination_relationship runs (a DB
-// query); tests/dry-runs supply it directly.
+// email to. An interface, not a direct PlaybookRunStore dependency, so
+// tests/dry-runs can supply one directly without touching Postgres.
+// Phase 2K's real production implementation is DbContactDirectory
+// (dbGmailCheckpointStore.ts) — it queries agent.tasks for active
+// destination_relationship runs and derives contacts from each run's own
+// already-persisted state, rather than maintaining a second, driftable
+// copy of the same data.
 // ---------------------------------------------------------------------------
 
 export type { KnownContactDirectory, MutableContactDirectory } from '../playbooks/gmailRelationshipLogic'
@@ -122,12 +124,9 @@ export class InMemoryContactDirectory implements MutableContactDirectory {
 }
 
 /**
- * A real, file-backed contact directory — same rationale as
- * FileGmailCheckpointStore: a durable-enough default for a single-process
- * deployment without inventing new DB schema. A DB-backed version
- * (querying active destination_relationship runs directly) is the
- * natural production upgrade and, like the checkpoint store, is an
- * honest, documented gap rather than guessed-at schema.
+ * A file-backed contact directory — same rationale as
+ * FileGmailCheckpointStore. Retained only for tests/dev; the real
+ * production directory is DbContactDirectory (dbGmailCheckpointStore.ts).
  */
 export class FileContactDirectory implements MutableContactDirectory {
   constructor(private readonly filePath: string) {}

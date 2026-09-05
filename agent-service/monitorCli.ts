@@ -1,15 +1,21 @@
 #!/usr/bin/env node
-// Chief Phase 2J — the production Gmail monitor entrypoint. Run under
+// Chief Phase 2J/2K — the production Gmail monitor entrypoint. Run under
 // whatever process supervisor Jerry chooses (pm2, systemd, launchd, or a
 // persistent terminal/tmux session) — agent-service has no existing
 // always-on host to reuse, so this IS the durable process, not a wrapper
-// around one. Restart safety comes from the checkpoint/contact files
-// (.chief-gmail-checkpoint.json, .chief-contacts.json — both gitignored,
-// same pattern as cli.ts's .chief-executions.json), not from this script
-// remembering anything itself.
+// around one. Restart safety (Phase 2K) comes from Postgres — the
+// checkpoint and contact directory are backed by
+// DbGmailCheckpointStore/DbContactDirectory (agent.tasks/agent.task_events,
+// same pattern as DbExecutionStore/DbPlaybookRunStore), never a local
+// file — so this process can restart on the SAME machine or move to a
+// different one entirely with zero loss of state, exactly like the
+// destination-relationship runs it drives already do.
 //
 // Usage: tsx agent-service/monitorCli.ts
-// Env: GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN
+// Env: AGENT_SERVICE_DATABASE_URL must be set (same variable every other
+//      DB-backed store in this repo uses — loaded via db.ts's .env side
+//      effect, see the import below).
+//      GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REFRESH_TOKEN
 //      (see googleCredentialProvider.ts) must be set — run
 //      agent-service/googleAuthorize.ts once first if they aren't yet.
 //      CHIEF_GMAIL_POLL_INTERVAL_MINUTES overrides the default 15.
@@ -21,14 +27,15 @@
 // exactly as before. It only polls, associates, classifies, and advances
 // relationship state — all AUTO per standingAuthority.ts.
 
-import { resolve } from 'node:path'
+import './db' // .env side effect (AGENT_SERVICE_DATABASE_URL, GOOGLE_*) — same convention every other DB-backed entrypoint in this repo relies on
 import { DbExecutionStore } from './specialists/dbExecutionStore'
 import { DbPlaybookRunStore } from './specialists/dbPlaybookRunStore'
+import { DbGmailCheckpointStore, DbContactDirectory } from './specialists/dbGmailCheckpointStore'
 import { RemoteAiExecutor, AnthropicMessagesAdapter } from './specialists/remoteAiExecutor'
 import { OpenAiAdapter } from './specialists/openAiAdapter'
 import { RealGmailAdapter, RealGoogleCalendarAdapter, RealGoogleContactsAdapter } from './specialists/googleAdapters'
 import { GoogleCredentialProvider } from './specialists/googleCredentialProvider'
-import { pollGmailForNewMessages, FileGmailCheckpointStore, FileContactDirectory } from './specialists/gmailInboundMonitor'
+import { pollGmailForNewMessages } from './specialists/gmailInboundMonitor'
 import { applyRelationshipResumeEvent, type RelationshipDriverDeps } from './specialists/destinationRelationshipDriver'
 import { runChiefMonitorLoop, DEFAULT_POLL_INTERVAL_MS } from './chiefMonitorLoop'
 
@@ -49,8 +56,8 @@ async function main() {
   const runStore = new DbPlaybookRunStore()
   const execStore = new DbExecutionStore()
   const executors = [new RemoteAiExecutor([new OpenAiAdapter(), new AnthropicMessagesAdapter()])]
-  const contactDirectory = new FileContactDirectory(resolve(process.cwd(), '.chief-contacts.json'))
-  const checkpointStore = new FileGmailCheckpointStore(resolve(process.cwd(), '.chief-gmail-checkpoint.json'))
+  const contactDirectory = new DbContactDirectory()
+  const checkpointStore = new DbGmailCheckpointStore()
 
   const driverDeps: RelationshipDriverDeps = {
     runStore,
