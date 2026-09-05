@@ -125,6 +125,13 @@ export class GoogleCredentialProvider {
  *   gmail.readonly  — search/read (RealGmailAdapter.searchMessages)
  *   gmail.compose   — create drafts (RealGmailAdapter.createDraft)
  *   gmail.send      — send (RealGmailAdapter.sendMessage, APPROVAL_REQUIRED at the driver level)
+ *   gmail.settings.basic — READ-ONLY use only: enumerating configured
+ *     send-as identities (RealGmailAdapter.listSendAsIdentities), so
+ *     Chief/Jerry can verify which From identity (e.g.
+ *     jerry@getcheckoff.com) is actually available before any send. This
+ *     scope technically also grants settings *write* access — this
+ *     codebase never calls a settings-mutating endpoint with it; only
+ *     GET .../settings/sendAs is ever called.
  *   contacts.readonly — search contacts (RealGoogleContactsAdapter.searchContacts)
  *   calendar.freebusy  — free/busy lookup (RealGoogleCalendarAdapter.freeBusy)
  *   calendar.events    — create events (RealGoogleCalendarAdapter.createEvent, APPROVAL_REQUIRED at the driver level)
@@ -133,6 +140,7 @@ export const GOOGLE_OAUTH_SCOPES: readonly string[] = Object.freeze([
   'https://www.googleapis.com/auth/gmail.readonly',
   'https://www.googleapis.com/auth/gmail.compose',
   'https://www.googleapis.com/auth/gmail.send',
+  'https://www.googleapis.com/auth/gmail.settings.basic',
   'https://www.googleapis.com/auth/contacts.readonly',
   'https://www.googleapis.com/auth/calendar.freebusy',
   'https://www.googleapis.com/auth/calendar.events',

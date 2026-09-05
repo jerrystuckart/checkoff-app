@@ -4,7 +4,7 @@ import { driveDestinationRelationship, applyRelationshipResumeEvent, type Relati
 import { InMemoryPlaybookRunStore, playbookRunId, recordJerryDecision } from './playbookRun'
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
-import type { GmailAdapter, GmailMessageSummary, GoogleCalendarAdapter, FreeBusyWindow, GoogleContactsAdapter, ContactSummary } from './googleAdapters'
+import type { GmailAdapter, GmailMessageSummary, GmailSendAsIdentity, GmailSendInput, GoogleCalendarAdapter, FreeBusyWindow, GoogleContactsAdapter, ContactSummary } from './googleAdapters'
 import type { DAPArtifact, DVA1Artifact, DVA2Artifact } from '../playbooks/destinationHubLifecycle'
 
 // ---------------------------------------------------------------------------
@@ -16,19 +16,23 @@ import type { DAPArtifact, DVA1Artifact, DVA2Artifact } from '../playbooks/desti
 class FakeGmailAdapter implements GmailAdapter {
   configured = true
   searchResults: GmailMessageSummary[] = []
-  sentMessages: Array<{ to: string; subject: string; bodyText: string }> = []
-  drafts: Array<{ to: string; subject: string; bodyText: string }> = []
+  sentMessages: GmailSendInput[] = []
+  drafts: GmailSendInput[] = []
+  sendAsIdentities: GmailSendAsIdentity[] = [{ sendAsEmail: 'jerry@getcheckoff.com', displayName: 'Jerry', isDefault: true, isPrimary: false, verificationStatus: 'accepted' }]
   isConfigured() {
     return this.configured
   }
   async searchMessages(): Promise<GmailMessageSummary[]> {
     return this.searchResults
   }
-  async createDraft(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ draftId: string; messageId: string; threadId: string }> {
+  async listSendAsIdentities(): Promise<GmailSendAsIdentity[]> {
+    return this.sendAsIdentities
+  }
+  async createDraft(input: GmailSendInput): Promise<{ draftId: string; messageId: string; threadId: string }> {
     this.drafts.push(input)
     return { draftId: `draft-${this.drafts.length}`, messageId: `draft-msg-${this.drafts.length}`, threadId: input.threadId ?? `thread-${this.drafts.length}` }
   }
-  async sendMessage(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ messageId: string; threadId: string }> {
+  async sendMessage(input: GmailSendInput): Promise<{ messageId: string; threadId: string }> {
     this.sentMessages.push(input)
     return { messageId: `msg-${this.sentMessages.length}`, threadId: input.threadId ?? `thread-${this.sentMessages.length}` }
   }
@@ -178,6 +182,37 @@ test('driveDestinationRelationship: after Jerry approves, the driver simulates t
   assert.equal(run.status, 'RUNNING')
   assert.equal(gmail.sentMessages.length, 0, 'Gmail is unconfigured — never a real send')
   assert.equal((run.state as any).outreachSentSimulated, true)
+})
+
+test('driveDestinationRelationship: an approved send explicitly uses jerry@getcheckoff.com as the From identity — never silently defaults to whatever mailbox the OAuth token authenticates as', async () => {
+  const executor = new TestExecutor()
+  scriptDraftOutreach(executor, 'destination-hood-river-or')
+  const gmail = new FakeGmailAdapter() // configured: true by default — a real send path is exercised
+  const d = deps({ executors: [executor], gmail })
+  const runId = playbookRunId('destination_relationship', 'destination-hood-river-or')
+  await driveDestinationRelationship(d, 'destination-hood-river-or', options('destination-hood-river-or', 'Hood River, OR'))
+
+  await recordJerryDecision(d.runStore, runId, { outreachApproved: true })
+  await driveDestinationRelationship(d, 'destination-hood-river-or', options('destination-hood-river-or', 'Hood River, OR'))
+
+  assert.equal(gmail.sentMessages.length, 1)
+  assert.equal(gmail.sentMessages[0].from, 'jerry@getcheckoff.com')
+  assert.notEqual(gmail.sentMessages[0].from, 'jerrystuckart@gmail.com', 'must never send as the OAuth-authenticated inbox mailbox')
+})
+
+test('outreachFromEmail: defaults to jerry@getcheckoff.com but honors an explicit CHIEF_OUTREACH_FROM_EMAIL override', async () => {
+  const { outreachFromEmail, DEFAULT_OUTREACH_FROM_EMAIL } = await import('./destinationRelationshipDriver')
+  const prior = process.env.CHIEF_OUTREACH_FROM_EMAIL
+  try {
+    delete process.env.CHIEF_OUTREACH_FROM_EMAIL
+    assert.equal(outreachFromEmail(), DEFAULT_OUTREACH_FROM_EMAIL)
+    assert.equal(outreachFromEmail(), 'jerry@getcheckoff.com')
+    process.env.CHIEF_OUTREACH_FROM_EMAIL = 'someone-else@getcheckoff.com'
+    assert.equal(outreachFromEmail(), 'someone-else@getcheckoff.com')
+  } finally {
+    if (prior === undefined) delete process.env.CHIEF_OUTREACH_FROM_EMAIL
+    else process.env.CHIEF_OUTREACH_FROM_EMAIL = prior
+  }
 })
 
 test('driveDestinationRelationship: prior Gmail correspondence is detected BEFORE first outreach and never treated as a cold relationship', async () => {

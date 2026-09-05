@@ -76,28 +76,62 @@ test('RealGmailAdapter: createDraft() posts a base64url-encoded RFC2822 message,
     return new Response(JSON.stringify({ id: 'draft-1', message: { id: 'msg-1', threadId: 'thread-1' } }), { status: 200 })
   }) as unknown as typeof fetch
   const adapter = new RealGmailAdapter({ accessToken: 'fake-token', fetchImpl: fakeFetch })
-  const result = await adapter.createDraft({ to: 'jane@example.com', subject: 'Hello', bodyText: 'Hi Jane' })
+  const result = await adapter.createDraft({ to: 'jane@example.com', from: 'jerry@getcheckoff.com', subject: 'Hello', bodyText: 'Hi Jane' })
   assert.equal(result.draftId, 'draft-1')
   assert.equal(result.messageId, 'msg-1')
   assert.equal(result.threadId, 'thread-1')
   assert.match(capturedUrl, /\/drafts$/)
   assert.ok(capturedBody?.message?.raw)
   const decoded = Buffer.from(capturedBody!.message!.raw!.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+  assert.match(decoded, /From: jerry@getcheckoff\.com/)
   assert.match(decoded, /To: jane@example.com/)
   assert.match(decoded, /Hi Jane/)
 })
 
 test('RealGmailAdapter: sendMessage() posts to messages/send — a real capability, but the driver must gate calling it behind Jerry approval', async () => {
   let capturedUrl = ''
-  const fakeFetch = (async (url: unknown) => {
+  let capturedBody: { raw?: string } | undefined
+  const fakeFetch = (async (url: unknown, init?: { body?: string }) => {
     capturedUrl = String(url)
+    capturedBody = JSON.parse(init!.body as string)
     return new Response(JSON.stringify({ id: 'msg-1', threadId: 'thread-1' }), { status: 200 })
   }) as unknown as typeof fetch
   const adapter = new RealGmailAdapter({ accessToken: 'fake-token', fetchImpl: fakeFetch })
-  const result = await adapter.sendMessage({ to: 'jane@example.com', subject: 'Hello', bodyText: 'Hi Jane' })
+  const result = await adapter.sendMessage({ to: 'jane@example.com', from: 'jerry@getcheckoff.com', subject: 'Hello', bodyText: 'Hi Jane' })
   assert.equal(result.messageId, 'msg-1')
   assert.equal(result.threadId, 'thread-1')
   assert.match(capturedUrl, /\/messages\/send$/)
+  const decoded = Buffer.from(capturedBody!.raw!.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString('utf8')
+  assert.match(decoded, /From: jerry@getcheckoff\.com/, 'the outbound RFC2822 message must explicitly set From — never rely on Gmail defaulting to the authenticated mailbox')
+})
+
+test('RealGmailAdapter: listSendAsIdentities() returns real configured send-as identities, read-only', async () => {
+  let capturedUrl = ''
+  let capturedMethod = 'GET'
+  const fakeFetch = (async (url: unknown, init?: { method?: string }) => {
+    capturedUrl = String(url)
+    capturedMethod = init?.method ?? 'GET'
+    return new Response(
+      JSON.stringify({
+        sendAs: [
+          { sendAsEmail: 'jerrystuckart@gmail.com', isPrimary: true, isDefault: false },
+          { sendAsEmail: 'jerry@getcheckoff.com', displayName: 'Jerry — CheckOff', isDefault: true, verificationStatus: 'accepted' },
+        ],
+      }),
+      { status: 200 }
+    )
+  }) as unknown as typeof fetch
+  const adapter = new RealGmailAdapter({ accessToken: 'fake-token', fetchImpl: fakeFetch })
+  const identities = await adapter.listSendAsIdentities()
+  assert.match(capturedUrl, /\/settings\/sendAs$/)
+  assert.equal(capturedMethod, 'GET', 'listing send-as identities must be a read-only GET, never a mutating call')
+  assert.equal(identities.length, 2)
+  const checkoffIdentity = identities.find((i) => i.sendAsEmail === 'jerry@getcheckoff.com')
+  assert.ok(checkoffIdentity)
+  assert.equal(checkoffIdentity?.isDefault, true)
+  assert.equal(checkoffIdentity?.verificationStatus, 'accepted')
+  const primaryIdentity = identities.find((i) => i.sendAsEmail === 'jerrystuckart@gmail.com')
+  assert.equal(primaryIdentity?.isPrimary, true)
 })
 
 test('RealGoogleCalendarAdapter: isConfigured() is false without an access token', () => {

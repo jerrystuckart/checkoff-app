@@ -260,12 +260,30 @@ export interface DriveDestinationRelationshipOptions {
   maxSteps?: number
 }
 
+/**
+ * Phase 2J — a real live proof exposed that the OAuth mailbox Chief
+ * authenticates as (Jerry's own inbox, jerrystuckart@gmail.com — chosen
+ * because @getcheckoff.com mail delivers there) is NOT the identity
+ * Destination outreach should send AS. Jerry manually selects
+ * jerry@getcheckoff.com as the From identity when sending by hand; Chief
+ * must do the same explicitly, never silently defaulting to whichever
+ * mailbox the OAuth token happens to authenticate. Overridable via
+ * CHIEF_OUTREACH_FROM_EMAIL for a future account change — never hardcoded
+ * without an escape hatch, same discipline as the AI model-routing env
+ * vars in modelRouting.ts.
+ */
+export const DEFAULT_OUTREACH_FROM_EMAIL = 'jerry@getcheckoff.com'
+
+export function outreachFromEmail(): string {
+  return process.env.CHIEF_OUTREACH_FROM_EMAIL || DEFAULT_OUTREACH_FROM_EMAIL
+}
+
 /** Actually calls the (real or fake) GmailAdapter to send — ONLY reached after Jerry's approval is on record, and only performs a real send if the adapter is actually configured (no Google OAuth token today, so this is always a no-op / simulated-only send in this codebase's current state). */
 async function performApprovedSend(deps: RelationshipDriverDeps, run: PlaybookRunRecord): Promise<void> {
   const state = readState(run)
   if (!state.draftedOutreach || !state.primaryContact) return
   if (deps.gmail.isConfigured()) {
-    const sent = await deps.gmail.sendMessage({ to: state.primaryContact.email, subject: state.draftedOutreach.subject, bodyText: state.draftedOutreach.bodyText })
+    const sent = await deps.gmail.sendMessage({ to: state.primaryContact.email, from: outreachFromEmail(), subject: state.draftedOutreach.subject, bodyText: state.draftedOutreach.bodyText })
     state.outreachSentReal = true
     // Phase 2J — thread continuity: preserve the real Gmail thread id so
     // this contact's reply (and any future follow-up Chief sends) stays

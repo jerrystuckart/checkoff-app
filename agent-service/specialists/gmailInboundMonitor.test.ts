@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pollGmailForNewMessages, InMemoryGmailCheckpointStore, InMemoryContactDirectory, FileGmailCheckpointStore, emptyCheckpoint, type GmailCheckpointStore } from './gmailInboundMonitor'
-import type { GmailAdapter, GmailMessageSummary } from './googleAdapters'
+import type { GmailAdapter, GmailMessageSummary, GmailSendAsIdentity } from './googleAdapters'
 import type { KnownRelationshipContact } from '../playbooks/gmailRelationshipLogic'
 import type { RelationshipResumeEventInput, ResumeEventResult } from './destinationRelationshipDriver'
 
@@ -16,6 +16,9 @@ class FakeGmail implements GmailAdapter {
   }
   async searchMessages(): Promise<GmailMessageSummary[]> {
     return this.messages
+  }
+  async listSendAsIdentities(): Promise<GmailSendAsIdentity[]> {
+    return []
   }
   async createDraft(): Promise<{ draftId: string; messageId: string; threadId: string }> {
     throw new Error('not used in monitor tests')

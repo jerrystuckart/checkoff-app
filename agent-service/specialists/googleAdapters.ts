@@ -69,22 +69,50 @@ export interface GmailMessageSummary {
   receivedAt: string | null
 }
 
+export interface GmailSendAsIdentity {
+  sendAsEmail: string
+  displayName: string | null
+  isDefault: boolean
+  isPrimary: boolean
+  /** Google's own verification state for a non-primary alias ('accepted', 'pending', etc) — null when not applicable (e.g. the primary address). A non-'accepted' alias cannot actually send yet, regardless of what this list otherwise shows. */
+  verificationStatus: string | null
+}
+
+export interface GmailSendInput {
+  to: string
+  subject: string
+  bodyText: string
+  threadId?: string
+  /**
+   * The From identity to send/draft as — e.g. 'jerry@getcheckoff.com'. A
+   * real live proof (Phase 2J) caught that omitting this silently sends
+   * as whichever mailbox the OAuth token authenticates as (the actual
+   * inbox, e.g. jerrystuckart@gmail.com) — never the intended business
+   * identity. Required here specifically so no caller can forget it;
+   * must be one of the addresses listSendAsIdentities() actually returns
+   * for this account.
+   */
+  from: string
+}
+
 export interface GmailAdapter {
   isConfigured(): boolean
   /** Real Gmail search syntax (e.g. `from:someone@example.com subject:Hood River`). */
   searchMessages(query: string, maxResults?: number): Promise<GmailMessageSummary[]>
+  /** AUTO, read-only — enumerates configured send-as identities/aliases so Chief/Jerry can verify which From address is actually available before any send. Never modifies settings. */
+  listSendAsIdentities(): Promise<GmailSendAsIdentity[]>
   /** AUTO (destination_relationship.draft_outreach) — creates a Gmail draft, never sends. */
-  createDraft(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ draftId: string; messageId: string; threadId: string }>
+  createDraft(input: GmailSendInput): Promise<{ draftId: string; messageId: string; threadId: string }>
   /** APPROVAL_REQUIRED (destination_relationship.send_email) — the driver must never call this without a recorded Jerry approval. */
-  sendMessage(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ messageId: string; threadId: string }>
+  sendMessage(input: GmailSendInput): Promise<{ messageId: string; threadId: string }>
 }
 
 function base64UrlEncode(s: string): string {
   return Buffer.from(s, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
-function buildRfc2822Message(input: { to: string; subject: string; bodyText: string }): string {
-  return [`To: ${input.to}`, `Subject: ${input.subject}`, 'Content-Type: text/plain; charset="UTF-8"', '', input.bodyText].join('\r\n')
+function buildRfc2822Message(input: { to: string; from: string; subject: string; bodyText: string }): string {
+  return [`From: ${input.from}`, `To: ${input.to}`, `Subject: ${input.subject}`, 'Content-Type: text/plain; charset="UTF-8"', '', input.bodyText].join('\r\n')
 }
 
 export class RealGmailAdapter extends GoogleAdapterBase implements GmailAdapter {
@@ -126,7 +154,21 @@ export class RealGmailAdapter extends GoogleAdapterBase implements GmailAdapter 
     return summaries
   }
 
-  async createDraft(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ draftId: string; messageId: string; threadId: string }> {
+  async listSendAsIdentities(): Promise<GmailSendAsIdentity[]> {
+    const token = await this.resolveAccessToken('RealGmailAdapter.listSendAsIdentities')
+    const res = await this.fetchImpl(`${this.baseUrl}/gmail/v1/users/me/settings/sendAs`, { headers: { authorization: `Bearer ${token}` } })
+    if (!res.ok) throw new Error(`Gmail settings.sendAs.list returned ${res.status}: ${await res.text().catch(() => '<no body>')}`)
+    const json = (await res.json()) as { sendAs?: Array<{ sendAsEmail: string; displayName?: string; isDefault?: boolean; isPrimary?: boolean; verificationStatus?: string }> }
+    return (json.sendAs ?? []).map((s) => ({
+      sendAsEmail: s.sendAsEmail,
+      displayName: s.displayName ?? null,
+      isDefault: !!s.isDefault,
+      isPrimary: !!s.isPrimary,
+      verificationStatus: s.verificationStatus ?? null,
+    }))
+  }
+
+  async createDraft(input: GmailSendInput): Promise<{ draftId: string; messageId: string; threadId: string }> {
     const token = await this.resolveAccessToken('RealGmailAdapter.createDraft')
     const raw = base64UrlEncode(buildRfc2822Message(input))
     const res = await this.fetchImpl(`${this.baseUrl}/gmail/v1/users/me/drafts`, {
@@ -139,7 +181,7 @@ export class RealGmailAdapter extends GoogleAdapterBase implements GmailAdapter 
     return { draftId: json.id, messageId: json.message.id, threadId: json.message.threadId }
   }
 
-  async sendMessage(input: { to: string; subject: string; bodyText: string; threadId?: string }): Promise<{ messageId: string; threadId: string }> {
+  async sendMessage(input: GmailSendInput): Promise<{ messageId: string; threadId: string }> {
     const token = await this.resolveAccessToken('RealGmailAdapter.sendMessage')
     const raw = base64UrlEncode(buildRfc2822Message(input))
     const res = await this.fetchImpl(`${this.baseUrl}/gmail/v1/users/me/messages/send`, {

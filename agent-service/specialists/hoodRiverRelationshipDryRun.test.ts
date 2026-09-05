@@ -17,24 +17,28 @@ import { driveDestinationRelationship, applyRelationshipResumeEvent, type Relati
 import { InMemoryPlaybookRunStore, playbookRunId, recordJerryDecision } from './playbookRun'
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
-import type { GmailAdapter, GmailMessageSummary, GoogleCalendarAdapter, FreeBusyWindow, GoogleContactsAdapter, ContactSummary } from './googleAdapters'
+import type { GmailAdapter, GmailMessageSummary, GmailSendAsIdentity, GmailSendInput, GoogleCalendarAdapter, FreeBusyWindow, GoogleContactsAdapter, ContactSummary } from './googleAdapters'
 import type { DAPArtifact, DVA1Artifact, DVA2Artifact } from '../playbooks/destinationHubLifecycle'
 
 class FakeGmailAdapter implements GmailAdapter {
   searchResults: GmailMessageSummary[] = []
-  sentMessages: Array<{ to: string; subject: string }> = []
-  drafts: Array<{ to: string; subject: string }> = []
+  sentMessages: GmailSendInput[] = []
+  drafts: GmailSendInput[] = []
+  sendAsIdentities: GmailSendAsIdentity[] = [{ sendAsEmail: 'jerry@getcheckoff.com', displayName: 'Jerry', isDefault: true, isPrimary: false, verificationStatus: 'accepted' }]
   isConfigured() {
     return true
   }
   async searchMessages(): Promise<GmailMessageSummary[]> {
     return this.searchResults
   }
-  async createDraft(input: { to: string; subject: string; threadId?: string }) {
+  async listSendAsIdentities(): Promise<GmailSendAsIdentity[]> {
+    return this.sendAsIdentities
+  }
+  async createDraft(input: GmailSendInput) {
     this.drafts.push(input)
     return { draftId: `draft-${this.drafts.length}`, messageId: `draft-msg-${this.drafts.length}`, threadId: input.threadId ?? `thread-${this.drafts.length}` }
   }
-  async sendMessage(input: { to: string; subject: string; threadId?: string }) {
+  async sendMessage(input: GmailSendInput) {
     this.sentMessages.push(input)
     return { messageId: `msg-${this.sentMessages.length}`, threadId: input.threadId ?? `thread-${this.sentMessages.length}` }
   }
