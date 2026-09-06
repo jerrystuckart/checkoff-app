@@ -40,6 +40,26 @@ export const MEXICO_NEIGHBORHOODS = new Set(['Zona Centro', 'Zona Río', 'Zona N
 // country-consistency check now prevents that class of bug generally,
 // but "downtown tijuana" is added here explicitly too so those 3 real
 // venues correctly resolve to Zona Centro instead of just failing.
+/**
+ * Every canonical neighborhood name's individual words, lowercased —
+ * passed to runIntakePipeline's additionalGenericWords so the semantic-
+ * duplicate similarity check never treats a shared neighborhood name
+ * alone as venue-identity evidence. Structural bug fix (San Diego
+ * catalog SQL review, 2026-09-06): "Oceanside Pier" and "Oceanside
+ * Museum of Art" were wrongly grouped as duplicates — the only shared
+ * word was the neighborhood name, and a metro-scale catalog will always
+ * have many unrelated venues in the same area.
+ */
+export const SAN_DIEGO_GENERIC_PLACE_WORDS = new Set(
+  CANONICAL_NEIGHBORHOODS.flatMap((n) =>
+    n
+      .normalize('NFKD')
+      .replace(/[̀-ͯ]/g, '') // strip diacritics — must match metroCatalog.ts's own normalizeText exactly, or "Río" here would never match the "rio" a candidate name normalizes to
+      .toLowerCase()
+      .split(/\s+/)
+  )
+)
+
 export const NEIGHBORHOOD_ALIASES: Record<string, string> = {
   downtown: 'Gaslamp Quarter',
   'petco park': 'East Village',

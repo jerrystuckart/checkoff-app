@@ -405,6 +405,21 @@ test('findSemanticDuplicates: does not over-merge two completely unrelated museu
   assert.equal(groups.length, 0)
 })
 
+test('findSemanticDuplicates: does not over-merge two distinct real facilities that happen to share a facility-type word (regression: San Diego Zoo / San Diego Zoo Safari Park are different physical locations)', () => {
+  const a = record({ candidateName: 'San Diego Zoo', mapsQuery: 'a' })
+  const b = record({ candidateName: 'San Diego Zoo Safari Park', mapsQuery: 'b' })
+  assert.equal(findSemanticDuplicates([a, b]).length, 0)
+})
+
+test('findSemanticDuplicates: additionalGenericWords excludes a shared neighborhood name from counting as venue identity (regression: Oceanside Pier / Oceanside Museum of Art)', () => {
+  const a = record({ candidateName: 'Oceanside Pier', mapsQuery: 'a' })
+  const b = record({ candidateName: 'Oceanside Museum of Art', mapsQuery: 'b' })
+  const withoutExclusion = findSemanticDuplicates([a, b])
+  assert.equal(withoutExclusion.length, 1) // confirms the bug is real without the exclusion
+  const withExclusion = findSemanticDuplicates([a, b], new Set(['oceanside']))
+  assert.equal(withExclusion.length, 0)
+})
+
 test('findSemanticDuplicates: does not over-merge two genuinely different La Jolla venues sharing only a place name', () => {
   const a = record({ candidateName: 'La Jolla Cove', mapsQuery: 'x' })
   const b = record({ candidateName: 'La Jolla Village Merchants Association', mapsQuery: 'y' })

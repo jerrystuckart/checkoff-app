@@ -48,7 +48,7 @@ import { DbPlaybookRunStore } from '../agent-service/specialists/dbPlaybookRunSt
 import { playbookRunId } from '../agent-service/specialists/playbookRun'
 import { classifyCategory } from '../agent-service/playbooks/categoryNormalization'
 import { runIntakePipeline, type MetroCatalogCandidate, type ItemIntakeRecord } from '../agent-service/playbooks/metroCatalog'
-import { CANONICAL_NEIGHBORHOODS, NEIGHBORHOOD_ALIASES, MEXICO_NEIGHBORHOODS } from './metroCatalogSanDiegoConfig'
+import { CANONICAL_NEIGHBORHOODS, NEIGHBORHOOD_ALIASES, MEXICO_NEIGHBORHOODS, SAN_DIEGO_GENERIC_PLACE_WORDS } from './metroCatalogSanDiegoConfig'
 import { Pool } from 'pg'
 
 function loadEnvFile(relPath: string): void {
@@ -125,6 +125,7 @@ async function buildFinalRecords(projectId: string, existingProductionMapsQuerie
     canonicalNeighborhoods: CANONICAL_NEIGHBORHOODS,
     neighborhoodAliases: NEIGHBORHOOD_ALIASES,
     mexicoNeighborhoods: MEXICO_NEIGHBORHOODS,
+    additionalGenericWords: SAN_DIEGO_GENERIC_PLACE_WORDS,
   })
   const records = result.finalRecords.map((r) => {
     const isMexico = MEXICO_NEIGHBORHOODS.has(r.neighborhoodName ?? '')

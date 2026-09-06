@@ -388,13 +388,23 @@ function normalizeVenueNameForSemanticMatch(rawName: string): string {
  * completely unrelated "Oceanside Museum of Art" — "museum"/"art" are
  * category-descriptive, not venue-identifying.
  */
-const VENUE_NAME_GENERIC_WORDS = new Set(['san', 'diego', 'tijuana', 'mexico', 'california', 'baja', 'museum', 'art', 'center', 'centre', 'gallery', 'park', 'plaza', 'hotel', 'historic', 'district'])
+const VENUE_NAME_GENERIC_WORDS = new Set(['san', 'diego', 'tijuana', 'mexico', 'california', 'baja', 'museum', 'art', 'center', 'centre', 'gallery', 'park', 'plaza', 'hotel', 'historic', 'district', 'zoo', 'safari'])
 
-function venueNameSignificantWords(rawName: string): Set<string> {
+/**
+ * Same generic-word problem, one level up: "Oceanside Pier" and
+ * "Oceanside Museum of Art" share only a NEIGHBORHOOD name, not real
+ * venue identity — any metro-scale catalog will have many unrelated
+ * venues in the same area. VENUE_NAME_GENERIC_WORDS can't hardcode every
+ * metro's place names without breaking the metro-agnostic promise this
+ * module makes elsewhere, so callers building a specific metro's
+ * pipeline (see runIntakePipeline's neighborhoodPlaceWords) supply their
+ * own neighborhood-derived words here instead.
+ */
+function venueNameSignificantWords(rawName: string, additionalGenericWords: ReadonlySet<string> = new Set()): Set<string> {
   return new Set(
     normalizeVenueNameForSemanticMatch(rawName)
       .split(' ')
-      .filter((w) => w.length > 2 && !VENUE_NAME_GENERIC_WORDS.has(w))
+      .filter((w) => w.length > 2 && !VENUE_NAME_GENERIC_WORDS.has(w) && !additionalGenericWords.has(w))
   )
 }
 
@@ -417,7 +427,7 @@ const SEMANTIC_NAME_SIMILARITY_THRESHOLD = 0.5
  * their shared token "la jolla" alone sits below the threshold once
  * combined with each name's other distinct words).
  */
-export function findSemanticDuplicates(records: readonly ItemIntakeRecord[]): SemanticDuplicateGroup[] {
+export function findSemanticDuplicates(records: readonly ItemIntakeRecord[], additionalGenericWords: ReadonlySet<string> = new Set()): SemanticDuplicateGroup[] {
   const exactGroups = new Map<string, ItemIntakeRecord[]>()
   for (const r of records) {
     const key = normalizeVenueNameForSemanticMatch(r.candidateName)
@@ -438,11 +448,11 @@ export function findSemanticDuplicates(records: readonly ItemIntakeRecord[]): Se
   const seen = new Set<string>()
   for (let i = 0; i < remaining.length; i++) {
     if (seen.has(remaining[i].candidateName)) continue
-    const wordsA = venueNameSignificantWords(remaining[i].candidateName)
+    const wordsA = venueNameSignificantWords(remaining[i].candidateName, additionalGenericWords)
     const similar: ItemIntakeRecord[] = [remaining[i]]
     for (let j = i + 1; j < remaining.length; j++) {
       if (seen.has(remaining[j].candidateName)) continue
-      const wordsB = venueNameSignificantWords(remaining[j].candidateName)
+      const wordsB = venueNameSignificantWords(remaining[j].candidateName, additionalGenericWords)
       if (wordsA.size === 0 || wordsB.size === 0) continue
       let intersection = 0
       for (const w of wordsA) if (wordsB.has(w)) intersection += 1
@@ -460,8 +470,8 @@ export function findSemanticDuplicates(records: readonly ItemIntakeRecord[]): Se
 }
 
 /** Applies findSemanticDuplicates and keeps only the most-complete representative from each group (same completeness scoring as dedupeCandidates) — a deterministic way to actually resolve what the audit found, not just report it. */
-export function dedupeSemanticDuplicates<T extends ItemIntakeRecord>(records: readonly T[]): { deduped: T[]; removed: Array<{ kept: T; discarded: T[] }> } {
-  const groups = findSemanticDuplicates(records)
+export function dedupeSemanticDuplicates<T extends ItemIntakeRecord>(records: readonly T[], additionalGenericWords: ReadonlySet<string> = new Set()): { deduped: T[]; removed: Array<{ kept: T; discarded: T[] }> } {
+  const groups = findSemanticDuplicates(records, additionalGenericWords)
   const toRemove = new Set<string>()
   const removed: Array<{ kept: T; discarded: T[] }> = []
   for (const group of groups) {
@@ -650,6 +660,8 @@ export interface IntakePipelineInput {
   canonicalNeighborhoods: readonly string[]
   neighborhoodAliases?: Readonly<Record<string, string>>
   mexicoNeighborhoods?: ReadonlySet<string>
+  /** Extra generic words (typically the metro's own neighborhood names, lowercased) excluded from the semantic-duplicate similarity fallback — see venueNameSignificantWords' doc for why a shared neighborhood name alone (e.g. "Oceanside") is not venue-identity evidence. */
+  additionalGenericWords?: ReadonlySet<string>
 }
 
 export interface IntakePipelineResult {
@@ -669,7 +681,7 @@ export function runIntakePipeline(input: IntakePipelineInput): IntakePipelineRes
     .filter((r) => resolved.has(r.candidateName))
     .map((r) => ({ ...r, neighborhoodName: resolved.get(r.candidateName)! }))
 
-  const { deduped: semanticallyClean, removed: semanticDuplicatesRemoved } = dedupeSemanticDuplicates(geographicallyResolved)
+  const { deduped: semanticallyClean, removed: semanticDuplicatesRemoved } = dedupeSemanticDuplicates(geographicallyResolved, input.additionalGenericWords ?? new Set())
 
   const presentationProblems: IntakeFailure[] = []
   const presentationClean = semanticallyClean.filter((r) => {
