@@ -294,6 +294,50 @@ MATCHES the default is NOT treated as a confirmed override, since there's no way
 distinguish "confirmed false" from "never touched" from the value alone — which is exactly
 the ambiguity this whole gate exists to remove going forward.
 
+### Product rules for the 3 fields with real UX/policy consequences (Jerry, 2026-09-06)
+
+Three of the six content-evaluable fields are not neutral facts — getting them wrong changes
+real product behavior or violates a business rule. These corrections are now permanent parts
+of the methodology, not a one-off San Diego fix:
+
+- **`has_alcohol` is an ITEM property, not a venue property.** True only when completing the
+  CheckOff item itself requires ordering/consuming/engaging with alcohol ("Order a tiki
+  cocktail at False Idol" → true; "Order the Paella Negra" at a place that also serves
+  alcohol → false; "Dance at Rich's" → false even though Rich's is a bar). A venue's category
+  (Bar & drinks, Nightlife) never sets this true on its own anymore. All keyword matching uses
+  `\b...\b` word-boundary regex — a prior plain-substring check let `"ale"` fire inside
+  `"whale"`, `"Whaley"`, `"Daley"`, `"tamale"`; every future keyword added to this list must
+  go through `wordBoundaryPattern()`, never `.includes()`.
+- **`is_secret` is NEVER inferred from item wording, ever, for any future metro.** It marks a
+  paid Pro/Premium business feature, not an editorial judgment. `determineIsSecret()`
+  deliberately doesn't even accept a `body` parameter — there's no code path by which
+  "hidden entrance"/"speakeasy"/"concealed door" language can reach this field. The only way
+  it becomes `true` is an explicit, real, business-configured flag passed in from outside this
+  module.
+- **`difficulty` follows a completion-EFFORT rubric, not a prestige rubric.** `1` = normal
+  walk-in/order/visit; `5` = meaningful cost, reservation/planning, special timing, travel,
+  moderate physical effort, a booked activity, or limited access (a guided kayak/whale-watch/
+  hot-air-balloon reasonably qualifies); `10` = major commitment/high effort/cost/unusual
+  activity (skydiving); `25` = reserved for true Secret Items/special premium experiences and
+  is NEVER auto-assigned during normal intake, `is_secret` status included. "Michelin-starred"
+  alone is deliberately excluded from the tier-5 signal list (prestige isn't effort), and a
+  concealed/hidden entrance alone does not raise the tier either.
+
+### Reusable default enrichment pipeline order
+
+```
+final catalog → deterministic metadata pass → Google Places enrichment (incl. website)
+  → targeted unresolved research only → completeness certification
+```
+
+`website_url` is deliberately NOT researched item-by-item during the metadata pass —
+`determineWebsiteUrl()` always returns `evaluated: false` and defers to the Google Places
+step, which returns an official website field wherever the business has one on file
+alongside `google_place_id`/`formatted_address`/`maps_lat`/`maps_lng`/`geo_location`/
+`geo_radius_m`. Only items Places can't resolve at all, or for which Places returns no usable
+website, get an individual targeted lookup afterward — never 100+ speculative one-off
+searches up front.
+
 ## Provenance
 
 Built and verified against the Denver/Boulder/Longmont launch cycle, 2026-08-21 —

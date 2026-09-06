@@ -14,7 +14,7 @@ import {
 } from './metroMetadataEnrichment'
 
 // ---------------------------------------------------------------------------
-// has_alcohol
+// has_alcohol — an ITEM property, not a venue property (2026-09-06 correction)
 // ---------------------------------------------------------------------------
 
 test('determineHasAlcohol: body names a specific cocktail -> true, HIGH confidence', () => {
@@ -23,10 +23,24 @@ test('determineHasAlcohol: body names a specific cocktail -> true, HIGH confiden
   assert.equal(r.confidence, 'HIGH')
 })
 
-test('determineHasAlcohol: Bar & drinks category with no named drink -> true, MEDIUM confidence', () => {
-  const r = determineHasAlcohol({ body: 'Visit the rooftop lounge for sunset views.', dbCategory: 'Bar & drinks' })
+test('determineHasAlcohol: a bar/nightlife category with NO named drink -> false (category alone never forces true)', () => {
+  const r = determineHasAlcohol({ body: 'Dance at Rich\'s.', dbCategory: 'Bar & drinks' })
+  assert.equal(r.value, false)
+})
+
+test('determineHasAlcohol: "Order a tiki cocktail at False Idol" -> true', () => {
+  const r = determineHasAlcohol({ body: 'Order a tiki cocktail at False Idol, San Diego\'s top-ranked occasion bar.', dbCategory: 'Bar & drinks' })
   assert.equal(r.value, true)
-  assert.equal(r.confidence, 'MEDIUM')
+})
+
+test('determineHasAlcohol: "Order a local craft beer at Bosiger Beer" -> true', () => {
+  const r = determineHasAlcohol({ body: 'Order a local craft beer at Bosiger Beer inside Plaza Fiesta.', dbCategory: 'Bar & drinks' })
+  assert.equal(r.value, true)
+})
+
+test('determineHasAlcohol: "Order the Paella Negra" at a restaurant that also serves alcohol -> false, the dish itself is not alcohol', () => {
+  const r = determineHasAlcohol({ body: 'Order the Paella Negra at Telefèric Barcelona.', dbCategory: 'Food & drink' })
+  assert.equal(r.value, false)
 })
 
 test('determineHasAlcohol: coffee shop, no alcohol keyword, non-alcohol category -> false', () => {
@@ -35,8 +49,45 @@ test('determineHasAlcohol: coffee shop, no alcohol keyword, non-alcohol category
   assert.equal(r.confidence, 'HIGH')
 })
 
+// The exact substring-false-positive regression the correction called out.
+for (const word of ['Whaley', 'whale', 'Daley', 'Valley', 'tamale', 'gallery']) {
+  test(`determineHasAlcohol REGRESSION: "${word}" never triggers a false positive via the embedded substring "ale"`, () => {
+    const r = determineHasAlcohol({ body: `Visit the ${word} exhibit downtown.`, dbCategory: 'Arts & Culture' })
+    assert.equal(r.value, false)
+  })
+}
+
+test('determineHasAlcohol REGRESSION: a genuine standalone "ale" still triggers true', () => {
+  const r = determineHasAlcohol({ body: 'Order a pale ale at the local brewery taproom.', dbCategory: 'Bar & drinks' })
+  assert.equal(r.value, true)
+})
+
+test('determineHasAlcohol REGRESSION: "gin" does not fire inside "imagine" or "original"', () => {
+  const r1 = determineHasAlcohol({ body: 'Imagine the possibilities at this art installation.', dbCategory: 'Arts & Culture' })
+  assert.equal(r1.value, false)
+  const r2 = determineHasAlcohol({ body: 'Try the original recipe at this bakery.', dbCategory: 'Food & drink' })
+  assert.equal(r2.value, false)
+})
+
+test('determineHasAlcohol REGRESSION: "rum" does not fire inside "drum" or "forum"', () => {
+  const r1 = determineHasAlcohol({ body: 'Play the drum circle at the beach.', dbCategory: 'Adventure' })
+  assert.equal(r1.value, false)
+  const r2 = determineHasAlcohol({ body: 'Attend the public forum downtown.', dbCategory: 'Social' })
+  assert.equal(r2.value, false)
+})
+
+test('determineHasAlcohol: touring a winery with no drink named -> false (venue-type word alone is not an item action)', () => {
+  const r = determineHasAlcohol({ body: 'Tour the historic winery grounds.', dbCategory: 'Travel' })
+  assert.equal(r.value, false)
+})
+
+test('determineHasAlcohol: a wine tasting IS the item action -> true', () => {
+  const r = determineHasAlcohol({ body: 'Join a wine tasting flight at the vineyard.', dbCategory: 'Food & drink' })
+  assert.equal(r.value, true)
+})
+
 // ---------------------------------------------------------------------------
-// photo_required / checkin_type
+// photo_required / checkin_type — unchanged behavior
 // ---------------------------------------------------------------------------
 
 test('determinePhotoRequired: body instructs a photo -> true', () => {
@@ -63,55 +114,82 @@ test('determineCheckinType: photo_required=false -> tap, never gps (no productio
 })
 
 // ---------------------------------------------------------------------------
-// is_secret
+// is_secret — NEVER inferred from wording (2026-09-06 correction)
 // ---------------------------------------------------------------------------
 
-test('determineIsSecret: hidden speakeasy language -> true, MEDIUM confidence (human should confirm)', () => {
-  const r = determineIsSecret({ body: 'Enter Noble Experiment through the concealed keg wall to find this hidden speakeasy.' })
-  assert.equal(r.value, true)
-  assert.equal(r.confidence, 'MEDIUM')
-})
-
-test('determineIsSecret: "hidden gem" turn of phrase alone does NOT trigger true', () => {
-  const r = determineIsSecret({ body: 'This hidden gem serves the best tacos in town.' })
-  assert.equal(r.value, false)
-})
-
-test('determineIsSecret: ordinary venue -> false, HIGH confidence', () => {
-  const r = determineIsSecret({ body: 'Watch Orca Encounter at SeaWorld San Diego.' })
+test('determineIsSecret: no explicit paid config -> false, HIGH confidence, regardless of body', () => {
+  const r = determineIsSecret(undefined)
   assert.equal(r.value, false)
   assert.equal(r.confidence, 'HIGH')
 })
 
+test('determineIsSecret: an EXPLICIT paid/business-configured flag IS preserved as true', () => {
+  const r = determineIsSecret(true)
+  assert.equal(r.value, true)
+  assert.equal(r.preservedManualOverride, true)
+})
+
+test('determineIsSecret: signature does not accept body at all — hidden-entrance wording cannot influence it', () => {
+  // TypeScript itself enforces this (the function only takes a boolean | undefined) —
+  // this test documents the intent: there is no parameter through which "Noble
+  // Experiment"-style concealed-entrance wording could reach this function.
+  assert.equal(determineIsSecret.length, 1)
+})
+
 // ---------------------------------------------------------------------------
-// difficulty
+// difficulty — completion-EFFORT rubric, not prestige (2026-09-06 correction)
 // ---------------------------------------------------------------------------
 
 test('determineDifficulty: ordinary item -> 1, HIGH confidence', () => {
-  const isSecret = determineIsSecret({ body: 'Order a burger.' })
-  const r = determineDifficulty({ body: 'Order a burger.', dbCategory: 'Food & drink' }, isSecret)
+  const r = determineDifficulty({ body: 'Order a burger.', dbCategory: 'Food & drink' })
   assert.equal(r.value, 1)
   assert.equal(r.confidence, 'HIGH')
 })
 
-test('determineDifficulty: secret venue -> proposes 10, LOW confidence (flagged for human)', () => {
-  const isSecret = determineIsSecret({ body: 'Enter through the hidden entrance behind the bookshelf.' })
-  const r = determineDifficulty({ body: 'Enter through the hidden entrance behind the bookshelf.', dbCategory: 'Bar & drinks' }, isSecret)
+test('determineDifficulty: a concealed/hidden-entrance venue alone does NOT raise the tier', () => {
+  const r = determineDifficulty({ body: 'Enter Noble Experiment through the concealed keg wall to find this hidden speakeasy.', dbCategory: 'Bar & drinks' })
+  assert.equal(r.value, 1)
+})
+
+test('determineDifficulty: "Michelin-starred" alone does NOT raise the tier (prestige is not effort)', () => {
+  const r = determineDifficulty({ body: 'Order the tasting menu at this Michelin-starred restaurant.', dbCategory: 'Food & drink' })
+  assert.equal(r.value, 1)
+})
+
+test('determineDifficulty: genuine reservation-only exclusivity -> proposes 5, LOW confidence', () => {
+  const r = determineDifficulty({ body: 'Book the reservation-only omakase counter.', dbCategory: 'Food & drink' })
+  assert.equal(r.value, 5)
+  assert.equal(r.confidence, 'LOW')
+})
+
+test('determineDifficulty: booked adventure activity (hot air balloon) -> proposes 5', () => {
+  const r = determineDifficulty({ body: 'Soar above the coast on a hot air balloon ride.', dbCategory: 'Adventure' })
+  assert.equal(r.value, 5)
+})
+
+test('determineDifficulty: guided kayak / whale watch can reasonably be 5', () => {
+  const r1 = determineDifficulty({ body: 'Paddle through the sea caves on a guided kayaking tour.', dbCategory: 'Adventure' })
+  assert.equal(r1.value, 5)
+  const r2 = determineDifficulty({ body: 'Spot gray whales on a whale watching cruise.', dbCategory: 'Adventure' })
+  assert.equal(r2.value, 5)
+})
+
+test('determineDifficulty: skydiving -> proposes 10, LOW confidence', () => {
+  const r = determineDifficulty({ body: 'Jump out of a plane on a tandem skydiving experience.', dbCategory: 'Adventure' })
   assert.equal(r.value, 10)
   assert.equal(r.confidence, 'LOW')
 })
 
-test('determineDifficulty: reservation-required exclusivity -> proposes 5, LOW confidence', () => {
-  const isSecret = determineIsSecret({ body: 'Reserve a table at the Michelin-starred restaurant.' })
-  const r = determineDifficulty({ body: 'Reserve a table at the Michelin-starred restaurant.', dbCategory: 'Food & drink' }, isSecret)
-  assert.equal(r.value, 5)
-  assert.equal(r.confidence, 'LOW')
-})
-
-test('determineDifficulty: booked adventure activity -> proposes 5, LOW confidence', () => {
-  const isSecret = determineIsSecret({ body: 'Paddle through the sea caves with a kayaking tour.' })
-  const r = determineDifficulty({ body: 'Paddle through the sea caves with a kayaking tour.', dbCategory: 'Adventure' }, isSecret)
-  assert.equal(r.value, 5)
+test('determineDifficulty: never proposes 25 automatically', () => {
+  const bodies = [
+    'Enter through the hidden entrance for a members-only tasting.',
+    'Book the sold-out chef\'s table experience.',
+    'Skydive over the coast.',
+  ]
+  for (const body of bodies) {
+    const r = determineDifficulty({ body, dbCategory: 'Adventure' })
+    assert.notEqual(r.value, 25)
+  }
 })
 
 // ---------------------------------------------------------------------------
@@ -171,13 +249,32 @@ test('determineVisitProfileKey: Misc -> manual_only, LOW confidence, never a gue
   assert.equal(r.confidence, 'LOW')
 })
 
+// Adventure-activity reclassification (2026-09-06 correction): booked,
+// operator-scheduled activities should be 'event', not 'outdoor'/'attraction'.
+for (const [body, label] of [
+  ['Spot gray whales on a whale watching cruise.', 'whale watching'],
+  ['Cruise with dolphins on a dolphin cruise.', 'dolphin cruise'],
+  ['Speed across the bay on a jet boat ride.', 'jet boat'],
+  ['Soar above the coast on a hot air balloon ride.', 'hot air balloon'],
+  ['Glide over the cliffs paragliding.', 'paragliding'],
+  ['Soar with a hang gliding lesson.', 'hang gliding'],
+  ['Dive with great whites on a shark diving excursion.', 'shark diving'],
+  ['Fly through the canopy on a zip line course.', 'zip line'],
+] as const) {
+  test(`determineVisitProfileKey: "${label}" reclassified from outdoor/attraction to event`, () => {
+    const r = determineVisitProfileKey({ body, dbCategory: 'Adventure' })
+    assert.equal(r.value, 'event')
+  })
+}
+
 // ---------------------------------------------------------------------------
 // website_url — always requires research, never fabricated
 // ---------------------------------------------------------------------------
 
-test('determineWebsiteUrl: always evaluated=false, never invents a URL', () => {
+test('determineWebsiteUrl: always evaluated=false, defers to the Google Places phase', () => {
   const r = determineWebsiteUrl({ candidateName: 'By The Sea' })
   assert.equal(r.evaluated, false)
+  assert.match(r.nextStep, /Google Places/)
   assert.match(r.nextStep, /By The Sea/)
 })
 
@@ -190,7 +287,7 @@ test('evaluateItemMetadata: The Goods manual override (difficulty=10, photo_requ
     candidateName: 'The Goods',
     body: 'Order artisan doughnuts, including gluten-free or vegan options, at The Goods, 2965 State St, Carlsbad.',
     dbCategory: 'Food & drink',
-    existing: { difficulty: 10, photoRequired: true, hasAlcohol: false, isSecret: false },
+    existing: { difficulty: 10, photoRequired: true, hasAlcohol: false },
   })
   assert.equal(r.difficulty.value, 10)
   assert.equal(r.difficulty.preservedManualOverride, true)
@@ -198,6 +295,8 @@ test('evaluateItemMetadata: The Goods manual override (difficulty=10, photo_requ
   assert.equal(r.photoRequired.preservedManualOverride, true)
   // checkin_type must follow the PRESERVED photo_required, not the freshly-evaluated one.
   assert.equal(r.checkinType.value, 'photo')
+  // is_secret is untouched by any of this — no paid config was passed, so it's false.
+  assert.equal(r.isSecret.value, false)
 })
 
 test('evaluateItemMetadata: existing value that merely MATCHES the default is NOT treated as a manual override', () => {
@@ -205,10 +304,21 @@ test('evaluateItemMetadata: existing value that merely MATCHES the default is NO
     candidateName: 'Some Restaurant',
     body: 'Order the tasting menu.',
     dbCategory: 'Food & drink',
-    existing: { difficulty: 1, hasAlcohol: false, photoRequired: false, isSecret: false },
+    existing: { difficulty: 1, hasAlcohol: false, photoRequired: false },
   })
   assert.equal(r.difficulty.preservedManualOverride, undefined)
   assert.equal(r.hasAlcohol.preservedManualOverride, undefined)
+})
+
+test('evaluateItemMetadata: hidden-speakeasy wording never sets is_secret=true even with no existing data', () => {
+  const r = evaluateItemMetadata({ candidateName: 'Noble Experiment', body: 'Enter Noble Experiment through the concealed keg wall to find this hidden speakeasy.', dbCategory: 'Bar & drinks' })
+  assert.equal(r.isSecret.value, false)
+  assert.equal(r.difficulty.value, 1)
+})
+
+test('evaluateItemMetadata: an explicit isSecretConfigured=true IS preserved', () => {
+  const r = evaluateItemMetadata({ candidateName: 'Some Paid Secret Venue', body: 'Find the hidden reveal.', dbCategory: 'Food & drink', existing: { isSecretConfigured: true } })
+  assert.equal(r.isSecret.value, true)
 })
 
 test('evaluateItemMetadata: no existing data at all still produces a fully evaluated record', () => {

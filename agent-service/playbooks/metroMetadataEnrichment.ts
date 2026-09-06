@@ -28,6 +28,47 @@
 // silently guessing a specific value (a fabricated difficulty tier, an
 // invented "secret" status) the way the original insert-time defaults
 // silently did.
+//
+// PRODUCT RULE CORRECTIONS (Jerry, 2026-09-06 — see the San Diego
+// metadata enrichment methodology update):
+//
+// 1. has_alcohol is an ITEM property, not a venue property — true only
+//    when COMPLETING THE CHECKOFF ITEM ITSELF requires ordering/
+//    consuming/engaging with alcohol ("Order a tiki cocktail at False
+//    Idol" -> true; "Order the Paella Negra" at a place that also
+//    serves alcohol -> false; "Dance at Rich's" -> false even though
+//    Rich's is a bar). Category can never independently force true
+//    anymore. All keyword matching uses whole-word regex (\b...\b) —
+//    the previous plain substring check let "ale" fire inside "whale",
+//    "Whaley", "Daley", "tamale", etc.
+// 2. is_secret is NEVER inferred from wording (hidden doors, speakeasy
+//    language, concealed entrances) — it's a separate paid Pro/Premium
+//    business feature. This module only ever preserves an EXPLICIT
+//    existing paid/business-configured secret flag; it never sets
+//    is_secret=true on its own for any reason.
+// 3. difficulty follows a completion-EFFORT rubric, not a prestige
+//    rubric: 1 = normal walk-in, 5 = meaningful cost/reservation/
+//    planning/travel/moderate physical effort/booked activity/limited
+//    access, 10 = major commitment/high effort/cost/unusual activity
+//    (skydiving), 25 = reserved for true Secret Items — NEVER
+//    auto-assigned during normal intake, is_secret status included. A
+//    concealed entrance alone (Noble Experiment, Oculto 477, etc.) does
+//    NOT bump difficulty; "Michelin" alone does NOT bump difficulty.
+// 4. photo_required/checkin_type: unchanged from the original design —
+//    photo only when the task itself requires photo proof or an
+//    existing explicit override says so; otherwise tap; 'gps' still
+//    never auto-assigned.
+// 5. visit_profile_key: booked, operator-scheduled adventure activities
+//    (whale watching, dolphin cruise, jet boat, hot air balloon,
+//    paragliding, hang gliding, shark diving, zip line, guided
+//    climbing) are reclassified to 'event' — their real visit behavior
+//    is a fixed-duration scheduled activity, not open-ended outdoor
+//    dwell or indoor attraction browsing — checked BEFORE the generic
+//    category fallback.
+// 6. website_url: no per-item research in this pass. Deferred to the
+//    Google Places enrichment phase (captured alongside google_place_id
+//    et al.); only items Places can't resolve get individual targeted
+//    research afterward.
 
 import type { RealDbCategory, StagingGateResult } from './metroCatalog'
 
@@ -41,7 +82,8 @@ export interface MetadataEnrichmentInput {
     checkinType?: string
     difficulty?: number
     photoRequired?: boolean
-    isSecret?: boolean
+    /** An EXPLICIT existing paid/business-configured Secret Item flag — never a guess, never derived from wording. Absent/undefined means "no known paid config," which evaluates to false, not "unknown." */
+    isSecretConfigured?: boolean
     visitProfileKey?: string | null
     websiteUrl?: string | null
   }
@@ -62,25 +104,39 @@ export interface FieldEvaluation<T> {
 // has_alcohol
 // ---------------------------------------------------------------------------
 
-const ALCOHOL_KEYWORDS = [
+// Deliberately DRINK NOUNS only — never a venue-type word (brewery,
+// winery, distillery, tasting room, bar, saloon, tavern, speakeasy).
+// Touring a winery or dancing at a bar doesn't itself require ordering
+// alcohol; naming a specific drink does. Matched with \b...\b word
+// boundaries so "ale" can never fire inside "whale"/"Whaley"/"Daley"/
+// "tamale" — \b only matches at a transition between a word character
+// and a non-word character (or string start/end), and none of those
+// words contain such a transition around their embedded "ale" letters.
+const ALCOHOL_ITEM_KEYWORDS = [
   'cocktail', 'cocktails', 'beer', 'beers', 'wine', 'wines', 'mezcal', 'tequila', 'whiskey', 'whisky',
   'bourbon', 'rum', 'vodka', 'gin', 'ipa', 'lager', 'ale', 'stout', 'sangria', 'margarita', 'martini',
-  'prosecco', 'champagne', 'cava', 'sake', 'brewery', 'brewing', 'distillery', 'winery', 'tasting room',
-  'bar,', 'speakeasy', 'saloon', 'tavern', 'pint', 'draft', 'brew', 'spirits', 'oysters and champagne',
-  'chapulines', 'aperitif', 'negroni', 'mimosa', 'sommelier',
+  'prosecco', 'champagne', 'cava', 'sake', 'pint', 'spirits', 'aperitif', 'negroni', 'mimosa', 'sommelier',
+  'hazy ipa', 'craft beer', 'wine tasting', 'beer flight', 'cocktail menu',
 ]
-const ALCOHOL_CATEGORIES = new Set(['Bar & drinks', 'Nightlife'])
+
+function wordBoundaryPattern(keyword: string): RegExp {
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`\\b${escaped}\\b`, 'i')
+}
+
+const ALCOHOL_ITEM_PATTERNS = ALCOHOL_ITEM_KEYWORDS.map((k) => ({ keyword: k, pattern: wordBoundaryPattern(k) }))
 
 export function determineHasAlcohol(input: Pick<MetadataEnrichmentInput, 'body' | 'dbCategory'>): FieldEvaluation<boolean> {
-  const bodyLower = input.body.toLowerCase()
-  const keywordHit = ALCOHOL_KEYWORDS.find((k) => bodyLower.includes(k))
-  if (keywordHit) {
-    return { evaluated: true, value: true, confidence: 'HIGH', reason: `Body names a specific alcoholic item/venue type ("${keywordHit}").` }
+  const hit = ALCOHOL_ITEM_PATTERNS.find(({ pattern }) => pattern.test(input.body))
+  if (hit) {
+    return { evaluated: true, value: true, confidence: 'HIGH', reason: `Completing this item itself requires ordering/consuming a specific alcoholic drink ("${hit.keyword}").` }
   }
-  if (ALCOHOL_CATEGORIES.has(input.dbCategory)) {
-    return { evaluated: true, value: true, confidence: 'MEDIUM', reason: `Category "${input.dbCategory}" is alcohol-serving by definition even though no specific drink is named in the body.` }
+  return {
+    evaluated: true,
+    value: false,
+    confidence: 'HIGH',
+    reason: `No specific alcoholic drink named as part of the item's own task — has_alcohol is an item property, not a venue property, so category ("${input.dbCategory}") alone (e.g. a bar or nightlife venue) never sets this true on its own.`,
   }
-  return { evaluated: true, value: false, confidence: 'HIGH', reason: 'No alcohol-related keyword in body and category is not an alcohol-serving category.' }
 }
 
 // ---------------------------------------------------------------------------
@@ -116,65 +172,89 @@ export function determineCheckinType(photoRequired: FieldEvaluation<boolean>): F
 }
 
 // ---------------------------------------------------------------------------
-// is_secret — keyword-based detection of genuinely hidden/speakeasy-style
-// venues, the one place a "secret" reveal-on-arrival presentation has real
-// precedent in this codebase (see components/home/EditorialCard.jsx,
-// screens/NearbyScreen.jsx). Deliberately conservative: only flags venues
-// whose own body text describes physical concealment (a hidden entrance,
-// a concealed door/wall/shelf), not merely a metaphorically "hidden gem."
+// is_secret — NEVER inferred from wording, ever (2026-09-06 product
+// correction). is_secret marks a paid Pro/Premium business feature (a
+// business-configured reveal-on-arrival experience), not an editorial
+// judgment about whether a venue's OWN description sounds hidden or
+// speakeasy-styled. Noble Experiment, Raised by Wolves, Oculto 477,
+// False Idol, Realm of the 52 Remedies, etc. may describe concealed
+// entrances in their item wording — that is flavor text, not a signal
+// this function is allowed to act on. The ONLY way this returns true is
+// an explicit existing paid/business-configured flag passed in — never
+// derived from `body` at all, on purpose (no `body` parameter exists).
 // ---------------------------------------------------------------------------
 
-const SECRET_KEYWORDS = [
-  'hidden entrance', 'hidden speakeasy', 'concealed', 'unmarked door', 'unmarked entrance', 'no sign',
-  'password', 'secret entrance', 'rotating shelf', 'keg wall', 'phone booth entrance', 'behind the',
-]
-
-export function determineIsSecret(input: Pick<MetadataEnrichmentInput, 'body'>): FieldEvaluation<boolean> {
-  const bodyLower = input.body.toLowerCase()
-  const keywordHit = SECRET_KEYWORDS.find((k) => bodyLower.includes(k))
-  if (keywordHit) {
-    return { evaluated: true, value: true, confidence: 'MEDIUM', reason: `Body describes physical concealment ("${keywordHit}") — a genuine hidden-entrance venue, not merely a "hidden gem" turn of phrase. Recommend a human confirm before flipping is_secret=true, since this changes real check-in UX (reveal-on-arrival, cover-candidate exclusion).` }
+export function determineIsSecret(existingConfiguredSecret: boolean | undefined): FieldEvaluation<boolean> {
+  if (existingConfiguredSecret) {
+    return {
+      evaluated: true,
+      value: true,
+      confidence: 'HIGH',
+      reason: 'Preserved an existing EXPLICIT paid/business-configured Secret Item flag — is_secret is never inferred from item wording (hidden doors, speakeasy language, concealed entrances), only from real Pro/Premium business configuration.',
+      preservedManualOverride: true,
+    }
   }
-  return { evaluated: true, value: false, confidence: 'HIGH', reason: 'No physical-concealment language in body.' }
+  return {
+    evaluated: true,
+    value: false,
+    confidence: 'HIGH',
+    reason: 'is_secret is a separate paid Pro/Premium business feature, not an editorial classification — never inferred from hidden-entrance/speakeasy wording, regardless of how the item itself is written.',
+  }
 }
 
 // ---------------------------------------------------------------------------
 // difficulty — the app's real tiers are 1 / 5 / 10 / 25 (confirmed via
 // DIFFICULTY_LABELS/DIFF_LABELS usage in ListScreen.jsx, LeaderboardScreen.jsx,
-// SecretRevealScreen.jsx), not an arbitrary numeric scale. A genuinely
-// deterministic assignment beyond "1 unless there's a strong, specific,
-// checkable signal for something rarer" would require judgment this
-// function refuses to fabricate — so it stays at 1 (HIGH confidence,
-// evaluated) for the ordinary case, and only proposes a higher tier when a
-// concrete, checkable signal is present (reservation-required exclusivity,
-// a real cost/rarity marker, or a secret/hidden venue) — always at MEDIUM
-// or LOW confidence, explicitly flagged for a human's final call rather
-// than silently applied.
+// SecretRevealScreen.jsx). This is a COMPLETION-EFFORT rubric, not a
+// prestige rubric (2026-09-06 product correction):
+//   1  = normal, easy walk-in/order/visit
+//   5  = materially harder: meaningful cost, reservation/planning,
+//        special timing, travel, moderate physical effort, a booked
+//        activity, or limited access
+//   10 = major commitment / high effort / high cost / unusual activity
+//        (e.g. skydiving)
+//   25 = reserved for true Secret Items / special premium experiences —
+//        NEVER auto-assigned during normal metro intake, regardless of
+//        is_secret status.
+// "Michelin" alone does NOT imply tier 5 (prestige isn't effort). A
+// concealed/hidden entrance alone does NOT imply a higher tier either
+// (per the is_secret correction above — a normal hidden-bar visit stays
+// at baseline unless it independently carries a real effort signal like
+// a reservation requirement). Stays at 1 (HIGH confidence) unless a
+// concrete, checkable effort signal is present, always flagged LOW
+// confidence for a human's final call rather than silently applied.
 // ---------------------------------------------------------------------------
 
-const RESERVATION_OR_EXCLUSIVITY_KEYWORDS = [
-  'reservation', 'reservations required', 'michelin', 'exclusive', 'members-only', 'by appointment',
-  'limited availability', 'sold out', 'hard to get',
+const TIER5_EXCLUSIVITY_KEYWORDS = [
+  'reservation-only', 'reservations required', 'reservation required', 'members-only', 'by appointment',
+  'limited availability', 'sold out', 'hard to get', 'advance booking required', 'must book in advance',
 ]
-const HIGH_EFFORT_ADVENTURE_KEYWORDS = [
-  'hot air balloon', 'kayak', 'kayaking', 'jet boat', 'sea cave', 'guided tour', 'guided haunted',
-  'whale watching', 'dolphin cruise', 'sailing', 'surf lesson', 'zipline',
+const TIER5_ADVENTURE_KEYWORDS = [
+  'hot air balloon', 'kayak', 'kayaking', 'jet boat', 'guided tour', 'guided haunted',
+  'whale watching', 'dolphin cruise', 'sailing', 'surf lesson', 'zip line', 'zipline', 'paragliding',
+  'hang gliding',
 ]
+// Deliberately excludes bare "sea cave" — a genuine kayak/guided sea-cave TOUR is
+// already caught via "kayak"/"guided tour" above; a bare, non-booked walk-through
+// sea cave (e.g. Sunny Jim's Sea Cave — descend a tunnel through a beachfront shop,
+// no booking, no guide) is a normal walk-in, not a booked adventure activity.
+const TIER10_MAJOR_COMMITMENT_KEYWORDS = ['skydiv', 'shark diving', 'scuba certification']
 
-export function determineDifficulty(input: Pick<MetadataEnrichmentInput, 'body' | 'dbCategory'>, isSecret: FieldEvaluation<boolean>): FieldEvaluation<1 | 5 | 10 | 25> {
+export function determineDifficulty(input: Pick<MetadataEnrichmentInput, 'body' | 'dbCategory'>): FieldEvaluation<1 | 5 | 10 | 25> {
   const bodyLower = input.body.toLowerCase()
-  if (isSecret.value) {
-    return { evaluated: true, value: 10, confidence: 'LOW', reason: 'Hidden/concealed-entrance venue — proposed higher tier reflects the extra effort of finding it, but the exact tier (5 vs 10) is a curatorial call, not derivable from text alone. Needs human confirmation.' }
+  const tier10Hit = TIER10_MAJOR_COMMITMENT_KEYWORDS.find((k) => bodyLower.includes(k))
+  if (tier10Hit) {
+    return { evaluated: true, value: 10, confidence: 'LOW', reason: `Body describes a major-commitment/high-risk activity ("${tier10Hit}") — proposed the top non-secret tier, but the exact tier is a curatorial call. Needs human confirmation.` }
   }
-  const exclusivityHit = RESERVATION_OR_EXCLUSIVITY_KEYWORDS.find((k) => bodyLower.includes(k))
+  const exclusivityHit = TIER5_EXCLUSIVITY_KEYWORDS.find((k) => bodyLower.includes(k))
   if (exclusivityHit) {
-    return { evaluated: true, value: 5, confidence: 'LOW', reason: `Body signals real exclusivity/planning effort ("${exclusivityHit}") — proposed a step above baseline, but the exact tier is a curatorial call. Needs human confirmation.` }
+    return { evaluated: true, value: 5, confidence: 'LOW', reason: `Body signals real reservation/exclusivity effort ("${exclusivityHit}") — proposed a step above baseline. "Michelin" alone is deliberately NOT treated as an effort signal (prestige isn't effort). Needs human confirmation.` }
   }
-  const adventureHit = HIGH_EFFORT_ADVENTURE_KEYWORDS.find((k) => bodyLower.includes(k))
+  const adventureHit = TIER5_ADVENTURE_KEYWORDS.find((k) => bodyLower.includes(k))
   if (adventureHit) {
-    return { evaluated: true, value: 5, confidence: 'LOW', reason: `Body describes a higher-effort/booked activity ("${adventureHit}") rather than a simple walk-in — proposed a step above baseline. Needs human confirmation.` }
+    return { evaluated: true, value: 5, confidence: 'LOW', reason: `Body describes a booked/moderate-physical-effort activity ("${adventureHit}") rather than a simple walk-in — proposed a step above baseline. Needs human confirmation.` }
   }
-  return { evaluated: true, value: 1, confidence: 'HIGH', reason: 'Standard walk-in/order/visit experience — no signal of unusual rarity, cost, or effort beyond the baseline tier.' }
+  return { evaluated: true, value: 1, confidence: 'HIGH', reason: 'Standard walk-in/order/visit experience — no signal of meaningful cost, reservation effort, travel, or physical exertion beyond the baseline tier. A concealed/hidden entrance alone does not raise this — see the is_secret correction.' }
 }
 
 // ---------------------------------------------------------------------------
@@ -193,6 +273,16 @@ export type VisitProfileKey = 'quick_stop' | 'retail' | 'fast_casual' | 'restaur
 
 const QUICK_STOP_KEYWORDS = ['coffee', 'café', 'cafe', 'espresso', 'latte', 'doughnut', 'donut', 'bakery', 'ice cream', 'gelato', 'boba', 'juice', 'smoothie']
 const FAST_CASUAL_KEYWORDS = ['taco', 'food truck', 'counter', 'walk-up', 'to-go', 'takeout', 'quick bite', 'fast casual']
+// Booked, operator-scheduled adventure activities — a fixed-duration
+// scheduled activity, closer to the 'event' dwell profile (20/75 min,
+// per visit_detection_profiles) than open-ended outdoor park dwell or
+// indoor attraction browsing. Checked BEFORE the generic outdoor/
+// landmark keyword lists below (2026-09-06 correction — these were
+// previously falling through to generic 'outdoor'/'attraction').
+const ADVENTURE_ACTIVITY_EVENT_KEYWORDS = [
+  'whale watching', 'dolphin cruise', 'jet boat', 'hot air balloon', 'paragliding', 'hang gliding',
+  'shark diving', 'zip line', 'zipline', 'guided climbing', 'rock climbing', 'kayaking tour', 'sailing tour',
+]
 const OUTDOOR_KEYWORDS = ['park', 'beach', 'trail', 'garden', 'pier', 'coastal', 'tide pool', 'kayak', 'hike', 'hiking', 'zoo safari', 'outdoor']
 const LANDMARK_KEYWORDS = ['monument', 'landmark', 'historic', 'bridge', 'lighthouse', 'mural', 'statue']
 const EVENT_KEYWORDS = ['festival', 'parade', 'game', 'match', 'concert', 'regatta', 'tournament', 'contest', 'live show']
@@ -220,11 +310,15 @@ export function determineVisitProfileKey(input: Pick<MetadataEnrichmentInput, 'b
     return { evaluated: true, value: 'restaurant', confidence: 'MEDIUM', reason: 'Category "Food & drink" with no quick-stop/fast-casual signal — treated as a sit-down restaurant dwell profile.' }
   }
   if (cat === 'Adventure' || cat === 'Travel') {
+    const adventureEventHit = ADVENTURE_ACTIVITY_EVENT_KEYWORDS.find((k) => bodyLower.includes(k))
+    if (adventureEventHit) {
+      return { evaluated: true, value: 'event', confidence: 'HIGH', reason: `Body names a booked, operator-scheduled adventure activity ("${adventureEventHit}") — real visit behavior is a fixed-duration scheduled activity, not open-ended outdoor dwell or attraction browsing.` }
+    }
     const outdoorHit = OUTDOOR_KEYWORDS.find((k) => bodyLower.includes(k))
     if (outdoorHit) return { evaluated: true, value: 'outdoor', confidence: 'HIGH', reason: `Body names an outdoor venue type ("${outdoorHit}").` }
     const landmarkHit = LANDMARK_KEYWORDS.find((k) => bodyLower.includes(k))
     if (landmarkHit) return { evaluated: true, value: 'landmark', confidence: 'HIGH', reason: `Body names a landmark-type venue ("${landmarkHit}").` }
-    return { evaluated: true, value: 'attraction', confidence: 'MEDIUM', reason: `Category "${cat}" with no outdoor/landmark keyword — treated as an indoor/standing attraction.` }
+    return { evaluated: true, value: 'attraction', confidence: 'MEDIUM', reason: `Category "${cat}" with no adventure-event/outdoor/landmark keyword — treated as an indoor/standing attraction.` }
   }
   if (cat === 'Arts & Culture' || cat === 'Spa & self-care') {
     return { evaluated: true, value: 'attraction', confidence: 'MEDIUM', reason: `Category "${cat}" maps to the attraction dwell profile (museum/gallery/theater/spa-style indoor dwell).` }
@@ -253,7 +347,7 @@ export function determineWebsiteUrl(input: Pick<MetadataEnrichmentInput, 'candid
   return {
     evaluated: false,
     reason: 'No parseable official-website URL exists in this candidate\'s provenance (sourceUrls are citation descriptions, not URLs) — this field cannot be evaluated deterministically.',
-    nextStep: `Run one targeted lookup for "${input.candidateName}"'s official website (a real domain, not a review/aggregator page like Yelp/Tripadvisor/Instagram) and record it with its source.`,
+    nextStep: `Capture "${input.candidateName}"'s website during the Google Places enrichment phase (alongside google_place_id/formatted_address/maps_lat/maps_lng/geo_location/geo_radius_m) — Places returns an official website field wherever the business has one on file. Only run an individual targeted lookup afterward if Places can't resolve this venue at all, or returns no usable website.`,
   }
 }
 
@@ -287,8 +381,10 @@ export interface MetadataEnrichmentResult {
 export function evaluateItemMetadata(input: MetadataEnrichmentInput): MetadataEnrichmentResult {
   const hasAlcohol = withPreservedOverride(determineHasAlcohol(input), input.existing?.hasAlcohol, false)
   const photoRequired = withPreservedOverride(determinePhotoRequired(input), input.existing?.photoRequired, false)
-  const isSecret = withPreservedOverride(determineIsSecret(input), input.existing?.isSecret, false)
-  const difficultyRaw = determineDifficulty(input, isSecret)
+  // is_secret takes ONLY an explicit paid/business-configured flag — never `input`/`body` at
+  // all, so there is no code path by which wording could influence this field.
+  const isSecret = determineIsSecret(input.existing?.isSecretConfigured)
+  const difficultyRaw = determineDifficulty(input)
   const difficulty = withPreservedOverride(difficultyRaw, input.existing?.difficulty as 1 | 5 | 10 | 25 | undefined, 1)
   // checkin_type is derived from the (possibly preserved) photo_required, so a
   // preserved photo_required=true override still correctly yields checkin_type='photo'.
