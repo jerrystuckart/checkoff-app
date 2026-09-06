@@ -598,3 +598,65 @@ export function evaluateOutreachGate(evidence: OutreachGateEvidence): StagingGat
     reason: unidentifiable.length === 0 ? `All ${evidence.records.length} items resolve to an identifiable venue — a future outreach pass could safely derive a business queue. No outreach required or performed for this soft launch.` : `${unidentifiable.length} item(s) have no identifiable venue name for future outreach.`,
   }
 }
+
+// ---------------------------------------------------------------------------
+// The single, consolidated intake pipeline (San Diego catalog SQL review,
+// 2026-09-06). Both the dry-run report and the SQL generator call THIS
+// function and nothing else — a prior version had each script re-derive
+// its own version of "clean records," and they drifted (the dry run's
+// gates were evaluated against an upstream set, not the exact rows the
+// SQL generator actually emitted). One function, one final record set,
+// gates evaluated against exactly what would be inserted.
+// ---------------------------------------------------------------------------
+
+export interface IntakePipelineInput {
+  candidates: readonly MetroCatalogCandidate[]
+  existingProductionMapsQueries: readonly string[]
+  canonicalNeighborhoods: readonly string[]
+  neighborhoodAliases?: Readonly<Record<string, string>>
+  mexicoNeighborhoods?: ReadonlySet<string>
+}
+
+export interface IntakePipelineResult {
+  /** The exact, final record set — this and only this should ever be turned into INSERT statements. */
+  finalRecords: ItemIntakeRecord[]
+  failures: IntakeFailure[]
+  semanticDuplicatesRemoved: Array<{ kept: ItemIntakeRecord; discarded: ItemIntakeRecord[] }>
+  gates: StagingGateResult[]
+}
+
+export function runIntakePipeline(input: IntakePipelineInput): IntakePipelineResult {
+  const { records, failures: mappingFailures } = mapCandidatesToIntakeRecords(input.candidates)
+  const duplicates = checkForDuplicates(records, input.existingProductionMapsQueries)
+
+  const { resolved, unresolved } = resolveNeighborhoods(duplicates.clean, input.canonicalNeighborhoods, input.neighborhoodAliases ?? {}, input.mexicoNeighborhoods ?? new Set())
+  const geographicallyResolved = duplicates.clean
+    .filter((r) => resolved.has(r.candidateName))
+    .map((r) => ({ ...r, neighborhoodName: resolved.get(r.candidateName)! }))
+
+  const { deduped: semanticallyClean, removed: semanticDuplicatesRemoved } = dedupeSemanticDuplicates(geographicallyResolved)
+
+  const presentationProblems: IntakeFailure[] = []
+  const presentationClean = semanticallyClean.filter((r) => {
+    const text = r.body
+    const isBad = !text || text.trim().length < 10 || PLACEHOLDER_PATTERNS.some((p) => p.test(text)) || META_PROCESS_LANGUAGE_PATTERNS.some((p) => p.test(text)) || MOJIBAKE_PATTERN.test(text)
+    if (isBad) presentationProblems.push({ candidateName: r.candidateName, reason: `rejected by presentation content check: "${text}"` })
+    return !isBad
+  })
+
+  const neighborhoodFailures: IntakeFailure[] = unresolved.map((u) => ({ candidateName: u.candidateName, reason: `neighborhood: ${u.reason}` }))
+  const semanticDupFailures: IntakeFailure[] = semanticDuplicatesRemoved.flatMap((g) => g.discarded.map((d) => ({ candidateName: d.candidateName, reason: `semantic duplicate of "${g.kept.candidateName}" (${g.kept.candidateName === d.candidateName ? 'exact' : 'name'} match) — kept the more complete record` })))
+  const allFailures = [...mappingFailures, ...neighborhoodFailures, ...semanticDupFailures, ...presentationProblems]
+
+  const catalogGate = evaluateCatalogGate({ expectedCanonicalCount: input.candidates.length, stagedRecords: presentationClean, intakeFailures: allFailures, duplicates })
+  const locationGate = evaluateLocationGate({ records: presentationClean })
+  const presentationGate = evaluatePresentationGate({ records: presentationClean })
+  const outreachGate = evaluateOutreachGate({ records: presentationClean })
+
+  return {
+    finalRecords: presentationClean,
+    failures: allFailures,
+    semanticDuplicatesRemoved,
+    gates: [catalogGate, locationGate, presentationGate, outreachGate],
+  }
+}

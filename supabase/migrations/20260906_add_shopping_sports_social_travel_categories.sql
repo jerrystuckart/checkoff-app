@@ -42,10 +42,24 @@
 --     4 unrelated new rows doesn't touch what it checks).
 --   - CONCLUSION: categories are fully data-driven end-to-end (DB -> app
 --     -> admin). Adding these 4 rows requires ZERO app or admin code
---     changes. The only judgment call is `color_hex` — chosen below as
---     reasonable, distinct placeholders; Jerry should adjust to match
---     the existing 8 colors' actual palette on review (this migration
---     was written without SELECT access to see them).
+--     changes.
+--
+-- color_hex — UNRESOLVED, genuinely blocked, not just unattempted (2026-09-06):
+--   agent_service has no SELECT grant on `categories` (confirmed via
+--   information_schema.role_table_grants — it returns zero rows for this
+--   table, meaning no visibility at all, not even column metadata), and
+--   a repo-wide grep for hex color literals near category names found
+--   nothing — every screen and the admin tool read color_hex from the
+--   live DB with no hardcoded fallback palette anywhere to read instead.
+--   There is no way for this migration to see the real existing 8 colors
+--   from this environment. The 4 values below are a best-effort, visually
+--   distinct placeholder set chosen for hue separation from each other —
+--   NOT verified against the real palette. Before running this: open
+--   /Users/jerrystuckart/Downloads/checkoff_admin.html, check the real
+--   color_hex values in the item-editor category dropdown
+--   (checkoff_admin.html:1775) or a live `select id,name,color_hex from
+--   categories` query, and replace these 4 literals to actually
+--   coordinate with the existing 8 — this migration cannot do that step.
 --
 -- Uses the exact, unchanged canonical Winston taxonomy names
 -- (agent-service/playbooks/categoryNormalization.ts) — never remapped.
@@ -57,20 +71,22 @@
 
 BEGIN;
 
+-- PLACEHOLDER — see the unresolved color_hex note above. Replace these 4
+-- literals with real, palette-coordinated values before running.
 INSERT INTO public.categories (name, color_hex)
-SELECT 'Shopping', '#C77DFF'
+SELECT 'Shopping', '#E85D75'
 WHERE NOT EXISTS (SELECT 1 FROM public.categories WHERE name = 'Shopping');
 
 INSERT INTO public.categories (name, color_hex)
-SELECT 'Sports', '#3A86FF'
+SELECT 'Sports', '#2D82B7'
 WHERE NOT EXISTS (SELECT 1 FROM public.categories WHERE name = 'Sports');
 
 INSERT INTO public.categories (name, color_hex)
-SELECT 'Social', '#FB5607'
+SELECT 'Social', '#F4A261'
 WHERE NOT EXISTS (SELECT 1 FROM public.categories WHERE name = 'Social');
 
 INSERT INTO public.categories (name, color_hex)
-SELECT 'Travel', '#06A77D'
+SELECT 'Travel', '#2A9D8F'
 WHERE NOT EXISTS (SELECT 1 FROM public.categories WHERE name = 'Travel');
 
 DO $$

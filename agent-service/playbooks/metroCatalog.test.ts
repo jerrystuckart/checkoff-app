@@ -9,6 +9,7 @@ import {
   resolveNeighborhoods,
   findSemanticDuplicates,
   dedupeSemanticDuplicates,
+  runIntakePipeline,
   evaluateCatalogGate,
   evaluateLocationGate,
   evaluatePresentationGate,
@@ -405,4 +406,47 @@ test('evaluateOutreachGate: PASSes without requiring any outreach to have happen
   const result = evaluateOutreachGate({ records: [record()] })
   assert.equal(result.verdict, 'PASS')
   assert.match(result.reason, /No outreach required/)
+})
+
+// ---------------------------------------------------------------------------
+// The consolidated pipeline — combines every fix above end-to-end, the way
+// both the dry-run report and the SQL generator actually call it, so a
+// gate result can never drift from the exact rows destined for INSERT.
+// ---------------------------------------------------------------------------
+
+function candidateFor(overrides: Partial<MetroCatalogCandidate> = {}): MetroCatalogCandidate {
+  return { name: 'X', canonicalCategory: 'Food & drink', neighborhood: 'Downtown', checkoffizedItem: 'A real, specific description of this place', claimSupported: 'x', sourceUrls: ['https://x'], verificationConfidence: 'HIGH', ...overrides }
+}
+
+test('runIntakePipeline: end-to-end regression — cross-border mismap, semantic duplicate, and meta-language rejection are all caught in one pass, and gates reflect the exact final set', () => {
+  const result = runIntakePipeline({
+    candidates: [
+      // The real Estación Federal bug: must NOT resolve to Gaslamp Quarter, must NOT appear in finalRecords.
+      candidateFor({ name: 'Estación Federal', neighborhood: 'Downtown Tijuana near PedWest crossing' }),
+      // A real semantic duplicate pair — the second carries richer evidence, so it must be the one kept.
+      candidateFor({ name: 'Zuma', neighborhood: 'Downtown' }),
+      candidateFor({ name: 'Zuma (Guild Hotel)', neighborhood: 'Downtown', checkoffizedItem: 'A much longer, more specific, richer description of this exact restaurant and its signature dish' }),
+      // A real meta-language process artifact.
+      candidateFor({ name: 'Fleurette (redundant?)', checkoffizedItem: 'Fleurette has already been counted and does not require a new checkoff item.' }),
+      // A genuinely clean candidate.
+      candidateFor({ name: 'Warwick’s Books', neighborhood: 'La Jolla' }),
+    ],
+    existingProductionMapsQueries: [],
+    canonicalNeighborhoods: ['Gaslamp Quarter', 'La Jolla', 'Zona Centro'],
+    neighborhoodAliases: { downtown: 'Gaslamp Quarter' },
+    mexicoNeighborhoods: new Set(['Zona Centro']),
+  })
+
+  const finalNames = result.finalRecords.map((r) => r.candidateName).sort()
+  assert.deepEqual(finalNames, ['Warwick’s Books', 'Zuma (Guild Hotel)']) // Estación Federal excluded (country mismatch), Zuma collapsed to its richer duplicate, Fleurette excluded (meta-language)
+  assert.ok(result.failures.some((f) => f.candidateName === 'Estación Federal' && f.reason.includes('country mismatch')))
+  assert.ok(result.failures.some((f) => f.candidateName === 'Fleurette (redundant?)' && f.reason.includes('presentation content')))
+  assert.ok(result.semanticDuplicatesRemoved.some((g) => g.kept.candidateName === 'Zuma (Guild Hotel)'))
+
+  // The gates were evaluated against finalRecords — 2 clean records, no duplicates, no unmapped categories.
+  // CATALOG_GATE legitimately PASSes: the 3 exclusions are accounted for (2 final + 3 failures = 5 candidates), none is a production/batch duplicate, none is a category-mapping failure — exactly what CATALOG_GATE is designed to catch, and none of those conditions occurred here.
+  const catalogGate = result.gates.find((g) => g.key === 'CATALOG_GATE')!
+  assert.equal(catalogGate.verdict, 'PASS')
+  const presentationGate = result.gates.find((g) => g.key === 'PRESENTATION_GATE')!
+  assert.equal(presentationGate.verdict, 'PASS') // because the bad row never reaches presentationGate's input at all
 })
