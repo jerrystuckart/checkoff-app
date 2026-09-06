@@ -176,6 +176,72 @@ export function mapCandidateToIntakeRecord(candidate: MetroCatalogCandidate): { 
   }
 }
 
+// ---------------------------------------------------------------------------
+// Neighborhood resolution — a candidate's free-text `neighborhood` field
+// is exactly as variable as its category ("La Jolla" vs "La Jolla (UTC)"
+// vs "University City / La Jolla"). The real `neighborhoods` table needs
+// items.neighborhood_id to point at ONE specific row, so every record
+// must resolve to exactly one of the metro's real, geocoded neighborhood
+// names before it can be inserted — same substring-containment
+// discipline as metroLaunchDriver.ts's buildAuditEvidence, applied here
+// to pick a single winner rather than just count matches.
+// ---------------------------------------------------------------------------
+
+export interface NeighborhoodResolutionResult {
+  resolved: Map<string, string> // candidateName -> canonical neighborhood name
+  unresolved: Array<{ candidateName: string; rawNeighborhood: string | null; reason: string }>
+}
+
+/**
+ * Resolves each record's free-text neighborhood to exactly one of
+ * `canonicalNeighborhoods`. A record whose text matches MORE than one
+ * canonical name (ambiguous) or none at all is reported unresolved,
+ * never guessed — the same "fail rather than guess" discipline as
+ * category mapping. Prefers the LONGEST matching canonical name when
+ * more than one is a substring match candidate but only one is not
+ * itself a substring of another match (e.g. "Otay" vs "Otay Mesa" would
+ * both hit generically named text — longest-match-wins resolves the
+ * common case; a genuine tie still fails rather than guessing).
+ */
+export function resolveNeighborhoods(
+  records: readonly ItemIntakeRecord[],
+  canonicalNeighborhoods: readonly string[],
+  /** landmark/area keyword (lowercase) -> canonical neighborhood name, for real sub-areas/landmarks that fall within a canonical neighborhood but never mention its name literally (e.g. "Avenida Revolución" is IN Zona Centro but the text alone never says "Zona Centro"). Checked only when no direct canonical-name match exists — never overrides a direct match. */
+  aliases: Readonly<Record<string, string>> = {}
+): NeighborhoodResolutionResult {
+  const resolved = new Map<string, string>()
+  const unresolved: Array<{ candidateName: string; rawNeighborhood: string | null; reason: string }> = []
+
+  for (const record of records) {
+    const raw = (record.neighborhoodName ?? '').toLowerCase()
+    if (!raw) {
+      unresolved.push({ candidateName: record.candidateName, rawNeighborhood: record.neighborhoodName, reason: 'no neighborhood text at all' })
+      continue
+    }
+    let matches = canonicalNeighborhoods.filter((n) => raw.includes(n.toLowerCase()))
+    if (matches.length === 0) {
+      const aliasMatches = Object.entries(aliases)
+        .filter(([keyword]) => raw.includes(keyword))
+        .map(([, canonical]) => canonical)
+      if (aliasMatches.length > 0) matches = [...new Set(aliasMatches)]
+    }
+    if (matches.length === 0) {
+      unresolved.push({ candidateName: record.candidateName, rawNeighborhood: record.neighborhoodName, reason: `no canonical neighborhood name found in "${record.neighborhoodName}"` })
+      continue
+    }
+    // Longest match wins when multiple canonical names are substrings of each other's text (e.g. both "Otay" and "Otay Mesa" would match "Otay Mesa, Tijuana" — the longer, more specific one wins).
+    const maxLen = Math.max(...matches.map((m) => m.length))
+    const longest = matches.filter((m) => m.length === maxLen)
+    if (longest.length > 1) {
+      unresolved.push({ candidateName: record.candidateName, rawNeighborhood: record.neighborhoodName, reason: `ambiguous — "${record.neighborhoodName}" matches multiple canonical neighborhoods equally: ${longest.join(', ')}` })
+      continue
+    }
+    resolved.set(record.candidateName, longest[0])
+  }
+
+  return { resolved, unresolved }
+}
+
 export function mapCandidatesToIntakeRecords(candidates: readonly MetroCatalogCandidate[]): IntakeMappingResult {
   const records: ItemIntakeRecord[] = []
   const failures: IntakeFailure[] = []

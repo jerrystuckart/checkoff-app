@@ -6,6 +6,7 @@ import {
   mapCandidatesToIntakeRecords,
   normalizeMapsQuery,
   checkForDuplicates,
+  resolveNeighborhoods,
   evaluateCatalogGate,
   evaluateLocationGate,
   evaluatePresentationGate,
@@ -246,6 +247,55 @@ test('evaluatePresentationGate: FAILs two different candidates sharing identical
   const result = evaluatePresentationGate({ records: [a, b] })
   assert.equal(result.verdict, 'FAIL')
   assert.match(result.reason, /identical display text/)
+})
+
+// ---------------------------------------------------------------------------
+// Neighborhood resolution
+// ---------------------------------------------------------------------------
+
+test('resolveNeighborhoods: resolves obvious free-text variants to the one canonical name', () => {
+  const canonical = ['La Jolla', 'Carlsbad', 'Downtown']
+  const records = [record({ candidateName: 'A', neighborhoodName: 'La Jolla (UTC)' }), record({ candidateName: 'B', neighborhoodName: 'University City / La Jolla area' })]
+  const result = resolveNeighborhoods(records, canonical)
+  assert.equal(result.resolved.get('A'), 'La Jolla')
+  assert.equal(result.resolved.get('B'), 'La Jolla')
+  assert.equal(result.unresolved.length, 0)
+})
+
+test('resolveNeighborhoods: longest match wins when one canonical name is a substring of another\'s text', () => {
+  const canonical = ['Otay', 'Otay Mesa']
+  const records = [record({ candidateName: 'A', neighborhoodName: 'Otay Mesa, Tijuana' })]
+  const result = resolveNeighborhoods(records, canonical)
+  assert.equal(result.resolved.get('A'), 'Otay Mesa')
+})
+
+test('resolveNeighborhoods: no canonical match fails resolution, never guesses', () => {
+  const canonical = ['La Jolla', 'Carlsbad']
+  const records = [record({ candidateName: 'A', neighborhoodName: 'Some Unknown Place' })]
+  const result = resolveNeighborhoods(records, canonical)
+  assert.equal(result.resolved.size, 0)
+  assert.equal(result.unresolved.length, 1)
+})
+
+test('resolveNeighborhoods: an alias resolves a real landmark whose text never names its containing canonical neighborhood', () => {
+  const canonical = ['Zona Centro', 'Zona Río']
+  const records = [record({ candidateName: 'A', neighborhoodName: 'Avenida Revolución (near border)' })]
+  const result = resolveNeighborhoods(records, canonical, { 'avenida revolución': 'Zona Centro' })
+  assert.equal(result.resolved.get('A'), 'Zona Centro')
+})
+
+test('resolveNeighborhoods: a direct canonical match always wins over an alias, never overridden', () => {
+  const canonical = ['Zona Centro', 'Zona Río']
+  const records = [record({ candidateName: 'A', neighborhoodName: 'Zona Río, near Avenida Revolución' })]
+  const result = resolveNeighborhoods(records, canonical, { 'avenida revolución': 'Zona Centro' })
+  assert.equal(result.resolved.get('A'), 'Zona Río')
+})
+
+test('resolveNeighborhoods: missing neighborhood text fails resolution', () => {
+  const canonical = ['La Jolla']
+  const records = [record({ candidateName: 'A', neighborhoodName: null })]
+  const result = resolveNeighborhoods(records, canonical)
+  assert.equal(result.unresolved[0].reason, 'no neighborhood text at all')
 })
 
 test('evaluateOutreachGate: PASSes without requiring any outreach to have happened', () => {

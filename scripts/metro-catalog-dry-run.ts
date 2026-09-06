@@ -29,6 +29,7 @@ import { classifyCategory } from '../agent-service/playbooks/categoryNormalizati
 import {
   mapCandidatesToIntakeRecords,
   checkForDuplicates,
+  resolveNeighborhoods,
   evaluateCatalogGate,
   evaluateLocationGate,
   evaluatePresentationGate,
@@ -36,6 +37,38 @@ import {
   type MetroCatalogCandidate,
   type ItemIntakeRecord,
 } from '../agent-service/playbooks/metroCatalog'
+
+// The 40 real, geocoded neighborhoods (scripts/output/san-diego-neighborhoods-with-radii.json)
+// — San Diego's 35 plus Tijuana's 5, all modeled under San Diego's own
+// metro_id per Jerry's 2026-09-06 architecture decision. Grown from an
+// initial 29 after the first dry-run pass showed ~100 real candidates
+// referencing genuine sub-areas (Balboa Park, Mission Bay, Old Town,
+// Liberty Station, Mission Valley, etc.) the original M1 list didn't cover.
+const CANONICAL_NEIGHBORHOODS = [
+  'Gaslamp Quarter', 'East Village', 'Little Italy', 'Barrio Logan', 'North Park', 'South Park',
+  'Hillcrest', 'Mission Hills', 'Point Loma', 'Ocean Beach', 'Mission Beach', 'Pacific Beach',
+  'La Jolla', 'Coronado', 'Chula Vista', 'Del Mar', 'Solana Beach', 'Encinitas', 'Carlsbad',
+  'Oceanside', 'Escondido', 'Rancho Santa Fe', 'San Marcos', 'Vista',
+  'Balboa Park', 'Mission Bay', 'Old Town', 'Liberty Station', 'Mission Valley', 'Kearny Mesa',
+  'San Ysidro', 'University City', 'Normal Heights', 'University Heights', 'Mira Mesa',
+  'Zona Centro', 'Zona Río', 'Zona Norte', 'Otay', 'Chapultepec Alamar',
+]
+
+// Real landmarks/sub-areas whose text never names their containing
+// canonical neighborhood literally — checked only when no direct match
+// exists (see resolveNeighborhoods' own doc). Judgment calls, flagged as
+// such: "Downtown" alone (no more specific district named) defaults to
+// Gaslamp Quarter, the historic downtown core; Petco Park/the Embarcadero
+// waterfront likewise. Tijuana landmarks route to their real containing zone.
+const NEIGHBORHOOD_ALIASES: Record<string, string> = {
+  downtown: 'Gaslamp Quarter',
+  'petco park': 'East Village',
+  embarcadero: 'Gaslamp Quarter',
+  'avenida revolución': 'Zona Centro',
+  revolución: 'Zona Centro',
+  'pueblo amigo': 'Zona Norte',
+  pedwest: 'Zona Centro',
+}
 
 function loadEnvFile(relPath: string): void {
   const envPath = require('node:path').join(__dirname, '..', relPath)
@@ -103,7 +136,8 @@ interface ProjectReport {
   intakeFailures: Array<{ candidateName: string; reason: string }>
   categoryCounts: Record<string, number>
   duplicates: ReturnType<typeof checkForDuplicates>
-  cleanRecords: ItemIntakeRecord[]
+  cleanRecords: Array<ItemIntakeRecord & { resolvedNeighborhood: string }>
+  neighborhoodResolutionFailures: ReturnType<typeof resolveNeighborhoods>['unresolved']
   gates: ReturnType<typeof evaluateCatalogGate>[]
   neighborhoods: Array<{ name: string; kind: string }>
 }
@@ -113,22 +147,29 @@ async function buildReportFor(config: ProjectConfig, existingProductionMapsQueri
   const { records, failures } = mapCandidatesToIntakeRecords(candidates)
   const duplicates = checkForDuplicates(records, existingProductionMapsQueries)
 
-  const categoryCounts: Record<string, number> = {}
-  for (const r of duplicates.clean) categoryCounts[r.dbCategory] = (categoryCounts[r.dbCategory] ?? 0) + 1
+  const { resolved, unresolved } = resolveNeighborhoods(duplicates.clean, CANONICAL_NEIGHBORHOODS, NEIGHBORHOOD_ALIASES)
+  const cleanRecords = duplicates.clean
+    .filter((r) => resolved.has(r.candidateName))
+    .map((r) => ({ ...r, resolvedNeighborhood: resolved.get(r.candidateName)! }))
 
-  const catalogGate = evaluateCatalogGate({ expectedCanonicalCount: candidates.length, stagedRecords: records, intakeFailures: failures, duplicates })
-  const locationGate = evaluateLocationGate({ records: duplicates.clean })
-  const presentationGate = evaluatePresentationGate({ records: duplicates.clean })
-  const outreachGate = evaluateOutreachGate({ records: duplicates.clean })
+  const categoryCounts: Record<string, number> = {}
+  for (const r of cleanRecords) categoryCounts[r.dbCategory] = (categoryCounts[r.dbCategory] ?? 0) + 1
+
+  const allFailures = [...failures, ...unresolved.map((u) => ({ candidateName: u.candidateName, reason: `neighborhood: ${u.reason}` }))]
+  const catalogGate = evaluateCatalogGate({ expectedCanonicalCount: candidates.length, stagedRecords: cleanRecords, intakeFailures: allFailures, duplicates })
+  const locationGate = evaluateLocationGate({ records: cleanRecords })
+  const presentationGate = evaluatePresentationGate({ records: cleanRecords })
+  const outreachGate = evaluateOutreachGate({ records: cleanRecords })
 
   return {
     projectId: config.projectId,
     metroLabel: config.metroLabel,
     canonicalCandidateCount: candidates.length,
-    intakeFailures: failures,
+    intakeFailures: allFailures,
     categoryCounts,
     duplicates,
-    cleanRecords: duplicates.clean,
+    cleanRecords,
+    neighborhoodResolutionFailures: unresolved,
     gates: [catalogGate, locationGate, presentationGate, outreachGate],
     neighborhoods,
   }
