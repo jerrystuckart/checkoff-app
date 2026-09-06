@@ -206,6 +206,11 @@ export interface NeighborhoodResolutionResult {
 /** Any of these appearing in a candidate's raw neighborhood text is a strong, explicit signal the venue is in Mexico — used to keep cross-border resolution honest (see resolveNeighborhoods' countryHint check below). */
 const MEXICO_TEXT_SIGNAL = /\b(tijuana|mexico|méxico|baja california)\b/i
 
+/** Collapses all Unicode whitespace (including U+00A0 non-breaking space, seen in real research text) to a single normal space. */
+function normalizeWhitespace(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
 export function resolveNeighborhoods(
   records: readonly ItemIntakeRecord[],
   canonicalNeighborhoods: readonly string[],
@@ -233,7 +238,15 @@ export function resolveNeighborhoods(
   const mexicoLower = new Set([...mexicoNeighborhoods].map((n) => n.toLowerCase()))
 
   for (const record of records) {
-    const raw = (record.neighborhoodName ?? '').toLowerCase()
+    // Bug fix (San Diego CheckOffization/attrition audit, 2026-09): a
+    // real research source used U+00A0 (non-breaking space) instead of a
+    // normal space in some venue text ("Point Loma", "Little Italy")
+    // — .includes() on the raw string silently never matched, so these
+    // candidates failed neighborhood resolution despite naming an exact
+    // canonical neighborhood. Collapsing all whitespace variants to a
+    // single normal space before matching fixes this generally, not just
+    // for these two names.
+    const raw = normalizeWhitespace((record.neighborhoodName ?? '').toLowerCase())
     if (!raw) {
       unresolved.push({ candidateName: record.candidateName, rawNeighborhood: record.neighborhoodName, reason: 'no neighborhood text at all' })
       continue
@@ -246,6 +259,17 @@ export function resolveNeighborhoods(
         .filter(([keyword]) => raw.includes(keyword))
         .map(([, canonical]) => canonical)
       if (aliasMatches.length > 0) matches = [...new Set(aliasMatches)]
+    }
+    // Bug fix: a candidate whose free-text neighborhood is too generic
+    // ("Central San Diego", "citywide") can still resolve when the
+    // candidate's OWN NAME literally names a canonical neighborhood — e.g.
+    // the candidate "Balboa Park" itself, whose research-recorded
+    // neighborhood text was just "Central San Diego". Checked only as a
+    // fallback, never overriding a real match from the neighborhood text.
+    if (matches.length === 0) {
+      const nameLower = normalizeWhitespace(record.candidateName.toLowerCase())
+      const nameMatches = canonicalNeighborhoods.filter((n) => nameLower.includes(n.toLowerCase()))
+      if (nameMatches.length > 0) matches = nameMatches
     }
 
     if (isMexicoSignaled && mexicoLower.size > 0) {
@@ -470,15 +494,15 @@ export function findSemanticDuplicates(records: readonly ItemIntakeRecord[], add
 }
 
 /** Applies findSemanticDuplicates and keeps only the most-complete representative from each group (same completeness scoring as dedupeCandidates) — a deterministic way to actually resolve what the audit found, not just report it. */
-export function dedupeSemanticDuplicates<T extends ItemIntakeRecord>(records: readonly T[], additionalGenericWords: ReadonlySet<string> = new Set()): { deduped: T[]; removed: Array<{ kept: T; discarded: T[] }> } {
+export function dedupeSemanticDuplicates<T extends ItemIntakeRecord>(records: readonly T[], additionalGenericWords: ReadonlySet<string> = new Set()): { deduped: T[]; removed: Array<{ kept: T; discarded: T[]; matchKind: 'exact' | 'similar' }> } {
   const groups = findSemanticDuplicates(records, additionalGenericWords)
   const toRemove = new Set<string>()
-  const removed: Array<{ kept: T; discarded: T[] }> = []
+  const removed: Array<{ kept: T; discarded: T[]; matchKind: 'exact' | 'similar' }> = []
   for (const group of groups) {
     const members = group.members as T[]
     const best = members.reduce((a, b) => (candidateCompletenessScoreForIntakeRecord(b) > candidateCompletenessScoreForIntakeRecord(a) ? b : a))
     for (const m of members) if (m !== best) toRemove.add(m.candidateName)
-    removed.push({ kept: best, discarded: members.filter((m) => m !== best) })
+    removed.push({ kept: best, discarded: members.filter((m) => m !== best), matchKind: group.matchKind })
   }
   return { deduped: records.filter((r) => !toRemove.has(r.candidateName)) as T[], removed }
 }
@@ -625,6 +649,154 @@ export function evaluatePresentationGate(evidence: PresentationGateEvidence): St
   }
 }
 
+// ---------------------------------------------------------------------------
+// EDITORIAL_GATE — San Diego CheckOffization quality regression (2026-09).
+// Jerry queried real production and found large clusters of items all
+// opening with the same handful of generic action verbs (Savor,
+// Experience, Sip, Shop, Catch, Dance) describing a generic venue visit
+// rather than naming a distinctive thing to do/order/find/notice. This
+// gate is a deterministic, heuristic-assisted check for that PATTERN — it
+// cannot understand English well enough to be a perfect substitute for
+// human editorial judgment (that would require a second AI call, which
+// this pipeline deliberately never uses for a pass/fail decision — see
+// categoryNormalization.ts's own doc for why), but it reliably catches
+// the two concrete, measurable failure modes Jerry named: (1) a batch
+// where opening-verb repetition itself proves a template is being used
+// instead of per-item specificity, and (2) ranking/superlative filler
+// words used as a substitute for a real fact. A body that PASSES this
+// gate is not guaranteed to be great copy; a body that FAILS it is a
+// reliable, explainable signal that it needs a specificity rewrite.
+// ---------------------------------------------------------------------------
+
+export interface EditorialGateEvidence {
+  records: readonly ItemIntakeRecord[]
+}
+
+export interface EditorialGateFinding {
+  candidateName: string
+  issue: string
+}
+
+/**
+ * The exact opening-verb cluster Jerry found in real production, plus
+ * their obvious synonyms — never individually banned (see the rewritten
+ * editor prompt's own note), but tracked here so batch-level repetition
+ * of ANY of them is measurable.
+ */
+const GENERIC_OPENING_VERBS = new Set([
+  'savor', 'experience', 'discover', 'shop', 'sip', 'dive', 'immerse', 'explore', 'dance', 'catch', 'soar', 'dine',
+  'step', 'celebrate', 'stroll', 'indulge', 'enjoy', 'taste', 'visit', 'check', 'stop', 'see', 'watch', 'admire',
+  'wander', 'browse', 'grab', 'tour', 'relax', 'unwind',
+])
+
+/** A single opening word/short opening group repeated across more than this share of a batch is itself evidence of a template, independent of any one item's own wording. Tuned against the real San Diego batch, where "Savor" alone was 33% and "Experience" 17% — a healthy, specificity-first batch should show a long tail, not two words covering half the items. */
+const MAX_SHARED_OPENING_SHARE = 0.15
+const MIN_BATCH_SIZE_FOR_OPENING_CHECK = 10
+
+function firstWord(body: string): string {
+  const m = body.trim().match(/^[A-Za-z']+/)
+  return m ? m[0].toLowerCase() : ''
+}
+
+/**
+ * Ranking/superlative language ("top-rated", "best", "vibrant", "world-
+ * class", "must-see", "iconic", "unbeatable", "award-winning") is filler
+ * UNLESS the sentence also carries a concrete, specific fact backing it
+ * up — a number, a named award in quotes, a "since <year>" date, an
+ * explicit uniqueness claim ("only ... in ..."), or a named
+ * certification/rating body. This can't perfectly distinguish verified
+ * ranking claims from unverified ones (that would require checking the
+ * source), but it reliably tells the difference between "the best X" as
+ * pure filler and "San Diego's only three-Michelin-star restaurant" as a
+ * real, specific, checkable fact.
+ */
+const RANKING_FILLER_PATTERN = /\b(top[- ]rated|\bbest\b|vibrant|world[- ]class|must[- ]see|\biconic\b|unbeatable|award[- ]winning)\b/i
+const CONCRETE_FACT_NEARBY_PATTERN = /\d|since \d{4}|only .{0,40} in\b|michelin|"[^"]+"|['’][^'’]+['’]/i
+
+/**
+ * A body is a "generic template" when, after removing the venue name and
+ * the small set of purely structural/connector words, every remaining
+ * significant word is a generic descriptor (flavors, dishes, eats,
+ * drinks, cuisine, vibes, fun, atmosphere, energy, finds, treasures,
+ * offerings, delights) or a generic intensifying adjective (fresh,
+ * vibrant, authentic, unique, top, new, best, popular, local, artisan,
+ * creative, craft, modern, classic, historic, exciting, amazing,
+ * stunning) — i.e. nothing in the sentence names one concrete, checkable
+ * thing (a specific dish, a specific feature, a number, a proper noun
+ * beyond the venue itself).
+ */
+const GENERIC_DESCRIPTOR_WORDS = new Set([
+  'flavors', 'flavor', 'dishes', 'dish', 'eats', 'bites', 'food', 'drinks', 'drink', 'cocktails', 'cocktail', 'cuisine',
+  'fun', 'vibes', 'vibe', 'experience', 'experiences', 'atmosphere', 'culture', 'treasures', 'finds', 'find', 'energy',
+  'delights', 'offerings', 'scene', 'spot', 'gem', 'hotspot', 'destination', 'attraction', 'dining', 'vendors',
+  'vendor', 'retail', 'shops', 'shopping', 'stores', 'goods', 'wares', 'market', 'markets', 'mall', 'malls', 'hub',
+])
+const GENERIC_INTENSIFIER_WORDS = new Set([
+  'fresh', 'vibrant', 'authentic', 'unique', 'top', 'new', 'best', 'popular', 'local', 'artisan', 'creative', 'craft',
+  'modern', 'classic', 'historic', 'exciting', 'amazing', 'stunning', 'diverse', 'innovative', 'acclaimed', 'renowned',
+  'beloved', 'must', 'great', 'perfect', 'ultimate', 'signature', 'inventive', 'bold', 'iconic',
+])
+const CONNECTOR_WORDS = new Set(['a', 'an', 'the', 'at', 'in', 'and', 'or', 'with', 'for', 'of', 'to', 'on', 'your', 'you', 'yourself', 's'])
+
+function normalizeWordsForGenericCheck(text: string): string[] {
+  return normalizeText(text)
+    .split(' ')
+    .filter((w) => w.length > 1)
+}
+
+function isGenericTemplateBody(body: string, candidateName: string): boolean {
+  const venueWords = new Set(venueNameSignificantWords(candidateName))
+  const words = normalizeWordsForGenericCheck(body)
+  let hasConcreteWord = false
+  for (const w of words) {
+    if (CONNECTOR_WORDS.has(w) || venueWords.has(w) || GENERIC_DESCRIPTOR_WORDS.has(w) || GENERIC_INTENSIFIER_WORDS.has(w)) continue
+    if (GENERIC_OPENING_VERBS.has(w)) continue
+    if (/^\d+$/.test(w)) { hasConcreteWord = true; break } // a specific number (year, count, distance) is itself concrete
+    hasConcreteWord = true
+    break
+  }
+  return !hasConcreteWord
+}
+
+export function evaluateEditorialQualityGate(evidence: EditorialGateEvidence): StagingGateResult {
+  const findings: EditorialGateFinding[] = []
+  const records = evidence.records
+
+  // 1. Batch-level opening-word repetition — a template signature independent of any single item.
+  if (records.length >= MIN_BATCH_SIZE_FOR_OPENING_CHECK) {
+    const openingCounts = new Map<string, number>()
+    for (const r of records) {
+      const w = firstWord(r.body)
+      if (w) openingCounts.set(w, (openingCounts.get(w) ?? 0) + 1)
+    }
+    for (const [word, count] of openingCounts) {
+      const share = count / records.length
+      if (share > MAX_SHARED_OPENING_SHARE) {
+        findings.push({ candidateName: '(batch-level)', issue: `${count}/${records.length} items (${(share * 100).toFixed(0)}%) open with the same word "${word}" — a repeated opening-verb template, not per-item specificity` })
+      }
+    }
+  }
+
+  // 2. Per-item checks.
+  for (const r of records) {
+    if (isGenericTemplateBody(r.body, r.candidateName)) {
+      findings.push({ candidateName: r.candidateName, issue: `body could describe dozens of unrelated venues — no specific dish/feature/activity/number identifies what makes this CheckOff-worthy: "${r.body}"` })
+    }
+    if (RANKING_FILLER_PATTERN.test(r.body) && !CONCRETE_FACT_NEARBY_PATTERN.test(r.body)) {
+      findings.push({ candidateName: r.candidateName, issue: `ranking/superlative filler used without a specific, checkable fact backing it up: "${r.body}"` })
+    }
+  }
+
+  return {
+    key: 'EDITORIAL_GATE',
+    verdict: findings.length === 0 ? 'PASS' : 'FAIL',
+    reason:
+      findings.length === 0
+        ? `All ${records.length} items pass the specificity/ranking-filler check — no repeated opening-verb template and no unbacked superlative language detected.`
+        : findings.map((f) => `${f.candidateName}: ${f.issue}`).join(' | '),
+  }
+}
+
 export interface OutreachGateEvidence {
   records: readonly ItemIntakeRecord[]
 }
@@ -668,7 +840,7 @@ export interface IntakePipelineResult {
   /** The exact, final record set — this and only this should ever be turned into INSERT statements. */
   finalRecords: ItemIntakeRecord[]
   failures: IntakeFailure[]
-  semanticDuplicatesRemoved: Array<{ kept: ItemIntakeRecord; discarded: ItemIntakeRecord[] }>
+  semanticDuplicatesRemoved: Array<{ kept: ItemIntakeRecord; discarded: ItemIntakeRecord[]; matchKind: 'exact' | 'similar' }>
   gates: StagingGateResult[]
 }
 
@@ -692,19 +864,32 @@ export function runIntakePipeline(input: IntakePipelineInput): IntakePipelineRes
   })
 
   const neighborhoodFailures: IntakeFailure[] = unresolved.map((u) => ({ candidateName: u.candidateName, reason: `neighborhood: ${u.reason}` }))
-  const semanticDupFailures: IntakeFailure[] = semanticDuplicatesRemoved.flatMap((g) => g.discarded.map((d) => ({ candidateName: d.candidateName, reason: `semantic duplicate of "${g.kept.candidateName}" (${g.kept.candidateName === d.candidateName ? 'exact' : 'name'} match) — kept the more complete record` })))
+  // Bug fix (San Diego CheckOffization/attrition audit, 2026-09): this
+  // used to compare kept.candidateName === d.candidateName to decide
+  // "exact" vs "name" match — a comparison that can never be true (a
+  // discarded record is by definition a DIFFERENT record than the one
+  // kept), so every semantic-dedup removal was mislabeled "(name match)"
+  // regardless of its real matchKind. That silently hid which removals
+  // were high-confidence exact-name collapses (same real venue, just a
+  // reworded/qualified name) versus the deliberately-conservative
+  // 'similar' token-overlap tier, where a genuinely distinct same-venue
+  // experience is more likely to have been wrongly swept up — exactly
+  // the case Jerry's "same venue does not automatically mean duplicate"
+  // rule is about. Now uses the group's real, computed matchKind.
+  const semanticDupFailures: IntakeFailure[] = semanticDuplicatesRemoved.flatMap((g) => g.discarded.map((d) => ({ candidateName: d.candidateName, reason: `semantic duplicate of "${g.kept.candidateName}" (${g.matchKind} match) — kept the more complete record` })))
   const allFailures = [...mappingFailures, ...neighborhoodFailures, ...semanticDupFailures, ...presentationProblems]
 
   const catalogGate = evaluateCatalogGate({ expectedCanonicalCount: input.candidates.length, stagedRecords: presentationClean, intakeFailures: allFailures, duplicates })
   const locationGate = evaluateLocationGate({ records: presentationClean })
   const presentationGate = evaluatePresentationGate({ records: presentationClean })
+  const editorialGate = evaluateEditorialQualityGate({ records: presentationClean })
   const outreachGate = evaluateOutreachGate({ records: presentationClean })
 
   return {
     finalRecords: presentationClean,
     failures: allFailures,
     semanticDuplicatesRemoved,
-    gates: [catalogGate, locationGate, presentationGate, outreachGate],
+    gates: [catalogGate, locationGate, presentationGate, editorialGate, outreachGate],
   }
 }
 

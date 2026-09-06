@@ -143,10 +143,40 @@ export function buildCheckoffEditorPrompt(request: SpecialistExecutionRequest, n
     runtimeDateContextLine(now),
     'You transform an ALREADY-VERIFIED factual candidate into final CheckOff item wording. You do NOT research new facts, and you ' +
       'must NEVER invent or embellish a menu item/product/experience beyond what the supplied factual source states.',
-    'Required voice: a compelling hook in approximately the first 5-7 words; action/experience first; the business/place ' +
-      'incorporated naturally in service of the action; sounds like a specific local recommendation, not a directory listing; ' +
-      'concise; energetic; factually faithful to the source. Avoid generic openings ("Visit", "Explore", "Check out", "Stop by") ' +
-      'unless genuinely the best fit.',
+    // Rewritten (San Diego CheckOffization quality regression, 2026-09):
+    // the prior wording ("action/experience first") still let the model
+    // default to a small, repeated set of generic action verbs (Savor,
+    // Experience, Sip, Shop, Catch, Dance...) as an opening template —
+    // Jerry found large real-production clusters of items all starting
+    // the same way, none of them saying what makes that visit
+    // CheckOff-worthy. The rule is no longer "start with an action" — it
+    // is "say the distinctive thing as early as possible," which is a
+    // different, stricter requirement that generic verbs almost never
+    // satisfy on their own.
+    'THE CORE RULE: the distinctive thing to do, order, find, or notice must appear as early as possible in the sentence — ideally ' +
+      'in the first few words. A CheckOff item is a specific instruction, not a description of the venue. Before writing, identify ' +
+      'the ONE specific, concrete thing from the factual source that makes this worth doing: the actual dish/drink name, the ' +
+      'specific room/feature/entrance, the exact ride or activity, the off-menu or hidden detail, the ritual or tradition, the ' +
+      'specific viewpoint or moment, the exact class or format. If the factual source genuinely gives you nothing more specific ' +
+      'than "this venue exists and is good," that is a sign the source is too thin for a real CheckOff item — write the most ' +
+      'concrete sentence the facts actually support, never pad it with vague enthusiasm to compensate.',
+    'DO NOT default to opening with a generic action verb ("Savor", "Experience", "Discover", "Explore", "Enjoy", "Indulge", ' +
+      '"Immerse yourself", "Sip", "Shop", "Dine", "Catch", "Dance", "Taste", "Visit", "Check out", "Stop by", or any close synonym ' +
+      'of these). These verbs are not individually banned words — the problem is using ANY of them as the reflexive default opening ' +
+      'for every item, which produces a wall of interchangeable copy. The test is not "which verb did I use" but "could this exact ' +
+      'sentence, with only the venue name swapped, describe a dozen unrelated places?" If yes, it is not specific enough yet, ' +
+      'regardless of which verb it uses.',
+    'Venue-first phrasing is fine ONLY when the venue itself, not an activity inside it, genuinely is the specific thing — a ' +
+      'famous landmark, a singular building, a one-of-a-kind sight. Do not use that exception as a loophole for an ordinary ' +
+      'restaurant/bar/shop where a specific dish, drink, or feature is available in the source and simply wasn\'t used.',
+    'Do not add ranking or superlative filler ("top-rated", "best", "vibrant", "world-class", "must-see", "iconic") unless the ' +
+      'ranking or superlative itself is the specific, source-verified fact being conveyed (e.g. "San Diego\'s only three-Michelin-' +
+      'star restaurant" is a specific fact; "one of the best restaurants in town" is filler).',
+    'Do not let internal reasoning, deduplication notes, or process language ("already counted", "redundant", "does not require a ' +
+      'new checkoff item") leak into checkoffizedItem — that field is user-facing copy only.',
+    'Vary sentence structure naturally across items because each is about a different specific thing, not as a deliberate ' +
+      'thesaurus exercise — do not simply rotate through a list of synonym verbs to "diversify" wording that is still generic ' +
+      'underneath.',
     'evidence must include: factualSource (verbatim, unchanged from what you were given), checkoffizedItem (the final wording), ' +
       'and fidelityAssessment (one or two sentences confirming every fact in checkoffizedItem traces directly back to factualSource, ' +
       'or naming exactly what could not be preserved).',

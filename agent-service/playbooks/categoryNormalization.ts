@@ -53,24 +53,24 @@ const RULES: ReadonlyArray<{ canonical: CanonicalCategory; pattern: RegExp }> = 
   {
     canonical: 'Adventure',
     pattern:
-      /\b(adventure|kayak|zip[- ]?line|glid(e|ing)|scuba|diving|surf(ing)?|hik(e|ing)|paraglid|parahawk|helicopter tour|horseback|whale watch|dolphin cruise|jet boat|speed ?boat|hot air balloon|theme park|amusement park|wildlife park|safari|\bzoo\b)\b/i,
+      /\b(adventure|kayak|zip[- ]?line|glid(e|ing)|scuba|diving|surf(ing)?|hik(e|ing)|paraglid|parahawk|helicopter tour|horseback|whale watch|dolphin cruise|jet boat|speed ?boat|hot air balloon|theme park|amusement park|wildlife park|wildlife|safari|\bzoo\b|\bpark\b|\boutdoor\b|escape rooms?|\bvr\b|arcade)\b/i,
   },
   { canonical: 'Sports', pattern: /\b(sports?( (venue|organization|club|event|league|teams?))?|professional (sports )?teams?|baseball|soccer|rugby|hockey|\bmlb\b|\bmls\b|\bahl\b|\bnfl\b|\bnba\b|\bnwsl\b|skate ?park|athletic)\b/i },
-  { canonical: 'Shopping', pattern: /\b(shopping|\bmalls?\b|outlet|boutique district|antique district|retail (center|hub|district)|shopping (mall|center|district|outlet)|\bmarkets?\b)\b/i },
+  { canonical: 'Shopping', pattern: /\b(shopping|\bmalls?\b|outlet|\bboutiques?\b|antique district|retail (center|hub|district)|shopping (mall|center|district|outlet)|\bmarkets?\b|bookstores?|\bfashion\b)\b/i },
   {
     canonical: 'Arts & Culture',
     pattern:
-      /\b(museums?|galler(y|ies)|theat(er|re)|\barts?\b|cultural (center|centre|institutions?|district)|performing arts|music venue|historic(al)? (site|district|monument|park|landmark)|monument|landmark)\b/i,
+      /\b(museums?|galler(y|ies)|theat(er|re)|\barts?\b|\bcultural\b|performing arts|music venue|performance venue|glassblowing|historic(al)? (site|district|monument|park|landmark)|monument|landmark)\b/i,
   },
   {
     canonical: 'Social',
     pattern: /\b(social (club|group|communit(y|ies)|mixers?)|meetup|club for|singles (club|event)|reading club|book club|chess club|game (night|club)|community centers?|festival|pride\b)\b/i,
   },
-  { canonical: 'Travel', pattern: /\b(guided tour|sightseeing|travel (agency|agencies|experience|management|attraction)|passport|visa services|tour operator)\b/i },
+  { canonical: 'Travel', pattern: /\b(guided tours?|sightseeing|travel (agency|agencies|experience|management|attraction)|passport|visa services|tour operator|\bferry\b)\b/i },
   {
     canonical: 'Food & drink',
     pattern:
-      /\b(restaurant|caf[eé]|coffee|bakery|bistro|taco|pizza|seafood|dining|food ?hall|brunch|steak ?house|sushi|omakase|izakaya|trattoria|patisserie|chocolate shop|food truck|gastropub|eatery|grill|brasserie|fast.{0,2}casual|small.?plates|shared.?plates|cuisine|fine dining|italian|mexican|vietnamese|filipino|japanese|thai|korean|chinese|mediterranean|french|spanish|greek|tapas|dim sum|ramen|contemporary american|new american)\b/i,
+      /\b(restaurant|caf[eé]|coffee|bakery|bistro|taco|pizza|seafood|dining|food ?hall|brunch|steak ?house|sushi|omakase|izakaya|trattoria|patisserie|chocolate shop|food truck|gastropub|eatery|grill|brasserie|fast.{0,2}casual|small.?plates|shared.?plates|cuisine|fine dining|italian|mexican|vietnamese|filipino|japanese|thai|korean|chinese|mediterranean|french|spanish|greek|tapas|dim sum|ramen|contemporary american|new american|dessert|frozen yogurt|doughnuts?|donuts?)\b/i,
   },
 ]
 

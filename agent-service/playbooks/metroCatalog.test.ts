@@ -14,6 +14,7 @@ import {
   evaluateLocationGate,
   evaluatePresentationGate,
   evaluateOutreachGate,
+  evaluateEditorialQualityGate,
   buildFeaturedExperienceBridgeCard,
   validateFeaturedExperienceBridgeCard,
   REAL_DB_CATEGORIES,
@@ -341,6 +342,40 @@ test('resolveNeighborhoods: a direct canonical match always wins over an alias, 
   assert.equal(result.resolved.get('A'), 'Zona Río')
 })
 
+test('resolveNeighborhoods: a non-breaking space in the raw text does not block a canonical match (regression: real research text used U+00A0 in "Point Loma"/"Little Italy")', () => {
+  const canonical = ['Point Loma', 'Little Italy']
+  const records = [
+    record({ candidateName: 'Cori Pastificio Trattoria', neighborhoodName: 'Point Loma' }),
+    record({ candidateName: 'Herb & Wood', neighborhoodName: 'Little Italy' }),
+  ]
+  const result = resolveNeighborhoods(records, canonical)
+  assert.equal(result.resolved.get('Cori Pastificio Trattoria'), 'Point Loma')
+  assert.equal(result.resolved.get('Herb & Wood'), 'Little Italy')
+  assert.equal(result.unresolved.length, 0)
+})
+
+test('resolveNeighborhoods: falls back to the candidate\'s own name when the free-text neighborhood is too generic (regression: "Balboa Park" recorded neighborhood was just "Central San Diego")', () => {
+  const canonical = ['Balboa Park', 'Gaslamp Quarter']
+  const records = [record({ candidateName: 'Balboa Park', neighborhoodName: 'Central San Diego' })]
+  const result = resolveNeighborhoods(records, canonical)
+  assert.equal(result.resolved.get('Balboa Park'), 'Balboa Park')
+})
+
+test('resolveNeighborhoods: the name fallback never overrides a real match already found in the neighborhood text', () => {
+  const canonical = ['Balboa Park', 'Gaslamp Quarter']
+  // Contrived: a candidate literally named "Balboa Park" but whose neighborhood text names a different real canonical area — the text should win.
+  const records = [record({ candidateName: 'Balboa Park Gift Shop', neighborhoodName: 'Gaslamp Quarter' })]
+  const result = resolveNeighborhoods(records, canonical)
+  assert.equal(result.resolved.get('Balboa Park Gift Shop'), 'Gaslamp Quarter')
+})
+
+test('resolveNeighborhoods: a candidate with genuinely no recognizable neighborhood still fails resolution — the name fallback is not a way to guess', () => {
+  const canonical = ['Balboa Park', 'Gaslamp Quarter']
+  const records = [record({ candidateName: 'VAVi Sport & Social Club', neighborhoodName: 'San Diego' })]
+  const result = resolveNeighborhoods(records, canonical)
+  assert.equal(result.resolved.size, 0)
+})
+
 test('resolveNeighborhoods: missing neighborhood text fails resolution', () => {
   const canonical = ['La Jolla']
   const records = [record({ candidateName: 'A', neighborhoodName: null })]
@@ -456,6 +491,79 @@ test('evaluateOutreachGate: PASSes without requiring any outreach to have happen
   const result = evaluateOutreachGate({ records: [record()] })
   assert.equal(result.verdict, 'PASS')
   assert.match(result.reason, /No outreach required/)
+})
+
+// ---------------------------------------------------------------------------
+// EDITORIAL_GATE — San Diego CheckOffization quality regression (2026-09):
+// Jerry found large real-production clusters of items opening with the
+// same generic verbs (Savor, Experience, Sip, Shop, Catch, Dance)
+// describing a generic venue visit instead of naming a distinctive thing
+// to do/order/find. These tests prove the gate reproduces exactly that
+// finding mechanically, and correctly passes genuinely specific,
+// non-templated copy.
+// ---------------------------------------------------------------------------
+
+test('evaluateEditorialQualityGate: FAILs a batch where one opening word covers more than 15% of items (regression: real production had "Savor" at 33%, "Experience" at 17%)', () => {
+  const records = [
+    record({ candidateName: 'A', body: 'Savor the tacos at A' }),
+    record({ candidateName: 'B', body: 'Savor the burgers at B' }),
+    record({ candidateName: 'C', body: 'Savor the pasta at C' }),
+    record({ candidateName: 'D', body: 'Order the signature ramen at D' }),
+    record({ candidateName: 'E', body: 'Try the off-menu dish at E' }),
+    record({ candidateName: 'F', body: 'Sit in the hidden booth at F' }),
+    record({ candidateName: 'G', body: 'Ride the wooden coaster at G' }),
+    record({ candidateName: 'H', body: 'Ask for the secret pour at H' }),
+    record({ candidateName: 'I', body: 'Find the mural room at I' }),
+    record({ candidateName: 'J', body: 'Climb the lighthouse at J' }),
+  ]
+  const result = evaluateEditorialQualityGate({ records })
+  assert.equal(result.verdict, 'FAIL')
+  assert.match(result.reason, /Savor/i)
+  assert.match(result.reason, /30%/)
+})
+
+test('evaluateEditorialQualityGate: PASSes a batch with a healthy, non-repeating opening-word distribution', () => {
+  const records = [
+    record({ candidateName: 'A', body: 'Order the signature dry-aged burger at A' }),
+    record({ candidateName: 'B', body: 'Find the hidden speakeasy behind the bookshelf at B' }),
+    record({ candidateName: 'C', body: 'Ride the 600-foot zip line at C' }),
+    record({ candidateName: 'D', body: 'Ask for the off-menu omakase at D' }),
+    record({ candidateName: 'E', body: 'Photograph the sunset viewpoint at E' }),
+    record({ candidateName: 'F', body: 'Try the tonkotsu ramen bowl at F, a local favorite since 1998' }),
+    record({ candidateName: 'G', body: 'Sit at the chef\'s counter for the 12-course tasting at G' }),
+    record({ candidateName: 'H', body: 'Climb the 27-foot climbing wall at H' }),
+    record({ candidateName: 'I', body: 'Kayak through the sea caves at I' }),
+    record({ candidateName: 'J', body: 'Sip the barrel-aged Negroni at J' }),
+  ]
+  const result = evaluateEditorialQualityGate({ records })
+  assert.equal(result.verdict, 'PASS')
+})
+
+test('evaluateEditorialQualityGate: FAILs a body with no concrete dish/feature/number — "could describe dozens of unrelated venues" (regression: real "Savor diverse artisan vendors and retail" at Liberty Public Market)', () => {
+  const result = evaluateEditorialQualityGate({ records: [record({ candidateName: 'Liberty Public Market', body: 'Savor diverse artisan vendors and retail at Liberty Public Market' })] })
+  assert.equal(result.verdict, 'FAIL')
+  assert.match(result.reason, /dozens of unrelated venues/)
+})
+
+test('evaluateEditorialQualityGate: PASSes a body that names a specific dish, even though it opens with a generic verb — the verb itself is never individually banned', () => {
+  const result = evaluateEditorialQualityGate({ records: [record({ candidateName: 'Aqui Es Texcoco', body: 'Savor authentic barbacoa de borrego at Aqui Es Texcoco' })] })
+  assert.equal(result.verdict, 'PASS')
+})
+
+test('evaluateEditorialQualityGate: FAILs ranking/superlative filler with no specific fact backing it up (regression: real "hailed as the Best Ballpark in America" with nothing else concrete)', () => {
+  const result = evaluateEditorialQualityGate({ records: [record({ candidateName: 'Petco Park', body: 'Catch thrilling Padres baseball action at San Diego’s Petco Park, hailed as the Best Ballpark in America.' })] })
+  assert.equal(result.verdict, 'FAIL')
+  assert.match(result.reason, /ranking\/superlative filler/)
+})
+
+test('evaluateEditorialQualityGate: PASSes a superlative when it is itself the specific, checkable fact (regression: real "only three-Michelin-star restaurant")', () => {
+  const result = evaluateEditorialQualityGate({ records: [record({ candidateName: 'Addison', body: 'Dine at Addison, San Diego’s top-ranked and only three-Michelin-star restaurant.' })] })
+  assert.equal(result.verdict, 'PASS')
+})
+
+test('evaluateEditorialQualityGate: does not run the batch-level opening-word check on a very small batch (a single strong item should not fail just because it is the whole batch)', () => {
+  const result = evaluateEditorialQualityGate({ records: [record({ candidateName: 'A', body: 'Order the dry-aged tomahawk at A' })] })
+  assert.equal(result.verdict, 'PASS')
 })
 
 // ---------------------------------------------------------------------------

@@ -75,6 +75,17 @@ test('researchExecutionTypeFor / buildResearchVerifierPrompt / buildCheckoffEdit
   assert.match(buildCheckoffEditorPrompt(editorReq).systemPrompt, /checkoffizedItem/)
 })
 
+test('buildCheckoffEditorPrompt: strengthened specificity rule (San Diego CheckOffization quality regression, 2026-09) — bans the generic-verb-opening default and requires the distinctive thing as early as possible', () => {
+  const editorReq: SpecialistExecutionRequest = { ...req(), specialist: 'checkoff_editor', methodologyId: 'checkoff_editor', methodologyVersion: 'v1' }
+  const { systemPrompt } = buildCheckoffEditorPrompt(editorReq)
+  assert.match(systemPrompt, /distinctive thing to do, order, find, or notice must appear as early as possible/)
+  assert.match(systemPrompt, /Savor/)
+  assert.match(systemPrompt, /Experience/)
+  assert.match(systemPrompt, /could this exact/)
+  assert.match(systemPrompt, /ranking or superlative filler/)
+  assert.match(systemPrompt, /already counted/)
+})
+
 // ---------------------------------------------------------------------------
 // Structural bug fix regression (San Diego run, 2026-09-05): the M1
 // geography stage's prompt must describe evidence.neighborhoods[]'s

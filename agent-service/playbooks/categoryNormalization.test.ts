@@ -39,6 +39,33 @@ test('classifyCategory: obvious free-text variants map to the correct canonical 
   }
 })
 
+test('classifyCategory: San Diego attrition audit recovery — real category labels that previously fell through unclassified (2026-09)', () => {
+  const cases: Array<[string, string]> = [
+    ['Wildlife/Educational', 'Adventure'], // The Living Coast Discovery Center
+    ['Cultural/Downtown', 'Arts & Culture'], // Historic Third Avenue
+    ['Outdoor / Attraction', 'Adventure'], // Coronado Central Beach
+    ['Outdoor / Recreation', 'Adventure'], // Bike rental & riding
+    ['Park / Outdoor', 'Adventure'], // Coronado Tidelands Park
+    ['bookstore', 'Shopping'], // Libélula Books & Co.
+    ['fashion / boutique', 'Shopping'], // Sew Loka
+    ['music / performance venue', 'Arts & Culture'], // Listening Rooms
+    ['Boutique / local artist collective', 'Shopping'], // Pangaea Outpost
+    ['Dessert (frozen yogurt)', 'Food & drink'], // Yogurt On The Rocks
+    ['Scenic park / viewpoint', 'Adventure'], // Kate Sessions Park
+    ['Artisan doughnut shop', 'Food & drink'], // The Goods
+    ['Hands‑on glassblowing workshop', 'Arts & Culture'], // Barrio Glassworks
+    ['Free‑roam VR escape rooms & arcade', 'Adventure'], // Escape To VR
+    ['Historic ranch & guided tours', 'Travel'], // Leo Carrillo Ranch Historic Park (plural "tours" bug fix)
+  ]
+  for (const [raw, expected] of cases) {
+    assert.equal(classifyCategory(raw).canonical, expected, `expected "${raw}" -> ${expected}`)
+  }
+})
+
+test('classifyCategory: "Upscale Contemporary" (Herb & Wood\'s real research category) is still correctly unclassified — no keyword in the text itself identifies it as food, so it must not be guessed', () => {
+  assert.equal(classifyCategory('Upscale Contemporary').canonical, null)
+})
+
 test('classifyCategory: a genuinely unrecognizable label is flagged unclassified, never forced into a bucket', () => {
   const result = classifyCategory('Upscale Contemporary')
   assert.equal(result.canonical, null)

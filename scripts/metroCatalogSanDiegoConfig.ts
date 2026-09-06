@@ -69,4 +69,17 @@ export const NEIGHBORHOOD_ALIASES: Record<string, string> = {
   revolución: 'Zona Centro',
   'pueblo amigo': 'Zona Norte',
   pedwest: 'Zona Centro',
+  // Added during the CheckOffization/attrition audit (2026-09) — same
+  // "judgment call, flagged as such" discipline as the aliases above.
+  // Each is a well-established, publicly verifiable real-world location
+  // fact (not researched fresh for this batch), used only to resolve a
+  // candidate whose recorded neighborhood text was too generic
+  // ("Westfield UTC", "Safari Park (north inland San Diego)",
+  // "Entertainment Circle area") to hit a canonical name directly. Flagged
+  // for Jerry's review, not silently applied.
+  'westfield utc': 'University City', // the mall itself sits in University City
+  'safari park': 'Escondido', // San Diego Zoo Safari Park is in Escondido
+  'daley ranch': 'Escondido', // Daley Ranch is a preserve in Escondido
+  'entertainment circle': 'Chula Vista', // Sesame Place San Diego is on the Chula Vista Bayfront
+  'gunpowder point': 'Chula Vista', // The Living Coast Discovery Center sits on the Sweetwater Marsh refuge in Chula Vista
 }
