@@ -26,9 +26,15 @@ test('candidatesAreSameThing: name differing only by case/punctuation/"The" is s
   assert.equal(candidatesAreSameThing(a, b), true)
 })
 
-test('candidatesAreSameThing: same venue, DIFFERENT specific experience is NOT a dupe — one venue can have multiple distinct items', () => {
+test('candidatesAreSameThing: same exact name now collapses regardless of how differently the claim is worded (design reversal, see module doc)', () => {
   const a = candidate({ claimSupported: 'make-your-own-glass ornament class' })
   const b = candidate({ claimSupported: 'Thursday evening live glassblowing demonstration' })
+  assert.equal(candidatesAreSameThing(a, b), true)
+})
+
+test('candidatesAreSameThing: a genuinely distinct experience at the same venue survives via a DIFFERENT name, not a different claim — this is how the real pipeline actually represents it', () => {
+  const a = candidate({ name: 'Sonoran Glass School — Make-Your-Own-Glass Class' })
+  const b = candidate({ name: 'Sonoran Glass School — Live Glassblowing Demonstration' })
   assert.equal(candidatesAreSameThing(a, b), false)
 })
 
@@ -53,9 +59,9 @@ test('dedupeCandidates: collapses a real dupe and records the discarded raw entr
   assert.equal(result.mergedGroups[0].discarded.length, 1)
 })
 
-test('dedupeCandidates: keeps two genuinely distinct items at the same venue', () => {
-  const a = candidate({ claimSupported: 'glass ornament class' })
-  const b = candidate({ claimSupported: 'glassblowing demonstration' })
+test('dedupeCandidates: keeps two genuinely distinct items at the same venue when they carry distinct names', () => {
+  const a = candidate({ name: 'Sonoran Glass School — Class', claimSupported: 'glass ornament class' })
+  const b = candidate({ name: 'Sonoran Glass School — Demo', claimSupported: 'glassblowing demonstration' })
   const result = dedupeCandidates([a, b])
   assert.equal(result.deduped.length, 2)
 })
@@ -71,10 +77,14 @@ test('mergeCandidateSets: merges a broad-discovery pass and a targeted gap pass,
 // Structural bug fix regression (San Diego run, 2026-09-05): 251 raw
 // candidates collapsed to only 200 unique names because re-describing
 // the SAME real venue across separate research passes almost never
-// produces identical or substring-overlapping claim text — the exact
-// claim-match/containment rule silently let 51 literal-same-name rows
-// through untouched (e.g. "Westfield UTC" x5, each with different
-// generic mall-description wording).
+// produces identical or substring-overlapping claim text. A first
+// attempt fixed most of this with a claim-similarity (Jaccard) threshold
+// but still mis-split 8 real duplicate pairs whose claims happened to be
+// short/generic ("Ranked #6, praised dishes" vs. "Critic's Pick for Top
+// Overall Restaurant" — the SAME restaurant, zero shared words, an
+// identical similarity score to a genuinely-distinct pair). These
+// fixtures are exactly those real pairs — proof the final name-only
+// design collapses them correctly where claim-similarity could not.
 // ---------------------------------------------------------------------------
 
 test('candidatesAreSameThing: regression — differently-worded re-descriptions of the same real venue across research passes are dupes', () => {
@@ -89,10 +99,18 @@ test('candidatesAreSameThing: regression — a second real San Diego duplicate p
   assert.equal(candidatesAreSameThing(a, b), true)
 })
 
-test('candidatesAreSameThing: the existing glass-class vs. glassblowing-demonstration fixture still stays distinct under the new similarity check', () => {
-  const a = candidate({ claimSupported: 'make-your-own-glass ornament class' })
-  const b = candidate({ claimSupported: 'Thursday evening live glassblowing demonstration' })
-  assert.equal(candidatesAreSameThing(a, b), false)
+test('candidatesAreSameThing: regression — real pairs a claim-SIMILARITY threshold still got wrong (short/generic wording, zero shared vocabulary) now correctly merge on name alone', () => {
+  const kingfisher = [
+    candidate({ name: 'Kingfisher', address: undefined, claimSupported: 'Ranked #6, praised dishes' }),
+    candidate({ name: 'Kingfisher', address: undefined, claimSupported: "Critic's Pick for Top Overall Restaurant" }),
+  ]
+  assert.equal(candidatesAreSameThing(kingfisher[0], kingfisher[1]), true)
+
+  const ussMidway = [
+    candidate({ name: 'USS Midway Museum', address: undefined, claimSupported: "Interactive museum aboard America's longest-serving aircraft carrier" }),
+    candidate({ name: 'USS Midway Museum', address: undefined, claimSupported: "lists USS Midway Museum as a can't-miss attraction" }),
+  ]
+  assert.equal(candidatesAreSameThing(ussMidway[0], ussMidway[1]), true)
 })
 
 test('candidatesAreSameThing: does not over-dedupe two different businesses with similar-but-not-equal names', () => {

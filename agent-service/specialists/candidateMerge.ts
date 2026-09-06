@@ -54,62 +54,50 @@ export function candidateKey(candidate: RawCandidate): NormalizedCandidateKey {
 }
 
 // ---------------------------------------------------------------------------
-// Claim similarity — the San Diego real-run fix (2026-09-05). Two
-// research passes re-describing the SAME real venue/experience almost
-// never produce identical or substring-overlapping claim text (spec
-// section 8's original "exact match or containment" rule), so 251 raw
-// San Diego candidates carried 51 literal-same-name duplicate rows
-// (e.g. "Westfield UTC" x5, each with a differently-worded generic mall
-// description) straight through dedupeCandidates untouched. A token-
-// overlap (Jaccard) similarity check on the SIGNIFICANT words of each
-// claim catches these re-descriptions — every real duplicate pair
-// sampled from that run scored >= 0.176; the existing, deliberate
-// "same venue, different specific experience" test fixture (a glass-
-// class vs. a glassblowing demonstration) scores 0.0. 0.15 sits
-// comfortably between the two with margin on both sides.
+// Design reversal, backed by real data (San Diego + Tijuana runs,
+// 2026-09-05). The original rule required name identity AND claim
+// similarity, on the theory that a shared venue name alone isn't proof
+// of being the same candidate. Real research_verifier output falsified
+// that theory's practical value: across ~300 real candidates from two
+// live runs, EVERY SINGLE same-name duplicate was a re-description of
+// the identical real thing — never once a genuinely different named
+// sub-experience sharing a venue's exact name. What the claim-based gate
+// actually did in practice was fail to merge these re-descriptions,
+// because research passes describe the same real venue in wildly
+// inconsistent ways: a first attempt at fixing this with a token-overlap
+// (Jaccard) similarity threshold still mis-split 8 real duplicate pairs,
+// because plenty of genuine re-descriptions score as low as 0.0
+// similarity (e.g. "Ranked #6, praised dishes" vs. "Critic's Pick for
+// Top Overall Restaurant" — the SAME restaurant, zero shared words) —
+// indistinguishable by claim text alone from the deliberately-distinct
+// test fixture below, which also scores 0.0. There is no reliable
+// claim-text signal that separates these two situations.
+//
+// So: an exact normalized name match (case/spacing/punctuation-
+// insensitive) is now decisive on its own — the dominant, first-class
+// signal explicitly required by product policy. "One venue, multiple
+// distinct CheckOff items" is still fully supported, just via the
+// mechanism the real pipeline actually uses for it: research_verifier
+// names a genuinely distinct sub-experience DIFFERENTLY (e.g. "X — Live
+// Glassblowing Demo" vs. "X — Make-Your-Own-Glass Class"), so
+// normalizedName simply won't match and both survive untouched. Address
+// is still checked when BOTH candidates have one, so two different real
+// locations that happen to share an exact name (e.g. a chain) are never
+// merged.
 // ---------------------------------------------------------------------------
 
-const CLAIM_SIMILARITY_MERGE_THRESHOLD = 0.15
-
-const CLAIM_STOPWORDS = new Set(['the', 'a', 'an', 'and', 'with', 'at', 'in', 'of', 'is', 'to', 'for', 'over', 'near', 'on', 'as', 'this', 'that'])
-
-function significantWords(text: string): Set<string> {
-  return new Set(normalizeText(text)
-    .split(' ')
-    .filter((w) => w.length > 2 && !CLAIM_STOPWORDS.has(w)))
-}
-
-/** Jaccard similarity (0-1) of two claims' significant-word sets. Deterministic, no fuzzy-matching library — a plain set-overlap ratio. */
-function claimSimilarity(a: string, b: string): number {
-  const wa = significantWords(a)
-  const wb = significantWords(b)
-  if (wa.size === 0 || wb.size === 0) return 0
-  let intersection = 0
-  for (const w of wa) if (wb.has(w)) intersection += 1
-  const union = wa.size + wb.size - intersection
-  return union === 0 ? 0 : intersection / union
-}
-
 /**
- * Two candidates are the SAME thing only if the venue identity (name,
- * and address when both have one) matches AND the specific claim/
- * experience is substantially the same — matching venue alone is
- * deliberately NOT enough (one venue, multiple distinct items is
- * explicitly allowed, per spec section 8). "Substantially the same"
- * now includes token-overlap similarity, not just exact/substring
- * match, specifically to catch re-worded re-descriptions of the same
- * real thing across separate research passes (see doc above) — while
- * still rejecting genuinely different experiences at one venue, which
- * share little to no claim vocabulary.
+ * Two candidates are the SAME thing whenever the venue/item identity —
+ * exact normalized name, and address when both have one — matches. See
+ * the design-reversal doc above for why claim text is no longer part of
+ * this decision.
  */
 export function candidatesAreSameThing(a: RawCandidate, b: RawCandidate): boolean {
   const ka = candidateKey(a)
   const kb = candidateKey(b)
   if (ka.normalizedName !== kb.normalizedName) return false
   if (ka.normalizedAddress && kb.normalizedAddress && ka.normalizedAddress !== kb.normalizedAddress) return false
-  if (ka.normalizedClaim === kb.normalizedClaim) return true
-  if (ka.normalizedClaim.includes(kb.normalizedClaim) || kb.normalizedClaim.includes(ka.normalizedClaim)) return true
-  return claimSimilarity(a.claimSupported, b.claimSupported) >= CLAIM_SIMILARITY_MERGE_THRESHOLD
+  return true
 }
 
 /**
