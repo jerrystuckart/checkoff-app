@@ -44,22 +44,16 @@
 --     -> admin). Adding these 4 rows requires ZERO app or admin code
 --     changes.
 --
--- color_hex — UNRESOLVED, genuinely blocked, not just unattempted (2026-09-06):
---   agent_service has no SELECT grant on `categories` (confirmed via
---   information_schema.role_table_grants — it returns zero rows for this
---   table, meaning no visibility at all, not even column metadata), and
---   a repo-wide grep for hex color literals near category names found
---   nothing — every screen and the admin tool read color_hex from the
---   live DB with no hardcoded fallback palette anywhere to read instead.
---   There is no way for this migration to see the real existing 8 colors
---   from this environment. The 4 values below are a best-effort, visually
---   distinct placeholder set chosen for hue separation from each other —
---   NOT verified against the real palette. Before running this: open
---   /Users/jerrystuckart/Downloads/checkoff_admin.html, check the real
---   color_hex values in the item-editor category dropdown
---   (checkoff_admin.html:1775) or a live `select id,name,color_hex from
---   categories` query, and replace these 4 literals to actually
---   coordinate with the existing 8 — this migration cannot do that step.
+-- color_hex — RESOLVED 2026-09-06. agent_service has no SELECT grant on
+--   `categories` (confirmed via information_schema.role_table_grants —
+--   zero rows for this table, no visibility at all), so this migration
+--   could not read the live palette itself; Jerry supplied the real,
+--   current production values directly. The full live palette (for
+--   context — only the 4 new rows below are inserted by this file):
+--     Adventure #0F6E56, Arts & Culture #9B4F96, Bar & drinks #BA7517,
+--     Food & drink #D85A30, Misc #888780, Nightlife #1A1A2E, Play #534AB7,
+--     Shopping #378ADD, Social #D4537E, Spa & self-care #B77AE0,
+--     Sports #1D9E75, Travel #185FA5.
 --
 -- Uses the exact, unchanged canonical Winston taxonomy names
 -- (agent-service/playbooks/categoryNormalization.ts) — never remapped.
@@ -71,22 +65,21 @@
 
 BEGIN;
 
--- PLACEHOLDER — see the unresolved color_hex note above. Replace these 4
--- literals with real, palette-coordinated values before running.
+-- Real production values (Jerry, 2026-09-06) — see the RESOLVED note above.
 INSERT INTO public.categories (name, color_hex)
-SELECT 'Shopping', '#E85D75'
+SELECT 'Shopping', '#378ADD'
 WHERE NOT EXISTS (SELECT 1 FROM public.categories WHERE name = 'Shopping');
 
 INSERT INTO public.categories (name, color_hex)
-SELECT 'Sports', '#2D82B7'
+SELECT 'Sports', '#1D9E75'
 WHERE NOT EXISTS (SELECT 1 FROM public.categories WHERE name = 'Sports');
 
 INSERT INTO public.categories (name, color_hex)
-SELECT 'Social', '#F4A261'
+SELECT 'Social', '#D4537E'
 WHERE NOT EXISTS (SELECT 1 FROM public.categories WHERE name = 'Social');
 
 INSERT INTO public.categories (name, color_hex)
-SELECT 'Travel', '#2A9D8F'
+SELECT 'Travel', '#185FA5'
 WHERE NOT EXISTS (SELECT 1 FROM public.categories WHERE name = 'Travel');
 
 DO $$
