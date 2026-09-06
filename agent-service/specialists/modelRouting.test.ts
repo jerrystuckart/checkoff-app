@@ -36,11 +36,11 @@ test('resolveOpenAiModel: research_verifier honors CHIEF_OPENAI_RESEARCH_MODEL o
   })
 })
 
-test('resolveOpenAiModel: checkoff_editor defaults to the cheap gpt-4.1-mini at ECONOMY tier', () => {
+test('resolveOpenAiModel: checkoff_editor defaults to gpt-4.1 at STANDARD tier — bumped from gpt-4.1-mini per Jerry\'s "strongest sensible model for final wording" requirement (San Diego CheckOffization quality regression, 2026-09)', () => {
   withEnv({ CHIEF_OPENAI_EDITOR_MODEL: undefined }, () => {
     const route = resolveOpenAiModel('checkoff_editor', 'checkoff_editor')
-    assert.equal(route.model, 'gpt-4.1-mini')
-    assert.equal(route.costTier, 'ECONOMY')
+    assert.equal(route.model, 'gpt-4.1')
+    assert.equal(route.costTier, 'STANDARD')
   })
 })
 

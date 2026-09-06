@@ -24,10 +24,13 @@ export interface ModelRoute {
 // gpt-4.1 specifically because it was the model CONFIRMED working with
 // live web research in this environment during the Phase 2H live-provider
 // proof (gpt-5 404s without organization verification) — this is a
-// verified-working choice, not an arbitrary one. checkoff_editor defaults
-// to a cheaper model: it's a constrained editorial transformation on
-// already-verified facts, not open-ended research, so it doesn't need
-// research-grade reasoning. DVA-2/DAP ("deep analysis") default to the
+// verified-working choice, not an arbitrary one. checkoff_editor also
+// defaults to gpt-4.1 (bumped from gpt-4.1-mini, San Diego CheckOffization
+// quality regression 2026-09) — Jerry's explicit requirement that final
+// user-facing wording use the strongest sensible model, not the
+// cheapest, since it's the copy real users see, even though the task
+// itself (editorial transformation of already-verified facts) doesn't
+// need research-grade reasoning. DVA-2/DAP ("deep analysis") default to the
 // SAME gpt-4.1 as DVA-1 — not automatically upgraded — until testing
 // specifically proves a stronger model materially improves output, at
 // which point CHIEF_OPENAI_DEEP_ANALYSIS_MODEL is the explicit override
@@ -35,7 +38,16 @@ export interface ModelRoute {
 // ---------------------------------------------------------------------------
 
 const DEFAULT_RESEARCH_MODEL = 'gpt-4.1'
-const DEFAULT_EDITOR_MODEL = 'gpt-4.1-mini'
+// Bumped from gpt-4.1-mini (San Diego CheckOffization quality regression,
+// 2026-09): Jerry's explicit requirement is the strongest sensible model
+// for final user-facing wording, not the cheapest one — the earlier
+// ECONOMY-tier choice was made before the editorial-quality bar was
+// tightened (specificity over generic-verb templates) and undersells it.
+// gpt-4.1 (full) is the strongest model confirmed actually working on
+// this account (gpt-5 404s without organization verification — see
+// openAiAdapter.ts's doc) — CHIEF_OPENAI_EDITOR_MODEL remains the
+// explicit override point if a stronger verified model becomes available.
+const DEFAULT_EDITOR_MODEL = 'gpt-4.1'
 const DEFAULT_DVA1_MODEL = 'gpt-4.1'
 const DEFAULT_DEEP_ANALYSIS_MODEL = 'gpt-4.1'
 // Phase 2I — destination_relationship_manager drafts ONE thing (outreach/
@@ -74,7 +86,7 @@ export function resolveOpenAiModel(specialist: string, methodologyId: string): M
   }
   if (specialist === 'checkoff_editor') {
     const { value, source } = fromEnvOrDefault('CHIEF_OPENAI_EDITOR_MODEL', DEFAULT_EDITOR_MODEL)
-    return { model: value, costTier: 'ECONOMY', source }
+    return { model: value, costTier: 'STANDARD', source }
   }
   if (specialist === 'destination_relationship_manager') {
     const { value, source } = fromEnvOrDefault('CHIEF_OPENAI_RELATIONSHIP_MODEL', DEFAULT_RELATIONSHIP_MODEL)

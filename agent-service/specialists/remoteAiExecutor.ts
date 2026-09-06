@@ -24,9 +24,26 @@ import { estimateCostUsd, type TokenUsage } from './usagePricing'
 
 export const SPECIALIST_PROVIDER_PREFERENCE: Readonly<Partial<Record<SpecialistKey, readonly string[]>>> = Object.freeze({
   research_verifier: ['openai', 'anthropic'],
-  checkoff_editor: ['anthropic', 'openai'],
+  checkoff_editor: ['openai'],
   destination_strategist: ['anthropic', 'openai'],
   destination_relationship_manager: ['anthropic', 'openai'],
+})
+
+/**
+ * Specialists whose provider is a HARD requirement, not just a
+ * preference — San Diego CheckOffization architecture decision (2026-09):
+ * Claude Code must never be the author of final CheckOff item wording.
+ * Final editorial copy is Winston's OpenAI/ChatGPT editorial provider's
+ * job; Claude Code is the developer/operator, not the copywriter. Unlike
+ * SPECIALIST_PROVIDER_PREFERENCE (which only orders adapters, so an
+ * unlisted/deprioritized provider is still usable as a fallback), an
+ * entry here REMOVES every other provider from qualifiedAdapters()
+ * entirely — if the named provider isn't configured or fails, execute()
+ * returns EXECUTOR_UNAVAILABLE (an honest, persisted provider error),
+ * never a silent fallback to a different vendor's prose.
+ */
+export const SPECIALIST_EXCLUSIVE_PROVIDER: Readonly<Partial<Record<SpecialistKey, string>>> = Object.freeze({
+  checkoff_editor: 'openai',
 })
 
 /**
@@ -300,7 +317,9 @@ export class RemoteAiExecutor implements SpecialistExecutor {
 
   private qualifiedAdapters(request: SpecialistExecutionRequest): ProviderAdapter[] {
     const needsLiveWeb = methodologyRequiresLiveWebResearch(request)
-    const qualified = this.adapters.filter((a) => a.isConfigured() && (!needsLiveWeb || a.supportsLiveWebResearch))
+    let qualified = this.adapters.filter((a) => a.isConfigured() && (!needsLiveWeb || a.supportsLiveWebResearch))
+    const exclusiveProvider = SPECIALIST_EXCLUSIVE_PROVIDER[request.specialist]
+    if (exclusiveProvider) qualified = qualified.filter((a) => a.providerKey === exclusiveProvider)
     return orderAdaptersForSpecialist(request.specialist, qualified)
   }
 

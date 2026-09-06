@@ -40,6 +40,23 @@ class FakeAdapter implements ProviderAdapter {
   }
 }
 
+/** Same shape as FakeAdapter, but providerKey='openai' — checkoff_editor's SPECIALIST_EXCLUSIVE_PROVIDER entry means only an adapter with this exact key ever qualifies for it (San Diego CheckOffization architecture decision, 2026-09: Claude must never author final wording). */
+class FakeOpenAiAdapter implements ProviderAdapter {
+  readonly providerKey = 'openai'
+  constructor(
+    public readonly supportsLiveWebResearch: boolean,
+    private configured: boolean,
+    private response: ProviderCompletionResult | Error = { text: '{}' }
+  ) {}
+  isConfigured() {
+    return this.configured
+  }
+  async complete(_input: ProviderCompletionInput): Promise<ProviderCompletionResult> {
+    if (this.response instanceof Error) throw this.response
+    return this.response
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Real Anthropic adapter — gating only, no live network call
 // ---------------------------------------------------------------------------
@@ -149,9 +166,22 @@ test('RemoteAiExecutor: canExecute is true once a configured, web-research-capab
 })
 
 test('RemoteAiExecutor: checkoff_editor does not require live web research capability from the adapter', () => {
-  const executor = new RemoteAiExecutor([new FakeAdapter(false, true)])
+  const executor = new RemoteAiExecutor([new FakeOpenAiAdapter(false, true)])
   const editorReq = req({ specialist: 'checkoff_editor', methodologyId: 'checkoff_editor', methodologyVersion: 'v1', requiredEvidenceKeys: ['factualSource', 'checkoffizedItem'], authorityOperations: ['metro_launch.build_internal_artifact'] })
   assert.equal(executor.canExecute(editorReq), true)
+})
+
+test('RemoteAiExecutor: checkoff_editor is EXECUTOR_UNAVAILABLE when only a non-OpenAI provider is configured — never silently falls back to another vendor for final wording (San Diego CheckOffization architecture decision, 2026-09)', () => {
+  const executor = new RemoteAiExecutor([new FakeAdapter(true, true)]) // configured, capable, but providerKey='fake' not 'openai'
+  const editorReq = req({ specialist: 'checkoff_editor', methodologyId: 'checkoff_editor', methodologyVersion: 'v1', requiredEvidenceKeys: ['factualSource', 'checkoffizedItem'], authorityOperations: ['metro_launch.build_internal_artifact'] })
+  assert.equal(executor.canExecute(editorReq), false)
+})
+
+test('RemoteAiExecutor: checkoff_editor execute() returns an honest unavailable error (never fabricated prose) when OpenAI is not configured', async () => {
+  const executor = new RemoteAiExecutor([new FakeAdapter(true, true), new FakeOpenAiAdapter(true, false)]) // openai adapter present but NOT configured (no API key)
+  const editorReq = req({ specialist: 'checkoff_editor', methodologyId: 'checkoff_editor', methodologyVersion: 'v1', requiredEvidenceKeys: ['factualSource', 'checkoffizedItem'], authorityOperations: ['metro_launch.build_internal_artifact'] })
+  const result = await executor.execute(editorReq)
+  assert.ok('unavailable' in result && result.unavailable)
 })
 
 test('RemoteAiExecutor: canExecute is false for destination_strategist against v1 (still gate-semantics-only, superseded)', () => {
@@ -273,9 +303,12 @@ test('RemoteAiExecutor: an unconfigured provider never counts as a fallback atte
 // ---------------------------------------------------------------------------
 
 class CapturingAdapter implements ProviderAdapter {
-  readonly providerKey = 'capturing'
+  readonly providerKey: string
   readonly supportsLiveWebResearch = true
   capturedRequiresLiveWebResearch: boolean | null = null
+  constructor(providerKey: string = 'capturing') {
+    this.providerKey = providerKey
+  }
   isConfigured() {
     return true
   }
@@ -314,7 +347,7 @@ test('RemoteAiExecutor: destination_strategist + destination/dap does NOT reques
 })
 
 test('RemoteAiExecutor: checkoff_editor does not request live web research', async () => {
-  const adapter = new CapturingAdapter()
+  const adapter = new CapturingAdapter('openai')
   const executor = new RemoteAiExecutor([adapter])
   await executor.execute(req({ specialist: 'checkoff_editor', methodologyId: 'checkoff_editor', methodologyVersion: 'v1', authorityOperations: [] }))
   assert.equal(adapter.capturedRequiresLiveWebResearch, false)

@@ -49,7 +49,7 @@ test('OpenAiAdapter: falls back to walking output[].content[] when output_text i
 test('OpenAiAdapter: modelFor() routes per-call via modelRouting.ts when no explicit model override is set at construction', () => {
   const adapter = new OpenAiAdapter({ apiKey: 'sk-test-fake' })
   assert.equal(adapter.modelFor('research_verifier', 'metro_launch'), 'gpt-4.1')
-  assert.equal(adapter.modelFor('checkoff_editor', 'checkoff_editor'), 'gpt-4.1-mini')
+  assert.equal(adapter.modelFor('checkoff_editor', 'checkoff_editor'), 'gpt-4.1')
   assert.equal(adapter.modelFor('destination_strategist', 'destination/dva1'), 'gpt-4.1')
 })
 
@@ -67,7 +67,7 @@ test('OpenAiAdapter: complete() sends the routed model in the request body', asy
   }) as unknown as typeof fetch
   const adapter = new OpenAiAdapter({ apiKey: 'sk-test-fake', fetchImpl: fakeFetch })
   await adapter.complete({ systemPrompt: 's', userPrompt: 'u', requiresLiveWebResearch: false, specialist: 'checkoff_editor', methodologyId: 'checkoff_editor' })
-  assert.equal(capturedBody?.model, 'gpt-4.1-mini')
+  assert.equal(capturedBody?.model, 'gpt-4.1')
 })
 
 test('OpenAiAdapter: a non-2xx response throws with the response body included', async () => {
