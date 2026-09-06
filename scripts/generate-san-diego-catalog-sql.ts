@@ -57,29 +57,11 @@
 //
 // Usage: npx tsx scripts/generate-san-diego-catalog-sql.ts
 
-import { writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs'
-import path from 'node:path'
-import { DbPlaybookRunStore } from '../agent-service/specialists/dbPlaybookRunStore'
-import { playbookRunId } from '../agent-service/specialists/playbookRun'
-import { classifyCategory } from '../agent-service/playbooks/categoryNormalization'
-import { runIntakePipeline, buildFeaturedExperienceBridgeCard, validateFeaturedExperienceBridgeCard, type MetroCatalogCandidate, type ItemIntakeRecord } from '../agent-service/playbooks/metroCatalog'
-import { CANONICAL_NEIGHBORHOODS, NEIGHBORHOOD_ALIASES, MEXICO_NEIGHBORHOODS, SAN_DIEGO_GENERIC_PLACE_WORDS, VERIFIED_NAME_OVERRIDES, CONFIRMED_DISTINCT_PAIRS } from './metroCatalogSanDiegoConfig'
-import { Pool } from 'pg'
+import { writeFileSync, mkdirSync, readFileSync } from 'node:fs'
+import { buildFeaturedExperienceBridgeCard, validateFeaturedExperienceBridgeCard } from '../agent-service/playbooks/metroCatalog'
+import { MEXICO_NEIGHBORHOODS } from './metroCatalogSanDiegoConfig'
+import { loadEnvFile, dollarQuote, buildFinalRecords, fetchExistingProductionMapsQueries, EXPECTED_EXISTING_ITEM_COUNT } from './sanDiegoReconciliationShared'
 
-function loadEnvFile(relPath: string): void {
-  const envPath = path.join(__dirname, '..', relPath)
-  if (!existsSync(envPath)) return
-  for (const line of readFileSync(envPath, 'utf8').split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed || trimmed.startsWith('#')) continue
-    const eq = trimmed.indexOf('=')
-    if (eq === -1) continue
-    const key = trimmed.slice(0, eq).trim()
-    let val = trimmed.slice(eq + 1).trim()
-    if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) val = val.slice(1, -1)
-    if (!(key in process.env)) process.env[key] = val
-  }
-}
 loadEnvFile('.env')
 
 function slugify(s: string): string {
@@ -90,74 +72,6 @@ function slugify(s: string): string {
     .replace(/[^a-z0-9]+/g, '-')
     .replace(/(^-|-$)/g, '')
 }
-
-/** Dollar-quoted string literal — avoids ALL single-quote/apostrophe escaping headaches for real venue names/copy (Warwick's Books, native Spanish text, etc.), same technique Denver's own draft SQL used ($co$...$co$). Tag is content-derived so it can never collide with the literal text itself. */
-function dollarQuote(text: string, tagHint: string): string {
-  let tag = tagHint
-  while (text.includes(`$${tag}$`)) tag += 'x'
-  return `$${tag}$${text}$${tag}$`
-}
-
-async function loadCandidates(projectId: string): Promise<MetroCatalogCandidate[]> {
-  const store = new DbPlaybookRunStore()
-  const run = await store.get(playbookRunId('metro_launch', projectId))
-  if (!run) throw new Error(`No metro_launch run found for project "${projectId}"`)
-  const state = run.state as {
-    candidates?: Array<{ name: string; category: string | null; neighborhood: string | null; claimSupported: string; source: string; mergedSourceUrls?: string[]; verificationConfidence?: 'LOW' | 'MEDIUM' | 'HIGH' }>
-    checkoffizedItems?: Array<{ name: string; checkoffizedItem: string }>
-  }
-  const checkoffizedByName = new Map((state.checkoffizedItems ?? []).map((c) => [c.name, c.checkoffizedItem]))
-  return (state.candidates ?? []).map((c) => ({
-    name: c.name,
-    canonicalCategory: classifyCategory(c.category).canonical,
-    neighborhood: c.neighborhood,
-    checkoffizedItem: checkoffizedByName.get(c.name) ?? '',
-    claimSupported: c.claimSupported,
-    sourceUrls: c.mergedSourceUrls ?? [c.source].filter(Boolean),
-    verificationConfidence: c.verificationConfidence,
-  }))
-}
-
-async function fetchExistingProductionMapsQueries(): Promise<string[]> {
-  const pool = new Pool({ connectionString: process.env.AGENT_SERVICE_DATABASE_URL, ssl: { rejectUnauthorized: false }, max: 2 })
-  try {
-    const result = await pool.query<{ maps_query: string }>('SELECT maps_query FROM public.items WHERE maps_query IS NOT NULL')
-    return result.rows.map((r) => r.maps_query)
-  } finally {
-    await pool.end()
-  }
-}
-
-interface FinalRecord extends ItemIntakeRecord {
-  isMexico: boolean
-}
-
-async function buildFinalRecords(projectId: string, existingProductionMapsQueries: string[]): Promise<{ records: FinalRecord[]; gates: ReturnType<typeof runIntakePipeline>['gates']; candidateCount: number }> {
-  const candidates = await loadCandidates(projectId)
-  const result = runIntakePipeline({
-    candidates,
-    existingProductionMapsQueries,
-    canonicalNeighborhoods: CANONICAL_NEIGHBORHOODS,
-    neighborhoodAliases: NEIGHBORHOOD_ALIASES,
-    mexicoNeighborhoods: MEXICO_NEIGHBORHOODS,
-    additionalGenericWords: SAN_DIEGO_GENERIC_PLACE_WORDS,
-    verifiedNameOverrides: VERIFIED_NAME_OVERRIDES,
-    confirmedDistinctPairs: CONFIRMED_DISTINCT_PAIRS,
-  })
-  const records = result.finalRecords.map((r) => {
-    const isMexico = MEXICO_NEIGHBORHOODS.has(r.neighborhoodName ?? '')
-    let mapsQuery = r.mapsQuery
-    if (isMexico && !/tijuana/i.test(mapsQuery)) mapsQuery = `${mapsQuery}, Tijuana, Mexico`
-    return { ...r, mapsQuery, isMexico }
-  })
-  return { records, gates: result.gates, candidateCount: candidates.length }
-}
-
-// Confirmed via Jerry's own direct production query, 2026-09-06: the San
-// Diego metro already has exactly this many staged items (the original,
-// pre-CheckOffization-audit foundation run) — see the regenerated report
-// for why agent_service's own read structurally could not see them.
-const EXPECTED_EXISTING_ITEM_COUNT = 141
 
 
 async function main() {
