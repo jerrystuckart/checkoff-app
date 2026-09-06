@@ -338,6 +338,40 @@ alongside `google_place_id`/`formatted_address`/`maps_lat`/`maps_lng`/`geo_locat
 website, get an individual targeted lookup afterward — never 100+ speculative one-off
 searches up front.
 
+### Places research is a separate, permanently CACHED stage — apply never re-calls it
+
+Corrected 2026-09-06 after San Diego's Places dry run was mistakenly at risk of being re-run
+just to turn its own results into SQL. The Google Places stage of the pipeline above is
+itself four distinct steps, and step 4 must NEVER trigger step 1 again:
+
+1. **Places research call** — one Text Search call per venue (never per-field, never
+   repeated), writes a local JSON cache file (`san-diego-places-dry-run-<date>.json` is the
+   San Diego example) capturing the full result set needed to certify a match:
+   `google_place_id`, `formatted_address`, `maps_lat`/`lng`, `websiteUri`,
+   `addressComponents` (for country verification), `viewport` (for area-venue radius
+   proposals) — never just the bare geocode.
+2. **Cached enrichment artifact** — that JSON file IS the authoritative research result from
+   that point forward. It is read, re-read, and reasoned about as many times as needed; it is
+   never treated as a "dry run to be redone" once real API calls already produced it.
+3. **Human/automated match certification** — every result gets a tier (EXACT,
+   HIGH_CONFIDENCE_PARENT_VENUE, AMBIGUOUS_NEEDS_REVIEW, UNRESOLVED) from structural risk
+   flags (multi-location chains, parent-venue/sub-experience wording, recurring events with
+   no fixed venue, area/district/market venues, "various operators" experiences) plus a
+   country cross-check (never accepted on name similarity alone). Ambiguous rows are resolved
+   FROM THE CACHED DATA already returned (address, neighborhood, parent venue, country,
+   item context) — a new API call is only ever justified when the cache genuinely contains no
+   information capable of resolving the question, and even then it's a targeted single
+   lookup for that one venue, never a full re-run.
+4. **Production apply** — an UPDATE built strictly from what step 3 certified. If the apply
+   step's own catalog reconstruction produces a candidate that isn't in the cache at all,
+   that means the catalog drifted since step 1 ran — the apply script must refuse and say so,
+   never silently re-query Places to paper over the drift.
+
+Any item the cache can't certify (a confirmed wrong match, an org address standing in for an
+event site, a zero-result event with no fixed venue) is excluded from the apply patch and
+left untouched (NULL) rather than forced — a future corrected or targeted pass handles it,
+never a guess baked into production.
+
 ## Provenance
 
 Built and verified against the Denver/Boulder/Longmont launch cycle, 2026-08-21 —
