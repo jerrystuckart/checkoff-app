@@ -36,27 +36,32 @@ import type { CanonicalCategory } from './categoryNormalization'
 // Category mapping — canonical (AI pipeline) -> real production category.
 // ---------------------------------------------------------------------------
 
-/** The exact, live-verified set of real `categories.name` values (docs/metro-launch-audit/patches/denver_catalog_insert_CORRECTED.sql:108-134). Never invented — confirm against a fresh preflight before every real metro build, since this file cannot read `public.categories` itself (agent_service has no SELECT grant on it). */
-export const REAL_DB_CATEGORIES = ['Adventure', 'Arts & Culture', 'Bar & drinks', 'Food & drink', 'Misc', 'Nightlife', 'Play', 'Spa & self-care'] as const
+/**
+ * The real `categories.name` set — ASSUMES
+ * supabase/migrations/20260906_add_shopping_sports_social_travel_categories.sql
+ * has been applied (a read-only dependency audit that same day confirmed
+ * categories are fully data-driven end-to-end — DB -> app -> admin —
+ * with zero app/admin code changes required to add a category; see that
+ * migration's own header for the full audit). Before this migration
+ * runs, Shopping/Sports/Social/Travel genuinely have no home and MUST
+ * fail intake (the original, more conservative behavior) — this file
+ * cannot verify live which state is currently true, since agent_service
+ * has no SELECT grant on `categories` itself. Confirm the migration has
+ * actually been run before trusting this mapping for a real build.
+ */
+export const REAL_DB_CATEGORIES = ['Adventure', 'Arts & Culture', 'Bar & drinks', 'Food & drink', 'Misc', 'Nightlife', 'Play', 'Spa & self-care', 'Shopping', 'Sports', 'Social', 'Travel'] as const
 export type RealDbCategory = (typeof REAL_DB_CATEGORIES)[number]
 
-/**
- * null = NO confident mapping exists — per explicit product policy, a
- * candidate in one of these categories FAILS INTAKE rather than being
- * guessed into "Play" or "Misc". This is a genuine, undecided product
- * question (does Shopping become Play? does Sports split between
- * Adventure and Play?) — resolving it silently here would misfile real
- * items across every category-based UI surface.
- */
+/** 1:1 — every canonical Winston taxonomy category now has a real, unchanged-name equivalent (see doc above). No guessing/remapping performed for any candidate. */
 export const CANONICAL_TO_DB_CATEGORY: Record<CanonicalCategory, RealDbCategory | null> = {
   'Food & drink': 'Food & drink',
   'Bar & drinks': 'Bar & drinks',
   Adventure: 'Adventure',
   'Arts & Culture': 'Arts & Culture',
-  Shopping: null,
-  Sports: null,
-  Social: null,
-  Travel: null,
+  Shopping: 'Shopping',
+  Sports: 'Sports',
+  Social: 'Social',
+  Travel: 'Travel',
   Nightlife: 'Nightlife',
   'Spa & self-care': 'Spa & self-care',
   Misc: 'Misc',

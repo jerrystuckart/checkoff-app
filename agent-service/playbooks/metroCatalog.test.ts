@@ -32,7 +32,7 @@ function candidate(overrides: Partial<MetroCatalogCandidate> = {}): MetroCatalog
 // Category mapping
 // ---------------------------------------------------------------------------
 
-test('mapCanonicalCategoryToDb: the 7 categories with a real production equivalent map correctly', () => {
+test('mapCanonicalCategoryToDb: all 11 canonical categories map 1:1 to a real production category (post-migration 20260906)', () => {
   const mapped: Array<[string, string]> = [
     ['Food & drink', 'Food & drink'],
     ['Bar & drinks', 'Bar & drinks'],
@@ -41,20 +41,15 @@ test('mapCanonicalCategoryToDb: the 7 categories with a real production equivale
     ['Nightlife', 'Nightlife'],
     ['Spa & self-care', 'Spa & self-care'],
     ['Misc', 'Misc'],
+    ['Shopping', 'Shopping'],
+    ['Sports', 'Sports'],
+    ['Social', 'Social'],
+    ['Travel', 'Travel'],
   ]
   for (const [canonical, expected] of mapped) {
     const result = mapCanonicalCategoryToDb(canonical as never)
     assert.equal(result.failed, false)
     assert.equal(result.dbCategory, expected)
-  }
-})
-
-test('mapCanonicalCategoryToDb: the 4 categories with NO real production equivalent fail intake rather than guess', () => {
-  for (const canonical of ['Shopping', 'Sports', 'Social', 'Travel']) {
-    const result = mapCanonicalCategoryToDb(canonical as never)
-    assert.equal(result.failed, true)
-    assert.equal(result.dbCategory, null)
-    assert.match(result.reason ?? '', /no confident real-DB equivalent/)
   }
 })
 
@@ -81,8 +76,14 @@ test('mapCandidateToIntakeRecord: a well-formed candidate maps to exactly one re
   assert.equal(record?.mapsQuery, "Warwick's Books, La Jolla")
 })
 
-test('mapCandidateToIntakeRecord: an unmappable category fails intake, produces no record', () => {
+test('mapCandidateToIntakeRecord: a Shopping candidate now maps cleanly (post-migration 20260906), no longer failing intake', () => {
   const { record, failure } = mapCandidateToIntakeRecord(candidate({ canonicalCategory: 'Shopping' }))
+  assert.equal(failure, null)
+  assert.equal(record?.dbCategory, 'Shopping')
+})
+
+test('mapCandidateToIntakeRecord: an unclassified (null) category still fails intake — the one case that always must', () => {
+  const { record, failure } = mapCandidateToIntakeRecord(candidate({ canonicalCategory: null }))
   assert.equal(record, null)
   assert.ok(failure)
   assert.match(failure!.reason, /category/)
