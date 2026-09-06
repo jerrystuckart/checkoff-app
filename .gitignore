@@ -86,6 +86,7 @@ checkoff_partner_signup.html
 # Local one-time admin/geocoding/triage scripts with embedded Supabase keys
 scripts/geocode-items.js
 scripts/geocode-denver-items.js
+scripts/geocode-san-diego-items.js
 scripts/generate-commit-sql.js
 scripts/generate-commit-sql-weak-review.js
 scripts/generate-commit-sql-weak-auto.js
