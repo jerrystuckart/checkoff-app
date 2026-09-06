@@ -60,13 +60,13 @@ const RULES: ReadonlyArray<{ canonical: CanonicalCategory; pattern: RegExp }> = 
   {
     canonical: 'Arts & Culture',
     pattern:
-      /\b(museums?|galler(y|ies)|theat(er|re)|\barts?\b|cultural (center|centre|institutions?|district)|performing arts|music venue|historic (site|district|monument|park)|monument)\b/i,
+      /\b(museums?|galler(y|ies)|theat(er|re)|\barts?\b|cultural (center|centre|institutions?|district)|performing arts|music venue|historic(al)? (site|district|monument|park|landmark)|monument|landmark)\b/i,
   },
   {
     canonical: 'Social',
     pattern: /\b(social (club|group|communit(y|ies)|mixers?)|meetup|club for|singles (club|event)|reading club|book club|chess club|game (night|club)|community centers?|festival|pride\b)\b/i,
   },
-  { canonical: 'Travel', pattern: /\b(guided tour|sightseeing|travel (agency|agencies|experience|management)|passport|visa services|tour operator)\b/i },
+  { canonical: 'Travel', pattern: /\b(guided tour|sightseeing|travel (agency|agencies|experience|management|attraction)|passport|visa services|tour operator)\b/i },
   {
     canonical: 'Food & drink',
     pattern:
