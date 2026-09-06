@@ -596,8 +596,18 @@ async function stepLaunchBoundary(run: PlaybookRunRecord): Promise<PlaybookRunRe
   // resolved everything upstream); a nonempty result here is a genuine
   // safety-net catch, not the expected steady state.
   const suspectedDuplicates = findSuspectedDuplicates(state.candidates ?? [])
+  // Structural fix (San Diego run, 2026-09-05, part 2): CATEGORY_GATE and
+  // GEOGRAPHY_GATE used to evaluate against this SAME hardcoded `[]` —
+  // Carlsbad dropping to 4/5 after a real dedupe went completely
+  // undetected. Reuses buildAuditEvidence (canonical category
+  // normalization, the exact same fuzzy geography/depth-target matching
+  // M4 uses) and auditCoverage — the single source of truth for gap
+  // detection — rather than a second, parallel free-text comparison that
+  // could reintroduce the original exact-match bug.
+  const { evidence } = buildAuditEvidence(state)
+  const coverageGaps = auditCoverage(evidence)
   const gateEvidence: MetroGateEvidence = {
-    coverageGaps: [],
+    coverageGaps,
     quality: { knownClosures: [], suspectedDuplicates, filler: [] },
     catalog: { viableItemCount: (state.candidates ?? []).length, targetCatalogSize: (state.candidates ?? []).length },
     location: { totalItems: (state.candidates ?? []).length, itemsWithCoordinates: (state.candidates ?? []).length },
