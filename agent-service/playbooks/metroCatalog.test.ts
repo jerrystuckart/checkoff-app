@@ -390,6 +390,21 @@ test('findSemanticDuplicates: catches the redundant-marker self-duplicate (regre
   assert.equal(groups[0].matchKind, 'exact')
 })
 
+test('findSemanticDuplicates: does not over-merge distinct venues that only share the city name (regression: San Diego Padres wrongly grouped with San Diego Zoo/SeaWorld/etc.)', () => {
+  const padres = record({ candidateName: 'San Diego Padres', mapsQuery: 'a' })
+  const zoo = record({ candidateName: 'San Diego Zoo', mapsQuery: 'b' })
+  const seaworld = record({ candidateName: 'SeaWorld San Diego', mapsQuery: 'c' })
+  const groups = findSemanticDuplicates([padres, zoo, seaworld])
+  assert.equal(groups.length, 0)
+})
+
+test('findSemanticDuplicates: does not over-merge two completely unrelated museums sharing only generic descriptor words (regression: Timken Museum of Art / Oceanside Museum of Art)', () => {
+  const a = record({ candidateName: 'Timken Museum of Art', mapsQuery: 'a' })
+  const b = record({ candidateName: 'Oceanside Museum of Art', mapsQuery: 'b' })
+  const groups = findSemanticDuplicates([a, b])
+  assert.equal(groups.length, 0)
+})
+
 test('findSemanticDuplicates: does not over-merge two genuinely different La Jolla venues sharing only a place name', () => {
   const a = record({ candidateName: 'La Jolla Cove', mapsQuery: 'x' })
   const b = record({ candidateName: 'La Jolla Village Merchants Association', mapsQuery: 'y' })

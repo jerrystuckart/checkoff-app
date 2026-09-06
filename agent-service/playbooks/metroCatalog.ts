@@ -376,11 +376,25 @@ function normalizeVenueNameForSemanticMatch(rawName: string): string {
   return words.join(' ')
 }
 
+/**
+ * Words too generic to count as venue-IDENTITY evidence for the
+ * similarity fallback specifically (never used for the exact-match tier,
+ * where they're harmless). Found necessary after a real false-positive:
+ * "San Diego Padres" was grouped with "San Diego Zoo", "SeaWorld San
+ * Diego", "San Diego Zoo Safari Park", and a skate event — all that's
+ * actually shared is the city name itself, present in nearly every venue
+ * in a single-metro catalog by construction, so it carries zero
+ * distinguishing signal. Same story for "Timken Museum of Art" vs. the
+ * completely unrelated "Oceanside Museum of Art" — "museum"/"art" are
+ * category-descriptive, not venue-identifying.
+ */
+const VENUE_NAME_GENERIC_WORDS = new Set(['san', 'diego', 'tijuana', 'mexico', 'california', 'baja', 'museum', 'art', 'center', 'centre', 'gallery', 'park', 'plaza', 'hotel', 'historic', 'district'])
+
 function venueNameSignificantWords(rawName: string): Set<string> {
   return new Set(
     normalizeVenueNameForSemanticMatch(rawName)
       .split(' ')
-      .filter((w) => w.length > 2)
+      .filter((w) => w.length > 2 && !VENUE_NAME_GENERIC_WORDS.has(w))
   )
 }
 
