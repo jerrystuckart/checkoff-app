@@ -39,21 +39,26 @@
 // catalog list), with Mexico geography preserved explicitly in each
 // item's maps_query text.
 //
-// STAGING SAFETY (San Diego catalog SQL review, 2026-09-06): items are
-// inserted with is_active=false, NOT true. Denver's real intake used
-// `true` at insert time, relying on metro_areas.is_active=false alone
-// for invisibility — but lib/useNearby.js's fetchItems() has NO metro
-// filter at all (it queries ALL active, non-universal items with a
-// neighborhood, across every metro combined, then filters by GPS radius
-// client-side). An is_active=true item is therefore globally
-// discoverable via Nearby the moment it's inserted, regardless of
-// metro_areas.is_active — this genuinely deviates from the historical
-// convention on Jerry's explicit instruction, because that convention
-// has a real, live exposure. RLS gates public read on
-// `is_active=true AND is_approved=true`, so is_active=false alone fully
-// hides these rows everywhere (Nearby included) until a separate,
-// later activation step flips them — see the companion activation
-// snippet noted at the end of the generated file.
+// ITEM ACTIVE-STATE POLICY (corrected 2026-09-06 per Jerry's explicit
+// instruction, superseding this file's earlier "is_active=false always"
+// stance): Jerry has intentionally allowed San Diego items to be
+// is_active=true during this build/testing phase — there is no real user
+// exposure risk right now (no marketing push, no seasonal/themed lists
+// pointing at this metro yet) and Nearby-level discoverability of a
+// build-in-progress catalog is an accepted, deliberate risk, not an
+// incident. Two separate rules follow from that:
+//   (1) RETAINED rows (matched to an existing production row) are never
+//       touched on is_active by this patch's UPDATE — whatever active
+//       state a row already has in production is preserved exactly.
+//       This file makes no assumption about what that state currently is.
+//   (2) GENUINELY NEW/RECOVERED rows (no existing match) are INSERTed
+//       with is_active=true, matching Jerry's current San Diego intake
+//       instruction — same as Denver's historical convention.
+// metro_areas.is_active and every curated_lists row stay is_active=false
+// regardless — list/browse-level discovery (and any future featured/
+// themed surfacing) remains a separate, deliberate activation step. Item
+// row activity and metro/list activity are two independent switches; this
+// file only ever moves the first one, and only for newly inserted rows.
 //
 // Usage: npx tsx scripts/generate-san-diego-catalog-sql.ts
 
@@ -126,16 +131,15 @@ async function main() {
   push(`-- later, human-reviewed geocoding pass (scripts/geocode-items.js), never fabricated`)
   push(`-- from AI research at intake time.`)
   push(`--`)
-  push(`-- STAGING SAFETY (deliberate deviation from Denver's historical convention — see`)
-  push(`-- this file's own header comment in the repo for the full explanation): every item`)
-  push(`-- below is inserted with is_active=false, NOT true. lib/useNearby.js's Nearby query`)
-  push(`-- has no metro filter at all, so an is_active=true item would be globally`)
-  push(`-- discoverable immediately, regardless of metro_areas.is_active — RLS's`)
-  push(`-- is_active=true AND is_approved=true read policy means is_active=false alone fully`)
-  push(`-- hides these rows everywhere until a separate, later, narrowly-scoped activation`)
-  push(`-- statement (matched by this exact maps_query set) flips them at real launch time.`)
+  push(`-- ITEM ACTIVE-STATE POLICY (corrected 2026-09-06, Jerry's explicit build-phase`)
+  push(`-- instruction): retained/matched rows keep whatever is_active value they already`)
+  push(`-- have in production — this patch's UPDATE never touches that column. Genuinely`)
+  push(`-- new/recovered rows (no existing match) are inserted is_active=true — there is no`)
+  push(`-- real user exposure risk right now, and this is the established San Diego intake`)
+  push(`-- behavior during build/testing (same as Denver's historical convention).`)
   push(`-- metro_areas.is_active=false and every curated_lists row is_active=false throughout`)
-  push(`-- too. Flipping any of these to true is the deliberate, separate launch trigger.`)
+  push(`-- — list/browse/featured-level discovery stays a separate, deliberate later step,`)
+  push(`-- independent of individual item row activity.`)
   push(``)
   push(`BEGIN;`)
   push(``)
@@ -170,10 +174,12 @@ async function main() {
   push(`  IF v_existing_item_count <> ${EXPECTED_EXISTING_ITEM_COUNT} THEN`)
   push(`    RAISE EXCEPTION 'Preflight failed: expected exactly ${EXPECTED_EXISTING_ITEM_COUNT} existing staged San Diego/Tijuana items (the original successful foundation run), found %. Production has drifted from the confirmed starting state — stopping rather than reconciling against an unverified assumption.', v_existing_item_count;`)
   push(`  END IF;`)
+  // Informational only (2026-09-06 correction): items may legitimately already be
+  // is_active=true during this build/testing phase per Jerry's explicit instruction —
+  // this patch never asserts or requires a particular pre-existing active count, and
+  // its UPDATE never touches is_active on retained rows.
   push(`  SELECT count(*) INTO v_active_item_count_pre FROM public.items i JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id WHERE nb.metro_id = v_metro_id AND i.is_active = true;`)
-  push(`  IF v_active_item_count_pre <> 0 THEN`)
-  push(`    RAISE EXCEPTION 'Preflight failed: expected ZERO active San Diego/Tijuana items before this patch, found %.', v_active_item_count_pre;`)
-  push(`  END IF;`)
+  push(`  RAISE NOTICE 'Preflight: % of the % existing San Diego/Tijuana items are currently is_active=true — this patch will not change that for retained rows.', v_active_item_count_pre, ${EXPECTED_EXISTING_ITEM_COUNT};`)
   push(`  IF NOT EXISTS (SELECT 1 FROM public.categories WHERE name = 'Shopping')`)
   push(`     OR NOT EXISTS (SELECT 1 FROM public.categories WHERE name = 'Sports')`)
   push(`     OR NOT EXISTS (SELECT 1 FROM public.categories WHERE name = 'Social')`)
@@ -215,7 +221,7 @@ async function main() {
   // the existing rows that matched no final candidate (explicitly excluded/
   // superseded), delisting them from curated_list_items first to satisfy
   // the FK before deleting.
-  push(`-- ── 3. items — reconcile the ${allRecords.length} final candidates (${sdRecords.length} San Diego + ${tjRecords.length} Tijuana) against the ${EXPECTED_EXISTING_ITEM_COUNT} real existing staged rows. Category/neighborhood via name subquery (no invented UUIDs). is_active stays false throughout — see STAGING SAFETY above. ──`)
+  push(`-- ── 3. items — reconcile the ${allRecords.length} final candidates (${sdRecords.length} San Diego + ${tjRecords.length} Tijuana) against the ${EXPECTED_EXISTING_ITEM_COUNT} real existing staged rows. Category/neighborhood via name subquery (no invented UUIDs). Retained rows keep their current is_active value untouched; new/recovered rows insert is_active=true — see ITEM ACTIVE-STATE POLICY above. ──`)
   push(`CREATE TEMP TABLE _sd_final_candidates (`)
   push(`  source_id text PRIMARY KEY,`)
   push(`  body text NOT NULL,`)
@@ -322,20 +328,24 @@ async function main() {
   push(`JOIN _sd_final_candidates f ON f.source_id = mt.source_id`)
   push(`WHERE i.id = mt.item_id;`)
   push(``)
-  push(`-- Insert genuinely new/recovered candidates (no existing match).`)
+  push(`-- Insert genuinely new/recovered candidates (no existing match). is_active=true per`)
+  push(`-- Jerry's current San Diego build-phase intake instruction (see ITEM ACTIVE-STATE`)
+  push(`-- POLICY above) — metro_areas/curated_lists stay inactive regardless, so this does`)
+  push(`-- not make the item discoverable via any list/browse/featured surface.`)
   push(`INSERT INTO public.items (body, category_id, checkin_type, is_universal, is_active, is_approved, neighborhood_id, maps_query, is_recurring, difficulty, photo_required, has_alcohol)`)
   push(`SELECT`)
   push(`  f.body,`)
   push(`  (SELECT id FROM public.categories WHERE name = f.category_name),`)
-  push(`  'tap', false, false, true,`)
+  push(`  'tap', false, true, true,`)
   push(`  (SELECT nb.id FROM public.neighborhoods nb JOIN public.metro_areas m ON m.id = nb.metro_id WHERE m.slug = 'san-diego' AND nb.name = f.neighborhood_name),`)
   push(`  f.maps_query, true, 1, false, false`)
   push(`FROM _sd_final_candidates f`)
   push(`WHERE NOT EXISTS (SELECT 1 FROM _sd_matches mt WHERE mt.source_id = f.source_id);`)
   push(``)
   push(`-- Remove obsolete rows: clear every plausible FK reference first, then delete the`)
-  push(`-- item. These staged rows were never is_active=true, so real user data`)
-  push(`-- (check_ins, list_items) should never reference them — but the admin tool's`)
+  push(`-- item. These are pre-launch staged/build items with no real marketing exposure,`)
+  push(`-- so real user data (check_ins, list_items) should never reference them — but the`)
+  push(`-- admin tool's`)
   push(`-- Image Manager could plausibly have touched item_cover_candidates during an`)
   push(`-- earlier review pass, so that's cleared defensively too (a no-op if none exist).`)
   push(`DELETE FROM public.item_cover_candidates WHERE item_id IN (SELECT id FROM _sd_obsolete);`)
@@ -462,8 +472,11 @@ async function main() {
   push(`  IF v_sd_item_count <> ${sdRecords.length} THEN RAISE EXCEPTION 'Postflight failed: expected % San Diego catalog items, found %.', ${sdRecords.length}, v_sd_item_count; END IF;`)
   push(`  SELECT count(*) INTO v_tj_item_count FROM public.curated_list_items WHERE curated_list_id = (SELECT id FROM public.curated_lists WHERE slug = 'san-diego-tijuana-extension');`)
   push(`  IF v_tj_item_count <> ${tjRecords.length} THEN RAISE EXCEPTION 'Postflight failed: expected % Tijuana items, found %.', ${tjRecords.length}, v_tj_item_count; END IF;`)
+  // Informational only (2026-09-06 correction) — active items are expected here now:
+  // every newly-inserted row is is_active=true, and retained rows keep whatever active
+  // state they already had. Not a failure condition.
   push(`  SELECT count(*) INTO v_active_item_count FROM public.items i JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id WHERE nb.metro_id = v_metro_id AND i.is_active = true;`)
-  push(`  IF v_active_item_count <> 0 THEN RAISE EXCEPTION 'Postflight failed: % San Diego/Tijuana item(s) are is_active=true — staging safety violated, these would be globally discoverable via Nearby right now.', v_active_item_count; END IF;`)
+  push(`  RAISE NOTICE '% of % total San Diego/Tijuana items are is_active=true after this patch (expected — new/recovered rows insert active; retained rows keep their prior state; metro_areas/curated_lists remain inactive regardless).', v_active_item_count, ${allRecords.length};`)
   push(`  SELECT deep_link, state INTO v_bridge_deep_link, v_bridge_state FROM public.featured_experiences WHERE list_id = (SELECT id FROM public.curated_lists WHERE slug = ${dollarQuote(bridgeCard.curatedListSlug, 'fe1pf')});`)
   push(`  IF v_bridge_deep_link IS NULL THEN RAISE EXCEPTION 'Postflight failed: featured_experiences bridge card has a null deep_link.'; END IF;`)
   push(`  IF v_bridge_state IS DISTINCT FROM ${dollarQuote(bridgeCard.state, 'fe1pfst')} THEN RAISE EXCEPTION 'Postflight failed: featured_experiences bridge card state is %, expected %.', v_bridge_state, ${dollarQuote(bridgeCard.state, 'fe1pfst2')}; END IF;`)
@@ -471,12 +484,14 @@ async function main() {
   push(``)
   push(`COMMIT;`)
   push(``)
-  push(`-- Absolute boundary (per docs/metro-launch-playbook.md Phase 6): do NOT flip`)
-  push(`-- metro_areas.is_active=true, any curated_lists.is_active=true, or any of these`)
-  push(`-- items' is_active=true as part of applying this file. Activation is a deliberate,`)
-  push(`-- separate, later step — a narrowly-scoped follow-up statement matched by this`)
-  push(`-- exact batch's maps_query set, run once visual assets/QA/season are ready, not a`)
-  push(`-- side effect of running this migration.`)
+  push(`-- Metro/list boundary (per docs/metro-launch-playbook.md Phase 6, item-activity`)
+  push(`-- policy corrected 2026-09-06): this file does NOT flip metro_areas.is_active=true`)
+  push(`-- or any curated_lists.is_active=true — list/browse/featured-level discovery`)
+  push(`-- remains a deliberate, separate, later activation step. Individual item rows are a`)
+  push(`-- separate switch: new/recovered rows are inserted is_active=true per Jerry's`)
+  push(`-- current build-phase instruction, and retained rows keep whatever active state`)
+  push(`-- they already had — neither is touched by any future metro/list activation step`)
+  push(`-- either, since those two switches are independent.`)
 
   mkdirSync('scripts/output', { recursive: true })
   const outPath = `scripts/output/san-diego-catalog-foundation-${new Date().toISOString().slice(0, 10)}.sql`

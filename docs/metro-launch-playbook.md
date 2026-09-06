@@ -210,6 +210,46 @@ that no existing `.gitignore` rule covered.
 6. Coordinated flip: `metro_areas.is_active=true`. This is the actual launch moment — sequence
    timing/announcement around it deliberately, it's not a side effect of any prior step.
 
+## Part 4 — Default scope for a full autonomous metro build (required enhancement, recorded 2026-09-06)
+
+Jerry's correction during the San Diego reconciliation repair cycle: a bare command like
+"Winston, build out Vienna, Austria" should be understood as a request for a **complete
+launch-ready metro package**, not just a permanent catalog. San Diego was built (and is
+being repaired) as catalog-only because that was the explicit scope at the time — this is
+not a retroactive requirement for San Diego in this repair cycle, but it IS the required
+default scope for the next metro built from a bare "build out X" instruction, unless Jerry
+explicitly narrows the ask.
+
+The default autonomous metro build should produce all of the following, not catalog alone:
+
+1. **Permanent catalog** — the existing Phase 1-6 process in this document.
+2. **Neighborhood coverage** — real, geocoded neighborhoods with non-overlapping ring radii
+   (existing Phase 2/4 process).
+3. **Verified CheckOffized items** — routed through the OpenAI-exclusive editorial provider,
+   never Claude-authored (see `agent-service/specialists/remoteAiExecutor.ts`'s
+   `SPECIALIST_EXCLUSIVE_PROVIDER`).
+4. **Categories/tags** — using the canonical category set, extending it only via an explicit
+   migration when a genuinely new category is needed (as San Diego's Shopping/Sports/Social/
+   Travel additions were).
+5. **Google Places geocoding** — real item-level `maps_lat`/`maps_lng`, a separate, later,
+   human-reviewed pass per the existing convention (never fabricated at intake time).
+6. **At least one featured, visitor-facing list** — not just the permanent catalog sitting
+   unlisted; a real curated list meant to be the metro's public front door.
+7. **Current-season list(s) when appropriate** — a real launch season / `starts_at`/`ends_at`,
+   not a placeholder title left in production (existing Phase 3 launch-day item #3).
+8. **Obvious themed list(s) when justified by the destination** — e.g. a cross-border
+   extension (San Diego/Tijuana), a signature seasonal event, or another theme genuinely
+   native to that metro — not manufactured filler.
+9. **Featured/hero configuration** — metro hero images and any `featured_experiences` bridge
+   cards the destination's structure calls for (e.g. cross-border, multi-neighborhood hub).
+10. **Launch-readiness validation** — the existing Part 3 launch-day checklist (device QA,
+    coordinated `metro_areas.is_active=true` flip, etc.) run and passing before declaring the
+    build complete.
+
+A build that stops at item 1 (catalog only) should be labeled a **partial** build in its own
+status report, not presented as a finished metro launch, unless Jerry explicitly asked only
+for the catalog.
+
 ## Provenance
 
 Built and verified against the Denver/Boulder/Longmont launch cycle, 2026-08-21 —
