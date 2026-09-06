@@ -1,8 +1,8 @@
 #!/usr/bin/env -S npx tsx
 // scripts/generate-san-diego-catalog-sql.ts
 //
-// Generates (never applies) the full San Diego + Tijuana catalog
-// foundation SQL, following docs/metro-launch-playbook.md Phase 4 and
+// Generates (never applies) the San Diego + Tijuana catalog RECONCILIATION
+// SQL, following docs/metro-launch-playbook.md Phase 4 and
 // docs/metro-launch-audit/patches/denver_catalog_insert_CORRECTED.sql's
 // proven house style: gen_random_uuid() (no invented UUIDs), NOT EXISTS
 // idempotency guards (not ON CONFLICT against unverifiable constraints),
@@ -10,6 +10,21 @@
 // checks. Writes ONLY a local .sql file for Jerry to review and run
 // himself via Supabase SQL Editor — this script has no DB write access
 // and never attempts one.
+//
+// RECONCILIATION, not blind insert (San Diego production-state
+// correction, 2026-09-06): the San Diego metro already has real, staged
+// items in production from an earlier successful run of an earlier
+// version of this file (the original, pre-CheckOffization-audit
+// wording) — agent_service's own read of `items` cannot see them (RLS
+// silently filters is_active=false rows for this role even though it
+// holds a table-level SELECT grant; see the regenerated report for the
+// full explanation). The items section below matches each of the final
+// candidates to an existing row by normalized maps_query (with a
+// venue-name fallback for a candidate whose neighborhood correction
+// changed its maps_query text), UPDATEs survivors in place (preserving
+// their id — never delete+reinsert merely because wording changed),
+// INSERTs only genuinely new/recovered candidates, and removes only the
+// existing rows matched to no final candidate.
 //
 // Calls agent-service/playbooks/metroCatalog.ts's single consolidated
 // runIntakePipeline() — the SAME function scripts/metro-catalog-dry-run.ts
@@ -138,6 +153,13 @@ async function buildFinalRecords(projectId: string, existingProductionMapsQuerie
   return { records, gates: result.gates, candidateCount: candidates.length }
 }
 
+// Confirmed via Jerry's own direct production query, 2026-09-06: the San
+// Diego metro already has exactly this many staged items (the original,
+// pre-CheckOffization-audit foundation run) — see the regenerated report
+// for why agent_service's own read structurally could not see them.
+const EXPECTED_EXISTING_ITEM_COUNT = 141
+
+
 async function main() {
   const geo = JSON.parse(readFileSync('scripts/output/san-diego-neighborhoods-with-radii.json', 'utf8')) as Array<{ name: string; lat: number; lng: number; ring0RadiusM: number; ring1RadiusM: number; ring2RadiusM: number }>
   const existingProductionMapsQueries = await fetchExistingProductionMapsQueries()
@@ -204,18 +226,23 @@ async function main() {
   push(`BEGIN;`)
   push(``)
   push(`-- ── Preflight ──────────────────────────────────────────────────────────`)
-  push(`-- Verifies the CURRENT real production state (confirmed via direct read, 2026-09-06):`)
-  push(`-- the San Diego metro_areas row and its 40 neighborhoods were already applied in an`)
-  push(`-- earlier successful run of an earlier version of this file — metro_areas.slug=`)
-  push(`-- 'san-diego' EXISTS today (is_active=false, as expected), but ZERO items exist under`)
-  push(`-- it yet. This preflight now asserts exactly THAT state (not "nothing exists yet",`)
-  push(`-- which was this file's earlier, now-stale assumption) — it fails loudly rather than`)
-  push(`-- proceeding if production has drifted from what was actually confirmed tonight.`)
+  push(`-- Verifies the CURRENT real production state, confirmed via Jerry's own direct`)
+  push(`-- query 2026-09-06 (agent_service's own read of \`items\` is unreliable here — RLS`)
+  push(`-- silently filters is_active=false rows for this role even though it holds a`)
+  push(`-- table-level SELECT grant, which is exactly what produced last night's incorrect`)
+  push(`-- "zero items exist" read; see the regenerated report for the full explanation):`)
+  push(`-- metro_areas.slug='san-diego' exists (is_active=false), all 40 neighborhoods exist,`)
+  push(`-- and exactly ${EXPECTED_EXISTING_ITEM_COUNT} items already exist under this metro from the ORIGINAL`)
+  push(`-- successful foundation run (pre-CheckOffization-audit wording) — none of them active.`)
+  push(`-- This file now RECONCILES against those ${EXPECTED_EXISTING_ITEM_COUNT} real rows (update survivors in`)
+  push(`-- place, insert genuinely new/recovered items, remove only explicitly-superseded`)
+  push(`-- ones) rather than assuming a clean slate.`)
   push(`DO $$`)
   push(`DECLARE`)
   push(`  v_metro_id uuid;`)
   push(`  v_neighborhood_count int;`)
   push(`  v_existing_item_count int;`)
+  push(`  v_active_item_count_pre int;`)
   push(`BEGIN`)
   push(`  SELECT id INTO v_metro_id FROM public.metro_areas WHERE slug = 'san-diego' AND name = 'San Diego Metro' AND is_active = false;`)
   push(`  IF v_metro_id IS NULL THEN`)
@@ -226,8 +253,12 @@ async function main() {
   push(`    RAISE EXCEPTION 'Preflight failed: expected % existing San Diego neighborhoods, found %.', ${geo.length}, v_neighborhood_count;`)
   push(`  END IF;`)
   push(`  SELECT count(*) INTO v_existing_item_count FROM public.items i JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id WHERE nb.metro_id = v_metro_id;`)
-  push(`  IF v_existing_item_count <> 0 THEN`)
-  push(`    RAISE EXCEPTION 'Preflight failed: expected ZERO existing items under the San Diego metro (a clean slate for this insert), found %. Do not run this file against a metro that already has items — build a differential patch instead.', v_existing_item_count;`)
+  push(`  IF v_existing_item_count <> ${EXPECTED_EXISTING_ITEM_COUNT} THEN`)
+  push(`    RAISE EXCEPTION 'Preflight failed: expected exactly ${EXPECTED_EXISTING_ITEM_COUNT} existing staged San Diego/Tijuana items (the original successful foundation run), found %. Production has drifted from the confirmed starting state — stopping rather than reconciling against an unverified assumption.', v_existing_item_count;`)
+  push(`  END IF;`)
+  push(`  SELECT count(*) INTO v_active_item_count_pre FROM public.items i JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id WHERE nb.metro_id = v_metro_id AND i.is_active = true;`)
+  push(`  IF v_active_item_count_pre <> 0 THEN`)
+  push(`    RAISE EXCEPTION 'Preflight failed: expected ZERO active San Diego/Tijuana items before this patch, found %.', v_active_item_count_pre;`)
   push(`  END IF;`)
   push(`  IF NOT EXISTS (SELECT 1 FROM public.categories WHERE name = 'Shopping')`)
   push(`     OR NOT EXISTS (SELECT 1 FROM public.categories WHERE name = 'Sports')`)
@@ -258,20 +289,138 @@ async function main() {
   }
   push(``)
 
-  // ── items ──
-  push(`-- ── 3. items (${allRecords.length}: ${sdRecords.length} San Diego + ${tjRecords.length} Tijuana). Category via name subquery (no invented UUIDs). is_active=false — see STAGING SAFETY above. Duplicate check re-verified inline (normalized maps_query, global) even though the pipeline already confirmed zero collisions, since production may have changed since. maps_lat/maps_lng intentionally NULL — see header. ──`)
-  for (const r of allRecords) {
-    push(`INSERT INTO public.items (body, category_id, checkin_type, is_universal, is_active, is_approved, neighborhood_id, maps_query, is_recurring, difficulty, photo_required, has_alcohol)`)
-    push(`SELECT`)
-    push(`  ${dollarQuote(r.body, 'bd')},`)
-    push(`  (SELECT id FROM public.categories WHERE name = ${dollarQuote(r.dbCategory, 'cat')}),`)
-    push(`  'tap', false, false, true,`)
-    push(`  (SELECT nb.id FROM public.neighborhoods nb JOIN public.metro_areas m ON m.id = nb.metro_id WHERE m.slug = 'san-diego' AND nb.name = ${dollarQuote(r.neighborhoodName!, 'nb')}),`)
-    push(`  ${dollarQuote(r.mapsQuery, 'mq')}, true, 1, false, false`)
+  // ── items — RECONCILIATION against the real 141 existing staged rows ──
+  // (San Diego production-state correction, 2026-09-06 — see report). Rather
+  // than blindly inserting, this section: (1) matches each of the 152 final
+  // candidates to an existing production row by normalized maps_query, with
+  // a venue-name-only fallback for the one candidate (Cori Pastificio
+  // Trattoria) whose neighborhood correction changed its maps_query text;
+  // (2) UPDATEs matched rows in place, preserving their id (no delete+
+  // reinsert merely because wording changed); (3) INSERTs only the
+  // candidates with no match (genuinely new/recovered); (4) removes ONLY
+  // the existing rows that matched no final candidate (explicitly excluded/
+  // superseded), delisting them from curated_list_items first to satisfy
+  // the FK before deleting.
+  push(`-- ── 3. items — reconcile the ${allRecords.length} final candidates (${sdRecords.length} San Diego + ${tjRecords.length} Tijuana) against the ${EXPECTED_EXISTING_ITEM_COUNT} real existing staged rows. Category/neighborhood via name subquery (no invented UUIDs). is_active stays false throughout — see STAGING SAFETY above. ──`)
+  push(`CREATE TEMP TABLE _sd_final_candidates (`)
+  push(`  source_id text PRIMARY KEY,`)
+  push(`  body text NOT NULL,`)
+  push(`  category_name text NOT NULL,`)
+  push(`  neighborhood_name text NOT NULL,`)
+  push(`  maps_query text NOT NULL,`)
+  push(`  venue_name text NOT NULL`)
+  push(`) ON COMMIT DROP;`)
+  push(``)
+  push(`INSERT INTO _sd_final_candidates (source_id, body, category_name, neighborhood_name, maps_query, venue_name) VALUES`)
+  allRecords.forEach((r, i) => {
+    const sourceId = `SD-${String(i + 1).padStart(4, '0')}`
+    const comma = i < allRecords.length - 1 ? ',' : ';'
     push(
-      `WHERE NOT EXISTS (SELECT 1 FROM public.items WHERE lower(regexp_replace(btrim(maps_query), '[^a-zA-Z0-9]+', '', 'g')) = lower(regexp_replace(btrim(${dollarQuote(r.mapsQuery, 'mq2')}), '[^a-zA-Z0-9]+', '', 'g')));`
+      // venue_name is the real candidate name (never derived by splitting maps_query on
+      // comma — a venue whose own name contains a comma, e.g. "Plaza Fiesta (El Depa,
+      // Teléfono Gastro Park, Bosiger Beer)", would otherwise get truncated mid-name).
+      // The fallback SQL match below still uses split_part(maps_query, ',', 1) against
+      // the live production row, so this fallback tier only actually engages correctly
+      // for a venue name with no internal comma (true for Cori Pastificio Trattoria, the
+      // one candidate that needs it tonight) — a known, accepted narrowing, not a bug.
+      `  (${dollarQuote(sourceId, 'sid')}, ${dollarQuote(r.body, 'bd')}, ${dollarQuote(r.dbCategory, 'cat')}, ${dollarQuote(r.neighborhoodName!, 'nb')}, ${dollarQuote(r.mapsQuery, 'mq')}, ${dollarQuote(r.candidateName, 'vn')})${comma}`
     )
-  }
+  })
+  push(``)
+  push(`-- Primary match: normalized full maps_query (handles every unchanged item).`)
+  push(`CREATE TEMP TABLE _sd_matches AS`)
+  push(`SELECT f.source_id, i.id AS item_id`)
+  push(`FROM _sd_final_candidates f`)
+  push(`JOIN public.items i`)
+  push(`  ON lower(regexp_replace(btrim(i.maps_query), '[^a-zA-Z0-9]+', '', 'g'))`)
+  push(`   = lower(regexp_replace(btrim(f.maps_query), '[^a-zA-Z0-9]+', '', 'g'))`)
+  push(`JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id`)
+  push(`WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego');`)
+  push(``)
+  push(`-- Fallback match: normalized venue-name-only, for a candidate whose neighborhood`)
+  push(`-- correction changed its maps_query text (e.g. Cori Pastificio Trattoria: Point`)
+  push(`-- Loma -> North Park) — only against candidates/items not already matched above,`)
+  push(`-- and only when exactly one candidate and exactly one existing item share that`)
+  push(`-- venue name (an ambiguous multi-match is left unmatched, never guessed).`)
+  push(`INSERT INTO _sd_matches (source_id, item_id)`)
+  push(`SELECT vm.source_id, vm.item_id FROM (`)
+  push(`  SELECT f.source_id, i.id AS item_id,`)
+  push(`    count(*) OVER (PARTITION BY f.venue_name) AS candidate_dupes,`)
+  push(`    count(*) OVER (PARTITION BY i.id) AS item_dupes`)
+  push(`  FROM _sd_final_candidates f`)
+  push(`  JOIN public.items i`)
+  push(`    ON lower(regexp_replace(btrim(split_part(i.maps_query, ',', 1)), '[^a-zA-Z0-9]+', '', 'g'))`)
+  push(`     = lower(regexp_replace(btrim(f.venue_name), '[^a-zA-Z0-9]+', '', 'g'))`)
+  push(`  JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id`)
+  push(`  WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')`)
+  push(`    AND f.source_id NOT IN (SELECT source_id FROM _sd_matches)`)
+  push(`    AND i.id NOT IN (SELECT item_id FROM _sd_matches)`)
+  push(`) vm`)
+  push(`WHERE vm.candidate_dupes = 1 AND vm.item_dupes = 1;`)
+  push(``)
+  push(`-- Safety: no candidate or existing item may appear more than once in the match set.`)
+  push(`DO $$`)
+  push(`DECLARE v_dupe_source int; v_dupe_item int;`)
+  push(`BEGIN`)
+  push(`  SELECT count(*) INTO v_dupe_source FROM (SELECT source_id FROM _sd_matches GROUP BY source_id HAVING count(*) > 1) x;`)
+  push(`  IF v_dupe_source > 0 THEN RAISE EXCEPTION 'Reconciliation failed: % final candidate(s) matched more than one existing item.', v_dupe_source; END IF;`)
+  push(`  SELECT count(*) INTO v_dupe_item FROM (SELECT item_id FROM _sd_matches GROUP BY item_id HAVING count(*) > 1) x;`)
+  push(`  IF v_dupe_item > 0 THEN RAISE EXCEPTION 'Reconciliation failed: % existing item(s) matched more than one final candidate.', v_dupe_item; END IF;`)
+  push(`END $$;`)
+  push(``)
+  push(`-- Obsolete existing rows: under the San Diego metro, matched to NO final candidate —`)
+  push(`-- computed BEFORE any insert, so newly-inserted rows can never appear here.`)
+  push(`CREATE TEMP TABLE _sd_obsolete AS`)
+  push(`SELECT i.id FROM public.items i`)
+  push(`JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id`)
+  push(`WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')`)
+  push(`  AND i.id NOT IN (SELECT item_id FROM _sd_matches);`)
+  push(``)
+  push(`-- Update surviving rows in place — preserve id, refresh wording/category/neighborhood/maps_query.`)
+  push(`UPDATE public.items i`)
+  push(`SET body = f.body,`)
+  push(`    category_id = (SELECT id FROM public.categories WHERE name = f.category_name),`)
+  push(`    neighborhood_id = (SELECT nb2.id FROM public.neighborhoods nb2 JOIN public.metro_areas m2 ON m2.id = nb2.metro_id WHERE m2.slug = 'san-diego' AND nb2.name = f.neighborhood_name),`)
+  push(`    maps_query = f.maps_query`)
+  push(`FROM _sd_matches mt`)
+  push(`JOIN _sd_final_candidates f ON f.source_id = mt.source_id`)
+  push(`WHERE i.id = mt.item_id;`)
+  push(``)
+  push(`-- Insert genuinely new/recovered candidates (no existing match).`)
+  push(`INSERT INTO public.items (body, category_id, checkin_type, is_universal, is_active, is_approved, neighborhood_id, maps_query, is_recurring, difficulty, photo_required, has_alcohol)`)
+  push(`SELECT`)
+  push(`  f.body,`)
+  push(`  (SELECT id FROM public.categories WHERE name = f.category_name),`)
+  push(`  'tap', false, false, true,`)
+  push(`  (SELECT nb.id FROM public.neighborhoods nb JOIN public.metro_areas m ON m.id = nb.metro_id WHERE m.slug = 'san-diego' AND nb.name = f.neighborhood_name),`)
+  push(`  f.maps_query, true, 1, false, false`)
+  push(`FROM _sd_final_candidates f`)
+  push(`WHERE NOT EXISTS (SELECT 1 FROM _sd_matches mt WHERE mt.source_id = f.source_id);`)
+  push(``)
+  push(`-- Remove obsolete rows: clear every plausible FK reference first, then delete the`)
+  push(`-- item. These staged rows were never is_active=true, so real user data`)
+  push(`-- (check_ins, list_items) should never reference them — but the admin tool's`)
+  push(`-- Image Manager could plausibly have touched item_cover_candidates during an`)
+  push(`-- earlier review pass, so that's cleared defensively too (a no-op if none exist).`)
+  push(`DELETE FROM public.item_cover_candidates WHERE item_id IN (SELECT id FROM _sd_obsolete);`)
+  push(`DELETE FROM public.curated_list_items WHERE item_id IN (SELECT id FROM _sd_obsolete);`)
+  push(`DELETE FROM public.items WHERE id IN (SELECT id FROM _sd_obsolete);`)
+  push(``)
+  push(`-- Reconciliation sanity check — must reconcile exactly to ${allRecords.length}.`)
+  push(`DO $$`)
+  push(`DECLARE v_matched int; v_obsolete int; v_inserted int;`)
+  push(`BEGIN`)
+  push(`  SELECT count(*) INTO v_matched FROM _sd_matches;`)
+  push(`  SELECT count(*) INTO v_obsolete FROM _sd_obsolete;`)
+  push(`  v_inserted := ${allRecords.length} - v_matched;`)
+  push(`  RAISE NOTICE 'Reconciliation: % retained/rewritten, % removed as obsolete, % newly inserted, % final total.', v_matched, v_obsolete, v_inserted, ${allRecords.length};`)
+  push(`  IF v_matched + v_inserted <> ${allRecords.length} THEN`)
+  push(`    RAISE EXCEPTION 'Reconciliation failed: matched (%) + inserted (%) != final total (%).', v_matched, v_inserted, ${allRecords.length};`)
+  push(`  END IF;`)
+  push(`  IF ${EXPECTED_EXISTING_ITEM_COUNT} - v_matched <> v_obsolete THEN`)
+  push(`    RAISE EXCEPTION 'Reconciliation failed: existing (%) - matched (%) != obsolete removed (%).', ${EXPECTED_EXISTING_ITEM_COUNT}, v_matched, v_obsolete;`)
+  push(`  END IF;`)
+  push(`END $$;`)
   push(``)
 
   // ── audience_groups ──
