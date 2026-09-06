@@ -7,6 +7,8 @@ import {
   normalizeMapsQuery,
   checkForDuplicates,
   resolveNeighborhoods,
+  findSemanticDuplicates,
+  dedupeSemanticDuplicates,
   evaluateCatalogGate,
   evaluateLocationGate,
   evaluatePresentationGate,
@@ -226,6 +228,12 @@ test('evaluatePresentationGate: PASSes clean, well-formed display text, includin
   assert.equal(result.verdict, 'PASS')
 })
 
+test('evaluatePresentationGate: FAILs meta/process language leaking into body text (regression: Fleurette (redundant?))', () => {
+  const result = evaluatePresentationGate({ records: [record({ candidateName: 'Fleurette (redundant?)', body: 'Fleurette has already been counted and does not require a new checkoff item.' })] })
+  assert.equal(result.verdict, 'FAIL')
+  assert.match(result.reason, /meta\/process language/)
+})
+
 test('evaluatePresentationGate: FAILs placeholder text', () => {
   const result = evaluatePresentationGate({ records: [record({ body: 'TBD - placeholder text here' })] })
   assert.equal(result.verdict, 'FAIL')
@@ -277,6 +285,34 @@ test('resolveNeighborhoods: no canonical match fails resolution, never guesses',
   assert.equal(result.unresolved.length, 1)
 })
 
+test('resolveNeighborhoods: country consistency — a Mexico-signaled candidate never resolves to a California neighborhood via a same-word alias (regression: Estación Federal/La Mezcalera/Rubiks)', () => {
+  const canonical = ['Gaslamp Quarter', 'Zona Centro']
+  const aliases = { downtown: 'Gaslamp Quarter' }
+  const mexico = new Set(['Zona Centro'])
+  const records = [record({ candidateName: 'Estación Federal', neighborhoodName: 'Downtown Tijuana near PedWest crossing' })]
+  const result = resolveNeighborhoods(records, canonical, aliases, mexico)
+  assert.equal(result.resolved.size, 0)
+  assert.match(result.unresolved[0].reason, /country mismatch/)
+})
+
+test('resolveNeighborhoods: country consistency still resolves correctly once a Mexico-specific alias exists', () => {
+  const canonical = ['Gaslamp Quarter', 'Zona Centro']
+  const aliases = { downtown: 'Gaslamp Quarter', 'downtown tijuana': 'Zona Centro' }
+  const mexico = new Set(['Zona Centro'])
+  const records = [record({ candidateName: 'Estación Federal', neighborhoodName: 'Downtown Tijuana near PedWest crossing' })]
+  const result = resolveNeighborhoods(records, canonical, aliases, mexico)
+  assert.equal(result.resolved.get('Estación Federal'), 'Zona Centro')
+})
+
+test('resolveNeighborhoods: a genuine US candidate is unaffected by the Mexico check', () => {
+  const canonical = ['Gaslamp Quarter', 'Zona Centro']
+  const aliases = { downtown: 'Gaslamp Quarter' }
+  const mexico = new Set(['Zona Centro'])
+  const records = [record({ candidateName: 'Some Bar', neighborhoodName: 'Downtown San Diego' })]
+  const result = resolveNeighborhoods(records, canonical, aliases, mexico)
+  assert.equal(result.resolved.get('Some Bar'), 'Gaslamp Quarter')
+})
+
 test('resolveNeighborhoods: an alias resolves a real landmark whose text never names its containing canonical neighborhood', () => {
   const canonical = ['Zona Centro', 'Zona Río']
   const records = [record({ candidateName: 'A', neighborhoodName: 'Avenida Revolución (near border)' })]
@@ -296,6 +332,73 @@ test('resolveNeighborhoods: missing neighborhood text fails resolution', () => {
   const records = [record({ candidateName: 'A', neighborhoodName: null })]
   const result = resolveNeighborhoods(records, canonical)
   assert.equal(result.unresolved[0].reason, 'no neighborhood text at all')
+})
+
+// ---------------------------------------------------------------------------
+// Semantic same-venue duplicate detection (San Diego catalog SQL review, 2026-09-06)
+// ---------------------------------------------------------------------------
+
+test('findSemanticDuplicates: catches a parenthetical-qualifier duplicate (regression: Zuma / Zuma (Guild Hotel))', () => {
+  const a = record({ candidateName: 'Zuma', mapsQuery: 'Zuma, Downtown' })
+  const b = record({ candidateName: 'Zuma (Guild Hotel)', mapsQuery: 'Zuma, Guild Hotel, Downtown' })
+  const groups = findSemanticDuplicates([a, b])
+  assert.equal(groups.length, 1)
+  assert.equal(groups[0].matchKind, 'exact')
+  assert.equal(groups[0].members.length, 2)
+})
+
+test('findSemanticDuplicates: catches a nickname-in-quotes duplicate (regression: Joan and Irwin Jacobs Performing Arts Center / "The Joan")', () => {
+  const a = record({ candidateName: 'Joan and Irwin Jacobs Performing Arts Center', mapsQuery: 'x' })
+  const b = record({ candidateName: 'Joan and Irwin Jacobs Performing Arts Center ("The Joan")', mapsQuery: 'y' })
+  const groups = findSemanticDuplicates([a, b])
+  assert.equal(groups.length, 1)
+  assert.equal(groups[0].matchKind, 'exact')
+})
+
+test('findSemanticDuplicates: catches a dropped-generic-suffix duplicate (regression: Fashion Valley Mall / Fashion Valley)', () => {
+  const a = record({ candidateName: 'Fashion Valley Mall', mapsQuery: 'x' })
+  const b = record({ candidateName: 'Fashion Valley', mapsQuery: 'y' })
+  const groups = findSemanticDuplicates([a, b])
+  assert.equal(groups.length, 1)
+})
+
+test('findSemanticDuplicates: catches a re-worded name via token overlap (regression: Harland Clubhouse / Harland Brewing Co. – The Clubhouse)', () => {
+  const a = record({ candidateName: 'Harland Clubhouse', mapsQuery: 'x' })
+  const b = record({ candidateName: 'Harland Brewing Co. – The Clubhouse', mapsQuery: 'y' })
+  const groups = findSemanticDuplicates([a, b])
+  assert.equal(groups.length, 1)
+  assert.equal(groups[0].matchKind, 'similar')
+})
+
+test('findSemanticDuplicates: catches the redundant-marker self-duplicate (regression: Fleurette / Fleurette (redundant?))', () => {
+  const a = record({ candidateName: 'Fleurette', mapsQuery: 'x' })
+  const b = record({ candidateName: 'Fleurette (redundant?)', mapsQuery: 'y' })
+  const groups = findSemanticDuplicates([a, b])
+  assert.equal(groups.length, 1)
+  assert.equal(groups[0].matchKind, 'exact')
+})
+
+test('findSemanticDuplicates: does not over-merge two genuinely different La Jolla venues sharing only a place name', () => {
+  const a = record({ candidateName: 'La Jolla Cove', mapsQuery: 'x' })
+  const b = record({ candidateName: 'La Jolla Village Merchants Association', mapsQuery: 'y' })
+  const groups = findSemanticDuplicates([a, b])
+  assert.equal(groups.length, 0)
+})
+
+test('findSemanticDuplicates: unrelated venues never group', () => {
+  const a = record({ candidateName: 'Warwick’s Books', mapsQuery: 'x' })
+  const b = record({ candidateName: 'Titan Missile Museum', mapsQuery: 'y' })
+  assert.equal(findSemanticDuplicates([a, b]).length, 0)
+})
+
+test('dedupeSemanticDuplicates: keeps the most complete representative and removes the rest', () => {
+  const thin = record({ candidateName: 'Zuma', mapsQuery: 'x', body: 'short' })
+  const rich = record({ candidateName: 'Zuma (Guild Hotel)', mapsQuery: 'y', body: 'A much longer, more detailed description of this real restaurant' })
+  rich.provenance = { ...rich.provenance, verificationConfidence: 'HIGH' }
+  const { deduped, removed } = dedupeSemanticDuplicates([thin, rich])
+  assert.equal(deduped.length, 1)
+  assert.equal(deduped[0].candidateName, 'Zuma (Guild Hotel)')
+  assert.equal(removed.length, 1)
 })
 
 test('evaluateOutreachGate: PASSes without requiring any outreach to have happened', () => {

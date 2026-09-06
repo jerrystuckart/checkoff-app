@@ -203,14 +203,34 @@ export interface NeighborhoodResolutionResult {
  * both hit generically named text — longest-match-wins resolves the
  * common case; a genuine tie still fails rather than guessing).
  */
+/** Any of these appearing in a candidate's raw neighborhood text is a strong, explicit signal the venue is in Mexico — used to keep cross-border resolution honest (see resolveNeighborhoods' countryHint check below). */
+const MEXICO_TEXT_SIGNAL = /\b(tijuana|mexico|méxico|baja california)\b/i
+
 export function resolveNeighborhoods(
   records: readonly ItemIntakeRecord[],
   canonicalNeighborhoods: readonly string[],
   /** landmark/area keyword (lowercase) -> canonical neighborhood name, for real sub-areas/landmarks that fall within a canonical neighborhood but never mention its name literally (e.g. "Avenida Revolución" is IN Zona Centro but the text alone never says "Zona Centro"). Checked only when no direct canonical-name match exists — never overrides a direct match. */
-  aliases: Readonly<Record<string, string>> = {}
+  aliases: Readonly<Record<string, string>> = {},
+  /**
+   * The subset of `canonicalNeighborhoods` that are actually in Mexico.
+   * Structural bug fix (San Diego/Tijuana catalog SQL review, 2026-09-06):
+   * "Estación Federal", "La Mezcalera", and "Rubiks" — all real Tijuana
+   * venues whose raw text was "Downtown Tijuana..." — resolved to
+   * "Gaslamp Quarter" because the generic `downtown -> Gaslamp Quarter`
+   * alias fired on the word "downtown" without checking that the SAME
+   * text also explicitly said "Tijuana". A candidate whose raw text
+   * carries an explicit Mexico signal (MEXICO_TEXT_SIGNAL) may now ONLY
+   * resolve to a neighborhood in this set — a same-country match that
+   * would otherwise win (via canonical name or alias) is discarded
+   * rather than accepted, and a candidate with NO Mexico neighborhood
+   * match at all fails resolution rather than silently landing on a
+   * California one.
+   */
+  mexicoNeighborhoods: ReadonlySet<string> = new Set()
 ): NeighborhoodResolutionResult {
   const resolved = new Map<string, string>()
   const unresolved: Array<{ candidateName: string; rawNeighborhood: string | null; reason: string }> = []
+  const mexicoLower = new Set([...mexicoNeighborhoods].map((n) => n.toLowerCase()))
 
   for (const record of records) {
     const raw = (record.neighborhoodName ?? '').toLowerCase()
@@ -218,6 +238,8 @@ export function resolveNeighborhoods(
       unresolved.push({ candidateName: record.candidateName, rawNeighborhood: record.neighborhoodName, reason: 'no neighborhood text at all' })
       continue
     }
+    const isMexicoSignaled = MEXICO_TEXT_SIGNAL.test(raw)
+
     let matches = canonicalNeighborhoods.filter((n) => raw.includes(n.toLowerCase()))
     if (matches.length === 0) {
       const aliasMatches = Object.entries(aliases)
@@ -225,6 +247,16 @@ export function resolveNeighborhoods(
         .map(([, canonical]) => canonical)
       if (aliasMatches.length > 0) matches = [...new Set(aliasMatches)]
     }
+
+    if (isMexicoSignaled && mexicoLower.size > 0) {
+      const consistent = matches.filter((m) => mexicoLower.has(m.toLowerCase()))
+      if (matches.length > 0 && consistent.length === 0) {
+        unresolved.push({ candidateName: record.candidateName, rawNeighborhood: record.neighborhoodName, reason: `country mismatch — "${record.neighborhoodName}" explicitly signals Mexico but only matched non-Mexico neighborhood(s): ${matches.join(', ')}` })
+        continue
+      }
+      matches = consistent
+    }
+
     if (matches.length === 0) {
       unresolved.push({ candidateName: record.candidateName, rawNeighborhood: record.neighborhoodName, reason: `no canonical neighborhood name found in "${record.neighborhoodName}"` })
       continue
@@ -303,6 +335,139 @@ export function checkForDuplicates(candidateRecords: readonly ItemIntakeRecord[]
 }
 
 // ---------------------------------------------------------------------------
+// Semantic same-venue duplicate detection — the San Diego catalog SQL
+// review (2026-09-06) found normalized-maps_query dedup (checkForDuplicates
+// above) insufficient: it only catches literal maps_query collisions, but
+// real duplicate pairs slipped through with genuinely different maps_query
+// text because the underlying research produced a second, differently-
+// worded NAME for the same real venue — a qualifier appended in
+// parentheses ("Zuma" / "Zuma (Guild Hotel)", "By The Sea" / "By The Sea
+// (new restaurant)", "Mr. Charlie's" / "Mr. Charlie's (Hillcrest)", "Joan
+// and Irwin Jacobs Performing Arts Center" / "...(\"The Joan\")",
+// "Museum of Contemporary Art San Diego" / "...(La Jolla)"), a dropped
+// generic suffix word ("Fashion Valley Mall" / "Fashion Valley"), or a
+// genuine re-wording ("Harland Clubhouse" / "Harland Brewing Co. – The
+// Clubhouse"). This is a NAME-level check, deliberately separate from
+// candidateMerge.ts's own (name-identity-only, by design — see that
+// module's doc) dedup, since these names are NOT identical strings.
+// ---------------------------------------------------------------------------
+
+function normalizeText(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+const VENUE_NAME_STOPWORDS = new Set(['the', 'a', 'an', 'and', 'of', 'co', 'company'])
+/** Generic descriptor words safe to drop ONLY from the end of a name (never mid-name, where they might be load-bearing — e.g. "Point Loma" itself must never be touched). */
+const VENUE_NAME_TRAILING_NOISE = new Set(['mall', 'center', 'centre', 'museum', 'clubhouse', 'restaurant', 'cafe'])
+
+function normalizeVenueNameForSemanticMatch(rawName: string): string {
+  const withoutQualifiers = rawName
+    .replace(/\([^)]*\)/g, ' ') // strip parenthetical qualifiers entirely — "(Guild Hotel)", "(La Jolla)", "(\"The Joan\")", "(redundant?)"
+    .replace(/[“”"']/g, '')
+  const normalized = normalizeText(withoutQualifiers)
+  const words = normalized.split(' ').filter((w) => w && !VENUE_NAME_STOPWORDS.has(w))
+  while (words.length > 1 && VENUE_NAME_TRAILING_NOISE.has(words[words.length - 1])) words.pop()
+  return words.join(' ')
+}
+
+function venueNameSignificantWords(rawName: string): Set<string> {
+  return new Set(
+    normalizeVenueNameForSemanticMatch(rawName)
+      .split(' ')
+      .filter((w) => w.length > 2)
+  )
+}
+
+export interface SemanticDuplicateGroup {
+  normalizedName: string
+  members: ItemIntakeRecord[]
+  /** 'exact' = identical after stripping qualifiers/noise words (high confidence); 'similar' = high name-token overlap, not identical (flagged for review, still excluded — see module doc). */
+  matchKind: 'exact' | 'similar'
+}
+
+const SEMANTIC_NAME_SIMILARITY_THRESHOLD = 0.5
+
+/**
+ * Finds groups of records that are almost certainly the same real venue
+ * despite carrying different literal names. Deliberately conservative on
+ * the 'similar' (non-exact) tier — the threshold and the trailing-noise-
+ * word list were tuned against this real dataset's actual false-positive
+ * risk (e.g. "La Jolla Cove" vs "La Jolla Village" would NOT trigger this,
+ * since neither is a trailing-noise-stripped near-match of the other and
+ * their shared token "la jolla" alone sits below the threshold once
+ * combined with each name's other distinct words).
+ */
+export function findSemanticDuplicates(records: readonly ItemIntakeRecord[]): SemanticDuplicateGroup[] {
+  const exactGroups = new Map<string, ItemIntakeRecord[]>()
+  for (const r of records) {
+    const key = normalizeVenueNameForSemanticMatch(r.candidateName)
+    exactGroups.set(key, [...(exactGroups.get(key) ?? []), r])
+  }
+
+  const groups: SemanticDuplicateGroup[] = []
+  const consumed = new Set<string>() // candidateName, already placed in an exact group
+
+  for (const [key, members] of exactGroups) {
+    if (members.length > 1) {
+      groups.push({ normalizedName: key, members, matchKind: 'exact' })
+      for (const m of members) consumed.add(m.candidateName)
+    }
+  }
+
+  const remaining = records.filter((r) => !consumed.has(r.candidateName))
+  const seen = new Set<string>()
+  for (let i = 0; i < remaining.length; i++) {
+    if (seen.has(remaining[i].candidateName)) continue
+    const wordsA = venueNameSignificantWords(remaining[i].candidateName)
+    const similar: ItemIntakeRecord[] = [remaining[i]]
+    for (let j = i + 1; j < remaining.length; j++) {
+      if (seen.has(remaining[j].candidateName)) continue
+      const wordsB = venueNameSignificantWords(remaining[j].candidateName)
+      if (wordsA.size === 0 || wordsB.size === 0) continue
+      let intersection = 0
+      for (const w of wordsA) if (wordsB.has(w)) intersection += 1
+      const union = wordsA.size + wordsB.size - intersection
+      const similarity = union === 0 ? 0 : intersection / union
+      if (similarity >= SEMANTIC_NAME_SIMILARITY_THRESHOLD) similar.push(remaining[j])
+    }
+    if (similar.length > 1) {
+      for (const m of similar) seen.add(m.candidateName)
+      groups.push({ normalizedName: normalizeVenueNameForSemanticMatch(remaining[i].candidateName), members: similar, matchKind: 'similar' })
+    }
+  }
+
+  return groups
+}
+
+/** Applies findSemanticDuplicates and keeps only the most-complete representative from each group (same completeness scoring as dedupeCandidates) — a deterministic way to actually resolve what the audit found, not just report it. */
+export function dedupeSemanticDuplicates<T extends ItemIntakeRecord>(records: readonly T[]): { deduped: T[]; removed: Array<{ kept: T; discarded: T[] }> } {
+  const groups = findSemanticDuplicates(records)
+  const toRemove = new Set<string>()
+  const removed: Array<{ kept: T; discarded: T[] }> = []
+  for (const group of groups) {
+    const members = group.members as T[]
+    const best = members.reduce((a, b) => (candidateCompletenessScoreForIntakeRecord(b) > candidateCompletenessScoreForIntakeRecord(a) ? b : a))
+    for (const m of members) if (m !== best) toRemove.add(m.candidateName)
+    removed.push({ kept: best, discarded: members.filter((m) => m !== best) })
+  }
+  return { deduped: records.filter((r) => !toRemove.has(r.candidateName)) as T[], removed }
+}
+
+function candidateCompletenessScoreForIntakeRecord(r: ItemIntakeRecord): number {
+  let score = r.body.length
+  if (r.provenance.verificationConfidence === 'HIGH') score += 1000
+  else if (r.provenance.verificationConfidence === 'MEDIUM') score += 500
+  score += r.provenance.sourceUrls.length * 10
+  return score
+}
+
+// ---------------------------------------------------------------------------
 // Real M7+ launch gates — replace the metro_launch driver's synthetic
 // CATALOG_GATE/LOCATION_GATE/PRESENTATION_GATE/OUTREACH_GATE placeholders
 // once a real staged catalog exists. Pure functions, same discipline as
@@ -368,6 +533,16 @@ export interface PresentationGateEvidence {
 }
 
 const PLACEHOLDER_PATTERNS = [/\btbd\b/i, /\blorem ipsum\b/i, /\bplaceholder\b/i, /\bfixme\b/i, /\btodo\b/i, /^checkoffized:?\s*$/i]
+/**
+ * A process artifact, not real editorial copy — found in the San Diego
+ * catalog SQL review (2026-09-06): "Fleurette (redundant?)" carried the
+ * body "Fleurette has already been counted and does not require a new
+ * checkoff item." — the M6/verification stage's own internal reasoning
+ * leaked into what should have been user-facing copy. This is a content
+ * check distinct from (and a safety net alongside) findSemanticDuplicates
+ * below, which independently catches the name-level duplicate itself.
+ */
+const META_PROCESS_LANGUAGE_PATTERNS = [/already been counted/i, /\bredundant\b/i, /does not require a new checkoff/i, /no new checkoff item/i, /duplicate of (an?|the) existing/i]
 /** A run of 3+ consecutive U+FFFD (replacement character) or literal "�" is the reliable signature of a real mojibake/encoding failure — a single accented character is normal, correct Unicode and must never be flagged. */
 const MOJIBAKE_PATTERN = /�{3,}/
 
@@ -385,6 +560,7 @@ export function evaluatePresentationGate(evidence: PresentationGateEvidence): St
     const text = r.body
     if (!text || text.trim().length < 10) problems.push(`${r.candidateName}: body text missing or too short`)
     else if (PLACEHOLDER_PATTERNS.some((p) => p.test(text))) problems.push(`${r.candidateName}: placeholder text detected`)
+    else if (META_PROCESS_LANGUAGE_PATTERNS.some((p) => p.test(text))) problems.push(`${r.candidateName}: meta/process language leaked into body text ("${text}")`)
     else if (MOJIBAKE_PATTERN.test(text)) problems.push(`${r.candidateName}: broken/mojibake encoding detected`)
     else if (hasBrokenCapitalization(text)) problems.push(`${r.candidateName}: malformed capitalization (all-caps or no capitals)`)
   }
