@@ -231,24 +231,68 @@ The default autonomous metro build should produce all of the following, not cata
 4. **Categories/tags** — using the canonical category set, extending it only via an explicit
    migration when a genuinely new category is needed (as San Diego's Shopping/Sports/Social/
    Travel additions were).
-5. **Google Places geocoding** — real item-level `maps_lat`/`maps_lng`, a separate, later,
-   human-reviewed pass per the existing convention (never fabricated at intake time).
-6. **At least one featured, visitor-facing list** — not just the permanent catalog sitting
+5. **Metadata completeness** — every non-geo, non-catalog column
+   (`has_alcohol`, `checkin_type`, `difficulty`, `photo_required`, `is_secret`,
+   `visit_profile_key`, `website_url`) explicitly EVALUATED per item, not left sitting at its
+   bare insert-time default. See Part 5 below — this is a real, required gate now, not an
+   implicit assumption.
+6. **Google Places geocoding** — real item-level `google_place_id`, `formatted_address`,
+   `maps_lat`/`maps_lng`, `geo_location`, `geo_radius_m`, a separate, later, human-reviewed
+   pass per the existing convention (never fabricated at intake time). Kept deliberately
+   separate from item 5 — one requires an external API call, the other doesn't, and neither
+   gate substitutes for the other.
+7. **At least one featured, visitor-facing list** — not just the permanent catalog sitting
    unlisted; a real curated list meant to be the metro's public front door.
-7. **Current-season list(s) when appropriate** — a real launch season / `starts_at`/`ends_at`,
+8. **Current-season list(s) when appropriate** — a real launch season / `starts_at`/`ends_at`,
    not a placeholder title left in production (existing Phase 3 launch-day item #3).
-8. **Obvious themed list(s) when justified by the destination** — e.g. a cross-border
+9. **Obvious themed list(s) when justified by the destination** — e.g. a cross-border
    extension (San Diego/Tijuana), a signature seasonal event, or another theme genuinely
    native to that metro — not manufactured filler.
-9. **Featured/hero configuration** — metro hero images and any `featured_experiences` bridge
-   cards the destination's structure calls for (e.g. cross-border, multi-neighborhood hub).
-10. **Launch-readiness validation** — the existing Part 3 launch-day checklist (device QA,
-    coordinated `metro_areas.is_active=true` flip, etc.) run and passing before declaring the
-    build complete.
+10. **Featured/hero configuration** — metro hero images and any `featured_experiences` bridge
+    cards the destination's structure calls for (e.g. cross-border, multi-neighborhood hub).
+11. **Launch-readiness validation** — the existing Part 3 launch-day checklist (device QA,
+    coordinated `metro_areas.is_active=true` flip, etc.) AND both gates in Part 5 passing
+    before declaring the build complete.
 
 A build that stops at item 1 (catalog only) should be labeled a **partial** build in its own
 status report, not presented as a finished metro launch, unless Jerry explicitly asked only
 for the catalog.
+
+## Part 5 — Metadata completeness and geo enrichment gates (required, recorded 2026-09-06)
+
+San Diego's reconciliation surfaced the next systematic gap after the catalog itself was
+correct: every one of `website_url`, `google_place_id`, `formatted_address`, `maps_lat`,
+`maps_lng`, `geo_location`, `geo_radius_m`, `visit_profile_key` was 100% NULL across all 149
+items, `has_alcohol`/`checkin_type`/`is_secret` were 100% at their bare schema default, and
+`difficulty`/`photo_required` were at default except for exactly one manually-edited row. A
+column holding its default value is NOT evidence the field was ever evaluated — it looks
+identical to a field nobody has ever looked at. **A future bare "build out `<city>`" must not
+report launch-ready while this ambiguity still exists.**
+
+Two separate, reusable gates close this gap — see
+`agent-service/playbooks/metroMetadataEnrichment.ts`:
+
+- **`METADATA_COMPLETENESS_GATE`** (`evaluateMetadataCompletenessGate`) — covers the 6
+  content-evaluable fields (`has_alcohol`, `checkin_type`, `difficulty`, `photo_required`,
+  `is_secret`, `visit_profile_key`) plus tracks `website_url` research status separately
+  (not a gate failure on its own, since it always requires a targeted external lookup, never
+  a fabricated value). PASSes only when every item has an explicit `evaluated: true` record
+  for each of the 6 fields — deterministic rules where a real, generalizable rule exists
+  (category + keyword matching), explicitly flagged LOW-confidence proposals for a human
+  glance where it doesn't (never a silently guessed value for something like `difficulty` or
+  `is_secret`, which are real curatorial/UX decisions).
+- **`GEO_ENRICHMENT_GATE`** (`evaluateGeoEnrichmentGate`) — covers the 6 Google-Places-
+  dependent fields. Deliberately kept SEPARATE from the metadata gate (one requires an
+  external API call and its own review pass — `scripts/geocode-*.js` — the other doesn't) and
+  FAILs by default with no fabricated "not needed" escape hatch; only PASSes once a real
+  Google Places pass has actually run and been reviewed.
+
+**Preserving manual overrides**: `evaluateItemMetadata()` never overwrites an existing value
+that already differs from the bare schema default (a genuine prior manual edit) — it
+preserves it verbatim and marks it `preservedManualOverride: true`. A value that merely
+MATCHES the default is NOT treated as a confirmed override, since there's no way to
+distinguish "confirmed false" from "never touched" from the value alone — which is exactly
+the ambiguity this whole gate exists to remove going forward.
 
 ## Provenance
 
