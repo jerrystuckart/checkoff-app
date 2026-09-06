@@ -130,6 +130,14 @@ async function main() {
    * `totalCheck` differs by phase: pre-mutation asserts the CURRENT
    * production count equals the confirmed existing count (143);
    * post-mutation asserts the FINAL count equals the target (149).
+   * 5c/5h are pre-mutation-only guards — post-mutation, every "should
+   * this candidate already exist?" question is moot (the INSERT already
+   * ran), so those two are replaced by 5i: every final candidate must
+   * resolve to exactly one live item via the exact maps_query match
+   * (see the 2026-09-06 fix — 5c/5h rerun verbatim post-mutation
+   * produced 33 false violations, since a freshly-inserted "new"
+   * candidate trivially satisfies its own fallback venue-name EXISTS
+   * check once its row exists).
    */
   function pushIntegrityCertification(phase: 'PRE-MUTATION' | 'POST-MUTATION') {
     const totalLabel = phase === 'PRE-MUTATION' ? 'current_total' : 'final_total'
@@ -173,35 +181,61 @@ async function main() {
     push(`  SELECT count(*) INTO v_violation_count FROM (SELECT source_id FROM _sd_matches GROUP BY source_id HAVING count(*) > 1) x;`)
     push(`  IF v_violation_count > 0 THEN RAISE EXCEPTION '[${phase}] Certification failed (5b): % final candidate(s) matched more than one existing item.', v_violation_count; END IF;`)
     push(``)
-    push(`  -- 5c. Ambiguous fallback venue-name match (more than one candidate or more than one`)
-    push(`  -- existing item shares a venue name and so was correctly excluded from the fallback`)
-    push(`  -- match) — a real candidate going unmatched purely from an ambiguous name collision.`)
-    push(`  SELECT count(*) INTO v_violation_count FROM (`)
-    push(`    SELECT f.source_id, f.venue_name, count(i.id) AS ambiguous_item_matches`)
-    push(`    FROM _sd_final_candidates f`)
-    push(`    JOIN public.items i`)
-    push(`      ON ${fallbackVenueMatchCondition('i', 'f')}`)
-    push(`    JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id`)
-    push(`    WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')`)
-    push(`      AND f.source_id NOT IN (SELECT source_id FROM _sd_matches)`)
-    push(`    GROUP BY f.source_id, f.venue_name`)
-    push(`    HAVING count(i.id) > 1`)
-    push(`  ) x;`)
-    push(`  IF v_violation_count > 0 THEN RAISE EXCEPTION '[${phase}] Certification failed (5c): % final candidate(s) have an ambiguous fallback venue-name match.', v_violation_count; END IF;`)
-    push(``)
-    push(`  -- 5h. Final candidate with ZERO fallback matches despite a known existing venue identity.`)
-    push(`  SELECT count(*) INTO v_violation_count FROM (`)
-    push(`    SELECT f.source_id FROM _sd_final_candidates f`)
-    push(`    WHERE f.source_id NOT IN (SELECT source_id FROM _sd_matches)`)
-    push(`      AND EXISTS (`)
-    push(`        SELECT 1 FROM public.items i`)
-    push(`        JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id`)
-    push(`        WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')`)
-    push(`          AND ${fallbackVenueMatchCondition('i', 'f')}`)
-    push(`      )`)
-    push(`  ) x;`)
-    push(`  IF v_violation_count > 0 THEN RAISE EXCEPTION '[${phase}] Certification failed (5h): % final candidate(s) have a matching existing venue by name but were not captured in _sd_matches.', v_violation_count; END IF;`)
-    push(``)
+    if (phase === 'PRE-MUTATION') {
+      // 5c/5h only make sense BEFORE mutation, when "final candidate has no item yet"
+      // is a real fact about production. Once the INSERT has run, every genuinely-new
+      // candidate now trivially has a matching row (the one just inserted for it), so
+      // re-running these same queries post-mutation would flag every new/recovered row
+      // as a false "should have matched but didn't" violation — not a real defect. The
+      // POST-MUTATION branch below runs the appropriate replacement check (5i) instead.
+      push(`  -- 5c. Ambiguous fallback venue-name match (more than one candidate or more than one`)
+      push(`  -- existing item shares a venue name and so was correctly excluded from the fallback`)
+      push(`  -- match) — a real candidate going unmatched purely from an ambiguous name collision.`)
+      push(`  SELECT count(*) INTO v_violation_count FROM (`)
+      push(`    SELECT f.source_id, f.venue_name, count(i.id) AS ambiguous_item_matches`)
+      push(`    FROM _sd_final_candidates f`)
+      push(`    JOIN public.items i`)
+      push(`      ON ${fallbackVenueMatchCondition('i', 'f')}`)
+      push(`    JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id`)
+      push(`    WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')`)
+      push(`      AND f.source_id NOT IN (SELECT source_id FROM _sd_matches)`)
+      push(`    GROUP BY f.source_id, f.venue_name`)
+      push(`    HAVING count(i.id) > 1`)
+      push(`  ) x;`)
+      push(`  IF v_violation_count > 0 THEN RAISE EXCEPTION '[${phase}] Certification failed (5c): % final candidate(s) have an ambiguous fallback venue-name match.', v_violation_count; END IF;`)
+      push(``)
+      push(`  -- 5h. Final candidate with ZERO fallback matches despite a known existing venue identity.`)
+      push(`  SELECT count(*) INTO v_violation_count FROM (`)
+      push(`    SELECT f.source_id FROM _sd_final_candidates f`)
+      push(`    WHERE f.source_id NOT IN (SELECT source_id FROM _sd_matches)`)
+      push(`      AND EXISTS (`)
+      push(`        SELECT 1 FROM public.items i`)
+      push(`        JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id`)
+      push(`        WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')`)
+      push(`          AND ${fallbackVenueMatchCondition('i', 'f')}`)
+      push(`      )`)
+      push(`  ) x;`)
+      push(`  IF v_violation_count > 0 THEN RAISE EXCEPTION '[${phase}] Certification failed (5h): % final candidate(s) have a matching existing venue by name but were not captured in _sd_matches.', v_violation_count; END IF;`)
+      push(``)
+    } else {
+      push(`  -- 5i (post-mutation replacement for 5c/5h). Every final candidate must now`)
+      push(`  -- resolve, via the exact normalized maps_query match, to EXACTLY ONE live item`)
+      push(`  -- row under this metro — whether it was updated in place or just inserted.`)
+      push(`  SELECT count(*) INTO v_violation_count FROM (`)
+      push(`    SELECT f.source_id, count(i.id) AS match_count`)
+      push(`    FROM _sd_final_candidates f`)
+      push(`    LEFT JOIN (`)
+      push(`      SELECT i2.id, i2.maps_query FROM public.items i2`)
+      push(`      JOIN public.neighborhoods nb2 ON nb2.id = i2.neighborhood_id`)
+      push(`      WHERE nb2.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')`)
+      push(`    ) i ON lower(regexp_replace(btrim(i.maps_query), '[^a-zA-Z0-9]+', '', 'g'))`)
+      push(`         = lower(regexp_replace(btrim(f.maps_query), '[^a-zA-Z0-9]+', '', 'g'))`)
+      push(`    GROUP BY f.source_id`)
+      push(`    HAVING count(i.id) <> 1`)
+      push(`  ) x;`)
+      push(`  IF v_violation_count > 0 THEN RAISE EXCEPTION '[${phase}] Certification failed (5i): % final candidate(s) do not resolve to exactly one live item via exact maps_query match.', v_violation_count; END IF;`)
+      push(``)
+    }
     push(`  -- 5d. Any Tijuana final candidate whose target neighborhood is a California one.`)
     push(`  SELECT count(*) INTO v_violation_count FROM _sd_final_candidates`)
     push(`  WHERE metro_label = 'Tijuana' AND neighborhood_name NOT IN (${[...MEXICO_NEIGHBORHOODS].map((n) => dollarQuote(n, 'mxn')).join(', ')});`)
