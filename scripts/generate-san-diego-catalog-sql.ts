@@ -347,12 +347,14 @@ async function main() {
   push(`  category_name text NOT NULL,`)
   push(`  neighborhood_name text NOT NULL,`)
   push(`  maps_query text NOT NULL,`)
-  push(`  venue_name text NOT NULL`)
+  push(`  venue_name text NOT NULL,`)
+  push(`  metro_label text NOT NULL`)
   push(`) ON COMMIT DROP;`)
   push(``)
-  push(`INSERT INTO _sd_final_candidates (source_id, body, category_name, neighborhood_name, maps_query, venue_name) VALUES`)
+  push(`INSERT INTO _sd_final_candidates (source_id, body, category_name, neighborhood_name, maps_query, venue_name, metro_label) VALUES`)
   allRecords.forEach((r, i) => {
     const sourceId = `SD-${String(i + 1).padStart(4, '0')}`
+    const metroLabel = i < sdRecords.length ? 'San Diego' : 'Tijuana'
     const comma = i < allRecords.length - 1 ? ',' : ';'
     push(
       // venue_name is the real candidate name (never derived by splitting maps_query on
@@ -360,8 +362,9 @@ async function main() {
       // Teléfono Gastro Park, Bosiger Beer)", would otherwise get truncated mid-name).
       // The fallback SQL match below uses a normalized-PREFIX match against the live
       // production row's maps_query (see fallbackVenueMatchCondition) — not split_part —
-      // so it is correct regardless of internal commas in the venue name.
-      `  (${dollarQuote(sourceId, 'sid')}, ${dollarQuote(r.body, 'bd')}, ${dollarQuote(r.dbCategory, 'cat')}, ${dollarQuote(r.neighborhoodName!, 'nb')}, ${dollarQuote(r.mapsQuery, 'mq')}, ${dollarQuote(r.candidateName, 'vn')})${comma}`
+      // so it is correct regardless of internal commas in the venue name. metro_label is
+      // needed by the PRE/POST-MUTATION integrity certification's 5d/5e/5f guards.
+      `  (${dollarQuote(sourceId, 'sid')}, ${dollarQuote(r.body, 'bd')}, ${dollarQuote(r.dbCategory, 'cat')}, ${dollarQuote(r.neighborhoodName!, 'nb')}, ${dollarQuote(r.mapsQuery, 'mq')}, ${dollarQuote(r.candidateName, 'vn')}, ${dollarQuote(metroLabel, 'ml')})${comma}`
     )
   })
   push(``)
