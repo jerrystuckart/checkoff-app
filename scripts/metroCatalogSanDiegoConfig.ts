@@ -83,3 +83,45 @@ export const NEIGHBORHOOD_ALIASES: Record<string, string> = {
   'entertainment circle': 'Chula Vista', // Sesame Place San Diego is on the Chula Vista Bayfront
   'gunpowder point': 'Chula Vista', // The Living Coast Discovery Center sits on the Sweetwater Marsh refuge in Chula Vista
 }
+
+/**
+ * Verified candidateName -> canonical neighborhood overrides, from the
+ * ~22-item targeted verification pass Jerry approved (2026-09) — a real
+ * web-search lookup per named business/operator to confirm one specific
+ * address or departure dock, NOT a broad re-research round. Checked only
+ * as resolveNeighborhoods' last-resort fallback (see that function's own
+ * doc) — never overrides a real match already present in the recorded
+ * text. Each entry is cited below; only entries that resolved to one of
+ * CANONICAL_NEIGHBORHOODS are included here — several verified addresses
+ * (Golden Hill, Bankers Hill, Midway District, Mission Gorge, Harbor
+ * Island) are real but NOT in the current 40-neighborhood set, so those
+ * candidates are left unresolved rather than force-fit into a nearby
+ * canonical name; adding them would mean adding a new neighborhood
+ * (geocoding), which is out of scope for this pass.
+ */
+export const VERIFIED_NAME_OVERRIDES = new Map<string, string>([
+  ['Callie', 'East Village'], // 1195 Island Ave, San Diego — East Village
+  ['Ambrogio15', 'Pacific Beach'], // flagship/original location, 926 Turquoise St — Pacific Beach (also has Del Mar + airport locations)
+  ['Et Voilà! French Bistro', 'Normal Heights'], // 3015 Adams Ave / 92116 — Normal Heights (Adams Ave is the Normal Heights/Kensington main street; some sources loosely call this stretch "North Park," also canonical if that's preferred)
+  ['Solare Ristorante', 'Liberty Station'], // 2820 Roosevelt Rd, Liberty Station, Point Loma
+  ['Soichi (Soichi Sushi)', 'University Heights'], // 2121 Adams Ave — University Heights (Michelin-starred, 2022)
+  ['San Diego Chocolate Co.', 'North Park'], // based in North Park; caveat — operates primarily as a rotating farmers-market vendor (Hillcrest/La Mesa/North Park), not a fixed storefront
+  ['Bird Rock Coffee Roasters', 'La Jolla'], // original/flagship Bird Rock location, 5627 La Jolla Blvd — Bird Rock is part of greater La Jolla
+  ['Mike’s Red Tacos (third location)', 'Mira Mesa'], // 9089 Mira Mesa Blvd
+  ['San Diego FC', 'Mission Valley'], // plays at Snapdragon Stadium, 2101 Stadium Way — Mission Valley
+  ['San Diego Wave FC', 'Mission Valley'], // also plays at Snapdragon Stadium — Mission Valley
+  ['Jeune et Jolie', 'Carlsbad'], // 2659 State St, Carlsbad — Michelin-starred
+  ['Whale Watching & Dolphin Cruises (various operators)', 'Point Loma'], // representative operator: H&M Landing, Point Loma (other operators may depart elsewhere — flagged, not exhaustively verified)
+  ['San Diego Bay Jet Boat Ride', 'Gaslamp Quarter'], // departs Seaport Village/Embarcadero — via the existing embarcadero->Gaslamp Quarter alias
+  ['Hot Air Balloon over San Diego Coast', 'Del Mar'], // multiple real operators launch from Del Mar for this exact coastal route
+])
+
+/**
+ * Candidate-name pairs manually confirmed to be genuinely distinct
+ * CheckOff-worthy experiences despite the semantic-dedup similarity
+ * check otherwise collapsing them — approved by Jerry, 2026-09. See
+ * metroCatalog.ts's confirmedDistinctPairs doc.
+ */
+export const CONFIRMED_DISTINCT_PAIRS: ReadonlyArray<readonly [string, string]> = [
+  ['Chicano Park', 'Chicano Park Museum & Cultural Center'], // the outdoor mural landmark (National Historic Landmark) vs. a separate indoor building, opened Oct 2022, celebrating the park's muralists
+]

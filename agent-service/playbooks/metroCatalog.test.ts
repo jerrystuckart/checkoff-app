@@ -376,6 +376,30 @@ test('resolveNeighborhoods: a candidate with genuinely no recognizable neighborh
   assert.equal(result.resolved.size, 0)
 })
 
+test('resolveNeighborhoods: a verified name override resolves a named business whose recorded text was too generic (regression: real "Callie" tagged only "San Diego (general)", verified via a targeted lookup to East Village)', () => {
+  const canonical = ['East Village', 'Gaslamp Quarter']
+  const records = [record({ candidateName: 'Callie', neighborhoodName: 'San Diego (general)' })]
+  const overrides = new Map([['Callie', 'East Village']])
+  const result = resolveNeighborhoods(records, canonical, {}, new Set(), overrides)
+  assert.equal(result.resolved.get('Callie'), 'East Village')
+})
+
+test('resolveNeighborhoods: a verified name override never fires when a real match already exists in the text — the override is last-resort only', () => {
+  const canonical = ['East Village', 'Gaslamp Quarter']
+  const records = [record({ candidateName: 'Callie', neighborhoodName: 'Gaslamp Quarter' })]
+  const overrides = new Map([['Callie', 'East Village']])
+  const result = resolveNeighborhoods(records, canonical, {}, new Set(), overrides)
+  assert.equal(result.resolved.get('Callie'), 'Gaslamp Quarter')
+})
+
+test('resolveNeighborhoods: a name override with no matching candidate in the batch has no effect', () => {
+  const canonical = ['East Village']
+  const records = [record({ candidateName: 'Someone Else', neighborhoodName: 'San Diego' })]
+  const overrides = new Map([['Callie', 'East Village']])
+  const result = resolveNeighborhoods(records, canonical, {}, new Set(), overrides)
+  assert.equal(result.resolved.size, 0)
+})
+
 test('resolveNeighborhoods: missing neighborhood text fails resolution', () => {
   const canonical = ['La Jolla']
   const records = [record({ candidateName: 'A', neighborhoodName: null })]
@@ -485,6 +509,28 @@ test('dedupeSemanticDuplicates: keeps the most complete representative and remov
   assert.equal(deduped.length, 1)
   assert.equal(deduped[0].candidateName, 'Zuma (Guild Hotel)')
   assert.equal(removed.length, 1)
+})
+
+test('findSemanticDuplicates: a confirmedDistinctPairs entry stops two genuinely different venues from being collapsed even though their names score above the similarity threshold (regression: Chicano Park / Chicano Park Museum & Cultural Center — the outdoor mural landmark vs. a separate indoor building)', () => {
+  const park = record({ candidateName: 'Chicano Park', mapsQuery: 'x', body: 'See the largest collection of Chicano murals at Chicano Park' })
+  const museum = record({ candidateName: 'Chicano Park Museum & Cultural Center', mapsQuery: 'y', body: 'Visit the indoor museum celebrating the park\'s muralists at Chicano Park Museum & Cultural Center' })
+  // Without the pair listed, these DO collide (documents the real bug this fixes).
+  assert.equal(findSemanticDuplicates([park, museum]).length, 1)
+  // With the pair listed as confirmed-distinct, neither is grouped.
+  const withException = findSemanticDuplicates([park, museum], new Set(), [['Chicano Park', 'Chicano Park Museum & Cultural Center']])
+  assert.equal(withException.length, 0)
+  const { deduped } = dedupeSemanticDuplicates([park, museum], new Set(), [['Chicano Park', 'Chicano Park Museum & Cultural Center']])
+  assert.equal(deduped.length, 2)
+})
+
+test('findSemanticDuplicates: confirmedDistinctPairs does not affect an unrelated pair in the same batch', () => {
+  const park = record({ candidateName: 'Chicano Park', mapsQuery: 'x' })
+  const museum = record({ candidateName: 'Chicano Park Museum & Cultural Center', mapsQuery: 'y' })
+  const zuma1 = record({ candidateName: 'Zuma', mapsQuery: 'z1', body: 'short' })
+  const zuma2 = record({ candidateName: 'Zuma (Guild Hotel)', mapsQuery: 'z2', body: 'A much longer, more detailed description' })
+  const groups = findSemanticDuplicates([park, museum, zuma1, zuma2], new Set(), [['Chicano Park', 'Chicano Park Museum & Cultural Center']])
+  assert.equal(groups.length, 1)
+  assert.ok(groups[0].members.some((m) => m.candidateName === 'Zuma'))
 })
 
 test('evaluateOutreachGate: PASSes without requiring any outreach to have happened', () => {

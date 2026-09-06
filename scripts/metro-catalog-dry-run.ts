@@ -23,7 +23,7 @@ import { DbPlaybookRunStore } from '../agent-service/specialists/dbPlaybookRunSt
 import { playbookRunId } from '../agent-service/specialists/playbookRun'
 import { classifyCategory } from '../agent-service/playbooks/categoryNormalization'
 import { runIntakePipeline, type MetroCatalogCandidate } from '../agent-service/playbooks/metroCatalog'
-import { CANONICAL_NEIGHBORHOODS, NEIGHBORHOOD_ALIASES, MEXICO_NEIGHBORHOODS, SAN_DIEGO_GENERIC_PLACE_WORDS } from './metroCatalogSanDiegoConfig'
+import { CANONICAL_NEIGHBORHOODS, NEIGHBORHOOD_ALIASES, MEXICO_NEIGHBORHOODS, SAN_DIEGO_GENERIC_PLACE_WORDS, VERIFIED_NAME_OVERRIDES, CONFIRMED_DISTINCT_PAIRS } from './metroCatalogSanDiegoConfig'
 
 function loadEnvFile(relPath: string): void {
   const envPath = require('node:path').join(__dirname, '..', relPath)
@@ -92,6 +92,8 @@ async function main() {
       neighborhoodAliases: NEIGHBORHOOD_ALIASES,
       mexicoNeighborhoods: MEXICO_NEIGHBORHOODS,
       additionalGenericWords: SAN_DIEGO_GENERIC_PLACE_WORDS,
+      verifiedNameOverrides: VERIFIED_NAME_OVERRIDES,
+      confirmedDistinctPairs: CONFIRMED_DISTINCT_PAIRS,
     })
     const categoryCounts: Record<string, number> = {}
     for (const r of result.finalRecords) categoryCounts[r.dbCategory] = (categoryCounts[r.dbCategory] ?? 0) + 1

@@ -231,7 +231,20 @@ export function resolveNeighborhoods(
    * match at all fails resolution rather than silently landing on a
    * California one.
    */
-  mexicoNeighborhoods: ReadonlySet<string> = new Set()
+  mexicoNeighborhoods: ReadonlySet<string> = new Set(),
+  /**
+   * Exact candidateName -> canonical neighborhood, for named businesses
+   * whose research-recorded neighborhood text was too generic ("San Diego
+   * (general)") to resolve any other way, but whose real, specific
+   * address was confirmed by a small targeted verification pass (never a
+   * broad re-research round — see the San Diego attrition-audit recovery
+   * pass, 2026-09). Checked ONLY as the last-resort fallback, after every
+   * text-based and name-word-based match has already failed — a real
+   * match from the record's own text always wins over this. Each entry
+   * here should be traceable to a specific, cited source, the same
+   * discipline as the alias table.
+   */
+  verifiedNameOverrides: ReadonlyMap<string, string> = new Map()
 ): NeighborhoodResolutionResult {
   const resolved = new Map<string, string>()
   const unresolved: Array<{ candidateName: string; rawNeighborhood: string | null; reason: string }> = []
@@ -270,6 +283,10 @@ export function resolveNeighborhoods(
       const nameLower = normalizeWhitespace(record.candidateName.toLowerCase())
       const nameMatches = canonicalNeighborhoods.filter((n) => nameLower.includes(n.toLowerCase()))
       if (nameMatches.length > 0) matches = nameMatches
+    }
+    if (matches.length === 0) {
+      const override = verifiedNameOverrides.get(record.candidateName.trim())
+      if (override) matches = [override]
     }
 
     if (isMexicoSignaled && mexicoLower.size > 0) {
@@ -451,7 +468,17 @@ const SEMANTIC_NAME_SIMILARITY_THRESHOLD = 0.5
  * their shared token "la jolla" alone sits below the threshold once
  * combined with each name's other distinct words).
  */
-export function findSemanticDuplicates(records: readonly ItemIntakeRecord[], additionalGenericWords: ReadonlySet<string> = new Set()): SemanticDuplicateGroup[] {
+function buildNeverMergeChecker(confirmedDistinctPairs: ReadonlyArray<readonly [string, string]>): (a: string, b: string) => boolean {
+  const pairs = new Set(confirmedDistinctPairs.flatMap(([a, b]) => [`${a}|||${b}`, `${b}|||${a}`]))
+  return (a, b) => pairs.has(`${a}|||${b}`)
+}
+
+export function findSemanticDuplicates(
+  records: readonly ItemIntakeRecord[],
+  additionalGenericWords: ReadonlySet<string> = new Set(),
+  confirmedDistinctPairs: ReadonlyArray<readonly [string, string]> = []
+): SemanticDuplicateGroup[] {
+  const isNeverMerge = buildNeverMergeChecker(confirmedDistinctPairs)
   const exactGroups = new Map<string, ItemIntakeRecord[]>()
   for (const r of records) {
     const key = normalizeVenueNameForSemanticMatch(r.candidateName)
@@ -462,9 +489,15 @@ export function findSemanticDuplicates(records: readonly ItemIntakeRecord[], add
   const consumed = new Set<string>() // candidateName, already placed in an exact group
 
   for (const [key, members] of exactGroups) {
-    if (members.length > 1) {
-      groups.push({ normalizedName: key, members, matchKind: 'exact' })
-      for (const m of members) consumed.add(m.candidateName)
+    // A confirmed-distinct pair should never be grouped even if their
+    // names happen to normalize identically — split them out rather than
+    // silently merging a pair a human has explicitly reviewed and said
+    // are different things.
+    const distinctSubset = members.filter((m) => members.some((other) => other !== m && isNeverMerge(m.candidateName, other.candidateName)))
+    const mergeable = members.filter((m) => !distinctSubset.includes(m))
+    if (mergeable.length > 1) {
+      groups.push({ normalizedName: key, members: mergeable, matchKind: 'exact' })
+      for (const m of mergeable) consumed.add(m.candidateName)
     }
   }
 
@@ -476,6 +509,7 @@ export function findSemanticDuplicates(records: readonly ItemIntakeRecord[], add
     const similar: ItemIntakeRecord[] = [remaining[i]]
     for (let j = i + 1; j < remaining.length; j++) {
       if (seen.has(remaining[j].candidateName)) continue
+      if (isNeverMerge(remaining[i].candidateName, remaining[j].candidateName)) continue
       const wordsB = venueNameSignificantWords(remaining[j].candidateName, additionalGenericWords)
       if (wordsA.size === 0 || wordsB.size === 0) continue
       let intersection = 0
@@ -494,8 +528,12 @@ export function findSemanticDuplicates(records: readonly ItemIntakeRecord[], add
 }
 
 /** Applies findSemanticDuplicates and keeps only the most-complete representative from each group (same completeness scoring as dedupeCandidates) — a deterministic way to actually resolve what the audit found, not just report it. */
-export function dedupeSemanticDuplicates<T extends ItemIntakeRecord>(records: readonly T[], additionalGenericWords: ReadonlySet<string> = new Set()): { deduped: T[]; removed: Array<{ kept: T; discarded: T[]; matchKind: 'exact' | 'similar' }> } {
-  const groups = findSemanticDuplicates(records, additionalGenericWords)
+export function dedupeSemanticDuplicates<T extends ItemIntakeRecord>(
+  records: readonly T[],
+  additionalGenericWords: ReadonlySet<string> = new Set(),
+  confirmedDistinctPairs: ReadonlyArray<readonly [string, string]> = []
+): { deduped: T[]; removed: Array<{ kept: T; discarded: T[]; matchKind: 'exact' | 'similar' }> } {
+  const groups = findSemanticDuplicates(records, additionalGenericWords, confirmedDistinctPairs)
   const toRemove = new Set<string>()
   const removed: Array<{ kept: T; discarded: T[]; matchKind: 'exact' | 'similar' }> = []
   for (const group of groups) {
@@ -834,6 +872,21 @@ export interface IntakePipelineInput {
   mexicoNeighborhoods?: ReadonlySet<string>
   /** Extra generic words (typically the metro's own neighborhood names, lowercased) excluded from the semantic-duplicate similarity fallback — see venueNameSignificantWords' doc for why a shared neighborhood name alone (e.g. "Oceanside") is not venue-identity evidence. */
   additionalGenericWords?: ReadonlySet<string>
+  /** See resolveNeighborhoods' own doc — verified, cited candidateName -> canonical neighborhood overrides for named businesses whose recorded text was too generic to resolve any other way. */
+  verifiedNameOverrides?: ReadonlyMap<string, string>
+  /**
+   * Pairs of candidate names that must NEVER be collapsed into each other
+   * by the semantic-duplicate similarity check, even if they'd otherwise
+   * score above the threshold — for confirmed, manually-reviewed cases
+   * where two records at/near the same venue are genuinely distinct
+   * CheckOff-worthy experiences (San Diego attrition audit, 2026-09:
+   * "Chicano Park" the outdoor mural landmark vs. "Chicano Park Museum &
+   * Cultural Center," a separate indoor building). Order within a pair
+   * doesn't matter. This is never a way to bypass a real duplicate — only
+   * for pairs a human has actually read and confirmed are different
+   * things.
+   */
+  confirmedDistinctPairs?: ReadonlyArray<readonly [string, string]>
 }
 
 export interface IntakePipelineResult {
@@ -848,12 +901,12 @@ export function runIntakePipeline(input: IntakePipelineInput): IntakePipelineRes
   const { records, failures: mappingFailures } = mapCandidatesToIntakeRecords(input.candidates)
   const duplicates = checkForDuplicates(records, input.existingProductionMapsQueries)
 
-  const { resolved, unresolved } = resolveNeighborhoods(duplicates.clean, input.canonicalNeighborhoods, input.neighborhoodAliases ?? {}, input.mexicoNeighborhoods ?? new Set())
+  const { resolved, unresolved } = resolveNeighborhoods(duplicates.clean, input.canonicalNeighborhoods, input.neighborhoodAliases ?? {}, input.mexicoNeighborhoods ?? new Set(), input.verifiedNameOverrides ?? new Map())
   const geographicallyResolved = duplicates.clean
     .filter((r) => resolved.has(r.candidateName))
     .map((r) => ({ ...r, neighborhoodName: resolved.get(r.candidateName)! }))
 
-  const { deduped: semanticallyClean, removed: semanticDuplicatesRemoved } = dedupeSemanticDuplicates(geographicallyResolved, input.additionalGenericWords ?? new Set())
+  const { deduped: semanticallyClean, removed: semanticDuplicatesRemoved } = dedupeSemanticDuplicates(geographicallyResolved, input.additionalGenericWords ?? new Set(), input.confirmedDistinctPairs ?? [])
 
   const presentationProblems: IntakeFailure[] = []
   const presentationClean = semanticallyClean.filter((r) => {
