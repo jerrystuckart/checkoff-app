@@ -101,6 +101,33 @@ export async function buildFinalRecords(projectId: string, existingProductionMap
   return { records, gates: result.gates, candidateCount: candidates.length }
 }
 
+/**
+ * Deterministic venue-identity join condition for the fallback match tier,
+ * shared verbatim by the write patch and the read-only audit so both use
+ * IDENTICAL matching logic by construction.
+ *
+ * `maps_query` is always built as `${venueName}, ${neighborhood}` (see
+ * `buildFinalRecords` / the intake pipeline's maps_query construction) —
+ * venue name ALWAYS comes first, followed by a comma-space separator, then
+ * the neighborhood. That means the normalized `maps_query` on an existing
+ * production row is GUARANTEED to start with the normalized venue name,
+ * regardless of whether the venue name itself contains internal commas
+ * (e.g. "Plaza Fiesta (El Depa, Teléfono Gastro Park, Bosiger Beer)").
+ *
+ * `split_part(maps_query, ',', 1)` is UNSAFE here: it splits on the FIRST
+ * comma in the string, which for a venue name with an internal comma is
+ * NOT the venue/neighborhood separator — it truncates mid-name and breaks
+ * the match. A normalized-prefix (LIKE) match instead checks "does the
+ * existing row's maps_query start with this candidate's venue name",
+ * which is correct regardless of where any internal commas fall.
+ */
+export function fallbackVenueMatchCondition(itemsAlias: string, candidateAlias: string): string {
+  return (
+    `lower(regexp_replace(btrim(${itemsAlias}.maps_query), '[^a-zA-Z0-9]+', '', 'g'))\n` +
+    `     LIKE lower(regexp_replace(btrim(${candidateAlias}.venue_name), '[^a-zA-Z0-9]+', '', 'g')) || '%'`
+  )
+}
+
 // Confirmed via Jerry's own direct production query, 2026-09-06: the San
 // Diego metro already has exactly this many staged items (the original,
 // pre-CheckOffization-audit foundation run) — agent_service's own read of

@@ -26,7 +26,7 @@
 // Usage: npx tsx scripts/generate-san-diego-reconciliation-audit.ts
 
 import { writeFileSync, mkdirSync } from 'node:fs'
-import { loadEnvFile, dollarQuote, buildFinalRecords, fetchExistingProductionMapsQueries, EXPECTED_EXISTING_ITEM_COUNT, RECOVERY_REASONS } from './sanDiegoReconciliationShared'
+import { loadEnvFile, dollarQuote, buildFinalRecords, fetchExistingProductionMapsQueries, EXPECTED_EXISTING_ITEM_COUNT, RECOVERY_REASONS, fallbackVenueMatchCondition } from './sanDiegoReconciliationShared'
 import { MEXICO_NEIGHBORHOODS } from './metroCatalogSanDiegoConfig'
 
 loadEnvFile('.env')
@@ -124,8 +124,7 @@ async function main() {
   push(`    count(*) OVER (PARTITION BY i.id) AS item_dupes`)
   push(`  FROM _sd_final_candidates f`)
   push(`  JOIN public.items i`)
-  push(`    ON lower(regexp_replace(btrim(split_part(i.maps_query, ',', 1)), '[^a-zA-Z0-9]+', '', 'g'))`)
-  push(`     = lower(regexp_replace(btrim(f.venue_name), '[^a-zA-Z0-9]+', '', 'g'))`)
+  push(`    ON ${fallbackVenueMatchCondition('i', 'f')}`)
   push(`  JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id`)
   push(`  WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')`)
   push(`    AND f.source_id NOT IN (SELECT source_id FROM _sd_matches)`)
@@ -238,13 +237,29 @@ async function main() {
   push(`SELECT f.source_id, f.venue_name, count(i.id) AS ambiguous_item_matches`)
   push(`FROM _sd_final_candidates f`)
   push(`JOIN public.items i`)
-  push(`  ON lower(regexp_replace(btrim(split_part(i.maps_query, ',', 1)), '[^a-zA-Z0-9]+', '', 'g'))`)
-  push(`   = lower(regexp_replace(btrim(f.venue_name), '[^a-zA-Z0-9]+', '', 'g'))`)
+  push(`  ON ${fallbackVenueMatchCondition('i', 'f')}`)
   push(`JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id`)
   push(`WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')`)
   push(`  AND f.source_id NOT IN (SELECT source_id FROM _sd_matches)`)
   push(`GROUP BY f.source_id, f.venue_name`)
   push(`HAVING count(i.id) > 1;`)
+  push(``)
+  push(`-- 5h. Final candidate with ZERO fallback matches despite a known existing venue`)
+  push(`-- identity — i.e. some existing row's maps_query begins with this candidate's`)
+  push(`-- venue name, but it did NOT end up in _sd_matches (whether because it was`)
+  push(`-- suppressed by the ambiguous >1 guard above, or some other reason) — must be`)
+  push(`-- empty. This complements 5c: 5c only catches AMBIGUOUS (>1) fallback matches,`)
+  push(`-- this catches a real existing-venue candidate silently ending up with NO match`)
+  push(`-- at all (which would misclassify a retained venue as "new" in Report 3).`)
+  push(`SELECT f.source_id, f.venue_name`)
+  push(`FROM _sd_final_candidates f`)
+  push(`WHERE f.source_id NOT IN (SELECT source_id FROM _sd_matches)`)
+  push(`  AND EXISTS (`)
+  push(`    SELECT 1 FROM public.items i`)
+  push(`    JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id`)
+  push(`    WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')`)
+  push(`      AND ${fallbackVenueMatchCondition('i', 'f')}`)
+  push(`  );`)
   push(``)
   push(`-- 5d. Any Tijuana final candidate whose target neighborhood is a California one — must be empty.`)
   push(`SELECT source_id, venue_name, neighborhood_name FROM _sd_final_candidates`)

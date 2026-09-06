@@ -60,7 +60,7 @@
 import { writeFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { buildFeaturedExperienceBridgeCard, validateFeaturedExperienceBridgeCard } from '../agent-service/playbooks/metroCatalog'
 import { MEXICO_NEIGHBORHOODS } from './metroCatalogSanDiegoConfig'
-import { loadEnvFile, dollarQuote, buildFinalRecords, fetchExistingProductionMapsQueries, EXPECTED_EXISTING_ITEM_COUNT } from './sanDiegoReconciliationShared'
+import { loadEnvFile, dollarQuote, buildFinalRecords, fetchExistingProductionMapsQueries, EXPECTED_EXISTING_ITEM_COUNT, fallbackVenueMatchCondition } from './sanDiegoReconciliationShared'
 
 loadEnvFile('.env')
 
@@ -233,10 +233,9 @@ async function main() {
       // venue_name is the real candidate name (never derived by splitting maps_query on
       // comma — a venue whose own name contains a comma, e.g. "Plaza Fiesta (El Depa,
       // Teléfono Gastro Park, Bosiger Beer)", would otherwise get truncated mid-name).
-      // The fallback SQL match below still uses split_part(maps_query, ',', 1) against
-      // the live production row, so this fallback tier only actually engages correctly
-      // for a venue name with no internal comma (true for Cori Pastificio Trattoria, the
-      // one candidate that needs it tonight) — a known, accepted narrowing, not a bug.
+      // The fallback SQL match below uses a normalized-PREFIX match against the live
+      // production row's maps_query (see fallbackVenueMatchCondition) — not split_part —
+      // so it is correct regardless of internal commas in the venue name.
       `  (${dollarQuote(sourceId, 'sid')}, ${dollarQuote(r.body, 'bd')}, ${dollarQuote(r.dbCategory, 'cat')}, ${dollarQuote(r.neighborhoodName!, 'nb')}, ${dollarQuote(r.mapsQuery, 'mq')}, ${dollarQuote(r.candidateName, 'vn')})${comma}`
     )
   })
@@ -263,14 +262,37 @@ async function main() {
   push(`    count(*) OVER (PARTITION BY i.id) AS item_dupes`)
   push(`  FROM _sd_final_candidates f`)
   push(`  JOIN public.items i`)
-  push(`    ON lower(regexp_replace(btrim(split_part(i.maps_query, ',', 1)), '[^a-zA-Z0-9]+', '', 'g'))`)
-  push(`     = lower(regexp_replace(btrim(f.venue_name), '[^a-zA-Z0-9]+', '', 'g'))`)
+  push(`    ON ${fallbackVenueMatchCondition('i', 'f')}`)
   push(`  JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id`)
   push(`  WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')`)
   push(`    AND f.source_id NOT IN (SELECT source_id FROM _sd_matches)`)
   push(`    AND i.id NOT IN (SELECT item_id FROM _sd_matches)`)
   push(`) vm`)
   push(`WHERE vm.candidate_dupes = 1 AND vm.item_dupes = 1;`)
+  push(``)
+  push(`-- Guard: a final candidate that matched NO existing item on the primary tier but`)
+  push(`-- SHOULD have a known existing venue identity (i.e. some existing row's maps_query`)
+  push(`-- begins with its venue name at all, ambiguous or not) yet still ended up with ZERO`)
+  push(`-- fallback matches is a silent-miss risk (e.g. a normalization edge case) — not just`)
+  push(`-- the >1 ambiguous case already guarded above. Fail loudly instead of silently`)
+  push(`-- treating a real existing venue as "new".`)
+  push(`DO $$`)
+  push(`DECLARE v_zero_fallback int;`)
+  push(`BEGIN`)
+  push(`  SELECT count(*) INTO v_zero_fallback FROM (`)
+  push(`    SELECT f.source_id FROM _sd_final_candidates f`)
+  push(`    WHERE f.source_id NOT IN (SELECT source_id FROM _sd_matches)`)
+  push(`      AND EXISTS (`)
+  push(`        SELECT 1 FROM public.items i`)
+  push(`        JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id`)
+  push(`        WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')`)
+  push(`          AND ${fallbackVenueMatchCondition('i', 'f')}`)
+  push(`      )`)
+  push(`  ) x;`)
+  push(`  IF v_zero_fallback > 0 THEN`)
+  push(`    RAISE EXCEPTION 'Reconciliation failed: % final candidate(s) have a matching existing venue by name but were not captured in _sd_matches (likely an ambiguous multi-match suppressed by the candidate_dupes/item_dupes=1 guard) — investigate before treating as new.', v_zero_fallback;`)
+  push(`  END IF;`)
+  push(`END $$;`)
   push(``)
   push(`-- Safety: no candidate or existing item may appear more than once in the match set.`)
   push(`DO $$`)
