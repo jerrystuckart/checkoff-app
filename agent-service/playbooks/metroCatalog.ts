@@ -388,7 +388,7 @@ function normalizeVenueNameForSemanticMatch(rawName: string): string {
  * completely unrelated "Oceanside Museum of Art" — "museum"/"art" are
  * category-descriptive, not venue-identifying.
  */
-const VENUE_NAME_GENERIC_WORDS = new Set(['san', 'diego', 'tijuana', 'mexico', 'california', 'baja', 'museum', 'art', 'center', 'centre', 'gallery', 'park', 'plaza', 'hotel', 'historic', 'district', 'zoo', 'safari'])
+const VENUE_NAME_GENERIC_WORDS = new Set(['san', 'diego', 'tijuana', 'mexico', 'california', 'baja', 'museum', 'art', 'center', 'centre', 'gallery', 'park', 'plaza', 'hotel', 'historic', 'district', 'zoo', 'safari', 'market', 'artisan'])
 
 /**
  * Same generic-word problem, one level up: "Oceanside Pier" and

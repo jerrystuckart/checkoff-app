@@ -420,6 +420,13 @@ test('findSemanticDuplicates: additionalGenericWords excludes a shared neighborh
   assert.equal(withExclusion.length, 0)
 })
 
+test('findSemanticDuplicates: does not over-merge two distinct recurring markets sharing only generic event-type words (regression: Gaslamp Artisan Market / Tianguis de la Raza Artisan Market)', () => {
+  const a = record({ candidateName: 'Gaslamp Artisan Market', mapsQuery: 'a' })
+  const b = record({ candidateName: 'Tianguis de la Raza Artisan Market', mapsQuery: 'b' })
+  const groups = findSemanticDuplicates([a, b], new Set(['gaslamp']))
+  assert.equal(groups.length, 0)
+})
+
 test('findSemanticDuplicates: does not over-merge two genuinely different La Jolla venues sharing only a place name', () => {
   const a = record({ candidateName: 'La Jolla Cove', mapsQuery: 'x' })
   const b = record({ candidateName: 'La Jolla Village Merchants Association', mapsQuery: 'y' })
