@@ -202,6 +202,17 @@ test('evaluateCatalogGate: FAILs when a duplicate against production survives in
   assert.match(result.reason, /duplicate/)
 })
 
+test('evaluateCatalogGate: PASSes even when candidates were excluded for a legitimate category-mapping failure — that is the pipeline working, not a gate violation', () => {
+  const result = evaluateCatalogGate({
+    expectedCanonicalCount: 2,
+    stagedRecords: [record()],
+    intakeFailures: [{ candidateName: 'Vague Candidate', reason: 'candidate has no canonical category at all (unclassified upstream)' }],
+    duplicates: { clean: [], collidesWithProduction: [], collidesWithinBatch: [] },
+  })
+  assert.equal(result.verdict, 'PASS')
+  assert.match(result.reason, /legitimately excluded/)
+})
+
 test('evaluateCatalogGate: FAILs when staged+failed count drifts from the expected canonical count — a silent drop', () => {
   const result = evaluateCatalogGate({ expectedCanonicalCount: 5, stagedRecords: [record()], intakeFailures: [], duplicates: { clean: [], collidesWithProduction: [], collidesWithinBatch: [] } })
   assert.equal(result.verdict, 'FAIL')

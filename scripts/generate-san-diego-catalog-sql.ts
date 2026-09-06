@@ -11,12 +11,34 @@
 // himself via Supabase SQL Editor — this script has no DB write access
 // and never attempts one.
 //
+// Calls agent-service/playbooks/metroCatalog.ts's single consolidated
+// runIntakePipeline() — the SAME function scripts/metro-catalog-dry-run.ts
+// calls — so the rows this file INSERTs are always exactly the rows the
+// dry-run report's gates were evaluated against (San Diego catalog SQL
+// review, 2026-09-06: a prior version let these drift).
+//
 // Architecture (Jerry's explicit decision, 2026-09-06): Tijuana is
 // NOT its own metro_areas row — it's a cross-border extension, modeled
 // as neighborhoods under San Diego's own metro_id, isolated into its
 // own dedicated curated list (never mixed into the main San Diego
 // catalog list), with Mexico geography preserved explicitly in each
 // item's maps_query text.
+//
+// STAGING SAFETY (San Diego catalog SQL review, 2026-09-06): items are
+// inserted with is_active=false, NOT true. Denver's real intake used
+// `true` at insert time, relying on metro_areas.is_active=false alone
+// for invisibility — but lib/useNearby.js's fetchItems() has NO metro
+// filter at all (it queries ALL active, non-universal items with a
+// neighborhood, across every metro combined, then filters by GPS radius
+// client-side). An is_active=true item is therefore globally
+// discoverable via Nearby the moment it's inserted, regardless of
+// metro_areas.is_active — this genuinely deviates from the historical
+// convention on Jerry's explicit instruction, because that convention
+// has a real, live exposure. RLS gates public read on
+// `is_active=true AND is_approved=true`, so is_active=false alone fully
+// hides these rows everywhere (Nearby included) until a separate,
+// later activation step flips them — see the companion activation
+// snippet noted at the end of the generated file.
 //
 // Usage: npx tsx scripts/generate-san-diego-catalog-sql.ts
 
@@ -25,7 +47,8 @@ import path from 'node:path'
 import { DbPlaybookRunStore } from '../agent-service/specialists/dbPlaybookRunStore'
 import { playbookRunId } from '../agent-service/specialists/playbookRun'
 import { classifyCategory } from '../agent-service/playbooks/categoryNormalization'
-import { mapCandidatesToIntakeRecords, checkForDuplicates, resolveNeighborhoods, type MetroCatalogCandidate, type ItemIntakeRecord } from '../agent-service/playbooks/metroCatalog'
+import { runIntakePipeline, type MetroCatalogCandidate, type ItemIntakeRecord } from '../agent-service/playbooks/metroCatalog'
+import { CANONICAL_NEIGHBORHOODS, NEIGHBORHOOD_ALIASES, MEXICO_NEIGHBORHOODS } from './metroCatalogSanDiegoConfig'
 import { Pool } from 'pg'
 
 function loadEnvFile(relPath: string): void {
@@ -43,27 +66,6 @@ function loadEnvFile(relPath: string): void {
   }
 }
 loadEnvFile('.env')
-
-const TIJUANA_NEIGHBORHOODS = new Set(['Zona Centro', 'Zona Río', 'Zona Norte', 'Otay', 'Chapultepec Alamar'])
-
-const CANONICAL_NEIGHBORHOODS = [
-  'Gaslamp Quarter', 'East Village', 'Little Italy', 'Barrio Logan', 'North Park', 'South Park',
-  'Hillcrest', 'Mission Hills', 'Point Loma', 'Ocean Beach', 'Mission Beach', 'Pacific Beach',
-  'La Jolla', 'Coronado', 'Chula Vista', 'Del Mar', 'Solana Beach', 'Encinitas', 'Carlsbad',
-  'Oceanside', 'Escondido', 'Rancho Santa Fe', 'San Marcos', 'Vista',
-  'Balboa Park', 'Mission Bay', 'Old Town', 'Liberty Station', 'Mission Valley', 'Kearny Mesa',
-  'San Ysidro', 'University City', 'Normal Heights', 'University Heights', 'Mira Mesa',
-  'Zona Centro', 'Zona Río', 'Zona Norte', 'Otay', 'Chapultepec Alamar',
-]
-const NEIGHBORHOOD_ALIASES: Record<string, string> = {
-  downtown: 'Gaslamp Quarter',
-  'petco park': 'East Village',
-  embarcadero: 'Gaslamp Quarter',
-  'avenida revolución': 'Zona Centro',
-  revolución: 'Zona Centro',
-  'pueblo amigo': 'Zona Norte',
-  pedwest: 'Zona Centro',
-}
 
 function slugify(s: string): string {
   return s
@@ -111,33 +113,52 @@ async function fetchExistingProductionMapsQueries(): Promise<string[]> {
   }
 }
 
-interface ResolvedRecord extends ItemIntakeRecord {
-  resolvedNeighborhood: string
+interface FinalRecord extends ItemIntakeRecord {
   isMexico: boolean
 }
 
-async function buildCleanRecords(projectId: string, existingProductionMapsQueries: string[]): Promise<ResolvedRecord[]> {
+async function buildFinalRecords(projectId: string, existingProductionMapsQueries: string[]): Promise<{ records: FinalRecord[]; gates: ReturnType<typeof runIntakePipeline>['gates']; candidateCount: number }> {
   const candidates = await loadCandidates(projectId)
-  const { records } = mapCandidatesToIntakeRecords(candidates)
-  const { clean } = checkForDuplicates(records, existingProductionMapsQueries)
-  const { resolved } = resolveNeighborhoods(clean, CANONICAL_NEIGHBORHOODS, NEIGHBORHOOD_ALIASES)
-  return clean
-    .filter((r) => resolved.has(r.candidateName))
-    .map((r) => {
-      const resolvedNeighborhood = resolved.get(r.candidateName)!
-      const isMexico = TIJUANA_NEIGHBORHOODS.has(resolvedNeighborhood)
-      let mapsQuery = r.mapsQuery
-      if (isMexico && !/tijuana/i.test(mapsQuery)) mapsQuery = `${mapsQuery}, Tijuana, Mexico`
-      return { ...r, resolvedNeighborhood, isMexico, mapsQuery }
-    })
+  const result = runIntakePipeline({
+    candidates,
+    existingProductionMapsQueries,
+    canonicalNeighborhoods: CANONICAL_NEIGHBORHOODS,
+    neighborhoodAliases: NEIGHBORHOOD_ALIASES,
+    mexicoNeighborhoods: MEXICO_NEIGHBORHOODS,
+  })
+  const records = result.finalRecords.map((r) => {
+    const isMexico = MEXICO_NEIGHBORHOODS.has(r.neighborhoodName ?? '')
+    let mapsQuery = r.mapsQuery
+    if (isMexico && !/tijuana/i.test(mapsQuery)) mapsQuery = `${mapsQuery}, Tijuana, Mexico`
+    return { ...r, mapsQuery, isMexico }
+  })
+  return { records, gates: result.gates, candidateCount: candidates.length }
 }
 
 async function main() {
-  const geo = JSON.parse(readFileSync('scripts/output/san-diego-neighborhoods-with-radii.json', 'utf8')) as Array<{ name: string; lat: number; lng: number; ring0RadiusM: number; ring1RadiusM: number; ring2RadiusM: number; isMexico: boolean }>
+  const geo = JSON.parse(readFileSync('scripts/output/san-diego-neighborhoods-with-radii.json', 'utf8')) as Array<{ name: string; lat: number; lng: number; ring0RadiusM: number; ring1RadiusM: number; ring2RadiusM: number }>
   const existingProductionMapsQueries = await fetchExistingProductionMapsQueries()
 
-  const sdRecords = await buildCleanRecords('san-diego', existingProductionMapsQueries)
-  const tjRecords = await buildCleanRecords('san-diego-tijuana-extension', existingProductionMapsQueries)
+  const sd = await buildFinalRecords('san-diego', existingProductionMapsQueries)
+  const tj = await buildFinalRecords('san-diego-tijuana-extension', existingProductionMapsQueries)
+
+  console.error('=== Final-output gate check (must ALL pass before any SQL is written) ===')
+  let allPass = true
+  for (const [label, r] of [['San Diego', sd], ['Tijuana', tj]] as const) {
+    for (const g of r.gates) {
+      console.error(`  [${label}] ${g.key}: ${g.verdict} — ${g.reason}`)
+      if (g.verdict !== 'PASS') allPass = false
+    }
+  }
+  if (!allPass) {
+    console.error('\nOne or more final-output gates FAILED — refusing to generate SQL. Fix the pipeline, not the output.')
+    process.exitCode = 1
+    return
+  }
+  console.error('\nAll final-output gates PASS. Generating SQL...\n')
+
+  const sdRecords = sd.records
+  const tjRecords = tj.records
   const allRecords = [...sdRecords, ...tjRecords]
 
   const lines: string[] = []
@@ -166,9 +187,16 @@ async function main() {
   push(`-- later, human-reviewed geocoding pass (scripts/geocode-items.js), never fabricated`)
   push(`-- from AI research at intake time.`)
   push(`--`)
-  push(`-- Staging: metro_areas.is_active=false and every curated_lists row is_active=false`)
-  push(`-- throughout. Flipping metro_areas.is_active=true is the deliberate, separate launch`)
-  push(`-- trigger (Part 3 of the playbook) — NOT part of this file.`)
+  push(`-- STAGING SAFETY (deliberate deviation from Denver's historical convention — see`)
+  push(`-- this file's own header comment in the repo for the full explanation): every item`)
+  push(`-- below is inserted with is_active=false, NOT true. lib/useNearby.js's Nearby query`)
+  push(`-- has no metro filter at all, so an is_active=true item would be globally`)
+  push(`-- discoverable immediately, regardless of metro_areas.is_active — RLS's`)
+  push(`-- is_active=true AND is_approved=true read policy means is_active=false alone fully`)
+  push(`-- hides these rows everywhere until a separate, later, narrowly-scoped activation`)
+  push(`-- statement (matched by this exact maps_query set) flips them at real launch time.`)
+  push(`-- metro_areas.is_active=false and every curated_lists row is_active=false throughout`)
+  push(`-- too. Flipping any of these to true is the deliberate, separate launch trigger.`)
   push(``)
   push(`BEGIN;`)
   push(``)
@@ -197,7 +225,7 @@ async function main() {
   // ── neighborhoods ──
   push(`-- ── 2. neighborhoods (${geo.length}) — San Diego's own + Tijuana's, ALL under San Diego's metro_id. Real, geocoded centers (scripts/geocode-san-diego-neighborhoods.js); ring radii computed to guarantee zero ring_2 overlap (verifyNoRingOverlap), a JUDGMENT CALL worth reviewing, not a fixed platform rule. ──`)
   for (const n of geo) {
-    const isMexico = TIJUANA_NEIGHBORHOODS.has(n.name)
+    const isMexico = MEXICO_NEIGHBORHOODS.has(n.name)
     const state = isMexico ? 'Baja California, Mexico' : 'CA'
     push(`INSERT INTO public.neighborhoods (id, metro_id, name, slug, state, center_geo, ring_0_radius_m, ring_1_radius_m, ring_2_radius_m, is_active)`)
     push(
@@ -208,14 +236,14 @@ async function main() {
   push(``)
 
   // ── items ──
-  push(`-- ── 3. items (${allRecords.length}: ${sdRecords.length} San Diego + ${tjRecords.length} Tijuana). Category via name subquery (no invented UUIDs). Duplicate check re-verified inline (normalized maps_query, global — same discipline as Denver's real intake) even though the dry run already confirmed zero collisions, since production may have changed since. maps_lat/maps_lng intentionally NULL — see header. ──`)
+  push(`-- ── 3. items (${allRecords.length}: ${sdRecords.length} San Diego + ${tjRecords.length} Tijuana). Category via name subquery (no invented UUIDs). is_active=false — see STAGING SAFETY above. Duplicate check re-verified inline (normalized maps_query, global) even though the pipeline already confirmed zero collisions, since production may have changed since. maps_lat/maps_lng intentionally NULL — see header. ──`)
   for (const r of allRecords) {
     push(`INSERT INTO public.items (body, category_id, checkin_type, is_universal, is_active, is_approved, neighborhood_id, maps_query, is_recurring, difficulty, photo_required, has_alcohol)`)
     push(`SELECT`)
     push(`  ${dollarQuote(r.body, 'bd')},`)
     push(`  (SELECT id FROM public.categories WHERE name = ${dollarQuote(r.dbCategory, 'cat')}),`)
-    push(`  'tap', false, true, true,`)
-    push(`  (SELECT nb.id FROM public.neighborhoods nb JOIN public.metro_areas m ON m.id = nb.metro_id WHERE m.slug = 'san-diego' AND nb.name = ${dollarQuote(r.resolvedNeighborhood, 'nb')}),`)
+    push(`  'tap', false, false, true,`)
+    push(`  (SELECT nb.id FROM public.neighborhoods nb JOIN public.metro_areas m ON m.id = nb.metro_id WHERE m.slug = 'san-diego' AND nb.name = ${dollarQuote(r.neighborhoodName!, 'nb')}),`)
     push(`  ${dollarQuote(r.mapsQuery, 'mq')}, true, 1, false, false`)
     push(
       `WHERE NOT EXISTS (SELECT 1 FROM public.items WHERE lower(regexp_replace(btrim(maps_query), '[^a-zA-Z0-9]+', '', 'g')) = lower(regexp_replace(btrim(${dollarQuote(r.mapsQuery, 'mq2')}), '[^a-zA-Z0-9]+', '', 'g')));`
@@ -293,6 +321,7 @@ async function main() {
   push(`  v_neighborhood_count int;`)
   push(`  v_sd_item_count int;`)
   push(`  v_tj_item_count int;`)
+  push(`  v_active_item_count int;`)
   push(`BEGIN`)
   push(`  SELECT id INTO v_metro_id FROM public.metro_areas WHERE slug = 'san-diego';`)
   push(`  IF v_metro_id IS NULL THEN RAISE EXCEPTION 'Postflight failed: san-diego metro_areas row missing.'; END IF;`)
@@ -302,14 +331,18 @@ async function main() {
   push(`  IF v_sd_item_count <> ${sdRecords.length} THEN RAISE EXCEPTION 'Postflight failed: expected % San Diego catalog items, found %.', ${sdRecords.length}, v_sd_item_count; END IF;`)
   push(`  SELECT count(*) INTO v_tj_item_count FROM public.curated_list_items WHERE curated_list_id = (SELECT id FROM public.curated_lists WHERE slug = 'san-diego-tijuana-extension');`)
   push(`  IF v_tj_item_count <> ${tjRecords.length} THEN RAISE EXCEPTION 'Postflight failed: expected % Tijuana items, found %.', ${tjRecords.length}, v_tj_item_count; END IF;`)
+  push(`  SELECT count(*) INTO v_active_item_count FROM public.items i JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id WHERE nb.metro_id = v_metro_id AND i.is_active = true;`)
+  push(`  IF v_active_item_count <> 0 THEN RAISE EXCEPTION 'Postflight failed: % San Diego/Tijuana item(s) are is_active=true — staging safety violated, these would be globally discoverable via Nearby right now.', v_active_item_count; END IF;`)
   push(`END $$;`)
   push(``)
   push(`COMMIT;`)
   push(``)
   push(`-- Absolute boundary (per docs/metro-launch-playbook.md Phase 6): do NOT flip`)
-  push(`-- metro_areas.is_active=true or any curated_lists.is_active=true as part of applying`)
-  push(`-- this file. That is the deliberate, separate launch trigger — a later step, once`)
-  push(`-- visual assets/QA/season are ready, not a side effect of running this migration.`)
+  push(`-- metro_areas.is_active=true, any curated_lists.is_active=true, or any of these`)
+  push(`-- items' is_active=true as part of applying this file. Activation is a deliberate,`)
+  push(`-- separate, later step — a narrowly-scoped follow-up statement matched by this`)
+  push(`-- exact batch's maps_query set, run once visual assets/QA/season are ready, not a`)
+  push(`-- side effect of running this migration.`)
 
   mkdirSync('scripts/output', { recursive: true })
   const outPath = `scripts/output/san-diego-catalog-foundation-${new Date().toISOString().slice(0, 10)}.sql`

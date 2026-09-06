@@ -2,20 +2,16 @@
 // scripts/metro-catalog-dry-run.ts
 //
 // Chief M7-M9 — Metro Catalog Construction dry run. Reusable across
-// metros: reads a metro_launch run's persisted canonical candidates,
-// maps them to real item-intake records (agent-service/playbooks/
-// metroCatalog.ts), checks for duplicates against the REAL production
-// `items` table (agent_service has read-only access to it), evaluates
-// the real CATALOG/LOCATION/PRESENTATION/OUTREACH gates, and generates
-// a reviewed SQL file for a human with elevated (service_role) database
-// access to run — the same role every prior metro (Denver, Tucson,
-// Phoenix, Milwaukee) was actually loaded by, per
-// docs/metro-launch-audit/patches/denver_catalog_insert_CORRECTED.sql.
+// metros: reads a metro_launch run's persisted canonical candidates and
+// runs them through agent-service/playbooks/metroCatalog.ts's single
+// consolidated runIntakePipeline() — the SAME function
+// scripts/generate-san-diego-catalog-sql.ts calls to produce the actual
+// SQL, so this report's gate results can never drift from what the
+// generator actually emits (San Diego catalog SQL review, 2026-09-06).
 //
 // THIS SCRIPT NEVER WRITES TO ANY public.* TABLE — agent_service has no
-// INSERT/UPDATE/DELETE grant on public schema at all (confirmed via
-// information_schema.role_table_grants), so it structurally could not
-// even if it tried. It writes ONLY to local review files under
+// INSERT/UPDATE/DELETE grant on public schema at all, so it structurally
+// could not even if it tried. It writes ONLY to local review files under
 // scripts/output/.
 //
 // Usage: npx tsx scripts/metro-catalog-dry-run.ts
@@ -26,49 +22,8 @@ import { readFileSync, existsSync } from 'node:fs'
 import { DbPlaybookRunStore } from '../agent-service/specialists/dbPlaybookRunStore'
 import { playbookRunId } from '../agent-service/specialists/playbookRun'
 import { classifyCategory } from '../agent-service/playbooks/categoryNormalization'
-import {
-  mapCandidatesToIntakeRecords,
-  checkForDuplicates,
-  resolveNeighborhoods,
-  evaluateCatalogGate,
-  evaluateLocationGate,
-  evaluatePresentationGate,
-  evaluateOutreachGate,
-  type MetroCatalogCandidate,
-  type ItemIntakeRecord,
-} from '../agent-service/playbooks/metroCatalog'
-
-// The 40 real, geocoded neighborhoods (scripts/output/san-diego-neighborhoods-with-radii.json)
-// — San Diego's 35 plus Tijuana's 5, all modeled under San Diego's own
-// metro_id per Jerry's 2026-09-06 architecture decision. Grown from an
-// initial 29 after the first dry-run pass showed ~100 real candidates
-// referencing genuine sub-areas (Balboa Park, Mission Bay, Old Town,
-// Liberty Station, Mission Valley, etc.) the original M1 list didn't cover.
-const CANONICAL_NEIGHBORHOODS = [
-  'Gaslamp Quarter', 'East Village', 'Little Italy', 'Barrio Logan', 'North Park', 'South Park',
-  'Hillcrest', 'Mission Hills', 'Point Loma', 'Ocean Beach', 'Mission Beach', 'Pacific Beach',
-  'La Jolla', 'Coronado', 'Chula Vista', 'Del Mar', 'Solana Beach', 'Encinitas', 'Carlsbad',
-  'Oceanside', 'Escondido', 'Rancho Santa Fe', 'San Marcos', 'Vista',
-  'Balboa Park', 'Mission Bay', 'Old Town', 'Liberty Station', 'Mission Valley', 'Kearny Mesa',
-  'San Ysidro', 'University City', 'Normal Heights', 'University Heights', 'Mira Mesa',
-  'Zona Centro', 'Zona Río', 'Zona Norte', 'Otay', 'Chapultepec Alamar',
-]
-
-// Real landmarks/sub-areas whose text never names their containing
-// canonical neighborhood literally — checked only when no direct match
-// exists (see resolveNeighborhoods' own doc). Judgment calls, flagged as
-// such: "Downtown" alone (no more specific district named) defaults to
-// Gaslamp Quarter, the historic downtown core; Petco Park/the Embarcadero
-// waterfront likewise. Tijuana landmarks route to their real containing zone.
-const NEIGHBORHOOD_ALIASES: Record<string, string> = {
-  downtown: 'Gaslamp Quarter',
-  'petco park': 'East Village',
-  embarcadero: 'Gaslamp Quarter',
-  'avenida revolución': 'Zona Centro',
-  revolución: 'Zona Centro',
-  'pueblo amigo': 'Zona Norte',
-  pedwest: 'Zona Centro',
-}
+import { runIntakePipeline, type MetroCatalogCandidate } from '../agent-service/playbooks/metroCatalog'
+import { CANONICAL_NEIGHBORHOODS, NEIGHBORHOOD_ALIASES, MEXICO_NEIGHBORHOODS } from './metroCatalogSanDiegoConfig'
 
 function loadEnvFile(relPath: string): void {
   const envPath = require('node:path').join(__dirname, '..', relPath)
@@ -86,28 +41,21 @@ function loadEnvFile(relPath: string): void {
 }
 loadEnvFile('.env')
 
-interface ProjectConfig {
-  projectId: string
-  metroLabel: string
-  /** Real production `categories.name` this project's items should use — resolved from state.candidates' raw category via categoryNormalization. */
-}
-
-const PROJECTS: ProjectConfig[] = [
+const PROJECTS = [
   { projectId: 'san-diego', metroLabel: 'San Diego' },
   { projectId: 'san-diego-tijuana-extension', metroLabel: 'Tijuana (cross-border extension)' },
 ]
 
-async function loadCandidates(projectId: string): Promise<{ candidates: MetroCatalogCandidate[]; neighborhoods: Array<{ name: string; kind: string }> }> {
+async function loadCandidates(projectId: string): Promise<MetroCatalogCandidate[]> {
   const store = new DbPlaybookRunStore()
   const run = await store.get(playbookRunId('metro_launch', projectId))
   if (!run) throw new Error(`No metro_launch run found for project "${projectId}"`)
   const state = run.state as {
     candidates?: Array<{ name: string; category: string | null; neighborhood: string | null; claimSupported: string; source: string; mergedSourceUrls?: string[]; verificationConfidence?: 'LOW' | 'MEDIUM' | 'HIGH' }>
     checkoffizedItems?: Array<{ name: string; checkoffizedItem: string }>
-    neighborhoods?: Array<{ name: string; kind: string }>
   }
   const checkoffizedByName = new Map((state.checkoffizedItems ?? []).map((c) => [c.name, c.checkoffizedItem]))
-  const candidates: MetroCatalogCandidate[] = (state.candidates ?? []).map((c) => ({
+  return (state.candidates ?? []).map((c) => ({
     name: c.name,
     canonicalCategory: classifyCategory(c.category).canonical,
     neighborhood: c.neighborhood,
@@ -116,7 +64,6 @@ async function loadCandidates(projectId: string): Promise<{ candidates: MetroCat
     sourceUrls: c.mergedSourceUrls ?? [c.source].filter(Boolean),
     verificationConfidence: c.verificationConfidence,
   }))
-  return { candidates, neighborhoods: state.neighborhoods ?? [] }
 }
 
 async function fetchExistingProductionMapsQueries(): Promise<string[]> {
@@ -129,61 +76,25 @@ async function fetchExistingProductionMapsQueries(): Promise<string[]> {
   }
 }
 
-interface ProjectReport {
-  projectId: string
-  metroLabel: string
-  canonicalCandidateCount: number
-  intakeFailures: Array<{ candidateName: string; reason: string }>
-  categoryCounts: Record<string, number>
-  duplicates: ReturnType<typeof checkForDuplicates>
-  cleanRecords: Array<ItemIntakeRecord & { resolvedNeighborhood: string }>
-  neighborhoodResolutionFailures: ReturnType<typeof resolveNeighborhoods>['unresolved']
-  gates: ReturnType<typeof evaluateCatalogGate>[]
-  neighborhoods: Array<{ name: string; kind: string }>
-}
-
-async function buildReportFor(config: ProjectConfig, existingProductionMapsQueries: string[]): Promise<ProjectReport> {
-  const { candidates, neighborhoods } = await loadCandidates(config.projectId)
-  const { records, failures } = mapCandidatesToIntakeRecords(candidates)
-  const duplicates = checkForDuplicates(records, existingProductionMapsQueries)
-
-  const { resolved, unresolved } = resolveNeighborhoods(duplicates.clean, CANONICAL_NEIGHBORHOODS, NEIGHBORHOOD_ALIASES)
-  const cleanRecords = duplicates.clean
-    .filter((r) => resolved.has(r.candidateName))
-    .map((r) => ({ ...r, resolvedNeighborhood: resolved.get(r.candidateName)! }))
-
-  const categoryCounts: Record<string, number> = {}
-  for (const r of cleanRecords) categoryCounts[r.dbCategory] = (categoryCounts[r.dbCategory] ?? 0) + 1
-
-  const allFailures = [...failures, ...unresolved.map((u) => ({ candidateName: u.candidateName, reason: `neighborhood: ${u.reason}` }))]
-  const catalogGate = evaluateCatalogGate({ expectedCanonicalCount: candidates.length, stagedRecords: cleanRecords, intakeFailures: allFailures, duplicates })
-  const locationGate = evaluateLocationGate({ records: cleanRecords })
-  const presentationGate = evaluatePresentationGate({ records: cleanRecords })
-  const outreachGate = evaluateOutreachGate({ records: cleanRecords })
-
-  return {
-    projectId: config.projectId,
-    metroLabel: config.metroLabel,
-    canonicalCandidateCount: candidates.length,
-    intakeFailures: allFailures,
-    categoryCounts,
-    duplicates,
-    cleanRecords,
-    neighborhoodResolutionFailures: unresolved,
-    gates: [catalogGate, locationGate, presentationGate, outreachGate],
-    neighborhoods,
-  }
-}
-
 async function main() {
   mkdirSync('scripts/output', { recursive: true })
   const existingProductionMapsQueries = await fetchExistingProductionMapsQueries()
   console.error(`Loaded ${existingProductionMapsQueries.length} existing production items' maps_query values for global dedup check.`)
 
-  const reports: ProjectReport[] = []
+  const reports = []
   for (const config of PROJECTS) {
     console.error(`\nBuilding dry-run report for ${config.metroLabel}...`)
-    reports.push(await buildReportFor(config, existingProductionMapsQueries))
+    const candidates = await loadCandidates(config.projectId)
+    const result = runIntakePipeline({
+      candidates,
+      existingProductionMapsQueries,
+      canonicalNeighborhoods: CANONICAL_NEIGHBORHOODS,
+      neighborhoodAliases: NEIGHBORHOOD_ALIASES,
+      mexicoNeighborhoods: MEXICO_NEIGHBORHOODS,
+    })
+    const categoryCounts: Record<string, number> = {}
+    for (const r of result.finalRecords) categoryCounts[r.dbCategory] = (categoryCounts[r.dbCategory] ?? 0) + 1
+    reports.push({ projectId: config.projectId, metroLabel: config.metroLabel, canonicalCandidateCount: candidates.length, categoryCounts, ...result })
   }
 
   const outPath = `scripts/output/metro-catalog-dry-run-${new Date().toISOString().slice(0, 10)}.json`
@@ -193,10 +104,9 @@ async function main() {
   for (const r of reports) {
     console.error(`\n=== ${r.metroLabel} (${r.projectId}) ===`)
     console.error(`canonical candidates: ${r.canonicalCandidateCount}`)
-    console.error(`intake failures: ${r.intakeFailures.length}`)
-    console.error(`clean, ready-to-insert records: ${r.cleanRecords.length}`)
-    console.error(`duplicates vs. production: ${r.duplicates.collidesWithProduction.length}`)
-    console.error(`duplicates within batch: ${r.duplicates.collidesWithinBatch.length}`)
+    console.error(`final, ready-to-insert records: ${r.finalRecords.length}`)
+    console.error(`total excluded: ${r.failures.length}`)
+    console.error(`semantic duplicate groups collapsed: ${r.semanticDuplicatesRemoved.length}`)
     console.error(`category counts: ${JSON.stringify(r.categoryCounts)}`)
     for (const g of r.gates) console.error(`  ${g.key}: ${g.verdict} — ${g.reason}`)
   }
