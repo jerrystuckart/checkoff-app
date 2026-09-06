@@ -128,12 +128,17 @@ export function fallbackVenueMatchCondition(itemsAlias: string, candidateAlias: 
   )
 }
 
-// Confirmed via Jerry's own direct production query, 2026-09-06: the San
-// Diego metro already has exactly this many staged items (the original,
-// pre-CheckOffization-audit foundation run) — agent_service's own read of
-// `items` cannot see them (RLS silently filters is_active=false rows for
-// this role — see the reconciliation report for the full explanation).
-export const EXPECTED_EXISTING_ITEM_COUNT = 141
+// Confirmed via Jerry's own direct, authoritative production query,
+// 2026-09-06 (superseding an earlier 141 figure that missed 2 items which
+// are already is_active=true — those were invisible to the query that
+// produced 141, not actually absent from the metro): the San Diego metro
+// currently has exactly this many total items under it — 141 inactive + 2
+// active, 126 California + 17 Tijuana. agent_service's own read of `items`
+// still cannot see the inactive ones (RLS silently filters is_active=false
+// rows for this role — see the reconciliation report for the full
+// explanation), so this number must come from Jerry's own privileged
+// Supabase SQL Editor query, never from an agent_service-side count.
+export const EXPECTED_EXISTING_ITEM_COUNT = 143
 
 /** Every candidate's real recovery/source reason, for the audit's "new rows proposed for insertion" report — tracked by hand across the session, not derived. Anything not listed here is either an original-141 survivor (should match) or an OpenAI-editorial-wording-only update (no location/category change since the original run). */
 export const RECOVERY_REASONS: Record<string, string> = {

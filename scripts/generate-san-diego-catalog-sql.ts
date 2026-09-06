@@ -209,10 +209,10 @@ async function main() {
   }
   push(``)
 
-  // ── items — RECONCILIATION against the real 141 existing staged rows ──
-  // (San Diego production-state correction, 2026-09-06 — see report). Rather
-  // than blindly inserting, this section: (1) matches each of the 152 final
-  // candidates to an existing production row by normalized maps_query, with
+  // ── items — RECONCILIATION against the real existing staged rows (count driven
+  // by EXPECTED_EXISTING_ITEM_COUNT, corrected to 143 on 2026-09-06 — see report).
+  // Rather than blindly inserting, this section: (1) matches each final
+  // candidate to an existing production row by normalized maps_query, with
   // a venue-name-only fallback for the one candidate (Cori Pastificio
   // Trattoria) whose neighborhood correction changed its maps_query text;
   // (2) UPDATEs matched rows in place, preserving their id (no delete+

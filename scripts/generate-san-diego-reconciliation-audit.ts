@@ -17,7 +17,7 @@
 // pipeline's cross-metro dedup check) and writes a local .sql file.
 //
 // The generated file creates TEMP tables (session-local, auto-dropped,
-// not a public.* write) to hold the 152-candidate target state and the
+// not a public.* write) to hold the final-candidate target state and the
 // match results, then returns SELECT-only reports. Every "integrity
 // guard" is a SELECT that should return zero rows, not a RAISE
 // EXCEPTION — the point of this file is for Jerry to inspect every
@@ -79,7 +79,7 @@ async function main() {
   push(``)
 
   // ── candidate temp table (identical shape/content to the write patch) ──
-  push(`-- ── 0. Build the 152-candidate target state (read-only: a session-local TEMP table, not a public.* write) ──`)
+  push(`-- ── 0. Build the ${allRecords.length}-candidate target state (read-only: a session-local TEMP table, not a public.* write) ──`)
   push(`DROP TABLE IF EXISTS _sd_final_candidates;`)
   push(`CREATE TEMP TABLE _sd_final_candidates (`)
   push(`  source_id text PRIMARY KEY,`)
@@ -152,6 +152,7 @@ async function main() {
   push(`SELECT`)
   push(`  (SELECT count(*) FROM public.items i JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')) AS current_existing_rows,`)
   push(`  (SELECT count(*) FROM public.items i JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego') AND i.is_active = true) AS current_existing_active_rows,`)
+  push(`  (SELECT count(*) FROM public.items i JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego') AND i.is_active = false) AS current_existing_inactive_rows,`)
   push(`  (SELECT count(*) FROM _sd_matches) AS retained_matched_rows,`)
   push(`  (SELECT count(*) FROM _sd_obsolete) AS obsolete_rows,`)
   push(`  (SELECT count(*) FROM _sd_matches) AS final_candidates_already_represented,`)
@@ -170,7 +171,7 @@ async function main() {
   push(``)
 
   push(`-- ═══════════════════════════════════════════════════════════════════════`)
-  push(`-- REPORT 2 — Existing rows proposed for removal (~35 expected) — INSPECT EVERY ROW`)
+  push(`-- REPORT 2 — Existing rows proposed for removal (see Report 1's obsolete_rows count) — INSPECT EVERY ROW`)
   push(`-- before deciding whether the write patch's obsolete-removal step is correct.`)
   push(`-- ═══════════════════════════════════════════════════════════════════════`)
   push(`SELECT`)
@@ -180,7 +181,7 @@ async function main() {
   push(`  c.name AS category,`)
   push(`  nb.name AS neighborhood,`)
   push(`  (SELECT string_agg(cl.title || ' (' || cl.slug || ')', ', ') FROM public.curated_list_items cli JOIN public.curated_lists cl ON cl.id = cli.curated_list_id WHERE cli.item_id = i.id) AS curated_list_membership,`)
-  push(`  'Not matched to any of the 152 final candidates by normalized maps_query or venue name — either superseded/renamed, or excluded by tonight''s editorial specificity bar. Cross-reference against the write patch''s final candidate list to confirm which.' AS reason_not_represented`)
+  push(`  'Not matched to any of the ${allRecords.length} final candidates by normalized maps_query or venue name — either superseded/renamed, or excluded by the editorial specificity bar. Cross-reference against the write patch''s final candidate list to confirm which.' AS reason_not_represented`)
   push(`FROM public.items i`)
   push(`JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id`)
   push(`JOIN public.categories c ON c.id = i.category_id`)
@@ -293,8 +294,8 @@ async function main() {
   push(``)
   push(`-- 5g. Reconciliation math check — must return a single row with both columns 'true'.`)
   push(`SELECT`)
-  push(`  ((SELECT count(*) FROM public.items i JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')) = ${EXPECTED_EXISTING_ITEM_COUNT}) AS existing_count_is_141,`)
-  push(`  ((SELECT count(*) FROM _sd_matches) + (SELECT count(*) FROM _sd_obsolete) = ${EXPECTED_EXISTING_ITEM_COUNT}) AS retained_plus_obsolete_equals_141,`)
+  push(`  ((SELECT count(*) FROM public.items i JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id WHERE nb.metro_id = (SELECT id FROM public.metro_areas WHERE slug = 'san-diego')) = ${EXPECTED_EXISTING_ITEM_COUNT}) AS existing_count_is_${EXPECTED_EXISTING_ITEM_COUNT},`)
+  push(`  ((SELECT count(*) FROM _sd_matches) + (SELECT count(*) FROM _sd_obsolete) = ${EXPECTED_EXISTING_ITEM_COUNT}) AS retained_plus_obsolete_equals_${EXPECTED_EXISTING_ITEM_COUNT},`)
   push(`  ((SELECT count(*) FROM _sd_matches) + ((SELECT count(*) FROM _sd_final_candidates) - (SELECT count(*) FROM _sd_matches)) = ${allRecords.length}) AS retained_plus_new_equals_${allRecords.length};`)
   push(``)
   push(`-- No public.* row was inserted, updated, or deleted by this file. Temp tables`)
