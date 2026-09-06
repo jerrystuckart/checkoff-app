@@ -185,6 +185,46 @@ test('San Diego FULL SYNTHETIC driver run: sequences M0 through the launch-readi
   assert.ok(allExecutions.some((e) => e.request.stage === 'M6_QUALITY_VERIFICATION'))
   assert.ok(allExecutions.filter((e) => e.request.specialist === 'checkoff_editor').length === 10)
   assert.ok(allExecutions.every((e) => e.status === 'COMPLETE'))
+
+  // Structural bug fix regression (San Diego run, 2026-09-05): the
+  // launch boundary's QUALITY_GATE duplicate check is no longer a
+  // hardcoded `[]` — on this genuinely-deduped synthetic candidate set
+  // it must report zero suspected duplicates and PASS for real, not by
+  // construction.
+  const qualityGate = run.decisionPacket?.evidence as { gates: Array<{ key: string; verdict: string }> } | undefined
+  assert.equal(qualityGate?.gates.find((g) => g.key === 'QUALITY_GATE')?.verdict, 'PASS')
+})
+
+test('driveMetroLaunch: QUALITY_GATE genuinely FAILS the launch boundary when a duplicate slips into the canonical candidate set', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  scriptSynthetic(executor)
+
+  const projectId = 'san-diego-leftover-duplicate-test'
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  seeded!.state = { m0Decisions: RESOLVED_M0 }
+  await runStore.put(seeded!)
+
+  await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN })
+
+  // Simulate a duplicate slipping past dedupe (e.g. added by a process
+  // that bypassed dedupeCandidates) directly into the persisted state,
+  // then let the driver re-evaluate the boundary.
+  const afterFirstPass = await runStore.get(playbookRunId('metro_launch', projectId))
+  const state = afterFirstPass!.state as { candidates: Array<{ name: string; category: string; neighborhood: string; claimSupported: string; source: string; needsVerification: boolean }> }
+  const dupe = { ...state.candidates[0], source: 'https://a-second-independent-source.example.com' }
+  state.candidates = [...state.candidates, dupe]
+  afterFirstPass!.currentStage = 'LAUNCH_READINESS_BOUNDARY'
+  afterFirstPass!.status = 'RUNNING'
+  await runStore.put(afterFirstPass!)
+
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN })
+  const qualityGate = run.decisionPacket?.evidence as { gates: Array<{ key: string; verdict: string; reason: string }> } | undefined
+  const result = qualityGate?.gates.find((g) => g.key === 'QUALITY_GATE')
+  assert.equal(result?.verdict, 'FAIL')
+  assert.match(result?.reason ?? '', /duplicate/)
 })
 
 // ---------------------------------------------------------------------------

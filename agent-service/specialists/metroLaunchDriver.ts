@@ -33,7 +33,7 @@ import { countByCanonicalCategory, type UnclassifiedCategory } from '../playbook
 import { runExecutionRouted } from './routing'
 import type { ExecutionStore, SpecialistExecutor, SpecialistExecutionRequest } from './executor'
 import { getOrCreateRun, type PlaybookRunStore, type PlaybookRunRecord } from './playbookRun'
-import { dedupeCandidates, type RawCandidate } from './candidateMerge'
+import { dedupeCandidates, findSuspectedDuplicates, type RawCandidate } from './candidateMerge'
 import { DEFAULT_DRIVER_GUARDRAILS, type DriverGuardrails } from './driverGuardrails'
 import type { SpecialistResultEnvelope } from './types'
 
@@ -588,9 +588,17 @@ async function stepEditor(deps: MetroDriverDeps, run: PlaybookRunRecord): Promis
 
 async function stepLaunchBoundary(run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
   const state = readState(run)
+  // Structural bug fix (San Diego run, 2026-09-05): this used to be a
+  // hardcoded `[]` — a real duplicate (251 raw candidates, only 200
+  // unique names) sailed through QUALITY_GATE undetected. Run against
+  // the canonical, already-deduped state.candidates: on a correctly
+  // reconciled set this returns empty (dedupeCandidates already
+  // resolved everything upstream); a nonempty result here is a genuine
+  // safety-net catch, not the expected steady state.
+  const suspectedDuplicates = findSuspectedDuplicates(state.candidates ?? [])
   const gateEvidence: MetroGateEvidence = {
     coverageGaps: [],
-    quality: { knownClosures: [], suspectedDuplicates: [], filler: [] },
+    quality: { knownClosures: [], suspectedDuplicates, filler: [] },
     catalog: { viableItemCount: (state.candidates ?? []).length, targetCatalogSize: (state.candidates ?? []).length },
     location: { totalItems: (state.candidates ?? []).length, itemsWithCoordinates: (state.candidates ?? []).length },
     presentation: { homeRenders: true, listsRender: true, imagesRender: true },
