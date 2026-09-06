@@ -707,3 +707,89 @@ export function runIntakePipeline(input: IntakePipelineInput): IntakePipelineRes
     gates: [catalogGate, locationGate, presentationGate, outreachGate],
   }
 }
+
+// ── featured_experiences bridge card ──
+//
+// Production incident, 2026-09 (San Diego catalog SQL run): the generator's
+// hand-written INSERT omitted `deep_link` outright, which is NOT NULL with
+// no usable default — the transaction failed and rolled back. Separately,
+// the row's `state` silently came back as 'AZ' on the failed-row report even
+// though we never wrote it: `featured_experiences` carries a `state` column
+// (never referenced anywhere in app/admin code — display-only or dead) that
+// still has whatever DEFAULT was set the first time this table was ever
+// populated, apparently during the original Phoenix, AZ build. Any INSERT
+// that doesn't explicitly set every column inherits that stale default.
+//
+// agent_service has zero grants on `featured_experiences` (confirmed via
+// information_schema.role_table_grants — no rows at all for this table), so
+// this module can't read the live schema and enumerate every NOT NULL
+// column. The fix instead is defensive: this builder always emits every
+// column it knows the table to have from app/admin code (id, title,
+// subtitle, city, state, metro_slug, deep_link, list_id, display_order,
+// active, vibes) explicitly, with real values — never relying on a
+// production default column having sane data again.
+const DEEP_LINK_LIST_PATTERN = /^checkoff:\/\/list\?id=[a-z0-9-]+&city=[a-z0-9-]+$/
+
+export interface FeaturedExperienceBridgeCardInput {
+  title: string
+  subtitle: string
+  city: string
+  /** Real two-letter US state code (or equivalent) for the metro this card is shown on — never left blank or inferred from a table default. */
+  state: string
+  metroSlug: string
+  curatedListSlug: string
+  vibes: string[]
+  displayOrder?: number
+  /** Staging safety: defaults to false, matching the "staged inactive until launch" convention used for every other row this generator emits. */
+  active?: boolean
+}
+
+export interface FeaturedExperienceBridgeCard {
+  title: string
+  subtitle: string
+  city: string
+  state: string
+  metroSlug: string
+  deepLink: string
+  curatedListSlug: string
+  vibes: string[]
+  displayOrder: number
+  active: boolean
+}
+
+/** Deterministically builds a featured_experiences bridge-card row, always populating every column this module knows the table to have (see note above) — including deep_link, so it can never again be silently omitted, and state, so it can never again fall through to a stale production default. */
+export function buildFeaturedExperienceBridgeCard(input: FeaturedExperienceBridgeCardInput): FeaturedExperienceBridgeCard {
+  if (!input.title.trim()) throw new Error('featured_experiences bridge card: title is required')
+  if (!input.subtitle.trim()) throw new Error('featured_experiences bridge card: subtitle is required')
+  if (!input.city.trim()) throw new Error('featured_experiences bridge card: city is required')
+  if (!/^[A-Z]{2}$/.test(input.state)) throw new Error(`featured_experiences bridge card: state must be a real two-letter code (got ${JSON.stringify(input.state)}) — never leave this to the table's own default`)
+  if (!input.metroSlug.trim()) throw new Error('featured_experiences bridge card: metroSlug is required')
+  if (!input.curatedListSlug.trim()) throw new Error('featured_experiences bridge card: curatedListSlug is required')
+
+  const deepLink = `checkoff://list?id=${input.curatedListSlug}&city=${input.metroSlug}`
+
+  return {
+    title: input.title,
+    subtitle: input.subtitle,
+    city: input.city,
+    state: input.state,
+    metroSlug: input.metroSlug,
+    deepLink,
+    curatedListSlug: input.curatedListSlug,
+    vibes: input.vibes,
+    displayOrder: input.displayOrder ?? 0,
+    active: input.active ?? false,
+  }
+}
+
+/** Returns every production-contract violation found on a bridge card, empty if none. Used both by the generator (fail-fast before emitting SQL) and by tests. */
+export function validateFeaturedExperienceBridgeCard(card: FeaturedExperienceBridgeCard): string[] {
+  const problems: string[] = []
+  if (!card.title.trim()) problems.push('title is empty')
+  if (!card.subtitle.trim()) problems.push('subtitle is empty')
+  if (!card.city.trim()) problems.push('city is empty')
+  if (!/^[A-Z]{2}$/.test(card.state)) problems.push(`state is not a real two-letter code: ${JSON.stringify(card.state)}`)
+  if (!card.deepLink || !DEEP_LINK_LIST_PATTERN.test(card.deepLink)) problems.push(`deep_link is missing or malformed: ${JSON.stringify(card.deepLink)}`)
+  if (!card.curatedListSlug.trim()) problems.push('curatedListSlug is empty')
+  return problems
+}

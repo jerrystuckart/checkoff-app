@@ -47,7 +47,7 @@ import path from 'node:path'
 import { DbPlaybookRunStore } from '../agent-service/specialists/dbPlaybookRunStore'
 import { playbookRunId } from '../agent-service/specialists/playbookRun'
 import { classifyCategory } from '../agent-service/playbooks/categoryNormalization'
-import { runIntakePipeline, type MetroCatalogCandidate, type ItemIntakeRecord } from '../agent-service/playbooks/metroCatalog'
+import { runIntakePipeline, buildFeaturedExperienceBridgeCard, validateFeaturedExperienceBridgeCard, type MetroCatalogCandidate, type ItemIntakeRecord } from '../agent-service/playbooks/metroCatalog'
 import { CANONICAL_NEIGHBORHOODS, NEIGHBORHOOD_ALIASES, MEXICO_NEIGHBORHOODS, SAN_DIEGO_GENERIC_PLACE_WORDS } from './metroCatalogSanDiegoConfig'
 import { Pool } from 'pg'
 
@@ -306,12 +306,33 @@ async function main() {
   push(``)
 
   // ── featured_experiences bridge card ──
-  push(`-- ── 7. featured_experiences — one explicit bridge card on San Diego's home rail linking to the Tijuana list, per Jerry's "make the cross-border nature explicit" requirement. JUDGMENT CALL: copy/title, review before applying. staged inactive. ──`)
-  push(`INSERT INTO public.featured_experiences (id, title, subtitle, city, metro_slug, list_id, display_order, active, vibes)`)
+  // Built via the reusable buildFeaturedExperienceBridgeCard() (not inlined
+  // here) after a production failure: the prior version of this INSERT
+  // omitted deep_link (NOT NULL, no usable default — the transaction failed
+  // and rolled back) and never set state explicitly, which silently pulled
+  // in a stale 'AZ' default left over from the table's original Phoenix
+  // build. See the long comment on that function for the full audit.
+  const bridgeCard = buildFeaturedExperienceBridgeCard({
+    title: 'Cross the Border',
+    subtitle: 'Tijuana food, culture & nightlife — just minutes away in Mexico',
+    city: 'San Diego',
+    state: 'CA',
+    metroSlug: 'san-diego',
+    curatedListSlug: 'san-diego-tijuana-extension',
+    vibes: ['adventurous', 'international'],
+    displayOrder: 0,
+    active: false,
+  })
+  const bridgeCardProblems = validateFeaturedExperienceBridgeCard(bridgeCard)
+  if (bridgeCardProblems.length > 0) {
+    throw new Error(`Refusing to generate SQL: featured_experiences bridge card failed validation: ${bridgeCardProblems.join('; ')}`)
+  }
+  push(`-- ── 7. featured_experiences — one explicit bridge card on San Diego's home rail linking to the Tijuana list, per Jerry's "make the cross-border nature explicit" requirement. Every column below is explicit (never left to a table default — see 2026-09 AZ/deep_link production incident). JUDGMENT CALL: copy/title, review before applying. staged inactive. ──`)
+  push(`INSERT INTO public.featured_experiences (id, title, subtitle, city, state, metro_slug, deep_link, list_id, display_order, active, vibes)`)
   push(
-    `SELECT gen_random_uuid(), ${dollarQuote('Cross the Border', 'fe1t')}, ${dollarQuote('Tijuana food, culture & nightlife — just minutes away in Mexico', 'fe1s')}, 'San Diego', 'san-diego', (SELECT id FROM public.curated_lists WHERE slug = 'san-diego-tijuana-extension'), 0, false, ARRAY['adventurous','international']::text[]`
+    `SELECT gen_random_uuid(), ${dollarQuote(bridgeCard.title, 'fe1t')}, ${dollarQuote(bridgeCard.subtitle, 'fe1s')}, ${dollarQuote(bridgeCard.city, 'fe1c')}, ${dollarQuote(bridgeCard.state, 'fe1st')}, ${dollarQuote(bridgeCard.metroSlug, 'fe1ms')}, ${dollarQuote(bridgeCard.deepLink, 'fe1dl')}, (SELECT id FROM public.curated_lists WHERE slug = ${dollarQuote(bridgeCard.curatedListSlug, 'fe1ls')}), ${bridgeCard.displayOrder}, ${bridgeCard.active}, ARRAY[${bridgeCard.vibes.map((v) => dollarQuote(v, 'fe1v')).join(', ')}]::text[]`
   )
-  push(`WHERE NOT EXISTS (SELECT 1 FROM public.featured_experiences WHERE list_id = (SELECT id FROM public.curated_lists WHERE slug = 'san-diego-tijuana-extension'));`)
+  push(`WHERE NOT EXISTS (SELECT 1 FROM public.featured_experiences WHERE list_id = (SELECT id FROM public.curated_lists WHERE slug = ${dollarQuote(bridgeCard.curatedListSlug, 'fe1ls2')}));`)
   push(``)
 
   // ── postflight ──
@@ -323,6 +344,8 @@ async function main() {
   push(`  v_sd_item_count int;`)
   push(`  v_tj_item_count int;`)
   push(`  v_active_item_count int;`)
+  push(`  v_bridge_deep_link text;`)
+  push(`  v_bridge_state text;`)
   push(`BEGIN`)
   push(`  SELECT id INTO v_metro_id FROM public.metro_areas WHERE slug = 'san-diego';`)
   push(`  IF v_metro_id IS NULL THEN RAISE EXCEPTION 'Postflight failed: san-diego metro_areas row missing.'; END IF;`)
@@ -334,6 +357,9 @@ async function main() {
   push(`  IF v_tj_item_count <> ${tjRecords.length} THEN RAISE EXCEPTION 'Postflight failed: expected % Tijuana items, found %.', ${tjRecords.length}, v_tj_item_count; END IF;`)
   push(`  SELECT count(*) INTO v_active_item_count FROM public.items i JOIN public.neighborhoods nb ON nb.id = i.neighborhood_id WHERE nb.metro_id = v_metro_id AND i.is_active = true;`)
   push(`  IF v_active_item_count <> 0 THEN RAISE EXCEPTION 'Postflight failed: % San Diego/Tijuana item(s) are is_active=true — staging safety violated, these would be globally discoverable via Nearby right now.', v_active_item_count; END IF;`)
+  push(`  SELECT deep_link, state INTO v_bridge_deep_link, v_bridge_state FROM public.featured_experiences WHERE list_id = (SELECT id FROM public.curated_lists WHERE slug = ${dollarQuote(bridgeCard.curatedListSlug, 'fe1pf')});`)
+  push(`  IF v_bridge_deep_link IS NULL THEN RAISE EXCEPTION 'Postflight failed: featured_experiences bridge card has a null deep_link.'; END IF;`)
+  push(`  IF v_bridge_state IS DISTINCT FROM ${dollarQuote(bridgeCard.state, 'fe1pfst')} THEN RAISE EXCEPTION 'Postflight failed: featured_experiences bridge card state is %, expected %.', v_bridge_state, ${dollarQuote(bridgeCard.state, 'fe1pfst2')}; END IF;`)
   push(`END $$;`)
   push(``)
   push(`COMMIT;`)

@@ -14,6 +14,8 @@ import {
   evaluateLocationGate,
   evaluatePresentationGate,
   evaluateOutreachGate,
+  buildFeaturedExperienceBridgeCard,
+  validateFeaturedExperienceBridgeCard,
   REAL_DB_CATEGORIES,
   type MetroCatalogCandidate,
   type ItemIntakeRecord,
@@ -497,4 +499,59 @@ test('runIntakePipeline: end-to-end regression — cross-border mismap, semantic
   assert.equal(catalogGate.verdict, 'PASS')
   const presentationGate = result.gates.find((g) => g.key === 'PRESENTATION_GATE')!
   assert.equal(presentationGate.verdict, 'PASS') // because the bad row never reaches presentationGate's input at all
+})
+
+// ── featured_experiences bridge card ──────────────────────────────────────
+// Production incident, 2026-09: the generated INSERT omitted deep_link
+// (NOT NULL, no usable default) and the failed row came back with
+// state='AZ' — a stale default from the table's original Phoenix build that
+// silently filled in because the generator never set state explicitly.
+
+function bridgeCardInput(overrides: Partial<Parameters<typeof buildFeaturedExperienceBridgeCard>[0]> = {}) {
+  return {
+    title: 'Cross the Border',
+    subtitle: 'Tijuana food, culture & nightlife — just minutes away in Mexico',
+    city: 'San Diego',
+    state: 'CA',
+    metroSlug: 'san-diego',
+    curatedListSlug: 'san-diego-tijuana-extension',
+    vibes: ['adventurous', 'international'],
+    ...overrides,
+  }
+}
+
+test('featured_experiences bridge card: has a non-null, valid deep_link', () => {
+  const card = buildFeaturedExperienceBridgeCard(bridgeCardInput())
+  assert.ok(card.deepLink)
+  assert.equal(card.deepLink, 'checkoff://list?id=san-diego-tijuana-extension&city=san-diego')
+  assert.deepEqual(validateFeaturedExperienceBridgeCard(card), [])
+})
+
+test('featured_experiences bridge card: state is the real metro state, never a stale table default like AZ', () => {
+  const card = buildFeaturedExperienceBridgeCard(bridgeCardInput())
+  assert.equal(card.state, 'CA')
+  assert.notEqual(card.state, 'AZ')
+})
+
+test('featured_experiences bridge card: rejects a missing/malformed state rather than silently falling through to a default', () => {
+  assert.throws(() => buildFeaturedExperienceBridgeCard(bridgeCardInput({ state: '' })), /state must be a real two-letter code/)
+  assert.throws(() => buildFeaturedExperienceBridgeCard(bridgeCardInput({ state: 'Arizona' })), /state must be a real two-letter code/)
+})
+
+test('featured_experiences bridge card: carries every production-required field non-empty', () => {
+  const card = buildFeaturedExperienceBridgeCard(bridgeCardInput())
+  assert.ok(card.title.trim())
+  assert.ok(card.subtitle.trim())
+  assert.ok(card.city.trim())
+  assert.ok(card.state.trim())
+  assert.ok(card.metroSlug.trim())
+  assert.ok(card.deepLink.trim())
+  assert.ok(card.curatedListSlug.trim())
+  assert.deepEqual(validateFeaturedExperienceBridgeCard(card), [])
+})
+
+test('featured_experiences bridge card: validateFeaturedExperienceBridgeCard catches a null-ish deep_link if one ever slips through again', () => {
+  const card = buildFeaturedExperienceBridgeCard(bridgeCardInput())
+  const brokenCard = { ...card, deepLink: '' }
+  assert.deepEqual(validateFeaturedExperienceBridgeCard(brokenCard), ['deep_link is missing or malformed: ""'])
 })
