@@ -797,10 +797,26 @@ function isGenericTemplateBody(body: string, candidateName: string): boolean {
 }
 
 export function evaluateEditorialQualityGate(evidence: EditorialGateEvidence): StagingGateResult {
-  const findings: EditorialGateFinding[] = []
+  // Hard findings (per-item generic-template / unbacked-filler checks) always
+  // fail the gate. The batch-level opening-word check is reported
+  // separately, ADVISORY ONLY (San Diego CheckOffization final pass,
+  // 2026-09: Jerry's explicit instruction — "the 15% repeated-opening
+  // threshold is only a warning/symptom detector... do not contort
+  // excellent specific wording to achieve artificial lexical diversity.
+  // Specificity > verb diversity."). It exists to catch the ORIGINAL
+  // failure mode (a lazy verb template applied to otherwise-generic
+  // bodies, like the real "Savor" 33%/"Experience" 17%" production
+  // incident) — every one of those items ALSO failed the per-item
+  // generic-template check. When every item sharing an opening word
+  // independently passes the per-item specificity check (a genuinely
+  // distinct dish/fact each time, e.g. many different real dishes all
+  // phrased as "Order the ___"), high word-sharing alone is not evidence
+  // of a template and must never force an artificial rewrite.
+  const hardFindings: EditorialGateFinding[] = []
+  const advisoryFindings: EditorialGateFinding[] = []
   const records = evidence.records
 
-  // 1. Batch-level opening-word repetition — a template signature independent of any single item.
+  // 1. Batch-level opening-word repetition — reported, never gate-failing on its own.
   if (records.length >= MIN_BATCH_SIZE_FOR_OPENING_CHECK) {
     const openingCounts = new Map<string, number>()
     for (const r of records) {
@@ -810,28 +826,31 @@ export function evaluateEditorialQualityGate(evidence: EditorialGateEvidence): S
     for (const [word, count] of openingCounts) {
       const share = count / records.length
       if (share > MAX_SHARED_OPENING_SHARE) {
-        findings.push({ candidateName: '(batch-level)', issue: `${count}/${records.length} items (${(share * 100).toFixed(0)}%) open with the same word "${word}" — a repeated opening-verb template, not per-item specificity` })
+        advisoryFindings.push({ candidateName: '(batch-level, advisory)', issue: `${count}/${records.length} items (${(share * 100).toFixed(0)}%) open with the same word "${word}" — worth a human glance, but not itself a failure when each item is independently specific (see per-item checks)` })
       }
     }
   }
 
-  // 2. Per-item checks.
+  // 2. Per-item checks — these are the real, hard-failing signal.
   for (const r of records) {
     if (isGenericTemplateBody(r.body, r.candidateName)) {
-      findings.push({ candidateName: r.candidateName, issue: `body could describe dozens of unrelated venues — no specific dish/feature/activity/number identifies what makes this CheckOff-worthy: "${r.body}"` })
+      hardFindings.push({ candidateName: r.candidateName, issue: `body could describe dozens of unrelated venues — no specific dish/feature/activity/number identifies what makes this CheckOff-worthy: "${r.body}"` })
     }
     if (RANKING_FILLER_PATTERN.test(r.body) && !CONCRETE_FACT_NEARBY_PATTERN.test(r.body)) {
-      findings.push({ candidateName: r.candidateName, issue: `ranking/superlative filler used without a specific, checkable fact backing it up: "${r.body}"` })
+      hardFindings.push({ candidateName: r.candidateName, issue: `ranking/superlative filler used without a specific, checkable fact backing it up: "${r.body}"` })
     }
   }
 
+  const findings = [...hardFindings, ...advisoryFindings]
   return {
     key: 'EDITORIAL_GATE',
-    verdict: findings.length === 0 ? 'PASS' : 'FAIL',
+    verdict: hardFindings.length === 0 ? 'PASS' : 'FAIL',
     reason:
       findings.length === 0
         ? `All ${records.length} items pass the specificity/ranking-filler check — no repeated opening-verb template and no unbacked superlative language detected.`
-        : findings.map((f) => `${f.candidateName}: ${f.issue}`).join(' | '),
+        : hardFindings.length === 0
+          ? `All ${records.length} items pass the hard specificity/ranking-filler check (advisory-only notes below, not a failure): ${advisoryFindings.map((f) => f.issue).join(' | ')}`
+          : findings.map((f) => `${f.candidateName}: ${f.issue}`).join(' | '),
   }
 }
 

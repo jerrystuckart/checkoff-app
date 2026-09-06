@@ -549,11 +549,11 @@ test('evaluateOutreachGate: PASSes without requiring any outreach to have happen
 // non-templated copy.
 // ---------------------------------------------------------------------------
 
-test('evaluateEditorialQualityGate: FAILs a batch where one opening word covers more than 15% of items (regression: real production had "Savor" at 33%, "Experience" at 17%)', () => {
+test('evaluateEditorialQualityGate: FAILs a batch where a shared opening word ALSO produces generic (per-item-failing) bodies (regression: real production had "Savor" at 33%, "Experience" at 17%, every one of them a generic venue description)', () => {
   const records = [
-    record({ candidateName: 'A', body: 'Savor the tacos at A' }),
-    record({ candidateName: 'B', body: 'Savor the burgers at B' }),
-    record({ candidateName: 'C', body: 'Savor the pasta at C' }),
+    record({ candidateName: 'A', body: 'Savor the food and drinks at A' }), // "food"/"drinks" are generic descriptor words — no concrete noun
+    record({ candidateName: 'B', body: 'Savor the food and drinks at B' }),
+    record({ candidateName: 'C', body: 'Savor the food and drinks at C' }),
     record({ candidateName: 'D', body: 'Order the signature ramen at D' }),
     record({ candidateName: 'E', body: 'Try the off-menu dish at E' }),
     record({ candidateName: 'F', body: 'Sit in the hidden booth at F' }),
@@ -564,8 +564,7 @@ test('evaluateEditorialQualityGate: FAILs a batch where one opening word covers 
   ]
   const result = evaluateEditorialQualityGate({ records })
   assert.equal(result.verdict, 'FAIL')
-  assert.match(result.reason, /Savor/i)
-  assert.match(result.reason, /30%/)
+  assert.match(result.reason, /dozens of unrelated venues/)
 })
 
 test('evaluateEditorialQualityGate: PASSes a batch with a healthy, non-repeating opening-word distribution', () => {
@@ -610,6 +609,24 @@ test('evaluateEditorialQualityGate: PASSes a superlative when it is itself the s
 test('evaluateEditorialQualityGate: does not run the batch-level opening-word check on a very small batch (a single strong item should not fail just because it is the whole batch)', () => {
   const result = evaluateEditorialQualityGate({ records: [record({ candidateName: 'A', body: 'Order the dry-aged tomahawk at A' })] })
   assert.equal(result.verdict, 'PASS')
+})
+
+test('evaluateEditorialQualityGate: PASSes a batch where many items share an opening word but each names a genuinely distinct specific dish/fact — high word-sharing alone is advisory, never a forced-diversity failure (San Diego CheckOffization final pass, 2026-09: "the threshold is only a warning/symptom detector... specificity > verb diversity")', () => {
+  const records = [
+    record({ candidateName: 'A', body: 'Order the cacio e pepe doughnuts at A' }),
+    record({ candidateName: 'B', body: 'Order the miso black cod off the robata grill at B' }),
+    record({ candidateName: 'C', body: 'Order the barbacoa de borrego at C' }),
+    record({ candidateName: 'D', body: 'Order the Detroit-style square pizza at D' }),
+    record({ candidateName: 'E', body: 'Order the 40-day dry-aged ribeye at E' }),
+    record({ candidateName: 'F', body: 'Order the tostadas and aguachile at F' }),
+    record({ candidateName: 'G', body: 'Order the wood-fired oysters topped with hoja santa at G' }),
+    record({ candidateName: 'H', body: 'Find the hidden entrance at H' }),
+    record({ candidateName: 'I', body: 'See the shark-bitten surfboard at I' }),
+    record({ candidateName: 'J', body: 'Watch the sunset from the rooftop at J' }),
+  ]
+  const result = evaluateEditorialQualityGate({ records })
+  assert.equal(result.verdict, 'PASS')
+  assert.match(result.reason, /advisory-only/)
 })
 
 // ---------------------------------------------------------------------------
