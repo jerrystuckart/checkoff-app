@@ -23,6 +23,7 @@ import type { CategoryCoveragePlan } from '../playbooks/metroLaunch'
 import type { HomeListRow } from '../playbooks/homeListCertification'
 import type { ImageReadinessCard } from '../playbooks/imageReadiness'
 import type { VerifiedTagSnapshot } from './tagVocabularyProvider'
+import { InMemoryGeoEnrichmentCacheStore } from './metroGeoEnrichmentDriver'
 
 const PROJECT_ID = 'vienna-austria-dry-run'
 
@@ -178,7 +179,9 @@ async function driveToBoundary(executor: TestExecutor, checkImageReadiness: (pla
         throw new Error('no live DB access in this dry run — snapshot fallback expected')
       },
       verifiedTagSnapshot: SNAPSHOT,
-      hasRunGooglePlacesPass: true,
+      placesLookup: async (q: string) => ({ topResult: { placeId: 'p-' + q, name: q.includes('Gumpendorfer') ? 'Cafe Sperl' : 'Kunsthistorisches Museum', formattedAddress: q, lat: 48.2, lng: 16.37, websiteUri: 'https://example.at', country: 'AT', viewportRadiusM: null }, apiError: null }),
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      expectedCountry: 'AT',
       verifyHomeListRows,
       checkImageReadiness,
     },
@@ -280,7 +283,9 @@ test('Vienna DRY RUN: once the missing images are resolved, METRO_LAUNCH_CERTIFI
       execStore: execStore2,
       executors: [executor],
       verifiedTagSnapshot: SNAPSHOT,
-      hasRunGooglePlacesPass: true,
+      placesLookup: async (q: string) => ({ topResult: { placeId: 'p-' + q, name: q.includes('Gumpendorfer') ? 'Cafe Sperl' : 'Kunsthistorisches Museum', formattedAddress: q, lat: 48.2, lng: 16.37, websiteUri: 'https://example.at', country: 'AT', viewportRadiusM: null }, apiError: null }),
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      expectedCountry: 'AT',
       verifyHomeListRows,
       checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: true })),
     },
@@ -298,4 +303,46 @@ test('Vienna DRY RUN: once the missing images are resolved, METRO_LAUNCH_CERTIFI
   // auto-flips metro_areas.is_active, even when every gate is green.
   assert.equal(resumed.status, 'NEEDS_JERRY')
   assert.equal(resumed.currentStage, 'LAUNCH_READINESS_BOUNDARY')
+})
+
+test('Vienna DRY RUN: re-running M8_BATCH_CERTIFICATION (a resumed run re-evaluating geo enrichment) makes zero new paid Places calls — the cache is reused across driver passes, not just within one', async () => {
+  const executor = buildExecutor()
+  const geoEnrichmentCache = new InMemoryGeoEnrichmentCacheStore()
+  let paidCalls = 0
+  const placesLookup = async (q: string) => {
+    paidCalls++
+    return { topResult: { placeId: 'p-' + q, name: q.includes('Gumpendorfer') ? 'Cafe Sperl' : 'Kunsthistorisches Museum', formattedAddress: q, lat: 48.2, lng: 16.37, websiteUri: 'https://example.at', country: 'AT', viewportRadiusM: null }, apiError: null }
+  }
+
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  await getOrCreateRun(runStore, 'metro_launch', PROJECT_ID, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', PROJECT_ID))
+  seeded!.state = { m0Decisions: RESOLVED_M0 }
+  await runStore.put(seeded!)
+
+  const firstPass = await driveMetroLaunch(
+    { runStore, execStore, executors: [executor], verifiedTagSnapshot: SNAPSHOT, placesLookup, geoEnrichmentCache, expectedCountry: 'AT', verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })) },
+    PROJECT_ID,
+    { categoryPlan: PLAN }
+  )
+  assert.equal(paidCalls, 2, 'exactly one real Places call per unique venue on the first pass')
+  assert.equal((firstPass.state as any).geoEnrichmentPaidCalls, 2)
+
+  // Reset to re-enter M8_BATCH_CERTIFICATION for a SECOND time against
+  // the SAME cache — simulating a resumed run re-evaluating gates (e.g.
+  // after a repair pass elsewhere) without ever having applied a code
+  // change that would invalidate the cache.
+  const stored = await runStore.get(playbookRunId('metro_launch', PROJECT_ID))
+  stored!.currentStage = 'M8_BATCH_CERTIFICATION'
+  stored!.status = 'RUNNING'
+  await runStore.put(stored!)
+
+  const secondPass = await driveMetroLaunch(
+    { runStore, execStore: new InMemoryExecutionStore(), executors: [executor], verifiedTagSnapshot: SNAPSHOT, placesLookup, geoEnrichmentCache, expectedCountry: 'AT', verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })) },
+    PROJECT_ID,
+    { categoryPlan: PLAN }
+  )
+  assert.equal(paidCalls, 2, 'REGRESSION: the second pass through M8 must make ZERO additional Places calls — the cache is metro-scoped and durable across driver re-entries')
+  assert.equal((secondPass.state as any).geoEnrichmentCacheHits, 2)
 })

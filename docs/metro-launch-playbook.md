@@ -724,6 +724,56 @@ defaults to `false` and is never faked true. This, plus `HOME_LIST_CERTIFICATION
 real `verifyHomeListRows` read path and image selection needing a human, are the genuine reasons a
 real bare Vienna command would still stop for Jerry during (not just at the end of) a build.
 
+## Part 9 — real geo enrichment and real Home-list DB reads (required, recorded 2026-09-07)
+
+Pre-Vienna closure: the two remaining technical blockers (GEO_ENRICHMENT_GATE always failing because
+no real Places integration existed, and HOME_LIST_CERTIFICATION_GATE only ever certifying against
+synthetic/in-memory rows) are now closed.
+
+### Real, cached Google Places enrichment
+
+`agent-service/playbooks/metroGeoEnrichment.ts` (pure — no I/O) extracts and generalizes the exact
+match-classification logic already proven in `scripts/generate-san-diego-places-dry-run.ts`
+(name-similarity via Levenshtein + substring boost, structural risk flags, country-match check) into
+six permanent tiers: `EXACT`, `HIGH_CONFIDENCE_PARENT_VENUE`, `AMBIGUOUS_NEEDS_REVIEW`,
+`REJECTED_WRONG_MATCH`, `NO_CANONICAL_VENUE` (events/routes/districts/multi-operator — an explicit,
+intentional exception, never a failure and never forced into a confident tier), and `UNRESOLVED`.
+`evaluateGeoEnrichmentCertificationGate()` PASSes only when every item is `EXACT`/
+`HIGH_CONFIDENCE_PARENT_VENUE`/`NO_CANONICAL_VENUE` — this replaces the old placeholder
+`hasRunGooglePlacesPass` boolean flag as the real `GEO_ENRICHMENT_GATE`.
+
+`agent-service/specialists/metroGeoEnrichmentDriver.ts` (I/O) owns the real Places Text Search call
+(`buildRealPlacesLookup()`, gated on `GOOGLE_PLACES_API_KEY`) and a metro-scoped cache
+(`InMemoryGeoEnrichmentCacheStore` for tests, `FileGeoEnrichmentCacheStore` — durable JSON under
+`scripts/output/geo-enrichment-cache/`, the same artifact-caching convention already used throughout
+this repo — for real runs) so a paid lookup for a given venue happens AT MOST ONCE per metro, ever,
+across every later re-certification or resumed run. `enrichMetroCatalogGeo()` is wired into
+`M8_BATCH_CERTIFICATION` in the real driver; `state.geoEnrichmentPaidCalls`/`geoEnrichmentCacheHits`
+track cost per metro. `viennaDryRun.test.ts`'s third test proves a driver re-entry through M8 makes
+ZERO additional paid calls.
+
+### Real Home-list DB read path
+
+`agent-service/specialists/homeListReadPath.ts` queries the actual `public.lists`/`public.list_items`
+(joined through `public.metro_areas` and `public.items`) and `public.curated_lists`/
+`public.curated_list_items` structures — never a synthetic stand-in — and is now the DEFAULT
+`MetroDriverDeps.verifyHomeListRows` implementation (a caller may still inject its own, e.g. in
+tests). As of 2026-09-07, `agent_service` has no `SELECT` grant on `public.lists`/`public.list_items`
+either (confirmed live: `permission denied for table lists`/`list_items`) — the read path is real and
+ready, and reports that exact, actionable gap in `HOME_LIST_CERTIFICATION_GATE`'s reason the moment
+it's hit, rather than silently returning an empty or fake-passing result.
+
+### Tag snapshot — still an open production input, not a methodology gap
+
+`agent-service/specialists/tagVocabularyProvider.ts`'s live-then-snapshot fallback is fully
+implemented (Phase 2W), but no `VerifiedTagSnapshot` has actually been captured into this repo — a
+full search turned up only `docs/metro-launch-audit/17_pull_tag_vocabulary_for_smart_tagging.sql`
+(a query to RUN, whose output was never pasted back) and no file anywhere containing the real
+production tag list. This is not something Winston can close on its own without either (a) a live
+`SELECT` grant on `public.tags`, or (b) Jerry supplying the actual captured tag export — inventing a
+plausible-looking list here would violate the explicit "never invent a tag" rule this whole module
+exists to enforce.
+
 ## Provenance
 
 Built and verified against the Denver/Boulder/Longmont launch cycle, 2026-08-21 —

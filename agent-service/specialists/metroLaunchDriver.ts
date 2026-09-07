@@ -39,7 +39,10 @@ import type { SpecialistResultEnvelope } from './types'
 import { certifyEditorialDistinctiveness, checkDistinctiveExperience, checkVenueQuoted, type DistinctivenessCertificationItem } from '../playbooks/editorialDistinctiveness'
 import { evaluateItemCritique, evaluateItemCertificationGate, type ItemCritiqueAnswers, type ItemCertificationOutcome, type CatalogItemCertificationCheck, type ItemCertificationRecord } from '../playbooks/itemCertificationLoop'
 import { evaluateTagCertificationGate, type ItemTagProposal } from '../playbooks/metroTagCertification'
-import { evaluateItemMetadata, evaluateMetadataCompletenessGate, evaluateGeoEnrichmentGate, type MetadataEnrichmentResult } from '../playbooks/metroMetadataEnrichment'
+import { evaluateItemMetadata, evaluateMetadataCompletenessGate, type MetadataEnrichmentResult } from '../playbooks/metroMetadataEnrichment'
+import { evaluateGeoEnrichmentCertificationGate, type GeoEnrichmentItemResult } from '../playbooks/metroGeoEnrichment'
+import { enrichMetroCatalogGeo, buildRealPlacesLookup, FileGeoEnrichmentCacheStore, type GeoEnrichmentCacheStore, type PlacesLookupFn, type GeoEnrichmentCandidate } from './metroGeoEnrichmentDriver'
+import { readRealHomeListRows, type HomeListReadPathFailure } from './homeListReadPath'
 import { certifyHomeListRow, evaluateHomeListCertificationGate, certifyCuratedListRow, evaluateCuratedListLayerGate, type HomeListRow, type CuratedListRow } from '../playbooks/homeListCertification'
 import { evaluateImageReadinessGate, type ImageReadinessCard } from '../playbooks/imageReadiness'
 import { certifyMetroLaunch, type MetroLaunchCertificationReport, type MetroLaunchCertificationSummary } from '../playbooks/metroLaunchCertification'
@@ -99,6 +102,9 @@ interface MetroDriverState {
   tagVocabularyDetail?: string
   batchCertificationGates?: StagingGateResult[]
   rejectedItemCount?: number
+  geoEnrichmentPaidCalls?: number
+  geoEnrichmentCacheHits?: number
+  geoEnrichmentResults?: Array<{ candidateName: string; classification: string; placeId: string | null; formattedAddress: string | null; lat: number | null; lng: number | null; websiteUrl: string | null; geoRadiusM: number | null }>
 }
 
 /**
@@ -156,10 +162,16 @@ export interface MetroDriverDeps {
   queryLiveTags?: () => Promise<string[]>
   /** M8 tag certification fallback — a versioned, justified VERIFIED_SNAPSHOT. Defaults to null (no snapshot captured yet — see tagVocabularyProvider.ts's own doc). */
   verifiedTagSnapshot?: VerifiedTagSnapshot | null
-  /** M9: has a real Google Places enrichment pass been run for this metro yet? Defaults to false — metroGeoEnrichment.ts (the real Places integration) does not exist yet, so GEO_ENRICHMENT_GATE correctly fails until it does. Never faked to true. */
-  hasRunGooglePlacesPass?: boolean
+  /** M8: the real Google Places lookup function. Defaults to buildRealPlacesLookup() (a genuine network call gated on GOOGLE_PLACES_API_KEY) — tests inject a fake, exactly like every other executor in this file. */
+  placesLookup?: PlacesLookupFn
+  /** M8: the Places result cache, scoped per metro — defaults to a real, durable FileGeoEnrichmentCacheStore so a paid lookup is never repeated across separate process runs, not just within one in-memory run. */
+  geoEnrichmentCache?: GeoEnrichmentCacheStore
+  /** M8: a coarse citywide lat/lng used to bias every Places query for this metro (no per-neighborhood geocode data exists in driver state yet) — required for a real Places call to be meaningfully accurate; omitted only in tests that inject their own placesLookup. */
+  metroCenterBias?: { lat: number; lng: number }
+  /** M8: the ISO-3166-1 alpha-2 country every candidate is expected to resolve to (Places match classification treats a country mismatch as a definite wrong match) — defaults to 'US'. */
+  expectedCountry?: string
   /** M9: reads the REAL runtime state of the planned Home lists (public.lists/public.list_items) — Chief has no direct public.lists write access (standing boundary, unchanged) and, without this, no way to confirm a hand-run SQL patch actually took effect either. Omit to correctly report HOME_LIST_CERTIFICATION_GATE as pending human application of the generated SQL patch; a caller (production wiring, or a test) supplies this once a real read path exists. */
-  verifyHomeListRows?: (plan: readonly HomeListPlanEntry[]) => Promise<HomeListRow[]>
+  verifyHomeListRows?: (plan: readonly HomeListPlanEntry[]) => Promise<HomeListRow[] | HomeListReadPathFailure>
   /** M10: which Home cards already have an image. Omit to correctly report every required card as still needing one — Winston never fabricates image readiness. */
   checkImageReadiness?: (plan: readonly HomeListPlanEntry[]) => Promise<ImageReadinessCard[]>
 }
@@ -887,9 +899,22 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
       ? { key: 'METADATA_COMPLETENESS_GATE', verdict: 'FAIL', reason: `${unclassifiedForMetadata.length} certified item(s) have no classifiable category, so metadata could not be evaluated: ${unclassifiedForMetadata.join(', ')}.` }
       : evaluateMetadataCompletenessGate(metadataResults)
 
-  // GEO_ENRICHMENT_GATE — real Google Places integration (metroGeoEnrichment.ts)
-  // does not exist yet; this correctly fails until it does, rather than faking a pass.
-  const geoGate = evaluateGeoEnrichmentGate(deps.hasRunGooglePlacesPass ?? false, `${certified.length} certified item(s) awaiting a real Google Places enrichment pass.`)
+  // GEO_ENRICHMENT_GATE — real, cached Google Places enrichment. A cache
+  // hit (this exact venue already looked up for this metro, ever) never
+  // repeats the paid call — see metroGeoEnrichmentDriver.ts.
+  const geoCandidates: GeoEnrichmentCandidate[] = certified.map((r) => {
+    const candidate = candidatesByName.get(r.candidateName)
+    const mapsQuery = candidate?.address?.trim() || `${r.candidateName}, ${candidate?.neighborhood ?? run.projectId}`
+    return { candidateName: r.candidateName, body: r.finalBody, mapsQuery, expectedCountry: deps.expectedCountry ?? 'US', biasLat: deps.metroCenterBias?.lat ?? 0, biasLng: deps.metroCenterBias?.lng ?? 0 }
+  })
+  const geoRun = await enrichMetroCatalogGeo(run.projectId, geoCandidates, {
+    cache: deps.geoEnrichmentCache ?? new FileGeoEnrichmentCacheStore(),
+    lookup: deps.placesLookup ?? buildRealPlacesLookup(),
+  })
+  state.geoEnrichmentPaidCalls = (state.geoEnrichmentPaidCalls ?? 0) + geoRun.paidCallsMade
+  state.geoEnrichmentCacheHits = (state.geoEnrichmentCacheHits ?? 0) + geoRun.cacheHits
+  state.geoEnrichmentResults = geoRun.records.map((r) => ({ candidateName: r.candidateName, classification: r.classification, placeId: r.placeId, formattedAddress: r.formattedAddress, lat: r.lat, lng: r.lng, websiteUrl: r.websiteUrl, geoRadiusM: r.geoRadiusM }))
+  const geoGate = evaluateGeoEnrichmentCertificationGate(geoRun.records.map((r): GeoEnrichmentItemResult => ({ candidateName: r.candidateName, classification: r.classification, reason: r.reason })))
 
   const gates: StagingGateResult[] = [...distinctivenessGates, itemCertificationGate, tagGate, metadataGate, geoGate]
   state.batchCertificationGates = gates
@@ -964,16 +989,23 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
   state.homeListPlan = plan
   state.homeListSqlPatch = buildHomeListSqlPatch(run.projectId, plan)
 
+  // Real read path by default (readRealHomeListRows — an actual
+  // public.lists/public.list_items query) — tests/production callers may
+  // still inject their own verifyHomeListRows to override it.
+  const verify = deps.verifyHomeListRows ?? ((p) => readRealHomeListRows(run.projectId, p))
+  const readResult = await verify(plan)
+
   let homeListGate: StagingGateResult
-  let curatedLayerGate: StagingGateResult
-  if (deps.verifyHomeListRows) {
-    const rows = await deps.verifyHomeListRows(plan)
-    const result = evaluateHomeListCertificationGate(rows)
-    homeListGate = result.gate
-    curatedLayerGate = evaluateCuratedListLayerGate([]).gate // curated_lists layer not required for this metro unless separately requested
+  const curatedLayerGate: StagingGateResult = evaluateCuratedListLayerGate([]).gate // curated_lists layer not required for this metro unless separately requested
+  if (!Array.isArray(readResult)) {
+    homeListGate = {
+      key: 'HOME_LIST_CERTIFICATION_GATE',
+      verdict: 'FAIL',
+      reason: `SQL patch generated (${plan.length} list(s): ${plan.map((p) => p.label).join(', ')}) but could not be verified against real runtime state: ${readResult.reason}`,
+    }
   } else {
-    homeListGate = { key: 'HOME_LIST_CERTIFICATION_GATE', verdict: 'FAIL', reason: `SQL patch generated (${plan.length} list(s): ${plan.map((p) => p.label).join(', ')}) but not yet applied/verified — no live read path is configured (MetroDriverDeps.verifyHomeListRows) to confirm public.lists/public.list_items actually reflect it. Apply the generated patch, then rerun this stage with a real read path wired in.` }
-    curatedLayerGate = evaluateCuratedListLayerGate([]).gate
+    const result = evaluateHomeListCertificationGate(readResult)
+    homeListGate = result.gate
   }
 
   const existingGates = state.batchCertificationGates ?? []

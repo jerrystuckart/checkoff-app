@@ -15,6 +15,7 @@ import { InMemoryPlaybookRunStore, getOrCreateRun, playbookRunId } from './playb
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
 import { auditCoverage, type CategoryCoveragePlan } from '../playbooks/metroLaunch'
+import { InMemoryGeoEnrichmentCacheStore } from './metroGeoEnrichmentDriver'
 
 const PLAN: CategoryCoveragePlan = {
   targets: [
@@ -171,7 +172,7 @@ test('driveMetroLaunch: with NO M0 decisions recorded, stops at NEEDS_JERRY befo
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, 'san-diego-no-decisions', { categoryPlan: PLAN })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, 'san-diego-no-decisions', { categoryPlan: PLAN })
   assert.equal(run.status, 'NEEDS_JERRY')
   assert.equal(run.currentStage, 'M0_METRO_DEFINITION')
   assert.ok(run.decisionPacket)
@@ -189,7 +190,7 @@ test('San Diego FULL SYNTHETIC driver run: sequences M0 through the launch-readi
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, { categoryPlan: PLAN })
 
   assert.equal(run.status, 'NEEDS_JERRY')
   assert.equal(run.currentStage, 'LAUNCH_READINESS_BOUNDARY')
@@ -243,7 +244,7 @@ test('driveMetroLaunch: QUALITY_GATE genuinely FAILS the launch boundary when a 
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN })
+  await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, { categoryPlan: PLAN })
 
   // Simulate a duplicate slipping past dedupe (e.g. added by a process
   // that bypassed dedupeCandidates) directly into the persisted state,
@@ -256,7 +257,7 @@ test('driveMetroLaunch: QUALITY_GATE genuinely FAILS the launch boundary when a 
   afterFirstPass!.status = 'RUNNING'
   await runStore.put(afterFirstPass!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, { categoryPlan: PLAN })
   const qualityGate = run.decisionPacket?.evidence as { gates: Array<{ key: string; verdict: string; reason: string }> } | undefined
   const result = qualityGate?.gates.find((g) => g.key === 'QUALITY_GATE')
   assert.equal(result?.verdict, 'FAIL')
@@ -342,7 +343,7 @@ test('driveMetroLaunch: launch-boundary GEOGRAPHY_GATE genuinely FAILS when a co
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, {
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, {
     categoryPlan: smallPlan,
     depthTargets: [{ neighborhoodName: 'Carlsbad', minimumItems: 5 }],
     maxSteps: 30,
@@ -410,7 +411,7 @@ test('driveMetroLaunch: launch-boundary GEOGRAPHY_GATE genuinely PASSES once a d
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, {
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, {
     categoryPlan: smallPlan,
     depthTargets: [{ neighborhoodName: 'Carlsbad', minimumItems: 5 }],
     maxSteps: 30,
@@ -452,7 +453,7 @@ test('driveMetroLaunch: launch-boundary CATEGORY_GATE genuinely FAILS when a rea
   // now drives the launch boundary's CATEGORY_GATE, since it's what
   // stops this run before the boundary is ever reached.
   const impossiblePlan: CategoryCoveragePlan = { targets: [{ categoryName: 'Sports', minimumViable: 5, healthyTarget: 5, qualityNotes: [] }] }
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: impossiblePlan, maxSteps: 30 })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, { categoryPlan: impossiblePlan, maxSteps: 30 })
   assert.match(run.jerryReason ?? '', /coverage gap loop exceeded/)
   const blockingGaps = run.decisionPacket?.evidence as Array<{ name: string }> | undefined
   assert.ok(blockingGaps?.some((g) => g.name === 'Sports'))
@@ -512,7 +513,7 @@ test('driveMetroLaunch: launch-boundary CATEGORY_GATE evaluates NORMALIZED categ
   await runStore.put(seeded!)
 
   const plan: CategoryCoveragePlan = { targets: [{ categoryName: 'Food & drink', minimumViable: 3, healthyTarget: 3, qualityNotes: [] }] }
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: plan, maxSteps: 30 })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, { categoryPlan: plan, maxSteps: 30 })
 
   assert.equal(run.currentStage, 'LAUNCH_READINESS_BOUNDARY')
   const packet = run.decisionPacket?.evidence as { gates: Array<{ key: string; verdict: string }> } | undefined
@@ -538,7 +539,7 @@ test('driveMetroLaunch: RESUME — a second call against the same run store cont
 
   // First call: bounded to a handful of steps, simulating a process that
   // dies partway through (e.g. after M1 and M3, before M4 finishes).
-  const partial = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN, maxSteps: 3 })
+  const partial = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, { categoryPlan: PLAN, maxSteps: 3 })
   assert.equal(partial.status, 'RUNNING')
   assert.notEqual(partial.currentStage, 'LAUNCH_READINESS_BOUNDARY')
   const m1ExecutionIdUsed = executionId(playbookRunId('metro_launch', projectId), 'M1', m1GeographyExecutionLabel())
@@ -546,7 +547,7 @@ test('driveMetroLaunch: RESUME — a second call against the same run store cont
 
   // Second call — a BRAND NEW driveMetroLaunch invocation, same stores,
   // simulating a process restart. Must resume, not restart from M1.
-  const resumed = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN })
+  const resumed = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, { categoryPlan: PLAN })
   assert.equal(resumed.status, 'NEEDS_JERRY')
   assert.equal(resumed.currentStage, 'LAUNCH_READINESS_BOUNDARY')
 
@@ -592,7 +593,7 @@ test('driveMetroLaunch: an unresolvable coverage gap escalates to NEEDS_JERRY on
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: shoplessPlan, maxSteps: 500 })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, { categoryPlan: shoplessPlan, maxSteps: 500 })
   assert.equal(run.status, 'NEEDS_JERRY')
   assert.match(run.jerryReason ?? '', /loop/i)
   assert.ok(run.loopIteration <= 6, 'the loop-iteration guardrail (default 5) must actually bound the number of M4<->M5 passes')
@@ -614,7 +615,7 @@ test('driveMetroLaunch: EXECUTOR_UNAVAILABLE blocks the run rather than NEEDS_JE
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, { categoryPlan: PLAN })
   assert.equal(run.status, 'BLOCKED')
   assert.equal(run.currentStage, 'M1_GEOGRAPHY_MAP')
 })
@@ -635,7 +636,7 @@ test('driveMetroLaunch: a rejected evidence result retries up to the guardrail, 
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, { categoryPlan: PLAN })
   assert.equal(run.status, 'NEEDS_JERRY')
   assert.match(run.jerryReason ?? '', /evidence validation/)
   assert.ok(run.totalRetries > 0 && run.totalRetries <= 3, 'retries must be bounded, not infinite')
@@ -670,7 +671,7 @@ test('driveMetroLaunch: M1 request inputs carry the M0 geographicScope decision,
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN, maxSteps: 2 })
+  await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, { categoryPlan: PLAN, maxSteps: 2 })
   assert.equal(capturedGeographicScope, RESOLVED_M0.geographicScope)
 })
 
@@ -811,7 +812,7 @@ test('driveMetroLaunch: a configured depth target with only token coverage trigg
 
   const plan: CategoryCoveragePlan = { targets: [{ categoryName: 'Food & drink', minimumViable: 1, healthyTarget: 1, qualityNotes: [] }, { categoryName: 'Shopping', minimumViable: 1, healthyTarget: 1, qualityNotes: [] }] }
   const run = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor] },
+    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) },
     projectId,
     { categoryPlan: plan, depthTargets: [{ neighborhoodName: 'Carlsbad', minimumItems: 2 }], maxSteps: 30 }
   )
@@ -847,7 +848,7 @@ test('driveMetroLaunch: M1 output missing a valid neighborhood "kind" fails evid
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: PLAN, maxSteps: 30 })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, { categoryPlan: PLAN, maxSteps: 30 })
 
   assert.ok(m1Attempts > 1, 'a malformed neighborhood must trigger at least one real retry, not be accepted on the first attempt')
   assert.equal(run.status, 'NEEDS_JERRY')
@@ -918,7 +919,7 @@ test('driveMetroLaunch: re-entering a stage whose execution is already COMPLETE 
   await runStore.put(seeded!)
 
   // First pass: drives all the way through M1 for real (COMPLETE recorded).
-  await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: smallPlan, maxSteps: 2 })
+  await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, { categoryPlan: smallPlan, maxSteps: 2 })
   assert.equal(m1CallCount, 1)
 
   // Simulate the manual reset: back to M1, same executionId will be reused.
@@ -927,7 +928,7 @@ test('driveMetroLaunch: re-entering a stage whose execution is already COMPLETE 
   afterM1!.status = 'RUNNING'
   await runStore.put(afterM1!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor] }, projectId, { categoryPlan: smallPlan, maxSteps: 30 })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }) }, projectId, { categoryPlan: smallPlan, maxSteps: 30 })
 
   assert.equal(m1CallCount, 1, 'the idempotent-COMPLETE execution must never be re-invoked — same executionId, same accepted result')
   // NEEDS_JERRY here is expected (the launch-readiness boundary always
