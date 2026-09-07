@@ -117,13 +117,37 @@ function scriptSynthetic(executor: TestExecutor) {
       })
   )
 
+  // M7_ITEM_CERTIFICATION critique calls — a distinct call shape (same
+  // specialist, distinguished by stage + inputs.mode) from the M6_5
+  // write call below. Scripted BEFORE the generic checkoff_editor
+  // catch-all so it takes priority (TestExecutor.scriptWhen resolves in
+  // registration order) — every item certifies cleanly on its first
+  // attempt in this baseline synthetic scenario, matching the real
+  // driver calling this stage for real (see the self-repair-specific
+  // test below for the deliberately-generic-then-fixed case).
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { hasConcreteAction: true, moreSpecificThanVenuePurpose: true, supportedByResearch: true, isCurrent: true, tellsUsefulNonObviousDetail: true, soundsLikeCheckoff: true, concise: true, critiqueNotes: 'passes on first attempt in this synthetic scenario' },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+      })
+  )
+
   executor.scriptWhen(
     (r) => r.specialist === 'checkoff_editor',
     (r) =>
       fakeEnvelope({
         taskId: r.executionId,
         objective: r.objective,
-        evidence: { factualSource: (r.inputs as { factualSource?: string }).factualSource ?? '', checkoffizedItem: `Checkoffized: ${(r.inputs as { businessOrPlace?: string }).businessOrPlace}` },
+        evidence: {
+          factualSource: (r.inputs as { factualSource?: string }).factualSource ?? '',
+          checkoffizedItem: `Checkoffized: order the 'signature dish' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`,
+          tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'],
+        },
         methodologyId: 'checkoff_editor',
         methodologyVersion: 'v1',
       })
@@ -183,8 +207,20 @@ test('San Diego FULL SYNTHETIC driver run: sequences M0 through the launch-readi
   assert.ok(allExecutions.some((e) => e.request.stage === 'M3_BROAD_DISCOVERY'))
   assert.ok(allExecutions.filter((e) => e.request.stage === 'M5_TARGETED_DEEP_DIVES').length >= 2, 'both the gap pass and the replacement pass are M5-stage executions')
   assert.ok(allExecutions.some((e) => e.request.stage === 'M6_QUALITY_VERIFICATION'))
-  assert.ok(allExecutions.filter((e) => e.request.specialist === 'checkoff_editor').length === 10)
+  // 10 M6_5 write calls + 10 M7 independent critique calls (one attempt
+  // each, since every item certifies on its first pass in this baseline
+  // scenario) — proves ITEM_CERTIFICATION_LOOP is actually invoked by
+  // the real driver, not merely available as a library function.
+  assert.ok(allExecutions.filter((e) => e.request.specialist === 'checkoff_editor' && e.request.stage === 'M6_5_CHECKOFF_EDITOR').length === 10)
+  assert.ok(allExecutions.filter((e) => e.request.stage === 'M7_ITEM_CERTIFICATION').length === 10)
   assert.ok(allExecutions.every((e) => e.status === 'COMPLETE'))
+
+  // The real M8-M10 gates actually ran and are reflected in the final report.
+  const finalReport = (state as unknown as { finalCertificationReport?: { verdict: string; passingGates: string[] } }).finalCertificationReport
+  assert.ok(finalReport, 'M10 must have produced a real finalCertificationReport, not left it unset')
+  assert.ok(finalReport!.passingGates.includes('ITEM_CERTIFICATION_GATE'))
+  assert.ok(finalReport!.passingGates.includes('DISTINCTIVE_EXPERIENCE_GATE'))
+  assert.ok(finalReport!.passingGates.includes('VENUE_QUOTING_GATE'))
 
   // Structural bug fix regression (San Diego run, 2026-09-05): the
   // launch boundary's QUALITY_GATE duplicate check is no longer a
@@ -255,7 +291,18 @@ test('driveMetroLaunch: launch-boundary GEOGRAPHY_GATE genuinely FAILS when a co
   )
   executor.scriptWhen(
     (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
-    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: 'x' }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { hasConcreteAction: true, moreSpecificThanVenuePurpose: true, supportedByResearch: true, isCurrent: true, tellsUsefulNonObviousDetail: true, soundsLikeCheckoff: true, concise: true, critiqueNotes: 'ok' },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+      })
   )
   // M3 returns exactly 4 Carlsbad candidates and enough Downtown Food & drink to clear the category minimum.
   executor.scriptWhen(
@@ -342,7 +389,18 @@ test('driveMetroLaunch: launch-boundary GEOGRAPHY_GATE genuinely PASSES once a d
   )
   executor.scriptWhen(
     (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
-    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: 'x' }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { hasConcreteAction: true, moreSpecificThanVenuePurpose: true, supportedByResearch: true, isCurrent: true, tellsUsefulNonObviousDetail: true, soundsLikeCheckoff: true, concise: true, critiqueNotes: 'ok' },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+      })
   )
 
   const smallPlan: CategoryCoveragePlan = { targets: [{ categoryName: 'Food & drink', minimumViable: 3, healthyTarget: 3, qualityNotes: [] }] }
@@ -433,7 +491,18 @@ test('driveMetroLaunch: launch-boundary CATEGORY_GATE evaluates NORMALIZED categ
   )
   executor.scriptWhen(
     (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
-    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: 'x' }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { hasConcreteAction: true, moreSpecificThanVenuePurpose: true, supportedByResearch: true, isCurrent: true, tellsUsefulNonObviousDetail: true, soundsLikeCheckoff: true, concise: true, critiqueNotes: 'ok' },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+      })
   )
 
   const projectId = 'san-diego-category-normalized-pass-test'
@@ -720,7 +789,18 @@ test('driveMetroLaunch: a configured depth target with only token coverage trigg
   )
   executor.scriptWhen(
     (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
-    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: 'x' }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { hasConcreteAction: true, moreSpecificThanVenuePurpose: true, supportedByResearch: true, isCurrent: true, tellsUsefulNonObviousDetail: true, soundsLikeCheckoff: true, concise: true, critiqueNotes: 'ok' },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+      })
   )
 
   const projectId = 'san-diego-depth-target-test'
@@ -816,7 +896,18 @@ test('driveMetroLaunch: re-entering a stage whose execution is already COMPLETE 
   )
   executor.scriptWhen(
     (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
-    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: 'x' }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { hasConcreteAction: true, moreSpecificThanVenuePurpose: true, supportedByResearch: true, isCurrent: true, tellsUsefulNonObviousDetail: true, soundsLikeCheckoff: true, concise: true, critiqueNotes: 'ok' },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+      })
   )
 
   const smallPlan: CategoryCoveragePlan = { targets: [{ categoryName: 'Food & drink', minimumViable: 1, healthyTarget: 1, qualityNotes: [] }] }

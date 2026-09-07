@@ -50,6 +50,12 @@ export const REQUIRED_GATE_CATEGORIES: Readonly<Record<string, readonly string[]
   Metadata: ['METADATA_COMPLETENESS_GATE'],
   Geo: ['GEO_ENRICHMENT_GATE'],
   Lists: ['HOME_LIST_CERTIFICATION_GATE'],
+  // Images: intentionally its own category, evaluated LAST alongside
+  // everything else, never used to stop the pipeline early — see
+  // imageReadiness.ts. Winston cannot autonomously select images; that
+  // is fine. What is not fine is treating a missing image as an
+  // early-exit instead of one more named, complete gate.
+  Images: ['IMAGE_READINESS_GATE'],
 })
 
 export interface MetroLaunchCertificationSummary {
@@ -80,6 +86,8 @@ export interface MetroLaunchCertificationReport {
   summary: MetroLaunchCertificationSummary
   /** Human-readable, ready-to-paste report matching the exact shape Jerry specified. */
   reportText: string
+  /** true when the ONLY thing keeping this metro from READY_TO_ACTIVATE is IMAGE_READINESS_GATE — every other required gate passed. The pipeline still reports BLOCKED (image selection is a genuine human decision), but with the distinct "BLOCKED — image selection required" framing rather than a generic blocked report, and only ever computed AFTER every other gate has already run. */
+  imageSelectionOnlyBlock: boolean
 }
 
 /**
@@ -111,10 +119,13 @@ export function certifyMetroLaunch(input: MetroLaunchCertificationInput): MetroL
   }
 
   const verdict: MetroLaunchVerdict = missingGates.length === 0 && failingGates.length === 0 ? 'READY_TO_ACTIVATE' : 'BLOCKED'
+  // "The only unresolved thing is images" — computed AFTER every other
+  // gate already ran, never used to short-circuit the pipeline earlier.
+  const imageSelectionOnlyBlock = verdict === 'BLOCKED' && missingGates.length === 0 && failingGates.length === 1 && failingGates[0].key === 'IMAGE_READINESS_GATE'
 
-  const reportText = buildReportText(input.metroName, verdict, input.summary, passingGates, failingGates, missingGates)
+  const reportText = buildReportText(input.metroName, verdict, input.summary, passingGates, failingGates, missingGates, imageSelectionOnlyBlock)
 
-  return { verdict, metroName: input.metroName, passingGates, failingGates, missingGates, summary: input.summary, reportText }
+  return { verdict, metroName: input.metroName, passingGates, failingGates, missingGates, summary: input.summary, reportText, imageSelectionOnlyBlock }
 }
 
 function buildReportText(
@@ -123,9 +134,20 @@ function buildReportText(
   summary: MetroLaunchCertificationSummary,
   passingGates: string[],
   failingGates: readonly StagingGateResult[],
-  missingGates: readonly string[]
+  missingGates: readonly string[],
+  imageSelectionOnlyBlock: boolean
 ): string {
   const lines: string[] = []
+  if (imageSelectionOnlyBlock) {
+    lines.push(`METRO_LAUNCH_CERTIFICATION — ${metroName}`)
+    lines.push('Verdict: BLOCKED — image selection required')
+    lines.push('')
+    lines.push('Every other required gate passed. The only remaining step is selecting/uploading images for the Home cards below — a human/business judgment call, never an automated pick:')
+    lines.push(`  - ${failingGates[0].reason}`)
+    lines.push('')
+    lines.push(`Passing gates (${passingGates.length}): ${passingGates.join(', ')}`)
+    return lines.join('\n')
+  }
   lines.push(`METRO_LAUNCH_CERTIFICATION — ${metroName}`)
   lines.push(`Verdict: ${verdict}`)
   lines.push('')

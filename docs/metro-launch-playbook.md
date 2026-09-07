@@ -660,6 +660,70 @@ rejected hook (with the reason it was rejected — currency failure or critique 
 currency check result, the final body, the certification outcome, and the full per-attempt
 history (hook, body, critique) for every attempt made.
 
+## Part 8 — real driver wiring: the bare command owns the whole sequence (required, recorded 2026-09-07)
+
+Everything in Parts 6-7 previously existed only as pure-logic library functions nothing in the
+actual runtime ever called — a bare `metro_launch` run stopped at the old `M6_5_CHECKOFF_EDITOR`
+stage and jumped straight to `LAUNCH_READINESS_BOUNDARY` with a synthetic, hardcoded gate
+evidence object. `agent-service/specialists/metroLaunchDriver.ts` (`driveMetroLaunch()`) now owns
+the whole sequence itself — no separate command, no manual per-stage invocation:
+
+`M6_5_CHECKOFF_EDITOR` (write, one item at a time) →
+**`M7_ITEM_CERTIFICATION`** (the real `ITEM_CERTIFICATION_LOOP`, per candidate: independent
+critique call → deterministic swap-test/quoting check via `evaluateItemCritique()` → on failure,
+a real rewrite call with the rejection reasons, bounded at `MAX_ITEM_CERTIFICATION_ATTEMPTS = 3` →
+`ITEM_CERTIFIED` or `EXHAUSTED_RETRIES`, never filler) →
+**`M8_BATCH_CERTIFICATION`** (deterministic: `DISTINCTIVE_EXPERIENCE_GATE`/`VENUE_QUOTING_GATE`/
+`OPENING_DISTRIBUTION_GATE` via `certifyEditorialDistinctiveness()`, `ITEM_CERTIFICATION_GATE`,
+`TAG_CERTIFICATION_GATE` via `resolveCanonicalTagVocabulary()` live-DB-then-snapshot,
+`METADATA_COMPLETENESS_GATE` via `evaluateItemMetadata()`, `GEO_ENRICHMENT_GATE`) →
+**`M9_HOME_LIST_MIRROR`** (builds the real launch list package — primary seasonal + themed lists
++ curated mirror — generates the one atomic SQL patch, and certifies against real runtime state
+when `MetroDriverDeps.verifyHomeListRows` is wired to a real read path) →
+**`M10_METRO_LAUNCH_CERTIFICATION`** (image readiness evaluated here, alongside everything else,
+never early — plus the Item-Intake-shaped `CATALOG_GATE`/`LOCATION_GATE`/`PRESENTATION_GATE`/
+`EDITORIAL_GATE`, built from the same certified items — then `certifyMetroLaunch()` produces the
+final `READY_TO_ACTIVATE`/`BLOCKED` report) → `LAUNCH_READINESS_BOUNDARY` (unchanged: public
+launch is always a human decision, but the decision packet now carries the REAL report instead of
+a synthetic placeholder).
+
+**Image selection never stops the pipeline early.** `IMAGE_READINESS_GATE`
+(`agent-service/playbooks/imageReadiness.ts`) is just one more required gate, evaluated at M10
+alongside every other one. When it is the ONLY failing required gate, `certifyMetroLaunch()` sets
+`imageSelectionOnlyBlock: true` and the report reads `"BLOCKED — image selection required"` with
+the exact Home cards still needing one — never a generic "needs more work," and never reached by
+skipping every other phase of work.
+
+**Tags never block a build just because `agent_service` still lacks `SELECT` on `public.tags`.**
+`agent-service/specialists/tagVocabularyProvider.ts`'s `resolveCanonicalTagVocabulary()` tries a
+live query first, falls back to a versioned, justified `VerifiedTagSnapshot`, and only fails
+closed (blocking `TAG_CERTIFICATION_GATE`, never inventing a tag list) when neither is available —
+which, as of 2026-09-07, is still the honest live state (no snapshot has been captured yet).
+
+**A real, pre-existing driver bug was fixed while wiring this in**: `stepEditor` (M6_5) used to
+check only for `outcome.kind === 'BLOCKED'` when deciding whether checkoff_editor failed for a
+batch — an evidence-validation failure (`kind === 'NEEDS_JERRY'`, e.g. missing a newly-required
+`tags` evidence key) fell through that check entirely, was silently dropped, and because
+`remaining` is recomputed from `checkoffizedItems` every call, the SAME failing candidate(s) were
+reprocessed identically forever, never escalating and never advancing — a real infinite-looking
+loop, caught while adding the `tags` evidence requirement for M7. Fixed: any non-`ACCEPTED` result
+now stops the stage and reports the run's real status (`BLOCKED` or `NEEDS_JERRY`), while still
+keeping whatever candidates DID succeed in that batch.
+
+**Verified end-to-end**: `agent-service/specialists/viennaDryRun.test.ts` drives a synthetic,
+fully-fake Vienna project through the real driver (`driveMetroLaunch()`) — never a hand-called
+library function — and proves every phase above actually runs, that a deliberately generic first
+draft is really rejected by critique and really rewritten (the self-repair proof), that the
+Home-list SQL patch is really generated, that the run genuinely `BLOCKED — image selection
+required` with every other real gate passing, and that resuming with images resolved reaches a
+genuine `READY_TO_ACTIVATE` while the human launch-approval boundary stays exactly where it was.
+
+**Known remaining gap**: `GEO_ENRICHMENT_GATE` legitimately fails until a real Google Places
+integration (`metroGeoEnrichment.ts`, referenced but not yet built) exists — `MetroDriverDeps.hasRunGooglePlacesPass`
+defaults to `false` and is never faked true. This, plus `HOME_LIST_CERTIFICATION_GATE` needing a
+real `verifyHomeListRows` read path and image selection needing a human, are the genuine reasons a
+real bare Vienna command would still stop for Jerry during (not just at the end of) a build.
+
 ## Provenance
 
 Built and verified against the Denver/Boulder/Longmont launch cycle, 2026-08-21 —

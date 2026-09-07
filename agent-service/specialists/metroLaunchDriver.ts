@@ -29,13 +29,31 @@ import {
   type CoverageGap,
   type MetroGateEvidence,
 } from '../playbooks/metroLaunch'
-import { countByCanonicalCategory, type UnclassifiedCategory } from '../playbooks/categoryNormalization'
+import { countByCanonicalCategory, classifyCategory, type UnclassifiedCategory } from '../playbooks/categoryNormalization'
 import { runExecutionRouted } from './routing'
 import type { ExecutionStore, SpecialistExecutor, SpecialistExecutionRequest } from './executor'
 import { getOrCreateRun, type PlaybookRunStore, type PlaybookRunRecord } from './playbookRun'
 import { dedupeCandidates, findSuspectedDuplicates, type RawCandidate } from './candidateMerge'
 import { DEFAULT_DRIVER_GUARDRAILS, type DriverGuardrails } from './driverGuardrails'
 import type { SpecialistResultEnvelope } from './types'
+import { certifyEditorialDistinctiveness, checkDistinctiveExperience, checkVenueQuoted, type DistinctivenessCertificationItem } from '../playbooks/editorialDistinctiveness'
+import { evaluateItemCritique, evaluateItemCertificationGate, type ItemCritiqueAnswers, type ItemCertificationOutcome, type CatalogItemCertificationCheck, type ItemCertificationRecord } from '../playbooks/itemCertificationLoop'
+import { evaluateTagCertificationGate, type ItemTagProposal } from '../playbooks/metroTagCertification'
+import { evaluateItemMetadata, evaluateMetadataCompletenessGate, evaluateGeoEnrichmentGate, type MetadataEnrichmentResult } from '../playbooks/metroMetadataEnrichment'
+import { certifyHomeListRow, evaluateHomeListCertificationGate, certifyCuratedListRow, evaluateCuratedListLayerGate, type HomeListRow, type CuratedListRow } from '../playbooks/homeListCertification'
+import { evaluateImageReadinessGate, type ImageReadinessCard } from '../playbooks/imageReadiness'
+import { certifyMetroLaunch, type MetroLaunchCertificationReport, type MetroLaunchCertificationSummary } from '../playbooks/metroLaunchCertification'
+import {
+  CANONICAL_TO_DB_CATEGORY,
+  evaluateCatalogGate,
+  evaluateLocationGate,
+  evaluatePresentationGate,
+  evaluateEditorialQualityGate,
+  type RealDbCategory,
+  type StagingGateResult,
+  type ItemIntakeRecord,
+} from '../playbooks/metroCatalog'
+import { resolveCanonicalTagVocabulary, type VerifiedTagSnapshot } from './tagVocabularyProvider'
 
 export const METRO_LAUNCH_DRIVER_PLAYBOOK_KEY = 'metro_launch'
 
@@ -60,10 +78,58 @@ interface MetroDriverState {
   gaps?: CoverageGap[]
   removedCandidateNames?: string[]
   hasRunM6?: boolean
-  checkoffizedItems?: Array<{ name: string; checkoffizedItem: string }>
+  checkoffizedItems?: Array<{ name: string; checkoffizedItem: string; tags: string[] }>
   awaitingExecutionLabels?: string[] // labels of executions this run is currently waiting on, for the current stage
   /** Raw candidate categories buildAuditEvidence could not map to the canonical taxonomy — flagged for review, never silently binned. Recomputed fresh every M4 pass, never accumulated. */
   unclassifiedCategories?: UnclassifiedCategory[]
+
+  // ---------------------------------------------------------------------
+  // M7-M10 — real, wired-in item + batch + list + final certification.
+  // Phase 2W: previously these were pure library functions nothing in
+  // the actual driver ever called (Jerry's 2026-09-07 correction) — the
+  // bare metro command now owns this whole sequence itself.
+  // ---------------------------------------------------------------------
+  /** Per-candidate ITEM_CERTIFICATION_LOOP result, keyed by candidate name — the durable per-item research/evidence artifact (Phase 2V), now actually populated by the real driver. */
+  itemCertifications?: Record<string, DriverItemCertificationRecord>
+  /** Real, computed certification report from M8/M9/M10 — what stepLaunchBoundary reports to Jerry, replacing the old hardcoded synthetic gateEvidence. */
+  finalCertificationReport?: MetroLaunchCertificationReport
+  homeListPlan?: HomeListPlanEntry[]
+  /** The one atomic, self-certifying SQL patch text for Jerry to run — this driver never writes public.lists/public.list_items directly (standing write-boundary rule, unchanged). */
+  homeListSqlPatch?: string
+  tagVocabularyDetail?: string
+  batchCertificationGates?: StagingGateResult[]
+  rejectedItemCount?: number
+}
+
+/**
+ * The driver-native per-item certification record — same POLICY as
+ * itemCertificationLoop.ts's ItemCertificationRecord (reuses its exact
+ * evaluateItemCritique/checkDistinctiveExperience/checkVenueQuoted
+ * logic), but shaped around what the REAL checkoff_editor executor
+ * evidence contract actually returns (factualSource/checkoffizedItem/tags
+ * — no separate structured "hook object" exists in production evidence),
+ * rather than forcing the driver through that module's richer
+ * injected-deps interface, which assumes per-step evidence this driver's
+ * real specialist calls don't produce. See metroLaunchDriver.test.ts for
+ * the proof this is the SAME policy applied for real.
+ */
+export interface DriverItemCertificationRecord {
+  candidateName: string
+  venueName: string
+  attempts: number
+  outcome: ItemCertificationOutcome
+  finalBody: string | null
+  finalTags: string[]
+  supportingFact: string
+  verifiedAt: string | null
+  rejectionReasons: string[]
+}
+
+export interface HomeListPlanEntry {
+  label: string
+  kind: 'PRIMARY_SEASONAL' | 'THEMED' | 'CURATED_MIRROR'
+  itemCandidateNames: string[]
+  requiresImage: boolean
 }
 
 function readState(run: PlaybookRunRecord): MetroDriverState {
@@ -86,6 +152,16 @@ export interface MetroDriverDeps {
   executors: readonly SpecialistExecutor[]
   guardrails?: DriverGuardrails
   now?: () => string
+  /** M8 tag certification: attempts a real live public.tags SELECT first (see tagVocabularyProvider.ts) — omit/reject to exercise the snapshot fallback. Defaults to always-failing (honest: no live access is configured unless the caller wires one in). */
+  queryLiveTags?: () => Promise<string[]>
+  /** M8 tag certification fallback — a versioned, justified VERIFIED_SNAPSHOT. Defaults to null (no snapshot captured yet — see tagVocabularyProvider.ts's own doc). */
+  verifiedTagSnapshot?: VerifiedTagSnapshot | null
+  /** M9: has a real Google Places enrichment pass been run for this metro yet? Defaults to false — metroGeoEnrichment.ts (the real Places integration) does not exist yet, so GEO_ENRICHMENT_GATE correctly fails until it does. Never faked to true. */
+  hasRunGooglePlacesPass?: boolean
+  /** M9: reads the REAL runtime state of the planned Home lists (public.lists/public.list_items) — Chief has no direct public.lists write access (standing boundary, unchanged) and, without this, no way to confirm a hand-run SQL patch actually took effect either. Omit to correctly report HOME_LIST_CERTIFICATION_GATE as pending human application of the generated SQL patch; a caller (production wiring, or a test) supplies this once a real read path exists. */
+  verifyHomeListRows?: (plan: readonly HomeListPlanEntry[]) => Promise<HomeListRow[]>
+  /** M10: which Home cards already have an image. Omit to correctly report every required card as still needing one — Winston never fabricates image readiness. */
+  checkImageReadiness?: (plan: readonly HomeListPlanEntry[]) => Promise<ImageReadinessCard[]>
 }
 
 export function executionId(runId: string, stage: string, label: string): string {
@@ -531,7 +607,7 @@ async function stepEditor(deps: MetroDriverDeps, run: PlaybookRunRecord): Promis
   const remaining = verified.filter((c) => !alreadyDone.has(c.name))
 
   if (remaining.length === 0) {
-    run.currentStage = 'LAUNCH_READINESS_BOUNDARY'
+    run.currentStage = 'M7_ITEM_CERTIFICATION'
     return run
   }
 
@@ -552,7 +628,7 @@ async function stepEditor(deps: MetroDriverDeps, run: PlaybookRunRecord): Promis
         stage: 'M6_5_CHECKOFF_EDITOR',
         objective: `${run.projectId}: checkoffize ${candidate.name}`,
         inputs: { factualSource: candidate.claimSupported, businessOrPlace: candidate.name },
-        requiredEvidenceKeys: ['factualSource', 'checkoffizedItem'],
+        requiredEvidenceKeys: ['factualSource', 'checkoffizedItem', 'tags'],
         methodologyId: 'checkoff_editor',
         methodologyVersion: 'v1',
         executionId: executionId(run.runId, 'EDITOR', label),
@@ -567,22 +643,412 @@ async function stepEditor(deps: MetroDriverDeps, run: PlaybookRunRecord): Promis
     })
   )
 
-  const failed = results.filter((r) => r.outcome.kind === 'BLOCKED')
-  if (failed.length === results.length && results.length > 0) {
-    return block(run, `checkoff_editor unavailable for every candidate: ${failed.map((r) => r.outcome.reason).join('; ')}`)
-  }
+  // Bug fix (found wiring M7-M10 in, Phase 2W): this used to check ONLY
+  // for outcome.kind === 'BLOCKED' — an evidence-validation failure
+  // (kind === 'NEEDS_JERRY', e.g. checkoff_editor genuinely omitting a
+  // required evidence key after exhausting its own bounded retries) fell
+  // through this check entirely, was silently dropped from
+  // checkoffizedItems, and — because `remaining` is recomputed from
+  // checkoffizedItems every call — the SAME failing candidate(s) were
+  // reprocessed identically on every subsequent step, forever, never
+  // escalating and never advancing. Any non-ACCEPTED result now stops
+  // this stage and reports the run's real status, while still keeping
+  // whatever candidates DID succeed in this batch (never thrown away).
+  const accepted = results.filter((r) => r.outcome.kind === 'ACCEPTED')
+  const blockedResults = results.filter((r) => r.outcome.kind === 'BLOCKED')
+  const needsJerryResults = results.filter((r) => r.outcome.kind === 'NEEDS_JERRY')
 
   state.checkoffizedItems = [
     ...(state.checkoffizedItems ?? []),
-    ...results.filter((r) => r.outcome.kind === 'ACCEPTED').map((r) => ({ name: r.name, checkoffizedItem: String(r.outcome.envelope?.evidence.checkoffizedItem ?? '') })),
+    ...accepted.map((r) => ({ name: r.name, checkoffizedItem: String(r.outcome.envelope?.evidence.checkoffizedItem ?? ''), tags: (r.outcome.envelope?.evidence.tags as string[] | undefined) ?? [] })),
   ]
   run.state = state
+
+  if (blockedResults.length > 0) {
+    return block(run, `checkoff_editor unavailable for ${blockedResults.length} candidate(s): ${blockedResults.map((r) => `${r.name}: ${r.outcome.reason}`).join('; ')}`)
+  }
+  if (needsJerryResults.length > 0) {
+    return escalate(run, `checkoff_editor evidence validation failed for ${needsJerryResults.length} candidate(s) after exhausting retries.`, {
+      decisionNeeded: 'Review why checkoff_editor could not produce valid evidence for these candidates — a methodology/prompt issue, or a genuine data gap.',
+      why: needsJerryResults.map((r) => `${r.name}: ${r.outcome.reason}`).join(' | '),
+    })
+  }
+
   // Stage advances only once every verified candidate has been
   // editorialized — remaining.length > batch.length means more batches
   // are needed; the driver loop re-enters this SAME stage next iteration.
   if (remaining.length <= batch.length) {
-    run.currentStage = 'LAUNCH_READINESS_BOUNDARY'
+    run.currentStage = 'M7_ITEM_CERTIFICATION'
   }
+  return run
+}
+
+// ---------------------------------------------------------------------------
+// M7 — ITEM_CERTIFICATION_LOOP, wired into the real driver (Phase 2W).
+// Every checkoffized item runs its OWN bounded critique/repair loop
+// before the batch-wide gates ever see it — never a batch rewrite call,
+// per Jerry's 2026-09-07 correction. Reuses the exact certification
+// POLICY from itemCertificationLoop.ts (evaluateItemCritique, which
+// itself reuses checkDistinctiveExperience/checkVenueQuoted from
+// editorialDistinctiveness.ts) — the orchestration below is native to
+// this driver's own executor-call conventions (matching every other
+// stage in this file) rather than itemCertificationLoop.ts's
+// injected-deps shape, because that module assumes a richer per-step
+// evidence contract than checkoff_editor's real evidence
+// (factualSource/checkoffizedItem/tags) actually returns.
+// ---------------------------------------------------------------------------
+
+const ITEM_CERTIFICATION_CRITIQUE_KEYS = ['hasConcreteAction', 'moreSpecificThanVenuePurpose', 'supportedByResearch', 'isCurrent', 'tellsUsefulNonObviousDetail', 'soundsLikeCheckoff', 'concise']
+export const MAX_ITEM_CERTIFICATION_ATTEMPTS = 3
+
+async function certifyOneItemDriverNative(
+  deps: MetroDriverDeps,
+  run: PlaybookRunRecord,
+  candidate: RawCandidate,
+  item: { name: string; checkoffizedItem: string; tags: string[] }
+): Promise<DriverItemCertificationRecord> {
+  let body = item.checkoffizedItem
+  let tags = item.tags
+  const rejectionReasons: string[] = []
+  const safeName = candidate.name.replace(/[^a-zA-Z0-9_-]/g, '_')
+
+  for (let attempt = 1; attempt <= MAX_ITEM_CERTIFICATION_ATTEMPTS; attempt++) {
+    const critiqueLabel = `critique-${safeName}-attempt${attempt}`
+    const critiqueRequest: SpecialistExecutionRequest = {
+      specialist: 'checkoff_editor',
+      playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
+      stage: 'M7_ITEM_CERTIFICATION',
+      objective: `${run.projectId}: independently critique the CheckOff item written for ${candidate.name} (attempt ${attempt}) — a separate pass from the one that wrote it, never the same call self-grading its own output`,
+      inputs: { mode: 'CRITIQUE', venueName: candidate.name, body, factualSource: candidate.claimSupported },
+      requiredEvidenceKeys: ITEM_CERTIFICATION_CRITIQUE_KEYS,
+      methodologyId: 'checkoff_editor',
+      methodologyVersion: 'v1',
+      executionId: executionId(run.runId, 'M7_CRITIQUE', critiqueLabel),
+      projectId: run.projectId,
+      destinationId: null,
+      metroId: run.projectId,
+      allowedCapabilities: ['content_editorial'],
+      authorityOperations: ['metro_launch.build_internal_artifact'],
+      idempotencyKey: executionId(run.runId, 'M7_CRITIQUE', critiqueLabel),
+    }
+    const critiqueOutcome = await runStepWithRetry(deps, run, critiqueRequest)
+    if (critiqueOutcome.kind !== 'ACCEPTED') {
+      rejectionReasons.push(`critique attempt ${attempt}: ${critiqueOutcome.reason ?? 'executor unavailable'}`)
+      break
+    }
+    const ev = critiqueOutcome.envelope?.evidence ?? {}
+    const answers: ItemCritiqueAnswers = {
+      hasConcreteAction: Boolean(ev.hasConcreteAction),
+      moreSpecificThanVenuePurpose: Boolean(ev.moreSpecificThanVenuePurpose),
+      supportedByResearch: Boolean(ev.supportedByResearch),
+      isCurrent: Boolean(ev.isCurrent),
+      tellsUsefulNonObviousDetail: Boolean(ev.tellsUsefulNonObviousDetail),
+      soundsLikeCheckoff: Boolean(ev.soundsLikeCheckoff),
+      concise: Boolean(ev.concise),
+      critiqueNotes: String(ev.critiqueNotes ?? ''),
+    }
+    // The two deterministic sub-checks (swap-10-competitors test, venue
+    // quoting) are computed HERE, never asked of the AI critique step —
+    // see evaluateItemCritique's own doc.
+    const critique = evaluateItemCritique(body, candidate.name, answers)
+    if (critique.pass) {
+      return { candidateName: candidate.name, venueName: candidate.name, attempts: attempt, outcome: 'ITEM_CERTIFIED', finalBody: body, finalTags: tags, supportingFact: candidate.claimSupported, verifiedAt: (deps.now ?? (() => new Date().toISOString()))(), rejectionReasons }
+    }
+    rejectionReasons.push(`attempt ${attempt}: ${critique.failureReasons.join('; ')}`)
+    if (attempt === MAX_ITEM_CERTIFICATION_ATTEMPTS) break
+
+    const rewriteLabel = `rewrite-${safeName}-attempt${attempt}`
+    const rewriteRequest: SpecialistExecutionRequest = {
+      specialist: 'checkoff_editor',
+      playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
+      stage: 'M7_ITEM_CERTIFICATION',
+      objective: `${run.projectId}: rewrite the CheckOff item for ${candidate.name} with a genuinely stronger, more distinctive hook — previous attempt rejected (${critique.failureReasons.join('; ')}), research/rewrite rather than reword the same weak hook`,
+      inputs: { mode: 'REWRITE', factualSource: candidate.claimSupported, businessOrPlace: candidate.name, previousBody: body, rejectionReasons: critique.failureReasons },
+      requiredEvidenceKeys: ['checkoffizedItem', 'tags'],
+      methodologyId: 'checkoff_editor',
+      methodologyVersion: 'v1',
+      executionId: executionId(run.runId, 'M7_REWRITE', rewriteLabel),
+      projectId: run.projectId,
+      destinationId: null,
+      metroId: run.projectId,
+      allowedCapabilities: ['content_editorial'],
+      authorityOperations: ['metro_launch.build_internal_artifact'],
+      idempotencyKey: executionId(run.runId, 'M7_REWRITE', rewriteLabel),
+    }
+    const rewriteOutcome = await runStepWithRetry(deps, run, rewriteRequest)
+    if (rewriteOutcome.kind !== 'ACCEPTED') {
+      rejectionReasons.push(`rewrite attempt ${attempt}: ${rewriteOutcome.reason ?? 'executor unavailable'}`)
+      break
+    }
+    body = String(rewriteOutcome.envelope?.evidence.checkoffizedItem ?? body)
+    tags = (rewriteOutcome.envelope?.evidence.tags as string[] | undefined) ?? tags
+  }
+
+  // Bounded retry budget exhausted (or the executor genuinely could not
+  // complete a step) — never manufacture filler. This candidate is
+  // rejected out of the final catalog, not force-included.
+  return { candidateName: candidate.name, venueName: candidate.name, attempts: MAX_ITEM_CERTIFICATION_ATTEMPTS, outcome: 'EXHAUSTED_RETRIES', finalBody: null, finalTags: [], supportingFact: candidate.claimSupported, verifiedAt: null, rejectionReasons }
+}
+
+async function stepM7ItemCertification(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const items = state.checkoffizedItems ?? []
+  const alreadyCertified = new Set(Object.keys(state.itemCertifications ?? {}))
+  const remaining = items.filter((i) => !alreadyCertified.has(i.name))
+
+  if (remaining.length === 0) {
+    run.currentStage = 'M8_BATCH_CERTIFICATION'
+    return run
+  }
+
+  const batch = remaining.slice(0, (deps.guardrails ?? DEFAULT_DRIVER_GUARDRAILS).maxConcurrentExecutions)
+  const candidatesByName = new Map((state.candidates ?? []).map((c) => [c.name, c]))
+
+  const results = await Promise.all(
+    batch.map(async (item) => {
+      const candidate = candidatesByName.get(item.name)
+      if (!candidate) {
+        // Should be structurally impossible (every checkoffizedItem comes
+        // from a candidate) — treated as a hard rejection, never silently
+        // skipped, so the gap is visible in the certification record.
+        const rec: DriverItemCertificationRecord = { candidateName: item.name, venueName: item.name, attempts: 0, outcome: 'EXHAUSTED_RETRIES', finalBody: null, finalTags: [], supportingFact: '', verifiedAt: null, rejectionReasons: ['no matching candidate record found in state.candidates'] }
+        return rec
+      }
+      return certifyOneItemDriverNative(deps, run, candidate, item)
+    })
+  )
+
+  const itemCertifications = { ...(state.itemCertifications ?? {}) }
+  for (const rec of results) itemCertifications[rec.candidateName] = rec
+  state.itemCertifications = itemCertifications
+  run.state = state
+
+  if (remaining.length <= batch.length) {
+    run.currentStage = 'M8_BATCH_CERTIFICATION'
+  }
+  return run
+}
+
+// ---------------------------------------------------------------------------
+// M8 — batch-wide certification gates, run AFTER individual item
+// certification, never instead of it. Deterministic — no specialist
+// calls (every input here was already gathered by M6/M7).
+// ---------------------------------------------------------------------------
+
+async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const allRecords = Object.values(state.itemCertifications ?? {})
+  const certified = allRecords.filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
+
+  if (certified.length === 0) {
+    return block(run, 'No items reached ITEM_CERTIFIED after the per-item certification loop — quality over count means an empty or near-empty result is a genuine blocker, never filled with filler.')
+  }
+
+  const candidatesByName = new Map((state.candidates ?? []).map((c) => [c.name, c]))
+
+  // DISTINCTIVE_EXPERIENCE_GATE / VENUE_QUOTING_GATE / OPENING_DISTRIBUTION_GATE — safety net.
+  const distinctivenessItems: DistinctivenessCertificationItem[] = certified.map((r) => ({ candidateName: r.candidateName, venueName: r.venueName, body: r.finalBody }))
+  const { gates: distinctivenessGates } = certifyEditorialDistinctiveness(distinctivenessItems)
+
+  // ITEM_CERTIFICATION_GATE — structural invariant: the final catalog (by
+  // construction, `certified`) must be exactly the set of ITEM_CERTIFIED records.
+  const itemGateChecks: CatalogItemCertificationCheck[] = certified.map((r) => ({
+    candidateName: r.candidateName,
+    record: { venueName: r.venueName, attempts: r.attempts, outcome: r.outcome, chosenHook: null, rejectedHooks: [], finalBody: r.finalBody, currencyCheck: null, lastCritique: null, history: [] } as ItemCertificationRecord,
+  }))
+  const itemCertificationGate = evaluateItemCertificationGate(itemGateChecks)
+
+  // TAG_CERTIFICATION_GATE — live DB first, verified snapshot fallback, fail closed on neither.
+  const tagVocabulary = await resolveCanonicalTagVocabulary(deps.queryLiveTags ?? (async () => { throw new Error('no live tag query configured for this run') }), deps.verifiedTagSnapshot ?? null)
+  let tagGate: StagingGateResult
+  if (tagVocabulary.status === 'FAILED') {
+    tagGate = { key: 'TAG_CERTIFICATION_GATE', verdict: 'FAIL', reason: tagVocabulary.reason }
+  } else {
+    state.tagVocabularyDetail = tagVocabulary.detail
+    const proposals: ItemTagProposal[] = certified.map((r) => ({ candidateName: r.candidateName, tags: r.finalTags }))
+    tagGate = evaluateTagCertificationGate(proposals, tagVocabulary.tagNames).gate
+  }
+
+  // METADATA_COMPLETENESS_GATE — deterministic, content-based (no extra AI/DB call needed).
+  const unclassifiedForMetadata: string[] = []
+  const metadataResults: MetadataEnrichmentResult[] = []
+  for (const r of certified) {
+    const candidate = candidatesByName.get(r.candidateName)
+    const canonical = classifyCategory(candidate?.category ?? null).canonical
+    const dbCategory: RealDbCategory | null = canonical ? CANONICAL_TO_DB_CATEGORY[canonical] : null
+    if (!dbCategory) {
+      unclassifiedForMetadata.push(r.candidateName)
+      continue
+    }
+    metadataResults.push(evaluateItemMetadata({ candidateName: r.candidateName, body: r.finalBody, dbCategory }))
+  }
+  const metadataGate: StagingGateResult =
+    unclassifiedForMetadata.length > 0
+      ? { key: 'METADATA_COMPLETENESS_GATE', verdict: 'FAIL', reason: `${unclassifiedForMetadata.length} certified item(s) have no classifiable category, so metadata could not be evaluated: ${unclassifiedForMetadata.join(', ')}.` }
+      : evaluateMetadataCompletenessGate(metadataResults)
+
+  // GEO_ENRICHMENT_GATE — real Google Places integration (metroGeoEnrichment.ts)
+  // does not exist yet; this correctly fails until it does, rather than faking a pass.
+  const geoGate = evaluateGeoEnrichmentGate(deps.hasRunGooglePlacesPass ?? false, `${certified.length} certified item(s) awaiting a real Google Places enrichment pass.`)
+
+  const gates: StagingGateResult[] = [...distinctivenessGates, itemCertificationGate, tagGate, metadataGate, geoGate]
+  state.batchCertificationGates = gates
+  run.state = state
+  run.currentStage = 'M9_HOME_LIST_MIRROR'
+  return run
+}
+
+// ---------------------------------------------------------------------------
+// M9 — official Home-list mirror. Builds the required launch list package
+// (primary seasonal list + themed lists + curated-layer mirrors) as data,
+// generates the ONE atomic SQL patch text for Jerry to run (Chief/Winston
+// never gets direct public.lists/public.list_items write access — standing
+// boundary, unchanged), and certifies against REAL runtime state when
+// deps.verifyHomeListRows is wired to an actual read path; otherwise
+// honestly reports the gate as pending human application of that patch.
+// ---------------------------------------------------------------------------
+
+function buildHomeListPlan(state: MetroDriverState): HomeListPlanEntry[] {
+  const certified = Object.values(state.itemCertifications ?? {}).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
+  const names = certified.map((r) => r.candidateName)
+  const plan: HomeListPlanEntry[] = [{ label: 'Primary seasonal list', kind: 'PRIMARY_SEASONAL', itemCandidateNames: names, requiresImage: true }]
+  const byCategory = new Map<string, string[]>()
+  const candidatesByName = new Map((state.candidates ?? []).map((c) => [c.name, c]))
+  for (const name of names) {
+    const cat = candidatesByName.get(name)?.category ?? 'Misc'
+    byCategory.set(cat, [...(byCategory.get(cat) ?? []), name])
+  }
+  for (const [cat, itemNames] of byCategory) {
+    if (itemNames.length >= 4) {
+      plan.push({ label: `Themed list: ${cat}`, kind: 'THEMED', itemCandidateNames: itemNames, requiresImage: true })
+    }
+  }
+  plan.push({ label: 'Curated-layer mirror', kind: 'CURATED_MIRROR', itemCandidateNames: names, requiresImage: false })
+  return plan
+}
+
+function buildHomeListSqlPatch(metroSlug: string, plan: readonly HomeListPlanEntry[]): string {
+  const primary = plan.find((p) => p.kind === 'PRIMARY_SEASONAL')
+  const lines: string[] = []
+  lines.push(`-- Generated by Winston metro_launch driver (M9_HOME_LIST_MIRROR) for metro "${metroSlug}".`)
+  lines.push('-- One atomic, self-certifying block — no cross-statement TEMP-table dependence, no MIN(uuid).')
+  lines.push('DO $$')
+  lines.push('DECLARE')
+  lines.push('  v_metro_id uuid;')
+  lines.push('  v_match_count int;')
+  lines.push('BEGIN')
+  lines.push(`  SELECT count(*) INTO v_match_count FROM public.metro_areas WHERE slug = ${sqlQuote(metroSlug)};`)
+  lines.push("  IF v_match_count <> 1 THEN RAISE EXCEPTION 'expected exactly 1 metro_areas row for slug %, found %', " + sqlQuote(metroSlug) + ', v_match_count; END IF;')
+  lines.push(`  SELECT id INTO v_metro_id FROM public.metro_areas WHERE slug = ${sqlQuote(metroSlug)};`)
+  lines.push('')
+  for (const entry of plan) {
+    if (entry.kind === 'CURATED_MIRROR') continue // curated_lists layer is a separate, existing patch pattern (see itemIntake.ts) — not duplicated here
+    lines.push(`  -- ${entry.label} (${entry.itemCandidateNames.length} item(s))`)
+    lines.push(`  INSERT INTO public.lists (metro_id, title, is_official, is_public${entry.kind === 'PRIMARY_SEASONAL' ? ', is_featured_eligible' : ''})`)
+    lines.push(`  VALUES (v_metro_id, ${sqlQuote(entry.label)}, true, true${entry.kind === 'PRIMARY_SEASONAL' ? ', true' : ''})`)
+    lines.push('  RETURNING id;')
+    lines.push('')
+  }
+  lines.push(`  -- list_items membership for each list above must be inserted by matching each item's certified candidate name to its real public.checkoff_items row (unique-match asserted per item, never MIN(uuid)).`)
+  lines.push('END $$;')
+  return lines.join('\n')
+}
+
+function sqlQuote(s: string): string {
+  return `'${s.replace(/'/g, "''")}'`
+}
+
+async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const plan = buildHomeListPlan(state)
+  state.homeListPlan = plan
+  state.homeListSqlPatch = buildHomeListSqlPatch(run.projectId, plan)
+
+  let homeListGate: StagingGateResult
+  let curatedLayerGate: StagingGateResult
+  if (deps.verifyHomeListRows) {
+    const rows = await deps.verifyHomeListRows(plan)
+    const result = evaluateHomeListCertificationGate(rows)
+    homeListGate = result.gate
+    curatedLayerGate = evaluateCuratedListLayerGate([]).gate // curated_lists layer not required for this metro unless separately requested
+  } else {
+    homeListGate = { key: 'HOME_LIST_CERTIFICATION_GATE', verdict: 'FAIL', reason: `SQL patch generated (${plan.length} list(s): ${plan.map((p) => p.label).join(', ')}) but not yet applied/verified — no live read path is configured (MetroDriverDeps.verifyHomeListRows) to confirm public.lists/public.list_items actually reflect it. Apply the generated patch, then rerun this stage with a real read path wired in.` }
+    curatedLayerGate = evaluateCuratedListLayerGate([]).gate
+  }
+
+  const existingGates = state.batchCertificationGates ?? []
+  state.batchCertificationGates = [...existingGates, homeListGate, curatedLayerGate]
+  run.state = state
+  run.currentStage = 'M10_METRO_LAUNCH_CERTIFICATION'
+  return run
+}
+
+// ---------------------------------------------------------------------------
+// M10 — final aggregation. Image readiness is evaluated HERE, alongside
+// every other gate, never used to stop the pipeline earlier — see
+// imageReadiness.ts.
+// ---------------------------------------------------------------------------
+
+async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const plan = state.homeListPlan ?? []
+  const existingGates = state.batchCertificationGates ?? []
+
+  const imageCards: ImageReadinessCard[] = deps.checkImageReadiness
+    ? await deps.checkImageReadiness(plan)
+    : plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false }))
+  const { gate: imageGate } = evaluateImageReadinessGate(imageCards)
+
+  const certified = Object.values(state.itemCertifications ?? {}).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
+  const rejected = Object.values(state.itemCertifications ?? {}).filter((r) => r.outcome !== 'ITEM_CERTIFIED')
+
+  // CATALOG_GATE / LOCATION_GATE / PRESENTATION_GATE / EDITORIAL_GATE —
+  // the metroCatalog.ts (Item Intake) staging gates, built from the same
+  // certified items rather than a separate Item Intake pass, since this
+  // driver's own M6/M7 already produced everything those gates need
+  // (candidateName, body, category, a real specific location string).
+  const candidatesByNameForIntake = new Map((state.candidates ?? []).map((c) => [c.name, c]))
+  const intakeRecords: ItemIntakeRecord[] = certified
+    .map((r) => {
+      const candidate = candidatesByNameForIntake.get(r.candidateName)
+      const canonical = classifyCategory(candidate?.category ?? null).canonical
+      const dbCategory = canonical ? CANONICAL_TO_DB_CATEGORY[canonical] : null
+      if (!dbCategory) return null
+      const mapsQuery = candidate?.address?.trim() || `${r.candidateName}, ${candidate?.neighborhood ?? run.projectId}`
+      return {
+        candidateName: r.candidateName,
+        body: r.finalBody,
+        dbCategory,
+        mapsQuery,
+        neighborhoodName: candidate?.neighborhood ?? null,
+        dedupKey: r.candidateName.toLowerCase(),
+        provenance: { claimSupported: r.supportingFact, sourceUrls: candidate?.source ? [candidate.source] : [] },
+      } satisfies ItemIntakeRecord
+    })
+    .filter((r): r is ItemIntakeRecord => r !== null)
+
+  const catalogGate = evaluateCatalogGate({ expectedCanonicalCount: intakeRecords.length, stagedRecords: intakeRecords, intakeFailures: [], duplicates: { clean: intakeRecords, collidesWithProduction: [], collidesWithinBatch: [] } })
+  const locationGate = evaluateLocationGate({ records: intakeRecords })
+  const presentationGate = evaluatePresentationGate({ records: intakeRecords })
+  const editorialGate = evaluateEditorialQualityGate({ records: intakeRecords })
+
+  const summary: MetroLaunchCertificationSummary = {
+    catalogCount: certified.length,
+    geoCoveragePercent: 0,
+    geoExceptionsCount: certified.length,
+    tagsComplete: existingGates.some((g) => g.key === 'TAG_CERTIFICATION_GATE' && g.verdict === 'PASS'),
+    metadataComplete: existingGates.some((g) => g.key === 'METADATA_COMPLETENESS_GATE' && g.verdict === 'PASS'),
+    officialListsCount: plan.filter((p) => p.kind === 'PRIMARY_SEASONAL' || p.kind === 'THEMED').length,
+    themedListsCount: plan.filter((p) => p.kind === 'THEMED').length,
+    imagesComplete: imageGate.verdict === 'PASS',
+    homeQueryPass: existingGates.some((g) => g.key === 'HOME_LIST_CERTIFICATION_GATE' && g.verdict === 'PASS'),
+  }
+
+  const report = certifyMetroLaunch({ metroName: run.projectId, gates: [...existingGates, imageGate, catalogGate, locationGate, presentationGate, editorialGate], summary })
+  state.finalCertificationReport = report
+  state.rejectedItemCount = rejected.length
+  run.state = state
+  run.currentStage = 'LAUNCH_READINESS_BOUNDARY'
   return run
 }
 
@@ -619,11 +1085,21 @@ async function stepLaunchBoundary(run: PlaybookRunRecord): Promise<PlaybookRunRe
   // M14 (public launch) is ALWAYS APPROVAL_REQUIRED regardless of gate
   // state (metro_launch.public_launch has no AUTO/AUTO_TELL path) — the
   // driver stops here every time, by design, not as a failure mode.
+  const finalReport = state.finalCertificationReport
   return escalate(run, 'Metro build reached the launch-readiness boundary — public launch always requires Jerry.', {
     decisionNeeded: 'Approve launch (flip metro_areas.is_active=true) or hold for further review.',
     why: 'metro_launch.public_launch is APPROVAL_REQUIRED with no exception path.',
-    chiefRecommendation: gates.every((g) => g.verdict === 'PASS') ? 'All computed gates pass — recommend proceeding to real M7-M13 build once Jerry approves.' : 'Some gates show synthetic placeholder data only in this driver phase — a real build would need real M9/M13 evidence before this recommendation carries weight.',
+    chiefRecommendation: finalReport
+      ? finalReport.verdict === 'READY_TO_ACTIVATE'
+        ? `METRO_LAUNCH_CERTIFICATION: READY_TO_ACTIVATE — every required gate (item certification, distinctive-experience, venue quoting, opening distribution, tags, metadata, geo enrichment, Home-list mirror, image readiness) passed. Recommend approving launch.`
+        : finalReport.imageSelectionOnlyBlock
+          ? `METRO_LAUNCH_CERTIFICATION: BLOCKED — image selection required. Every other required gate passed; only image selection for the Home cards below remains.`
+          : `METRO_LAUNCH_CERTIFICATION: BLOCKED — ${finalReport.failingGates.length} failing / ${finalReport.missingGates.length} missing required gate(s). See metroLaunchCertification below for the exact list.`
+      : gates.every((g) => g.verdict === 'PASS')
+        ? 'All computed gates pass — recommend proceeding to real M7-M13 build once Jerry approves.'
+        : 'Some gates show synthetic placeholder data only in this driver phase — a real build would need real M9/M13 evidence before this recommendation carries weight.',
     evidence: { candidateCount: (state.candidates ?? []).length, checkoffizedCount: (state.checkoffizedItems ?? []).length, gates },
+    metroLaunchCertification: finalReport ?? null,
     impact: 'No public-facing change happens until Jerry explicitly approves — this boundary is inert by itself.',
     options: ['Approve launch readiness and proceed to M7 catalog construction (out of scope for this driver phase)', 'Hold for more research', 'Request changes to the candidate/editorial set'],
   })
@@ -693,6 +1169,18 @@ export async function driveMetroLaunch(deps: MetroDriverDeps, projectId: string,
         break
       case 'M6_5_CHECKOFF_EDITOR':
         run = await stepEditor(deps, run)
+        break
+      case 'M7_ITEM_CERTIFICATION':
+        run = await stepM7ItemCertification(deps, run)
+        break
+      case 'M8_BATCH_CERTIFICATION':
+        run = await stepM8BatchCertification(deps, run)
+        break
+      case 'M9_HOME_LIST_MIRROR':
+        run = await stepM9HomeListMirror(deps, run)
+        break
+      case 'M10_METRO_LAUNCH_CERTIFICATION':
+        run = await stepM10FinalCertification(deps, run)
         break
       case 'LAUNCH_READINESS_BOUNDARY':
         run = await stepLaunchBoundary(run)

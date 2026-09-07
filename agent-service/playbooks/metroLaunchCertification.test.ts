@@ -33,6 +33,26 @@ test('a fully passing metro certifies READY_TO_ACTIVATE', () => {
   assert.match(result.reportText, /150 items/)
 })
 
+test('imageSelectionOnlyBlock: BLOCKED with the special "image selection required" framing when IMAGE_READINESS_GATE is the ONLY failing gate', () => {
+  const gates = allRequiredGatesPassing().map((g) => (g.key === 'IMAGE_READINESS_GATE' ? { ...g, verdict: 'FAIL' as const, reason: '2 required Home card(s) still need an image: Primary seasonal list, Themed list: Hidden Vienna.' } : g))
+  const result = certifyMetroLaunch({ metroName: 'Vienna, Austria', gates, summary: goodSummary({ imagesComplete: false }) })
+  assert.equal(result.verdict, 'BLOCKED')
+  assert.equal(result.imageSelectionOnlyBlock, true)
+  assert.match(result.reportText, /BLOCKED — image selection required/)
+  assert.match(result.reportText, /Primary seasonal list, Themed list: Hidden Vienna/)
+})
+
+test('imageSelectionOnlyBlock: false when images fail alongside another gate — never framed as "just images" when it is not', () => {
+  const gates = allRequiredGatesPassing().map((g) => {
+    if (g.key === 'IMAGE_READINESS_GATE') return { ...g, verdict: 'FAIL' as const, reason: 'missing images' }
+    if (g.key === 'TAG_CERTIFICATION_GATE') return { ...g, verdict: 'FAIL' as const, reason: 'missing tags' }
+    return g
+  })
+  const result = certifyMetroLaunch({ metroName: 'Vienna, Austria', gates, summary: goodSummary() })
+  assert.equal(result.imageSelectionOnlyBlock, false)
+  assert.doesNotMatch(result.reportText, /image selection required/)
+})
+
 test('a single failing required gate blocks the whole certification', () => {
   const gates = allRequiredGatesPassing().map((g) => (g.key === 'TAG_CERTIFICATION_GATE' ? { ...g, verdict: 'FAIL' as const, reason: '3 items have fewer than 6 tags' } : g))
   const result = certifyMetroLaunch({ metroName: 'Vienna, Austria', gates, summary: goodSummary({ tagsComplete: false }) })
@@ -53,7 +73,7 @@ test('a gate that never ran at all (missing from the input) blocks certification
 
 test('every gate category from the required list is represented in REQUIRED_GATE_CATEGORIES', () => {
   const allKeys = Object.values(REQUIRED_GATE_CATEGORIES).flat()
-  for (const key of ['CATALOG_GATE', 'ITEM_CERTIFICATION_GATE', 'EDITORIAL_GATE', 'DISTINCTIVE_EXPERIENCE_GATE', 'VENUE_QUOTING_GATE', 'OPENING_DISTRIBUTION_GATE', 'TAG_CERTIFICATION_GATE', 'METADATA_COMPLETENESS_GATE', 'GEO_ENRICHMENT_GATE', 'HOME_LIST_CERTIFICATION_GATE']) {
+  for (const key of ['CATALOG_GATE', 'ITEM_CERTIFICATION_GATE', 'EDITORIAL_GATE', 'DISTINCTIVE_EXPERIENCE_GATE', 'VENUE_QUOTING_GATE', 'OPENING_DISTRIBUTION_GATE', 'TAG_CERTIFICATION_GATE', 'METADATA_COMPLETENESS_GATE', 'GEO_ENRICHMENT_GATE', 'HOME_LIST_CERTIFICATION_GATE', 'IMAGE_READINESS_GATE']) {
     assert.ok(allKeys.includes(key), `expected ${key} in REQUIRED_GATE_CATEGORIES`)
   }
 })
