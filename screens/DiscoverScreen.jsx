@@ -12,13 +12,14 @@ import { supabase } from '../lib/supabase'
 import { haversineMeters } from '../lib/distance'
 import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { isItemInSeason } from '../lib/seasonFilter'
+import { isWithinNearbyRadius, distLabel, rankNearbyItems } from '../lib/nearbyRanking'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
 
-const RING_RADII = [12875, 32187, 64374, 96561]
-const MAX_DEST_M = 804672
-
+// Admin-set content classification, shown as a small color dot on each row
+// and as a text chip on ItemDetailScreen/PartnerPreviewScreen. Purely
+// display — Nearby's own radius filtering and ranking never read this.
 const RINGS = [
   { weight: 0, label: 'Core',        color: '#1D9E75' },
   { weight: 1, label: 'Near',        color: '#378ADD' },
@@ -26,58 +27,50 @@ const RINGS = [
   { weight: 3, label: 'Destination', color: '#D85A30' },
 ]
 
-function distLabel(m) {
-  if (m < 160)  return 'Right here'
-  if (m < 1609) return `${Math.round(m / 100) * 100}m away`
-  const mi = m / 1609.34
-  return mi < 10 ? `${mi.toFixed(1)} mi` : `${Math.round(mi)} mi`
-}
-
-function ringForDist(m) {
-  if (m < RING_RADII[0]) return 0
-  if (m < RING_RADII[1]) return 1
-  if (m < RING_RADII[2]) return 2
-  if (m < MAX_DEST_M)    return 3
-  return -1
-}
-
-// Augment raw item rows (from items table) with computed distance/ring.
-// Does NOT filter by distance — tag search shows all matching items.
+// Augment raw item rows (from items table) with computed distance, and
+// enforce the automatic Nearby radius — tag/text search must stay within the
+// same geographic universe as default Nearby, never expand nationwide just
+// because an item matches strongly. Items whose distance is known and beyond
+// the radius are dropped outright (hard cutoff, no banding); items with no
+// location data are left in rather than excluded, since we can't tell
+// whether they're in range.
 function augmentWithDistance(rawItems, userCoords) {
-  return (rawItems ?? []).map(item => {
-    let dist = null
-    let ring = 3  // default to Destination ring when no location
-    if (item.maps_lat && item.maps_lng && userCoords) {
-      dist = haversineMeters(userCoords.latitude, userCoords.longitude, item.maps_lat, item.maps_lng)
-      const r = ringForDist(dist)
-      ring = r < 0 ? 3 : r  // cap beyond-max items at Destination, don't exclude
-    }
-    return {
-      id:               item.id,
-      listItemId:       item.id,
-      body:             item.body,
-      difficulty:       item.difficulty ?? 1,
-      maps_lat:         item.maps_lat ?? null,
-      maps_lng:         item.maps_lng ?? null,
-      is_secret:        item.is_secret ?? false,
-      secret_reveal_text: item.secret_reveal_text ?? null,
-      partner_id:       item.partner_id ?? null,
-      maps_query:       item.maps_query ?? null,
-      website_url:      item.website_url ?? null,
-      geo_radius_m:     item.geo_radius_m ?? null,
-      categoryName:     item.categories?.name ?? 'Misc',
-      categoryColor:    item.categories?.color_hex ?? '#888780',
-      neighborhoodName: item.neighborhoods?.name ?? null,
-      partnerName:      item.partners?.business_name ?? null,
-      has_alcohol:      item.has_alcohol ?? false,
-      checked:          false,
-      isUniversal:      false,
-      hasExactLocation: !!(item.maps_lat && item.maps_lng),
-      dist_m:           dist ?? 99999999,
-      dist_label:       dist ? distLabel(dist) : null,
-      ring_weight:      ring,
-    }
-  })
+  return (rawItems ?? [])
+    .map(item => {
+      let dist = null
+      if (item.maps_lat && item.maps_lng && userCoords) {
+        dist = haversineMeters(userCoords.latitude, userCoords.longitude, item.maps_lat, item.maps_lng)
+      }
+      return {
+        id:               item.id,
+        listItemId:       item.id,
+        body:             item.body,
+        difficulty:       item.difficulty ?? 1,
+        maps_lat:         item.maps_lat ?? null,
+        maps_lng:         item.maps_lng ?? null,
+        is_secret:        item.is_secret ?? false,
+        secret_reveal_text: item.secret_reveal_text ?? null,
+        partner_id:       item.partner_id ?? null,
+        maps_query:       item.maps_query ?? null,
+        website_url:      item.website_url ?? null,
+        geo_radius_m:     item.geo_radius_m ?? null,
+        categoryName:     item.categories?.name ?? 'Misc',
+        categoryColor:    item.categories?.color_hex ?? '#888780',
+        neighborhoodName: item.neighborhoods?.name ?? null,
+        partnerName:      item.partners?.business_name ?? null,
+        has_alcohol:      item.has_alcohol ?? false,
+        checked:          false,
+        isUniversal:      false,
+        hasExactLocation: !!(item.maps_lat && item.maps_lng),
+        dist_m:           dist ?? 99999999,
+        dist_label:       dist ? distLabel(dist) : null,
+        // Raw admin-set classification, passed through unmodified for
+        // display (see RINGS above) — not used for radius/ranking here.
+        ring_weight:      item.ring_weight ?? 0,
+        withinRadius:     dist === null || isWithinNearbyRadius(dist),
+      }
+    })
+    .filter(item => item.withinRadius)
 }
 
 export default function DiscoverScreen({ navigation, route }) {
@@ -255,7 +248,7 @@ export default function DiscoverScreen({ navigation, route }) {
             .from('items')
             .select(`
               id, body, difficulty, maps_lat, maps_lng, is_active, is_approved,
-              is_secret, secret_reveal_text, has_alcohol, season_tag,
+              is_secret, secret_reveal_text, has_alcohol, season_tag, ring_weight,
               partner_id, maps_query, website_url, geo_radius_m,
               categories(name, color_hex),
               neighborhoods!items_neighborhood_id_fkey(name),
@@ -390,10 +383,9 @@ export default function DiscoverScreen({ navigation, route }) {
       if (tagResultItems === null) {
         base = base.map(item => {
           if (!item.maps_lat || !item.maps_lng) return item
-          const d    = haversineMeters(postCheckin.lat, postCheckin.lng, item.maps_lat, item.maps_lng)
-          const ring = ringForDist(d)
-          return { ...item, dist_m: d, dist_label: distLabel(d), ring_weight: ring < 0 ? 3 : ring }
-        }).filter(i => i.ring_weight !== -1)
+          const d = haversineMeters(postCheckin.lat, postCheckin.lng, item.maps_lat, item.maps_lng)
+          return { ...item, dist_m: d, dist_label: distLabel(d), withinRadius: isWithinNearbyRadius(d) }
+        }).filter(i => i.withinRadius !== false)
       }
     }
 
@@ -407,16 +399,11 @@ export default function DiscoverScreen({ navigation, route }) {
       base = base.filter(i => i.categoryName === activeCategoryName)
     }
 
-    // Sort: tag match count desc → ring asc → distance asc
-    return base.sort((a, b) => {
-      const ac = tagMatchData.counts[String(a.id)] ?? 0
-      const bc = tagMatchData.counts[String(b.id)] ?? 0
-      if (bc !== ac) return bc - ac
-      const ar = a.ring_weight ?? 99
-      const br = b.ring_weight ?? 99
-      if (ar !== br) return ar - br
-      return (a.dist_m ?? 9999999) - (b.dist_m ?? 9999999)
-    })
+    // Geography first, relevance second: continuous distance-based score
+    // with a bounded relevance discount — no named bands, no distance
+    // cliffs. A far item can never be discounted enough to beat a close
+    // one — see lib/nearbyRanking.js.
+    return rankNearbyItems(base, tagMatchData.counts)
   }, [nearbyItems, tagResultItems, postCheckin, tagMatchData, bodyMatchIds, activeCategoryName])
 
   // ── Navigation ───────────────────────────────────────────────────────────
