@@ -372,6 +372,195 @@ event site, a zero-result event with no fixed venue) is excluded from the apply 
 left untouched (NULL) rather than forced — a future corrected or targeted pass handles it,
 never a guess baked into production.
 
+## Part 6 — METRO_LAUNCH_CERTIFICATION and the bare-command definition (required, recorded 2026-09-07)
+
+Jerry's correction after the San Diego editorial repair cycle: even after 7-8 rounds of manual
+checking, he kept finding obviously generic items ("Go shopping at all the stores at the mall")
+that had technically passed every existing gate, plus ~44-47/149 items opening with "Order," zero
+tags on every item at initial launch, and lists that existed in `curated_lists` but never appeared
+on Home because no corresponding `public.lists`/`public.list_items` rows existed. **The required
+result of a metro build is now one of exactly two outcomes: `READY TO ACTIVATE`, or `BLOCKED` with
+only genuine human-decision blockers.** It is not acceptable for Winston to stop after research,
+catalog creation, or SQL generation and leave Jerry to discover additional missing production
+layers manually.
+
+### What a bare "Winston, build out `<metro>`" now means
+
+`agent-service/playbooks/metroLaunchCertification.ts`'s `certifyMetroLaunch()` is the single, final,
+fail-closed stage every autonomous metro build must reach before reporting done. A bare build
+command runs through all 23 steps below — Winston should never require Jerry to remember which
+hidden table is missing:
+
+1. Geography definition
+2. Neighborhood coverage
+3. Broad discovery
+4. Category/geography audit
+5. Targeted gap research
+6. Verification/current-open checks
+7. Distinctive-item qualification (`editorialDistinctiveness.ts`'s `checkDistinctiveExperience()` —
+   see below)
+8. OpenAI CheckOff editorial (Winston's exclusive provider — never Claude-authored, see
+   `agent-service/specialists/remoteAiExecutor.ts`'s `SPECIALIST_EXCLUSIVE_PROVIDER`)
+9. Editorial self-repair/certification (`EDITORIAL_GATE` + `DISTINCTIVE_EXPERIENCE_GATE`)
+10. Venue-name quoting (`VENUE_QUOTING_GATE`)
+11. Duplicate certification (`CATALOG_GATE`'s duplicate checks)
+12. 6-8 canonical tags/item (`TAG_CERTIFICATION_GATE`)
+13. Metadata enrichment (`METADATA_COMPLETENESS_GATE`)
+14. Google Places cached enrichment (the 4-step pipeline in Part 5)
+15. Geo/website certification (`GEO_ENRICHMENT_GATE`)
+16. Seasonal flagship-list creation
+17. Justified themed-list creation
+18. Curated-list structures where the current app architecture requires them
+    (`CURATED_LIST_LAYER_GATE`)
+19. Official `public.lists` + `public.list_items` Home structures (`HOME_LIST_CERTIFICATION_GATE`)
+20. Image/hero readiness
+21. Actual Home-query visibility validation (the decisive check inside
+    `HOME_LIST_CERTIFICATION_GATE` — a row with every field correct that the real runtime query
+    still doesn't return is NOT Home-ready)
+22. Launch certification (`certifyMetroLaunch()`)
+23. Activation package (the Part 3 launch-day checklist, staged and ready — not applied)
+
+### The distinctive-experience test — semantic, not lexical
+
+The San Diego editorial failure was semantic, not lexical: **"could this sentence still work if I
+swapped in ten other businesses of the same type? If yes, it fails."** Banning one phrase or
+rotating synonyms never satisfies this — "shop at the mall," "browse the stores," "eat at the
+restaurant," "have a drink at the bar," "see art at the museum," "visit the beach," and "experience
+the nightlife" all remain unacceptable regardless of verb ("explore"/"discover"/"savor"/
+"experience"/"enjoy"/"check out" included). `checkDistinctiveExperience()` in
+`agent-service/playbooks/editorialDistinctiveness.ts` matches the underlying CONCEPT (a generic
+verb synonym + a generic category noun, with no specific qualifying detail — a number, a quoted
+term, a specific compound-hyphenated descriptor like "shark-bitten," or a named product/feature —
+rescuing it). A venue is never entitled to an item merely for coverage: when no distinctive hook
+can be found, Winston returns to research or rejects the venue with `REJECT_NO_DISTINCTIVE_EXPERIENCE`.
+
+### Mandatory venue quoting
+
+Every destination business/venue/attraction/landmark/named place in a final item body must be
+wrapped in literal single quotes (`'Cori Pastificio Trattoria'`, `'Hennessey's Tavern'` — the
+venue's own apostrophe does not break the wrapping-quote detection, since the check is "does the
+exact substring `'<venue name>'` appear," not "are there exactly two quote characters").
+`checkVenueQuoted()` validates this per item; `VENUE_QUOTING_GATE` certifies the whole catalog.
+
+### Opening-word distribution is a HARD gate now, separate from EDITORIAL_GATE's advisory note
+
+`metroCatalog.ts`'s existing `EDITORIAL_GATE` deliberately keeps its own batch-level opening-word
+check advisory-only (per an earlier 2026-09-06 instruction: don't contort genuinely specific
+per-item wording into artificial lexical diversity). That carve-out is UNCHANGED at the per-item
+pass, but Jerry's 2026-09-07 correction adds a separate, ALWAYS-HARD gate at final certification:
+`evaluateOpeningDistributionGate()` in `editorialDistinctiveness.ts`, default max share 15% (same
+threshold, tighten only for a documented, compelling reason). San Diego's real ~44-47/149 "Order"
+items (~30%) were each individually valid and still unacceptable at the batch level — this gate
+exists specifically so that can never happen again, independent of per-item specificity.
+Semantic specificity still comes first: never satisfy this gate by rotating synonyms while leaving
+the underlying sentences equally generic — fix it by finding more genuinely distinct hooks.
+
+### Tags are mandatory before certification (6-8, not the Item Intake exactly-8 rule)
+
+San Diego launched with ZERO tags on every item. `agent-service/playbooks/metroTagCertification.ts`'s
+`evaluateTagCertificationGate()` is now a required, hard-failing part of `certifyMetroLaunch()`:
+every item needs 6-8 valid canonical `public.tags.name` values (prefer 8 when 8 are genuinely
+relevant — never padded with filler), verified against a live query or, when live verification is
+unavailable, the current verified canonical tag snapshot — this module never invents, singularizes,
+or pluralizes a tag name (the real lesson: `cocktails` exists in production, `cocktail` did not).
+This is DISTINCT from `itemIntake.ts`'s `validateTagSelection()`, which retains its stricter,
+unchanged exactly-8 (5 tier-1 + 3 tier-2) methodology for the individual phone/ChatGPT Item Intake
+flow specifically.
+
+**Known gap, recorded honestly:** the `agent_service` DB role does not currently have `SELECT` on
+`public.tags` (confirmed via a live permission-denied error, 2026-09-07). Either grant it, or Jerry
+must supply a fresh tag export before each metro build — this module refuses to fabricate a
+vocabulary rather than silently working around the missing grant.
+
+### SQL execution compatibility
+
+Every generated Jerry-run production patch should pass `agent-service/playbooks/sqlPatchSafety.ts`'s
+`checkSqlPatchSafety()` before being handed to Jerry: no `CREATE TEMP TABLE`/`CREATE TEMPORARY
+TABLE` dependency (Supabase's SQL Editor does not guarantee a temp table survives across separate
+executions — prefer a single atomic `DO $$ ... $$;` block with inline datasets and fail-closed
+`RAISE EXCEPTION` assertions instead), and no `MIN(<identifier column>)` used to resolve a supposedly
+unique match (UUIDs have no meaningful order — `MIN()` on one silently picks an arbitrary row). When
+a match must resolve exactly once, use `buildUniqueMatchAssertion()`'s count -> assert count = 1 ->
+select pattern, never a bare `SELECT ... INTO`, `LIMIT 1`, or `MIN(id)`.
+
+### List architecture — Home visibility is governed by `public.lists`, not `curated_lists` alone
+
+The single biggest San Diego discovery: rows in `curated_lists`/`curated_list_items`/
+`curated_list_metros` are NOT sufficient for a Home-visible official/themed list. The real,
+confirmed runtime read path (`screens/HomeScreen.jsx`) is `public.lists WHERE is_official = true
+AND is_public = true AND metro_id = <metro>`, with membership from `public.list_items`. Before
+generating launch SQL for any Home-visible content, Winston must inspect the actual current
+app/admin read path and confirm exactly which tables/columns/filters control visibility — never
+rely on naming assumptions like `is_featured`/`featured_experiences`/`curated_lists` alone.
+`agent-service/playbooks/homeListCertification.ts` encodes this as two SEPARATE certifications
+(`HOME_LIST_CERTIFICATION_GATE` for the real `public.lists`/`public.list_items` layer,
+`CURATED_LIST_LAYER_GATE` for the legacy/curated-definition layer when the app still requires it) —
+"the row exists" is never conflated with "the actual runtime query would return it"; the gate's
+decisive final check is exactly that: does a live simulation of the real Home query actually return
+this list.
+
+**Required launch list package** (default scope, per Part 4 item 7-9, made concrete): one primary
+current seasonal/flagship list (`is_public=true`, `is_official=true`, correct `metro_id`, correct
+`starts_at`/`ends_at`, `is_featured_eligible=true` where appropriate, ~30 balanced items), plus 2-4
+justified themed lists (`is_official=true`, `is_public=true`, correct `metro_id` and date window,
+generally `is_featured_eligible=false` — San Diego's Fall Nights & Hidden San Diego, San Diego Fall
+Coast & Outdoors, Fall Markets/Art & Local Finds precedent). A genuine cross-border/special
+extension (San Diego's Tijuana list) is handled separately, never blindly treated as an ordinary
+themed list.
+
+### Images are part of launch readiness, not a post-activation discovery
+
+A metro is not `READY_TO_ACTIVATE` if a Home-visible list card required an image and doesn't have
+one — `homeListCertification.ts`'s `requiresImage`/`hasImage` fields make this an explicit,
+certifiable field rather than something Jerry finds after activation via the Home Screen admin.
+When an image cannot be selected/uploaded automatically, Winston must surface the exact remaining
+human action, never silently mark the list ready anyway.
+
+### The self-repair loop, bounded
+
+For every automatable failure category (research gap, weak item, generic wording, duplicate,
+missing/invalid tags, missing metadata, ambiguous geo match, list count mismatch, missing
+official-list mirror, missing Home-visibility field), Winston repairs and reruns the specific
+failing gate internally rather than asking Jerry to re-run the whole pipeline —
+`metroLaunchCertification.ts`'s `runWithBoundedRetries()` bounds this at
+`DEFAULT_MAX_REPAIR_ATTEMPTS` (3) so it can never loop forever. Once the retry budget is exhausted
+without a PASS, that is reported as a genuine `BLOCKED` reason, never silently treated as success.
+
+### Dynamic production state, never a hardcoded historical fact
+
+Never hardcode a fact like "San Diego should currently have 143 items" into a certification
+check — real production state legitimately changes, and a hardcoded number causes false failures
+(this happened multiple times during San Diego). Query expected state dynamically, or pass an
+explicitly frozen launch snapshot into the certification stage with a stated justification —
+`assertExplicitProductionStateSource()` enforces that a frozen snapshot is always a deliberate,
+justified choice, never an implicit stale assumption.
+
+### The write boundary is unchanged — do not expand DB privileges to make Winston "more autonomous"
+
+Where Winston is not authorized to write `public.*` directly, the answer is still one clean,
+self-certifying, production-safe SQL patch that tells Jerry exactly what to run — never dozens of
+tiny patches where one atomic patch can safely do the whole stage, and never a request to expand
+standing DB privileges just to remove that human step.
+
+### Required METRO_LAUNCH_CERTIFICATION gate categories
+
+`certifyMetroLaunch()` requires every one of these gate keys to be present AND passing —
+a gate that's simply missing (never run) blocks the same as an explicit FAIL:
+
+| Category | Gate keys |
+|---|---|
+| Catalog | `CATALOG_GATE`, `LOCATION_GATE` |
+| Editorial | `PRESENTATION_GATE`, `EDITORIAL_GATE`, `DISTINCTIVE_EXPERIENCE_GATE`, `VENUE_QUOTING_GATE`, `OPENING_DISTRIBUTION_GATE` |
+| Tags | `TAG_CERTIFICATION_GATE` |
+| Metadata | `METADATA_COMPLETENESS_GATE` |
+| Geo | `GEO_ENRICHMENT_GATE` |
+| Lists | `HOME_LIST_CERTIFICATION_GATE` |
+
+Final output is either `READY_TO_ACTIVATE` with a concise summary (catalog count, geo
+coverage/exceptions, tags complete, metadata complete, official/themed list counts, images
+complete, runtime Home-query PASS), or `BLOCKED` with only the true human-decision blockers listed
+by name — never a vague "needs more work."
+
 ## Provenance
 
 Built and verified against the Denver/Boulder/Longmont launch cycle, 2026-08-21 —
