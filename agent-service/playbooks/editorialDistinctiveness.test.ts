@@ -13,6 +13,17 @@ test('generic mall item "Go shopping at all the stores at the mall" FAILS the di
   assert.match(result.reason, new RegExp(REJECT_NO_DISTINCTIVE_EXPERIENCE))
 })
 
+test('a bare count of the venue\'s own generic category ("more than 200 stores" at a mall) does NOT rescue an otherwise-generic sentence — Jerry\'s exact worked FAIL example', () => {
+  const result = checkDistinctiveExperience("Browse more than 200 stores at 'Fashion Valley Mall'.", 'Fashion Valley Mall')
+  assert.equal(result.pass, false)
+  assert.equal(result.matchedConcept, 'shop-at-the-mall')
+})
+
+test('a digit that is NOT a bare count of the generic category still qualifies as a rescuing detail (e.g. a year, or a count of a named product)', () => {
+  const yearRescue = checkDistinctiveExperience("Shop the vintage vinyl collection dating back to 1965 at 'Off the Record'.", 'Off the Record')
+  assert.equal(yearRescue.pass, true)
+})
+
 test('generic restaurant/museum/bar versions fail even with synonym changes — synonym rotation never satisfies the gate', () => {
   const generic = [
     'Explore the shops at Westfield Mall',

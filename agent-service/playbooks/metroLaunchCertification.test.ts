@@ -53,7 +53,7 @@ test('a gate that never ran at all (missing from the input) blocks certification
 
 test('every gate category from the required list is represented in REQUIRED_GATE_CATEGORIES', () => {
   const allKeys = Object.values(REQUIRED_GATE_CATEGORIES).flat()
-  for (const key of ['CATALOG_GATE', 'EDITORIAL_GATE', 'DISTINCTIVE_EXPERIENCE_GATE', 'VENUE_QUOTING_GATE', 'OPENING_DISTRIBUTION_GATE', 'TAG_CERTIFICATION_GATE', 'METADATA_COMPLETENESS_GATE', 'GEO_ENRICHMENT_GATE', 'HOME_LIST_CERTIFICATION_GATE']) {
+  for (const key of ['CATALOG_GATE', 'ITEM_CERTIFICATION_GATE', 'EDITORIAL_GATE', 'DISTINCTIVE_EXPERIENCE_GATE', 'VENUE_QUOTING_GATE', 'OPENING_DISTRIBUTION_GATE', 'TAG_CERTIFICATION_GATE', 'METADATA_COMPLETENESS_GATE', 'GEO_ENRICHMENT_GATE', 'HOME_LIST_CERTIFICATION_GATE']) {
     assert.ok(allKeys.includes(key), `expected ${key} in REQUIRED_GATE_CATEGORIES`)
   }
 })

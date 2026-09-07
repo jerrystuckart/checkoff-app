@@ -106,6 +106,14 @@ const GENERIC_CONCEPTS: GenericConcept[] = [
 // never uses one, since it would require actually knowing the specific
 // object/detail being described.
 const HYPHENATED_COMPOUND_DESCRIPTOR_PATTERN = /\b[a-z]+-[a-z]+\b/i
+// A bare digit is deliberately EXCLUDED when it is just a count of the
+// matched concept's own generic category noun ("more than 200 stores" at
+// a mall, "50 exhibits" at a museum) — that is a fact about the
+// venue's SIZE, not a distinguishing detail; any mall/museum of that
+// type could cite a similarly large number. A digit still qualifies
+// everywhere else (a year, a specific quantity of a named product, a
+// distance, etc.).
+const GENERIC_COUNT_NOUN_EXCLUSION = /\d[\d,]*\s*\+?\s*(stores|shops|shopping|boutiques|retailers|exhibits?|artworks?|vendors|stalls|restaurants|bars|pubs)\b/i
 const QUALIFYING_DETAIL_PATTERN = /\d|"[^"]+"|['’][^'’]{2,}['’]|\b(handmade|artisan-made|vintage|antique|limited[- ]edition|since \d{4})\b/i
 
 function normalizeForConceptMatch(text: string): string {
@@ -143,7 +151,12 @@ export function checkDistinctiveExperience(body: string, venueName?: string): Di
   const normalized = normalizeForConceptMatch(body)
   const quoteNormalizedBody = normalizeQuotes(body)
   const bodyForQualifyingScan = venueName ? quoteNormalizedBody.split(`'${normalizeQuotes(venueName).trim()}'`).join(' ') : body
-  const hasQualifyingDetail = QUALIFYING_DETAIL_PATTERN.test(bodyForQualifyingScan) || HYPHENATED_COMPOUND_DESCRIPTOR_PATTERN.test(bodyForQualifyingScan)
+  // Strip "<number> <generic category noun>" spans before testing for a
+  // qualifying digit — a bare count of the venue's own generic category
+  // (e.g. "200 stores") must never by itself rescue a generic concept
+  // match; any other digit (a year, a quantity of a named product) still can.
+  const bodyForDigitScan = bodyForQualifyingScan.replace(GENERIC_COUNT_NOUN_EXCLUSION, ' ')
+  const hasQualifyingDetail = QUALIFYING_DETAIL_PATTERN.test(bodyForDigitScan) || HYPHENATED_COMPOUND_DESCRIPTOR_PATTERN.test(bodyForQualifyingScan)
 
   for (const concept of GENERIC_CONCEPTS) {
     const verbHit = concept.verbs.find((v) => normalized.includes(normalizeForConceptMatch(v)))

@@ -550,7 +550,7 @@ a gate that's simply missing (never run) blocks the same as an explicit FAIL:
 | Category | Gate keys |
 |---|---|
 | Catalog | `CATALOG_GATE`, `LOCATION_GATE` |
-| Editorial | `PRESENTATION_GATE`, `EDITORIAL_GATE`, `DISTINCTIVE_EXPERIENCE_GATE`, `VENUE_QUOTING_GATE`, `OPENING_DISTRIBUTION_GATE` |
+| Editorial | `ITEM_CERTIFICATION_GATE`, `PRESENTATION_GATE`, `EDITORIAL_GATE`, `DISTINCTIVE_EXPERIENCE_GATE`, `VENUE_QUOTING_GATE`, `OPENING_DISTRIBUTION_GATE` |
 | Tags | `TAG_CERTIFICATION_GATE` |
 | Metadata | `METADATA_COMPLETENESS_GATE` |
 | Geo | `GEO_ENRICHMENT_GATE` |
@@ -560,6 +560,105 @@ Final output is either `READY_TO_ACTIVATE` with a concise summary (catalog count
 coverage/exceptions, tags complete, metadata complete, official/themed list counts, images
 complete, runtime Home-query PASS), or `BLOCKED` with only the true human-decision blockers listed
 by name — never a vague "needs more work."
+
+## Part 7 — ITEM_CERTIFICATION_LOOP: per-item certification, not batch-only editorial gates (required, recorded 2026-09-07)
+
+San Diego proved batch-level editorial gates are **necessary but not sufficient**. Even after
+7-8 editorial passes and a batch `EDITORIAL_GATE` PASS, Jerry manually rewrote another ~15-20
+San Diego items because individual rows were still generic, obvious, or didn't capture the
+actual memorable thing at that specific venue. A catalog can pass every batch-wide check
+(duplicates, opener repetition, geography, category distribution, tags, metadata, unsupported
+language) while still containing individually mediocre items — batch statistics can't see a
+single row's quality.
+
+**The permanent fix: Winston never generates the final 100-200 item catalog by asking one model
+call to rewrite a large batch.** For every candidate that survives qualification, Winston runs a
+bounded `ITEM_CERTIFICATION_LOOP` (`agent-service/playbooks/itemCertificationLoop.ts`,
+`runItemCertificationLoop()`) — one venue, one research/editorial/critique problem, worked
+end-to-end before moving to the next candidate:
+
+1. Identify the exact venue.
+2. Read accumulated research evidence for that venue.
+3. Ask: what is the actual distinctive thing a visitor should do there?
+4. If evidence is insufficient, perform targeted research for that ONE venue/item
+   (`performTargetedResearch` — never a shared, generic research pass across many venues at once).
+5. Select the strongest specific hook (`selectHook` — explicitly allowed to report
+   `hookFound: false` and reject the venue outright rather than force a weak hook to hit a
+   coverage quota).
+6. Verify that exact hook is still current (`verifyHookCurrent`) before writing anything.
+7. Write the CheckOff item with OpenAI, one item at a time (`writeItem` — the
+   `SPECIALIST_EXCLUSIVE_PROVIDER.checkoff_editor = 'openai'` lock in `remoteAiExecutor.ts`
+   still applies here exactly as it does for any other CheckOff editorial call).
+8. Critique that individual item independently (`critiqueItem` — a separate call/prompt from
+   `writeItem`, never the same call self-grading its own output).
+9. If the critique says it's generic, venue-level, unsupported, awkward, or replaceable with
+   another same-category venue, research and rewrite it — not a superficial reword of the same
+   weak hook.
+10. Repeat within a bounded retry limit (`DEFAULT_MAX_ITEM_CERTIFICATION_ATTEMPTS = 3`,
+    overridable) — never an unbounded loop.
+11. Only then mark the item `ITEM_CERTIFIED`. Exhausting the retry budget without passing
+    reports `EXHAUSTED_RETRIES`, a genuine per-item blocker, never silently treated as success.
+
+### The 9 certification questions
+
+Every final item must answer YES to all nine (`evaluateItemCritique()` combines them — any single
+NO fails certification, no partial credit):
+
+1. A concrete thing to do/order/find/see/ride/photograph/attend/experience exists.
+2. That thing is more specific than the venue's general purpose.
+3. The distinctive detail is research-supported.
+4. It is current.
+5. Swapping the venue name with 10 competitors would make the sentence nonsensical or clearly
+   wrong — computed deterministically via `checkDistinctiveExperience()` from
+   `editorialDistinctiveness.ts` (reused, never reimplemented), never left to the AI critique
+   step to self-report.
+6. The sentence tells a visitor something useful they likely wouldn't know from the category
+   alone.
+7. It sounds like CheckOff, not tourism-board or Google-Maps copy.
+8. The destination venue/place is correctly single-quoted — computed deterministically via
+   `checkVenueQuoted()` (also reused from `editorialDistinctiveness.ts`).
+9. The sentence is concise enough for the app.
+
+Worked examples (from the venue-research methodology, not phrase-banning):
+
+- FAIL: `Browse more than 200 stores at 'Fashion Valley Mall'.` — factual, but only tells the
+  visitor the definition of a mall. A bare count of the venue's own generic category ("200
+  stores") does not rescue it; `editorialDistinctiveness.ts`'s `QUALIFYING_DETAIL_PATTERN` was
+  tightened (`GENERIC_COUNT_NOUN_EXCLUSION`) specifically so this exact sentence keeps failing.
+  Correct methodology: research the mall for an actual hook (an unusual retailer, an
+  architectural feature, a local-specific element, a food hall, art, a seasonal installation, a
+  luxury cluster). If nothing sufficiently distinctive exists, **reject the venue** rather than
+  fill a geographic/category quota.
+- FAIL: `Explore exhibits at 'Museum X'.` / PASS: `See Bethany Hamilton's shark-bitten surfboard
+  at 'California Surf Museum'.`
+- FAIL: `Grab a drink at 'Bar X'.` / PASS: `Enter 'Raised by Wolves' through the rotating
+  fireplace and order from the hidden cocktail bar.`
+
+### Research cost is explicitly accepted, and preferred over a larger mediocre catalog
+
+"A 120-item metro where all 120 are genuinely good is much better than a 180-item metro
+containing 40 generic filler items" (Jerry, 2026-09-07). Individual OpenAI/web research calls
+per candidate item are explicitly sanctioned — optimize intelligently, but never at the expense
+of CheckOff item quality.
+
+### Ordering: individual certification runs BEFORE batch-wide gates, never instead of them
+
+`metroLaunchCertification.ts`'s `REQUIRED_GATE_CATEGORIES.Editorial` lists
+`ITEM_CERTIFICATION_GATE` first, deliberately: `evaluateItemCertificationGate()`
+(`itemCertificationLoop.ts`) fails the whole catalog if even one item lacks its own
+`ITEM_CERTIFIED` record — a batch-wide PASS on `EDITORIAL_GATE`/`DISTINCTIVE_EXPERIENCE_GATE`/
+etc. never substitutes for missing per-item certification. The existing batch-wide gates
+(duplicates, opener repetition, geography, category distribution, tags, metadata, unsupported
+language) still run after every item certifies individually — never instead of it.
+
+### Preserved per-item research-evidence artifacts
+
+Every `ItemCertificationRecord` (`itemCertificationLoop.ts`) is the durable, structured evidence
+for that one item — enough for Winston to repair a single bad item later without rerunning the
+entire metro: venue name, chosen hook (with its supporting fact/source and reasoning), every
+rejected hook (with the reason it was rejected — currency failure or critique failure), the
+currency check result, the final body, the certification outcome, and the full per-attempt
+history (hook, body, critique) for every attempt made.
 
 ## Provenance
 

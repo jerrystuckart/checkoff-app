@@ -15,6 +15,7 @@
 // METADATA_COMPLETENESS_GATE/GEO_ENRICHMENT_GATE,
 // editorialDistinctiveness.ts's DISTINCTIVE_EXPERIENCE_GATE/
 // VENUE_QUOTING_GATE/OPENING_DISTRIBUTION_GATE,
+// itemCertificationLoop.ts's ITEM_CERTIFICATION_GATE,
 // metroTagCertification.ts's TAG_CERTIFICATION_GATE,
 // homeListCertification.ts's HOME_LIST_CERTIFICATION_GATE/
 // CURATED_LIST_LAYER_GATE) into one final verdict.
@@ -37,7 +38,14 @@ export type MetroLaunchVerdict = 'READY_TO_ACTIVATE' | 'BLOCKED'
  */
 export const REQUIRED_GATE_CATEGORIES: Readonly<Record<string, readonly string[]>> = Object.freeze({
   Catalog: ['CATALOG_GATE', 'LOCATION_GATE'],
-  Editorial: ['PRESENTATION_GATE', 'EDITORIAL_GATE', 'DISTINCTIVE_EXPERIENCE_GATE', 'VENUE_QUOTING_GATE', 'OPENING_DISTRIBUTION_GATE'],
+  // ITEM_CERTIFICATION_GATE (itemCertificationLoop.ts) is listed FIRST in
+  // Editorial deliberately: every item must individually certify via the
+  // bounded ITEM_CERTIFICATION_LOOP (own research, own critique) BEFORE
+  // the batch-wide editorial gates run — a batch-level PASS never
+  // substitutes for per-item certification (Jerry, 2026-09-07, after
+  // manually rewriting ~15-20 San Diego items that survived every batch
+  // gate but were still generic/venue-level).
+  Editorial: ['ITEM_CERTIFICATION_GATE', 'PRESENTATION_GATE', 'EDITORIAL_GATE', 'DISTINCTIVE_EXPERIENCE_GATE', 'VENUE_QUOTING_GATE', 'OPENING_DISTRIBUTION_GATE'],
   Tags: ['TAG_CERTIFICATION_GATE'],
   Metadata: ['METADATA_COMPLETENESS_GATE'],
   Geo: ['GEO_ENRICHMENT_GATE'],
