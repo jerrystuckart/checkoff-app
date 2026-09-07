@@ -56,7 +56,7 @@ import {
   type StagingGateResult,
   type ItemIntakeRecord,
 } from '../playbooks/metroCatalog'
-import { resolveCanonicalTagVocabulary, type VerifiedTagSnapshot } from './tagVocabularyProvider'
+import { resolveCanonicalTagVocabulary, loadGeneratedTagSnapshot, type VerifiedTagSnapshot } from './tagVocabularyProvider'
 
 export const METRO_LAUNCH_DRIVER_PLAYBOOK_KEY = 'metro_launch'
 
@@ -160,7 +160,7 @@ export interface MetroDriverDeps {
   now?: () => string
   /** M8 tag certification: attempts a real live public.tags SELECT first (see tagVocabularyProvider.ts) — omit/reject to exercise the snapshot fallback. Defaults to always-failing (honest: no live access is configured unless the caller wires one in). */
   queryLiveTags?: () => Promise<string[]>
-  /** M8 tag certification fallback — a versioned, justified VERIFIED_SNAPSHOT. Defaults to null (no snapshot captured yet — see tagVocabularyProvider.ts's own doc). */
+  /** M8 tag certification fallback — a versioned, justified VERIFIED_SNAPSHOT. Omit to default to the real, checked-in VerifiedTagSnapshot v1 (loadGeneratedTagSnapshot() — Jerry's 2026-09-06 production export, 857 names). Pass `null` explicitly to force the no-snapshot/fail-closed path (used only in tests). */
   verifiedTagSnapshot?: VerifiedTagSnapshot | null
   /** M8: the real Google Places lookup function. Defaults to buildRealPlacesLookup() (a genuine network call gated on GOOGLE_PLACES_API_KEY) — tests inject a fake, exactly like every other executor in this file. */
   placesLookup?: PlacesLookupFn
@@ -871,7 +871,10 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
   const itemCertificationGate = evaluateItemCertificationGate(itemGateChecks)
 
   // TAG_CERTIFICATION_GATE — live DB first, verified snapshot fallback, fail closed on neither.
-  const tagVocabulary = await resolveCanonicalTagVocabulary(deps.queryLiveTags ?? (async () => { throw new Error('no live tag query configured for this run') }), deps.verifiedTagSnapshot ?? null)
+  const tagVocabulary = await resolveCanonicalTagVocabulary(
+    deps.queryLiveTags ?? (async () => { throw new Error('no live tag query configured for this run') }),
+    deps.verifiedTagSnapshot !== undefined ? deps.verifiedTagSnapshot : loadGeneratedTagSnapshot()
+  )
   let tagGate: StagingGateResult
   if (tagVocabulary.status === 'FAILED') {
     tagGate = { key: 'TAG_CERTIFICATION_GATE', verdict: 'FAIL', reason: tagVocabulary.reason }

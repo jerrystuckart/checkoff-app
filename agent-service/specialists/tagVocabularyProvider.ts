@@ -16,11 +16,17 @@
 //      evaluateTagCertificationGate() then correctly reports every item's
 //      tags as unverifiable rather than silently skipping the gate.
 //
-// As of 2026-09-07 no VerifiedTagSnapshot has been captured yet (no live
-// read access has ever succeeded to capture one from) — passing
-// `snapshot: null` is the honest, current state, not an oversight. The
-// first time SELECT is granted OR Jerry hands over a real tag list, that
-// becomes VerifiedTagSnapshot v1 and this gap closes for good.
+// Phase 2Y (2026-09-07): VerifiedTagSnapshot v1 now exists —
+// loadGeneratedTagSnapshot() below reads it from
+// agent-service/specialists/tagSnapshotData.generated.json, itself
+// generated (never hand-typed) by scripts/generate-tag-snapshot.ts from
+// Appendix A of docs/checkoff-item-intake-chatgpt-instructions-UPDATED-2026-09-06.md
+// — Jerry's own real 2026-09-06 production export of public.tags.name.
+// This is a NAME VOCABULARY snapshot only: every string preserved
+// exactly (no normalizing/singularizing/pluralizing/aliasing/inventing),
+// used only as a fallback when live public.tags SELECT is unavailable —
+// live access, once granted, is always preferred (see resolveCanonicalTagVocabulary's
+// own ordering below, unchanged).
 
 export interface VerifiedTagSnapshot {
   /** Monotonically increasing — bump every time the snapshot is refreshed from a real source. */
@@ -74,5 +80,45 @@ export async function resolveCanonicalTagVocabulary(queryLiveTags: () => Promise
   return {
     status: 'FAILED',
     reason: `Neither a live public.tags SELECT (${liveError}) nor a configured VerifiedTagSnapshot is available — tag certification cannot run. Grant SELECT on public.tags to the agent_service role, or supply a current VerifiedTagSnapshot, before this metro's TAG_CERTIFICATION_GATE can be evaluated. Never invents a tag list to work around this.`,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// VerifiedTagSnapshot v1 — loaded from the checked-in generated JSON
+// file, itself produced only by scripts/generate-tag-snapshot.ts parsing
+// Appendix A of the source markdown. Never hand-edit
+// tagSnapshotData.generated.json directly — re-run the generator against
+// an updated Appendix A instead, so there is exactly one place this
+// vocabulary is ever transcribed from.
+// ---------------------------------------------------------------------------
+
+interface GeneratedTagSnapshotFile {
+  version: number
+  capturedAt: string
+  source: string
+  justification: string
+  tagNames: string[]
+}
+
+let cachedSnapshot: VerifiedTagSnapshot | null = null
+
+/**
+ * Loads VerifiedTagSnapshot v1 from the generated JSON artifact. Cached
+ * after the first successful load (the file is a static, checked-in
+ * build artifact within one process lifetime — re-running the generator
+ * script and restarting the process is how it's ever refreshed).
+ * Returns null (never throws) if the generated file doesn't exist yet —
+ * callers fall through to the FAILED/fail-closed path exactly as if no
+ * snapshot were configured, per this module's own fail-closed discipline.
+ */
+export function loadGeneratedTagSnapshot(): VerifiedTagSnapshot | null {
+  if (cachedSnapshot) return cachedSnapshot
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const data = require('./tagSnapshotData.generated.json') as GeneratedTagSnapshotFile
+    cachedSnapshot = { version: data.version, capturedAt: data.capturedAt, justification: `${data.justification} (source: ${data.source})`, tagNames: data.tagNames }
+    return cachedSnapshot
+  } catch {
+    return null
   }
 }

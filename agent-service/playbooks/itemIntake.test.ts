@@ -212,3 +212,37 @@ test('validateItemIntakeCandidate: accepts a fully valid candidate end to end', 
   })
   assert.equal(result.accepted, true)
 })
+
+// ---------------------------------------------------------------------------
+// REGRESSION (Jerry, 2026-09-07 pre-Vienna closure): generated SQL must
+// resolve tag ids by exact name at execution time, never embed a
+// fabricated UUID — a tag id can only ever be known by actually running
+// the real production database, never guessed or invented ahead of time.
+// ---------------------------------------------------------------------------
+
+test('buildItemIntakeSql: resolves tag ids by exact name via a real SELECT, never embeds a UUID literal for a tag', () => {
+  const proposal: ItemIntakeProposal = {
+    venueName: 'Test Venue',
+    checkoffizedItem: "Order the 'signature dish' at 'Test Venue'.",
+    categoryName: 'Food & drink',
+    neighborhoodName: 'Downtown',
+    checkinType: 'tap',
+    mapsQuery: 'Test Venue, Downtown',
+    hasAlcohol: false,
+    isRecurring: false,
+    tier1Tags: ['restaurant', 'mexican', 'seafood', 'oyster-bar', 'dinner'],
+    tier2Tags: ['carlsbad', 'date-night', 'craft-cocktails'],
+  }
+  const sql = buildItemIntakeSql(proposal)
+  assert.match(sql, /INSERT INTO public\.item_tags \(item_id, tag_id, source, confidence\)/)
+  assert.match(sql, /FROM public\.tags t/)
+  assert.match(sql, /WHERE t\.name IN \(/)
+  // Every tag name from the proposal appears as a quoted literal to
+  // match against t.name — never as a bare/raw UUID-shaped token.
+  for (const tag of [...proposal.tier1Tags, ...proposal.tier2Tags]) {
+    assert.ok(sql.includes(tag), `expected the SQL to reference tag name "${tag}" for a real name-based lookup`)
+  }
+  // No UUID literal appears anywhere for a tag id — the only uuid type
+  // usage in this file is the DECLARE block's own variable types.
+  assert.doesNotMatch(sql, /tag_id\)\s*VALUES\s*\([^)]*'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'/i)
+})
