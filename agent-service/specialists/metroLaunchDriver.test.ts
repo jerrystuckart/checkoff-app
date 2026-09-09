@@ -2184,3 +2184,85 @@ test('driveMetroLaunch: M9 Home-list SQL creates metro_areas, reuses lists idemp
   assert.ok(sql.includes('ON CONFLICT (list_id, item_id) DO NOTHING'), 'list_items linking is idempotent on re-apply')
   assert.ok(sql.includes('postflight: expected at least'), 'a postflight assertion verifies the real applied state, not just that the block ran without error')
 })
+
+// ---------------------------------------------------------------------------
+// Themed-list category architecture (Chief Phase 2AE, 2026-09-09
+// instruction) — buildHomeListPlan previously grouped by the RAW,
+// un-normalized candidate.category discovery label instead of the real
+// production dbCategory, so "Museum"/"museum" (same real category, only
+// differing by capitalization) became TWO separate themed lists, and
+// non-canonical labels like "restaurant"/"Adventure & outdoors" leaked
+// straight into list titles. Verifies: (1) dbCategory is resolved and
+// persisted once by M8, (2) case/wording variants of the same real
+// category merge into ONE themed list, (3) the list title is a fixed,
+// visitor-facing name, never the raw label.
+// ---------------------------------------------------------------------------
+
+test('driveMetroLaunch: themed Home lists group by the real, persisted dbCategory — never by raw candidate.category text — so "Museum"/"museum" merge into one canonical Arts & Culture list and "restaurant" becomes a visitor-facing Food & Drink title', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  scriptTagSelection(executor)
+
+  const validTags = ['coffee', 'historic', 'family friendly', 'live music', 'outdoor', 'art']
+  const museumNames = ['Kunsthistorisches Wing', 'Belvedere Annex', 'Leopold Extension', 'Albertina North']
+  const lowerMuseumNames = ['Sigmund Freud House', 'Strauss Residence', 'Haydn Residence']
+  const restaurantNames = ['Steirereck Garden', 'Figlmuller Old Town', 'Plachutta Wieden', 'Meissl & Schadn', 'Zum Schwarzen Kameel']
+
+  const candidates: Array<{ name: string; category: string; neighborhood: string; claimSupported: string; source: string; needsVerification: boolean }> = []
+  const certs: Record<string, DriverItemCertificationRecord> = {}
+  for (const name of museumNames) {
+    candidates.push({ name, category: 'Museum', neighborhood: 'Innere Stadt', claimSupported: `${name} has a real, specific exhibit.`, source: `https://example.com/${name}`, needsVerification: false })
+    certs[name] = { candidateName: name, venueName: name, attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: `See the real exhibit at '${name}'.`, finalTags: validTags, supportingFact: `${name} has a real, specific exhibit.`, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+  }
+  for (const name of lowerMuseumNames) {
+    candidates.push({ name, category: 'museum', neighborhood: 'Alsergrund', claimSupported: `${name} has a real, specific exhibit.`, source: `https://example.com/${name}`, needsVerification: false })
+    certs[name] = { candidateName: name, venueName: name, attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: `See the real exhibit at '${name}'.`, finalTags: validTags, supportingFact: `${name} has a real, specific exhibit.`, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+  }
+  for (const name of restaurantNames) {
+    candidates.push({ name, category: 'restaurant', neighborhood: 'Innere Stadt', claimSupported: `${name} serves a real, specific dish.`, source: `https://example.com/${name}`, needsVerification: false })
+    certs[name] = { candidateName: name, venueName: name, attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: `Order the specialty at '${name}'.`, finalTags: validTags, supportingFact: `${name} serves a real, specific dish.`, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+  }
+
+  const projectId = 'vienna-m9-theme-architecture'
+  await seedForBatchCertification(runStore, projectId, candidates, certs)
+
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      verifiedTagSnapshot: TEST_TAG_VOCAB,
+      placesLookup: async (q: string) => ({ topResult: { placeId: `p-${q}`, name: q, formattedAddress: q, lat: 48.2, lng: 16.37, websiteUri: null, country: 'AT', viewportRadiusM: null }, apiError: null }),
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+    },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 20 }
+  )
+
+  const state = run.state as { itemCertifications: Record<string, DriverItemCertificationRecord>; homeListPlan: Array<{ label: string; kind: string; itemCandidateNames: string[] }> }
+
+  // 1. dbCategory resolved and persisted for every certified item.
+  for (const name of [...museumNames, ...lowerMuseumNames]) {
+    assert.equal(state.itemCertifications[name].dbCategory, 'Arts & Culture', `${name} (raw category variant) must resolve to the real Arts & Culture production category`)
+  }
+  for (const name of restaurantNames) {
+    assert.equal(state.itemCertifications[name].dbCategory, 'Food & drink', `${name} (raw category "restaurant") must resolve to the real Food & drink production category`)
+  }
+
+  // 2. exactly ONE Arts & Culture themed list, containing all 7 museum items — "Museum" and "museum" never split into two lists.
+  const themed = state.homeListPlan.filter((p) => p.kind === 'THEMED')
+  const artsLists = themed.filter((p) => p.label.includes('Arts & Culture'))
+  assert.equal(artsLists.length, 1, 'exactly one themed list for Arts & Culture — "Museum" and "museum" must merge, never split by capitalization')
+  assert.equal(artsLists[0]!.itemCandidateNames.length, museumNames.length + lowerMuseumNames.length)
+  assert.ok(!themed.some((p) => p.label === 'Themed list: Museum' || p.label === 'Themed list: museum'), 'the raw, un-normalized label must never appear as a list title')
+
+  // 3. the Food & drink list uses the fixed visitor-facing title, never the raw "restaurant" string.
+  const foodLists = themed.filter((p) => p.label.toLowerCase().includes('food'))
+  assert.equal(foodLists.length, 1)
+  assert.equal(foodLists[0]!.label, 'Themed list: Food & Drink')
+  assert.ok(!themed.some((p) => p.label === 'Themed list: restaurant'), 'the raw "restaurant" label must never appear as a list title')
+})

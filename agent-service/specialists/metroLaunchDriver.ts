@@ -179,6 +179,21 @@ export interface DriverItemCertificationRecord {
   supportingFact: string
   verifiedAt: string | null
   rejectionReasons: string[]
+  /**
+   * The real production category (categories.name — one of REAL_DB_CATEGORIES),
+   * resolved ONCE via classifyCategoryWithFallback and persisted here by
+   * stepM8BatchCertification's METADATA_COMPLETENESS_GATE pass — the
+   * single source of truth every later stage (M9's Home-list theming,
+   * M10's intake records) reads instead of each recomputing its own
+   * classification. Chief Phase 2AE (2026-09-09): buildHomeListPlan
+   * previously grouped by the RAW candidate.category free-text label
+   * instead of this, so "Museum"/"museum"/"restaurant" each became their
+   * own themed list — never a canonical category. Undefined until M8
+   * has run for this item (or when METADATA_COMPLETENESS_GATE could not
+   * classify it at all, in which case the item never reaches this point
+   * uncensored — see stepM8_5CatalogPruning's REJECTED_UNCLASSIFIABLE_METADATA).
+   */
+  dbCategory?: RealDbCategory
 }
 
 export interface HomeListPlanEntry {
@@ -1355,8 +1370,14 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
   }
 
   // METADATA_COMPLETENESS_GATE — deterministic, content-based (no extra AI/DB call needed).
+  // This is also the single place that resolves and PERSISTS each
+  // certified item's real production dbCategory (see
+  // DriverItemCertificationRecord.dbCategory) — every later stage reads
+  // it from here rather than each recomputing its own classification.
   const unclassifiedForMetadata: string[] = []
   const metadataResults: MetadataEnrichmentResult[] = []
+  const itemCertificationsWithDbCategory = { ...(state.itemCertifications ?? {}) }
+  let dbCategoryChanged = false
   for (const r of certified) {
     const candidate = candidatesByName.get(r.candidateName)
     const canonical = classifyCategoryWithFallback(candidate?.category ?? null, r.finalBody ?? null).canonical
@@ -1366,7 +1387,12 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
       continue
     }
     metadataResults.push(evaluateItemMetadata({ candidateName: r.candidateName, body: r.finalBody, dbCategory }))
+    if (itemCertificationsWithDbCategory[r.candidateName]?.dbCategory !== dbCategory) {
+      itemCertificationsWithDbCategory[r.candidateName] = { ...itemCertificationsWithDbCategory[r.candidateName], dbCategory }
+      dbCategoryChanged = true
+    }
   }
+  if (dbCategoryChanged) state.itemCertifications = itemCertificationsWithDbCategory
   const metadataGate: StagingGateResult =
     unclassifiedForMetadata.length > 0
       ? { key: 'METADATA_COMPLETENESS_GATE', verdict: 'FAIL', reason: `${unclassifiedForMetadata.length} certified item(s) have no classifiable category, so metadata could not be evaluated: ${unclassifiedForMetadata.join(', ')}.` }
@@ -1587,19 +1613,55 @@ async function stepM8_5CatalogPruning(deps: MetroDriverDeps, run: PlaybookRunRec
 // honestly reports the gate as pending human application of that patch.
 // ---------------------------------------------------------------------------
 
+/**
+ * A fixed, deterministic visitor-facing title for each real production
+ * category — Chief Phase 2AE (2026-09-09 instruction): the themed-list
+ * generator must never surface a raw category/classification string
+ * (or, worse, a raw un-normalized candidate.category label) as a list
+ * title. This is a lookup table, never an AI call — same discipline as
+ * every other deterministic classifier in this codebase.
+ */
+const THEMED_LIST_TITLE: Record<RealDbCategory, string> = {
+  'Food & drink': 'Food & Drink',
+  'Bar & drinks': 'Bars & Drinks',
+  Adventure: 'Outdoor Adventures',
+  'Arts & Culture': 'Arts & Culture',
+  Shopping: 'Shopping & Markets',
+  Sports: 'Sports & Recreation',
+  Social: 'Social & Community',
+  Travel: 'Sightseeing & Landmarks',
+  Nightlife: 'Nightlife',
+  'Spa & self-care': 'Spa & Self-Care',
+  Misc: 'Hidden Gems',
+  Play: 'Games & Play',
+}
+
+/**
+ * Groups certified items into themed Home lists by their PERSISTED
+ * dbCategory (DriverItemCertificationRecord.dbCategory, resolved once by
+ * stepM8BatchCertification's METADATA_COMPLETENESS_GATE pass) — never by
+ * the raw candidate.category free-text discovery label. Vienna,
+ * 2026-09-09: grouping by the raw label previously produced separate
+ * "restaurant" / "Museum" / "museum" / "Adventure & outdoors" lists —
+ * three of those four aren't even real production categories, and
+ * "Museum"/"museum" were the SAME category split only by capitalization.
+ * A certified item with no dbCategory (should be structurally
+ * unreachable — M8's metadata gate/M8.5 pruning guarantee every
+ * surviving certified item has one) is skipped from theming rather than
+ * silently bucketed into a guessed category.
+ */
 function buildHomeListPlan(state: MetroDriverState): HomeListPlanEntry[] {
   const certified = Object.values(state.itemCertifications ?? {}).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
   const names = certified.map((r) => r.candidateName)
   const plan: HomeListPlanEntry[] = [{ label: 'Primary seasonal list', kind: 'PRIMARY_SEASONAL', itemCandidateNames: names, requiresImage: true }]
-  const byCategory = new Map<string, string[]>()
-  const candidatesByName = new Map((state.candidates ?? []).map((c) => [c.name, c]))
-  for (const name of names) {
-    const cat = candidatesByName.get(name)?.category ?? 'Misc'
-    byCategory.set(cat, [...(byCategory.get(cat) ?? []), name])
+  const byDbCategory = new Map<RealDbCategory, string[]>()
+  for (const r of certified) {
+    if (!r.dbCategory) continue
+    byDbCategory.set(r.dbCategory, [...(byDbCategory.get(r.dbCategory) ?? []), r.candidateName])
   }
-  for (const [cat, itemNames] of byCategory) {
+  for (const [dbCategory, itemNames] of byDbCategory) {
     if (itemNames.length >= 4) {
-      plan.push({ label: `Themed list: ${cat}`, kind: 'THEMED', itemCandidateNames: itemNames, requiresImage: true })
+      plan.push({ label: `Themed list: ${THEMED_LIST_TITLE[dbCategory]}`, kind: 'THEMED', itemCandidateNames: itemNames, requiresImage: true })
     }
   }
   plan.push({ label: 'Curated-layer mirror', kind: 'CURATED_MIRROR', itemCandidateNames: names, requiresImage: false })
@@ -1787,8 +1849,15 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
   const intakeRecords: ItemIntakeRecord[] = certified
     .map((r) => {
       const candidate = candidatesByNameForIntake.get(r.candidateName)
-      const canonical = classifyCategoryWithFallback(candidate?.category ?? null, r.finalBody ?? null).canonical
-      const dbCategory = canonical ? CANONICAL_TO_DB_CATEGORY[canonical] : null
+      // Prefer the SAME dbCategory stepM8BatchCertification already
+      // resolved and persisted (single source of truth — see
+      // DriverItemCertificationRecord.dbCategory); only a certified item
+      // that somehow never went through that pass (structurally
+      // unreachable in the real driver flow) falls back to recomputing.
+      const dbCategory = r.dbCategory ?? (() => {
+        const canonical = classifyCategoryWithFallback(candidate?.category ?? null, r.finalBody ?? null).canonical
+        return canonical ? CANONICAL_TO_DB_CATEGORY[canonical] : null
+      })()
       if (!dbCategory) {
         unclassifiedForIntake.push(r.candidateName)
         return null
