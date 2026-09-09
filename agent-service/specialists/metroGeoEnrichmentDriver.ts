@@ -174,12 +174,25 @@ export function buildRealPlacesLookup(apiKey: string | undefined = process.env.G
 // ---------------------------------------------------------------------------
 
 export interface GeoEnrichmentCandidate {
+  /** Identity key — used for the cache, the output record, and cross-referencing against itemCertifications/state.candidates. Kept as the RAW discovery name so every other stage's keying stays consistent. */
   candidateName: string
   body: string
   mapsQuery: string
   expectedCountry: string
   biasLat: number
   biasLng: number
+  /**
+   * The name actually compared against the Places result for name-
+   * similarity scoring (classifyPlacesMatch) — defaults to candidateName
+   * when omitted. Vienna, 2026-09-09: candidateName is often a long,
+   * compound M3 discovery label ("Musikverein (Golden Hall, Brahms Hall,
+   * New Halls)") that scores low similarity against the real Places
+   * name purely from the parenthetical bloat, even for a genuinely
+   * correct match — the SAME root cause as the venue-quoting and tag
+   * bugs. Callers that already resolved a clean canonical venue name
+   * (canonicalVenueName.ts) should pass it here.
+   */
+  matchName?: string
 }
 
 export interface GeoEnrichmentRecord extends GeoEnrichmentItemResult {
@@ -230,7 +243,7 @@ export async function enrichMetroCatalogGeo(metroId: string, candidates: readonl
       cacheHits += 1
     }
 
-    const match = classifyPlacesMatch({ candidateName: candidate.candidateName, body: candidate.body, expectedCountry: candidate.expectedCountry, topResult: cached.topResult, apiError: cached.apiError })
+    const match = classifyPlacesMatch({ candidateName: candidate.matchName ?? candidate.candidateName, body: candidate.body, expectedCountry: candidate.expectedCountry, topResult: cached.topResult, apiError: cached.apiError })
     records.push({
       candidateName: candidate.candidateName,
       classification: match.classification,

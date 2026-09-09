@@ -1317,8 +1317,21 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
   }
   const geoCandidates: GeoEnrichmentCandidate[] = certified.map((r) => {
     const candidate = candidatesByName.get(r.candidateName)
+    // mapsQuery is deliberately left keyed on the RAW candidate name
+    // (unchanged) — enrichMetroCatalogGeo's cache key is derived from
+    // mapsQuery, and a resumed run must never re-pay for a lookup it
+    // already made (explicit standing rule). Only the MATCH uses the
+    // resolved canonical venue identity (canonicalVenueName.ts), never
+    // the raw (often long, compound, parenthetical) M3 discovery label —
+    // Vienna, 2026-09-09: matching against the raw label was scoring
+    // genuinely-correct matches as AMBIGUOUS/REJECTED purely from
+    // parenthetical bloat ("Musikverein (Golden Hall, Brahms Hall, New
+    // Halls)" vs. the real Places name) — the same root cause as the
+    // venue-quoting and tag bugs. candidateName (the raw name) stays the
+    // identity key for the cache/output record/itemCertifications
+    // cross-reference.
     const mapsQuery = candidate?.address?.trim() || `${r.candidateName}, ${candidate?.neighborhood ?? run.projectId}`
-    return { candidateName: r.candidateName, body: r.finalBody, mapsQuery, expectedCountry, biasLat: metroCenterBias.lat, biasLng: metroCenterBias.lng }
+    return { candidateName: r.candidateName, matchName: r.venueName, body: r.finalBody, mapsQuery, expectedCountry, biasLat: metroCenterBias.lat, biasLng: metroCenterBias.lng }
   })
   const geoRun = await enrichMetroCatalogGeo(run.projectId, geoCandidates, {
     cache: deps.geoEnrichmentCache ?? new FileGeoEnrichmentCacheStore(),

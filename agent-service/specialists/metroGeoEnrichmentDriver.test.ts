@@ -83,3 +83,49 @@ test('buildRealPlacesLookup: returns a clear, actionable error instead of a sile
   assert.equal(result.topResult, null)
   assert.match(result.apiError ?? '', /GOOGLE_PLACES_API_KEY is not configured/)
 })
+
+// ---------------------------------------------------------------------------
+// matchName (Chief Phase 2Z geo fix) — the candidate identity used for
+// caching/output stays the RAW candidateName; only the name-similarity
+// match itself uses matchName when supplied.
+// ---------------------------------------------------------------------------
+
+test('enrichMetroCatalogGeo: matchName, when supplied, is what drives the classification — not candidateName', async () => {
+  const cache = new InMemoryGeoEnrichmentCacheStore()
+  const lookup: PlacesLookupFn = async () => ({
+    topResult: { placeId: 'p1', name: 'Musikverein Wien', formattedAddress: 'Musikvereinspl. 1, 1010 Wien', lat: 48.2, lng: 16.37, websiteUri: null, country: 'AT', viewportRadiusM: null },
+    apiError: null,
+  })
+  const raw = candidate({ candidateName: 'Musikverein (Golden Hall, Brahms Hall, New Halls)', matchName: 'Musikverein', mapsQuery: 'Musikverein (Golden Hall, Brahms Hall, New Halls), Innere Stadt', expectedCountry: 'AT' })
+  const result = await enrichMetroCatalogGeo('vienna-dry-run', [raw], { cache, lookup })
+  assert.equal(result.records[0].classification, 'EXACT', 'the clean canonical name matches well even though the raw compound label would not')
+  assert.equal(result.records[0].candidateName, 'Musikverein (Golden Hall, Brahms Hall, New Halls)', 'the RAW name remains the identity key in the output record')
+})
+
+test('enrichMetroCatalogGeo: without matchName, candidateName is used for the match — unchanged, backward-compatible default', async () => {
+  const cache = new InMemoryGeoEnrichmentCacheStore()
+  const lookup: PlacesLookupFn = async () => ({
+    topResult: { placeId: 'p1', name: 'California Surf Museum', formattedAddress: 'Oceanside, CA', lat: 33.19, lng: -117.38, websiteUri: null, country: 'US', viewportRadiusM: null },
+    apiError: null,
+  })
+  const result = await enrichMetroCatalogGeo('vienna-dry-run', [candidate()], { cache, lookup })
+  assert.equal(result.records[0].classification, 'EXACT')
+})
+
+test('enrichMetroCatalogGeo: matchName does NOT change the cache key — mapsQuery alone still governs caching (never re-pay for a lookup on a resumed run)', async () => {
+  let calls = 0
+  const cache = new InMemoryGeoEnrichmentCacheStore()
+  const lookup: PlacesLookupFn = async () => {
+    calls++
+    return { topResult: { placeId: 'p1', name: 'Musikverein Wien', formattedAddress: 'x', lat: 48.2, lng: 16.37, websiteUri: null, country: 'AT', viewportRadiusM: null }, apiError: null }
+  }
+  const withoutMatchName = candidate({ candidateName: 'Musikverein (Golden Hall, Brahms Hall, New Halls)', mapsQuery: 'Musikverein (Golden Hall, Brahms Hall, New Halls), Innere Stadt' })
+  await enrichMetroCatalogGeo('vienna-dry-run', [withoutMatchName], { cache, lookup })
+  assert.equal(calls, 1)
+
+  // Same mapsQuery, now WITH matchName added — must hit the cache, never re-query.
+  const withMatchName = { ...withoutMatchName, matchName: 'Musikverein' }
+  const second = await enrichMetroCatalogGeo('vienna-dry-run', [withMatchName], { cache, lookup })
+  assert.equal(calls, 1, 'adding matchName must never trigger a fresh paid call for an already-cached query')
+  assert.equal(second.records[0].fromCache, true)
+})
