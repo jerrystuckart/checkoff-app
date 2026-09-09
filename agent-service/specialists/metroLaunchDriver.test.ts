@@ -29,6 +29,8 @@ const RESOLVED_M0: MetroM0Decisions = {
   categoryCatalogTargets: 'Food & drink (5/10), Shopping (4/8)',
   launchSeason: null,
   executionGoAhead: true,
+  metroCountry: 'US',
+  metroCenter: { lat: 32.7157, lng: -117.1611 }, // San Diego
 }
 
 function food(name: string, neighborhood: string) {
@@ -277,7 +279,7 @@ function foodCandidate(name: string, neighborhood: string, categoryLabel = 'Food
   return { name, category: categoryLabel, neighborhood, claimSupported: `${name} serves a real, specific dish`, source: `https://example.com/${name}`, needsVerification: true }
 }
 
-test('driveMetroLaunch: launch-boundary GEOGRAPHY_GATE genuinely FAILS when a configured depth target is below minimum (Carlsbad 4/5)', async () => {
+test('driveMetroLaunch: a plateaued district-depth gap (Carlsbad 4/5) self-relaxes instead of escalating, and the relaxation is recorded', async () => {
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
@@ -349,8 +351,19 @@ test('driveMetroLaunch: launch-boundary GEOGRAPHY_GATE genuinely FAILS when a co
     maxSteps: 30,
   })
 
-  // With only 4 Carlsbad candidates and no M5 script to supply a 5th, the M4<->M5 loop exhausts its guardrail and escalates BEFORE ever reaching the launch boundary — which is itself proof the gate is real (M4 uses the identical auditCoverage() check).
-  assert.match(run.jerryReason ?? '', /coverage gap loop exceeded|Carlsbad/)
+  // With only 4 Carlsbad candidates and every M5 pass re-discovering the
+  // SAME existing one (a genuine plateau, not under-research), the
+  // depth-target minimum self-relaxes from 5 to 4 instead of escalating
+  // — the run proceeds all the way to the (always-escalating) launch
+  // boundary, never gets stuck at M4, and the relaxation is a permanent,
+  // recorded artifact.
+  assert.equal(run.currentStage, 'LAUNCH_READINESS_BOUNDARY')
+  assert.match(run.jerryReason ?? '', /launch-readiness boundary/)
+  const state = run.state as { planRelaxations?: Array<{ kind: string; targetName: string; fromValue: string; toValue: string }> }
+  assert.ok(state.planRelaxations?.some((r) => r.kind === 'DISTRICT_DEPTH' && r.targetName === 'Carlsbad' && r.fromValue === '5' && r.toValue === '4'), `expected a recorded Carlsbad depth relaxation, got: ${JSON.stringify(state.planRelaxations)}`)
+  const packet = run.decisionPacket?.evidence as { gates: Array<{ key: string; verdict: string }> } | undefined
+  const geoGate = packet?.gates.find((g) => g.key === 'GEOGRAPHY_GATE')
+  assert.equal(geoGate?.verdict, 'PASS', 'the relaxed target is what the launch-boundary gate re-audits against, so it now genuinely passes')
 })
 
 test('driveMetroLaunch: launch-boundary GEOGRAPHY_GATE genuinely PASSES once a depth target reaches its minimum (Carlsbad 5/5)', async () => {
@@ -423,7 +436,7 @@ test('driveMetroLaunch: launch-boundary GEOGRAPHY_GATE genuinely PASSES once a d
   assert.equal(geoGate?.verdict, 'PASS')
 })
 
-test('driveMetroLaunch: launch-boundary CATEGORY_GATE genuinely FAILS when a real category is below minimum with no approved exception', async () => {
+test('driveMetroLaunch: a category with genuinely zero real-world inventory (Sports, plateaued at 0) self-relaxes to its achieved count instead of escalating', async () => {
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
@@ -440,6 +453,25 @@ test('driveMetroLaunch: launch-boundary CATEGORY_GATE genuinely FAILS when a rea
     (r) => r.stage === 'M5_TARGETED_DEEP_DIVES',
     (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { candidates: [foodCandidate('OnlyFood', 'Downtown')] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
   )
+  executor.scriptWhen(
+    (r) => r.stage === 'M6_QUALITY_VERIFICATION',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { verifiedCandidateNames: ['OnlyFood'] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { hasConcreteAction: true, moreSpecificThanVenuePurpose: true, supportedByResearch: true, isCurrent: true, tellsUsefulNonObviousDetail: true, soundsLikeCheckoff: true, concise: true, critiqueNotes: 'ok' },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+      })
+  )
 
   const projectId = 'san-diego-category-fail-test'
   await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
@@ -447,16 +479,20 @@ test('driveMetroLaunch: launch-boundary CATEGORY_GATE genuinely FAILS when a rea
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  // A minimum the M4<->M5 loop can never satisfy in this synthetic
-  // (M5 isn't scripted) reproduces "category below minimum, no exception"
-  // by construction — proving the SAME underlying auditCoverage() check
-  // now drives the launch boundary's CATEGORY_GATE, since it's what
-  // stops this run before the boundary is ever reached.
+  // Sports never gets a single real candidate — every M5 pass only
+  // re-surfaces the unrelated existing Food & drink candidate, a genuine
+  // plateau at 0. The category minimum self-relaxes to 0 instead of
+  // escalating; Sports effectively drops out of the plan rather than
+  // blocking the whole build or being backfilled with a fake Sports item.
   const impossiblePlan: CategoryCoveragePlan = { targets: [{ categoryName: 'Sports', minimumViable: 5, healthyTarget: 5, qualityNotes: [] }] }
   const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: impossiblePlan, maxSteps: 30 })
-  assert.match(run.jerryReason ?? '', /coverage gap loop exceeded/)
-  const blockingGaps = run.decisionPacket?.evidence as Array<{ name: string }> | undefined
-  assert.ok(blockingGaps?.some((g) => g.name === 'Sports'))
+
+  assert.equal(run.currentStage, 'LAUNCH_READINESS_BOUNDARY')
+  assert.match(run.jerryReason ?? '', /launch-readiness boundary/)
+  const state = run.state as { planRelaxations?: Array<{ kind: string; targetName: string; fromValue: string; toValue: string }>; candidates?: Array<{ name: string }> }
+  assert.ok(state.planRelaxations?.some((r) => r.kind === 'CATEGORY_MINIMUM' && r.targetName === 'Sports' && r.fromValue === '5' && r.toValue === '0'), `expected a recorded Sports minimum relaxation, got: ${JSON.stringify(state.planRelaxations)}`)
+  // No fake Sports item was manufactured to hit the (now-relaxed) minimum.
+  assert.ok(!state.candidates?.some((c) => c.name !== 'OnlyFood'), 'no filler candidate was invented for Sports')
 })
 
 test('driveMetroLaunch: launch-boundary CATEGORY_GATE evaluates NORMALIZED category counts, not raw free-text labels — the original San Diego false-zero bug, now checked at the boundary too', async () => {
@@ -560,7 +596,7 @@ test('driveMetroLaunch: RESUME — a second call against the same run store cont
 // Runaway-loop guardrail (spec section 20)
 // ---------------------------------------------------------------------------
 
-test('driveMetroLaunch: an unresolvable coverage gap escalates to NEEDS_JERRY once the loop-iteration guardrail is exceeded, never loops forever', async () => {
+test('driveMetroLaunch: a coverage gap that plateaus rather than closing self-relaxes and proceeds, never loops forever', async () => {
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
@@ -579,12 +615,33 @@ test('driveMetroLaunch: an unresolvable coverage gap escalates to NEEDS_JERRY on
   )
   // Every M5 Shopping-gap pass deliberately re-returns the SAME
   // already-known candidate — dedupe collapses it to nothing new, so the
-  // Shopping gap can never close. Proves the loop-iteration guardrail
-  // fires rather than looping forever, distinct from a retry-exhaustion
-  // escalation (evidence is never empty/invalid here, it's just useless).
+  // Shopping gap can never close via more research. Proves the
+  // loop-iteration guardrail still bounds M4<->M5 passes, but the
+  // response to exhausting it is now self-relaxation, never an unbounded
+  // loop AND never an immediate human escalation for what plan adaptation
+  // can resolve on its own.
   executor.scriptWhen(
     (r) => r.stage === 'M5_TARGETED_DEEP_DIVES',
     (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { candidates: [food('FoodA', 'Downtown')] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M6_QUALITY_VERIFICATION',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { verifiedCandidateNames: ['FoodA'] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { hasConcreteAction: true, moreSpecificThanVenuePurpose: true, supportedByResearch: true, isCurrent: true, tellsUsefulNonObviousDetail: true, soundsLikeCheckoff: true, concise: true, critiqueNotes: 'ok' },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+      })
   )
 
   const projectId = 'san-diego-runaway-test'
@@ -594,9 +651,58 @@ test('driveMetroLaunch: an unresolvable coverage gap escalates to NEEDS_JERRY on
   await runStore.put(seeded!)
 
   const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: shoplessPlan, maxSteps: 500 })
+
+  assert.equal(run.currentStage, 'LAUNCH_READINESS_BOUNDARY')
+  assert.match(run.jerryReason ?? '', /launch-readiness boundary/)
+  assert.ok(run.loopIteration <= 6, 'the loop-iteration guardrail (default 5) must actually bound each round of M4<->M5 passes')
+  const state = run.state as { planRelaxations?: Array<{ kind: string; targetName: string }>; planRelaxationRounds?: number }
+  assert.ok(state.planRelaxations?.some((r) => r.kind === 'CATEGORY_MINIMUM' && r.targetName === 'Shopping'))
+  assert.equal(state.planRelaxationRounds, 1, 'closed on the FIRST relaxation round — never needed the full relaxation-round budget')
+})
+
+test('driveMetroLaunch: a TRULY unsatisfiable metro (relaxation-round budget already exhausted) still escalates to NEEDS_JERRY — self-repair is bounded, not unlimited', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const shoplessPlan: CategoryCoveragePlan = { targets: [{ categoryName: 'Shopping', minimumViable: 4, healthyTarget: 8, qualityNotes: [] }] }
+
+  executor.scriptWhen(
+    (r) => r.stage === 'M3_BROAD_DISCOVERY',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { candidates: [food('FoodA', 'Downtown')] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M5_TARGETED_DEEP_DIVES',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { candidates: [food('FoodA', 'Downtown')] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
+  )
+
+  const projectId = 'san-diego-truly-unsatisfiable-test'
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  // Seeded already at the M4<->M5 loop, one relaxation round short of
+  // the bound, with a category minimum that is ALSO already at 0 (i.e.
+  // already relaxed as far as it can go) — simulating a run that has
+  // genuinely been through the full self-repair budget for real. This
+  // is the deterministic way to reach "relaxation budget exhausted" in
+  // a unit test without needing dozens of real loop passes.
+  seeded!.state = {
+    m0Decisions: RESOLVED_M0,
+    plan: { targets: [{ categoryName: 'Shopping', minimumViable: 1, healthyTarget: 8, qualityNotes: [] }] },
+    neighborhoods: [],
+    candidates: [],
+    planRelaxationRounds: 3, // == DEFAULT_DRIVER_GUARDRAILS.maxPlanRelaxationRounds
+    planRelaxations: [{ kind: 'CATEGORY_MINIMUM', targetName: 'Shopping', fromValue: '4', toValue: '1', reason: 'prior rounds (test fixture)', relaxedAtRound: 1 }],
+  }
+  seeded!.currentStage = 'M4_COVERAGE_AUDIT'
+  seeded!.loopIteration = 5 // already at the per-round bound
+  await runStore.put(seeded!)
+
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: shoplessPlan, maxSteps: 30 })
+
   assert.equal(run.status, 'NEEDS_JERRY')
-  assert.match(run.jerryReason ?? '', /loop/i)
-  assert.ok(run.loopIteration <= 6, 'the loop-iteration guardrail (default 5) must actually bound the number of M4<->M5 passes')
+  assert.equal(run.currentStage, 'M4_COVERAGE_AUDIT')
+  assert.match(run.jerryReason ?? '', /genuine product decision/)
+  const state = run.state as { planRelaxations?: unknown[] }
+  assert.equal(state.planRelaxations?.length, 1, 'the escalation preserves the relaxation history already recorded — never discards it')
 })
 
 // ---------------------------------------------------------------------------
@@ -1068,4 +1174,121 @@ test('ensureMetroProject: an ambiguous/wrong project type fails closed — the d
   // to clean up.
   const run = await runStore.get(playbookRunId('metro_launch', 'vienna-bootstrap-conflict-test'))
   assert.equal(run, undefined)
+})
+
+// ---------------------------------------------------------------------------
+// International geo defaults (Chief Phase 2Y) — expectedCountry/
+// metroCenterBias must derive from THIS metro's own resolved M0
+// decisions (metroCountry/metroCenter), never a hardcoded 'US' default.
+// No deps.expectedCountry/deps.metroCenterBias override is passed in
+// either test below — proving the value genuinely comes from
+// state.m0Decisions, not a lingering test convenience.
+// ---------------------------------------------------------------------------
+
+function scriptThroughM8(executor: TestExecutor, candidateName: string, neighborhood: string) {
+  executor.scriptWhen(
+    (r) => r.stage === 'M1_GEOGRAPHY_MAP',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { neighborhoods: [{ name: neighborhood, kind: 'core_urban', ring1RadiusM: 1500, ring2RadiusM: 3000 }] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M3_BROAD_DISCOVERY',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { candidates: [foodCandidate(candidateName, neighborhood)] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M6_QUALITY_VERIFICATION',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { verifiedCandidateNames: [candidateName] }, methodologyId: 'metro_launch', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { hasConcreteAction: true, moreSpecificThanVenuePurpose: true, supportedByResearch: true, isCurrent: true, tellsUsefulNonObviousDetail: true, soundsLikeCheckoff: true, concise: true, critiqueNotes: 'ok' },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+      })
+  )
+}
+
+test('driveMetroLaunch: a US metro (metroCountry "US") resolves geo enrichment against a US Places result as EXACT — the ordinary, already-covered case', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  scriptThroughM8(executor, 'DowntownDiner', 'Downtown')
+
+  const projectId = 'us-metro-country-test'
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  seeded!.state = { m0Decisions: RESOLVED_M0 } // metroCountry: 'US', metroCenter: San Diego
+  await runStore.put(seeded!)
+
+  const smallPlan: CategoryCoveragePlan = { targets: [{ categoryName: 'Food & drink', minimumViable: 1, healthyTarget: 1, qualityNotes: [] }] }
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      // NO expectedCountry/metroCenterBias override — must come from state.m0Decisions.
+      placesLookup: async (q: string) => ({ topResult: { placeId: 'p-us', name: 'DowntownDiner', formattedAddress: q, lat: 32.7, lng: -117.1, websiteUri: 'https://example.com', country: 'US', viewportRadiusM: null }, apiError: null }),
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+    },
+    projectId,
+    { categoryPlan: smallPlan, maxSteps: 30 }
+  )
+
+  const state = run.state as { geoEnrichmentResults?: Array<{ candidateName: string; classification: string }> }
+  const result = state.geoEnrichmentResults?.find((r) => r.candidateName === 'DowntownDiner')
+  assert.equal(result?.classification, 'EXACT', `expected EXACT, got ${JSON.stringify(state.geoEnrichmentResults)}`)
+})
+
+test('driveMetroLaunch: a non-US metro (Vienna, metroCountry "AT") resolves geo enrichment against an AT Places result as EXACT — no US default leaks into international matching', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  scriptThroughM8(executor, 'CafeWien', 'Innere Stadt')
+
+  const projectId = 'at-metro-country-test'
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  seeded!.state = { m0Decisions: { ...RESOLVED_M0, metroCountry: 'AT', metroCenter: { lat: 48.2082, lng: 16.3738 } } }
+  await runStore.put(seeded!)
+
+  const smallPlan: CategoryCoveragePlan = { targets: [{ categoryName: 'Food & drink', minimumViable: 1, healthyTarget: 1, qualityNotes: [] }] }
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      // NO expectedCountry/metroCenterBias override — a bug here would
+      // default to 'US' and misclassify this AT result as a country
+      // mismatch (REJECTED_WRONG_MATCH), exactly the real Vienna defect.
+      placesLookup: async (q: string) => ({ topResult: { placeId: 'p-at', name: 'CafeWien', formattedAddress: q, lat: 48.2, lng: 16.37, websiteUri: 'https://example.at', country: 'AT', viewportRadiusM: null }, apiError: null }),
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+    },
+    projectId,
+    { categoryPlan: smallPlan, maxSteps: 30 }
+  )
+
+  const state = run.state as { geoEnrichmentResults?: Array<{ candidateName: string; classification: string }> }
+  const result = state.geoEnrichmentResults?.find((r) => r.candidateName === 'CafeWien')
+  assert.equal(result?.classification, 'EXACT', `expected EXACT (not a country-mismatch rejection), got ${JSON.stringify(state.geoEnrichmentResults)}`)
+})
+
+test('m0DecisionsResolved: missing metroCountry or metroCenter resolves false — no metro can start M1 research without its own real geography identity', () => {
+  const { metroCountry, ...withoutCountry } = RESOLVED_M0
+  assert.equal(m0DecisionsResolved(withoutCountry), false)
+  const { metroCenter, ...withoutCenter } = RESOLVED_M0
+  assert.equal(m0DecisionsResolved(withoutCenter), false)
+  assert.equal(m0DecisionsResolved({ ...RESOLVED_M0, metroCenter: { lat: 48.2, lng: NaN as unknown as number } }), true) // NaN is still typeof 'number' — a distinct, not-this-function's-job validation concern
 })

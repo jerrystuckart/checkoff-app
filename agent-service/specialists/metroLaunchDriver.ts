@@ -60,6 +60,14 @@ import { resolveCanonicalTagVocabulary, loadGeneratedTagSnapshot, type VerifiedT
 import { evaluateActivationKitGate, validateActivationKitReference, UNIVERSAL_BUSINESS_ACTIVATION_KIT_URL } from '../playbooks/businessActivationKit'
 import { checkActivationKitUrlLive, type ActivationKitLiveCheckResult } from './businessActivationKitCheck'
 import { ensureProject as ensureProjectMutation, type EnsureProjectInput, type EnsureProjectResult } from '../mutations'
+import {
+  classifyGapsForRelaxation,
+  relaxPlanForGaps,
+  sortGapsForDispatch,
+  gapHistoryKey,
+  type GapResearchHistory,
+  type PlanRelaxationRecord,
+} from '../playbooks/coveragePlanRelaxation'
 
 export const METRO_LAUNCH_DRIVER_PLAYBOOK_KEY = 'metro_launch'
 
@@ -72,6 +80,17 @@ export interface MetroM0Decisions {
   categoryCatalogTargets: string
   launchSeason: string | null // null is a VALID resolved decision ("deferred" is itself a decision, per the v2 playbook's own pattern) — undefined/missing key is NOT resolved
   executionGoAhead: boolean
+  /**
+   * ISO-3166-1 alpha-2 (e.g. "US", "AT") — the metro's real geography
+   * identity, resolved at M0 like everything else here. Chief Phase 2Y:
+   * M8 geo enrichment previously defaulted this to 'US' whenever it was
+   * omitted, which silently broke Places country-match classification
+   * for any non-US metro (found building Vienna). Required, same
+   * discipline as geographicScope — there is no safe default.
+   */
+  metroCountry: string
+  /** A coarse citywide lat/lng that biases every M8 Places query — same "no safe default" reasoning as metroCountry (0,0 is not a real fallback for any metro). */
+  metroCenter: { lat: number; lng: number }
 }
 
 interface MetroDriverState {
@@ -88,6 +107,14 @@ interface MetroDriverState {
   awaitingExecutionLabels?: string[] // labels of executions this run is currently waiting on, for the current stage
   /** Raw candidate categories buildAuditEvidence could not map to the canonical taxonomy — flagged for review, never silently binned. Recomputed fresh every M4 pass, never accumulated. */
   unclassifiedCategories?: UnclassifiedCategory[]
+  /** Per-gap real-dispatched-research history (coveragePlanRelaxation.ts) — accumulated across the whole run, never reset, so classification always sees the true research effort so far. */
+  gapResearchHistory?: GapResearchHistory
+  /** Every plan/depth-target/neighborhood-kind relaxation actually applied, in order — the permanent artifact record of what Winston loosened and why (never rejected candidates, never quality gates). Surfaced in the final report/decision packet. */
+  planRelaxations?: PlanRelaxationRecord[]
+  /** How many times stepM4 has responded to an exhausted maxLoopIterations budget by relaxing the plan (or granting one more bounded round) — bounded by guardrails.maxPlanRelaxationRounds before a genuine NEEDS_JERRY escalation. */
+  planRelaxationRounds?: number
+  /** Transient: gap history keys (coveragePlanRelaxation.ts's gapHistoryKey) actually dispatched to M5 research in the pass immediately before the NEXT M4 audit — consumed and cleared by that audit to attribute its counts correctly. Never accumulated. */
+  lastDispatchedGapKeys?: string[]
 
   // ---------------------------------------------------------------------
   // M7-M10 — real, wired-in item + batch + list + final certification.
@@ -148,7 +175,18 @@ function readState(run: PlaybookRunRecord): MetroDriverState {
 
 export function m0DecisionsResolved(decisions: Partial<MetroM0Decisions> | undefined): decisions is MetroM0Decisions {
   if (!decisions) return false
-  return typeof decisions.geographicScope === 'string' && decisions.geographicScope.length > 0 && typeof decisions.categoryCatalogTargets === 'string' && decisions.categoryCatalogTargets.length > 0 && 'launchSeason' in decisions && decisions.executionGoAhead === true
+  return (
+    typeof decisions.geographicScope === 'string' &&
+    decisions.geographicScope.length > 0 &&
+    typeof decisions.categoryCatalogTargets === 'string' &&
+    decisions.categoryCatalogTargets.length > 0 &&
+    'launchSeason' in decisions &&
+    decisions.executionGoAhead === true &&
+    typeof decisions.metroCountry === 'string' &&
+    decisions.metroCountry.length > 0 &&
+    typeof decisions.metroCenter?.lat === 'number' &&
+    typeof decisions.metroCenter?.lng === 'number'
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -170,9 +208,9 @@ export interface MetroDriverDeps {
   placesLookup?: PlacesLookupFn
   /** M8: the Places result cache, scoped per metro — defaults to a real, durable FileGeoEnrichmentCacheStore so a paid lookup is never repeated across separate process runs, not just within one in-memory run. */
   geoEnrichmentCache?: GeoEnrichmentCacheStore
-  /** M8: a coarse citywide lat/lng used to bias every Places query for this metro (no per-neighborhood geocode data exists in driver state yet) — required for a real Places call to be meaningfully accurate; omitted only in tests that inject their own placesLookup. */
+  /** M8: TEST-ONLY override for the coarse citywide lat/lng used to bias every Places query. Production always derives this from state.m0Decisions.metroCenter (resolved at M0 — see MetroM0Decisions) — never a hardcoded default, since a wrong bias silently degrades Places match quality for whichever metro doesn't happen to match the default. */
   metroCenterBias?: { lat: number; lng: number }
-  /** M8: the ISO-3166-1 alpha-2 country every candidate is expected to resolve to (Places match classification treats a country mismatch as a definite wrong match) — defaults to 'US'. */
+  /** M8: TEST-ONLY override for the ISO-3166-1 alpha-2 country every candidate is expected to resolve to (Places match classification treats a country mismatch as a definite wrong match). Production always derives this from state.m0Decisions.metroCountry — a hardcoded 'US' default here previously broke geo enrichment for every non-US metro (found building Vienna, Chief Phase 2Y). */
   expectedCountry?: string
   /** M9: reads the REAL runtime state of the planned Home lists (public.lists/public.list_items) — Chief has no direct public.lists write access (standing boundary, unchanged) and, without this, no way to confirm a hand-run SQL patch actually took effect either. Omit to correctly report HOME_LIST_CERTIFICATION_GATE as pending human application of the generated SQL patch; a caller (production wiring, or a test) supplies this once a real read path exists. */
   verifyHomeListRows?: (plan: readonly HomeListPlanEntry[]) => Promise<HomeListRow[] | HomeListReadPathFailure>
@@ -301,12 +339,14 @@ async function stepM0(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
   if (!resolved) {
     return escalate(run, 'Metro launch cannot start — required M0 decisions are unresolved.', {
       decisionNeeded: 'Confirm the 4 Metro launch decisions before Chief begins research.',
-      why: 'metro_launch/v1 methodology requires geographic scope, category/catalog targets, launch season (or an explicit deferral), and an execution go-ahead before any specialist work starts.',
+      why: 'metro_launch/v1 methodology requires geographic scope, category/catalog targets, launch season (or an explicit deferral), a resolved metro country + center point, and an execution go-ahead before any specialist work starts.',
       missing: {
         geographicScope: !decisions?.geographicScope,
         categoryCatalogTargets: !decisions?.categoryCatalogTargets,
         launchSeason: !decisions || !('launchSeason' in decisions),
         executionGoAhead: decisions?.executionGoAhead !== true,
+        metroCountry: !decisions?.metroCountry,
+        metroCenter: typeof decisions?.metroCenter?.lat !== 'number' || typeof decisions?.metroCenter?.lng !== 'number',
       },
     })
   }
@@ -454,11 +494,40 @@ export function buildAuditEvidence(state: MetroDriverState): BuildAuditEvidenceR
   }
 }
 
+/** The achieved count auditCoverage compared a gap's target against — category count for a CATEGORY_* gap, neighborhood count for a GEOGRAPHIC_* gap. Same lookup auditCoverage itself does internally, exposed here so relaxation can compare "what did we actually find" against "what the plan demands". */
+function achievedCountForGap(gap: Pick<CoverageGap, 'kind' | 'name'>, evidence: CoverageAuditEvidence): number {
+  if (gap.kind.startsWith('CATEGORY_')) {
+    return evidence.categoryCounts.find((c) => c.categoryName === gap.name)?.count ?? 0
+  }
+  return evidence.neighborhoodCounts.find((n) => n.neighborhoodName === gap.name)?.count ?? 0
+}
+
 async function stepM4(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
   const guardrails = deps.guardrails ?? DEFAULT_DRIVER_GUARDRAILS
   const state = readState(run)
   const { evidence, unclassifiedCategories } = buildAuditEvidence(state)
   state.unclassifiedCategories = unclassifiedCategories
+
+  // Attribute this audit's counts to whichever gaps were ACTUALLY
+  // dispatched for research in the immediately preceding M5 pass — never
+  // to a gap that merely sat in the blocking list while fan-out
+  // researched something else (coveragePlanRelaxation.ts's plateau
+  // detection must reflect real research effort, not audit cadence).
+  // Accumulates across the WHOLE run — never reset — so classification
+  // always sees the true research effort so far, even across relaxation
+  // rounds.
+  const history: GapResearchHistory = { ...(state.gapResearchHistory ?? {}) }
+  for (const key of state.lastDispatchedGapKeys ?? []) {
+    const sep = key.indexOf(':')
+    const kind = key.slice(0, sep) as CoverageGap['kind']
+    const name = key.slice(sep + 1)
+    const count = achievedCountForGap({ kind, name }, evidence)
+    const rec = history[key] ?? { timesDispatched: 0, countAfterDispatch: [] }
+    history[key] = { ...rec, countAfterDispatch: [...rec.countAfterDispatch, count] }
+  }
+  state.gapResearchHistory = history
+  state.lastDispatchedGapKeys = []
+
   const gaps = auditCoverage(evidence)
   const loop = deriveMetroLoopAction(gaps)
 
@@ -471,14 +540,84 @@ async function stepM4(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
 
   run.loopIteration += 1
   if (run.loopIteration > guardrails.maxLoopIterations) {
-    return escalate(run, `Metro coverage gap loop exceeded ${guardrails.maxLoopIterations} iterations without closing — needs Jerry's judgment on whether to relax a category minimum or accept an exception.`, {
-      decisionNeeded: 'Approve a category-minimum exception, or provide additional research direction.',
-      why: `${loop.blockingGaps.length} blocking gap(s) remain after ${run.loopIteration - 1} targeted research loop(s).`,
-      evidence: loop.blockingGaps,
-    })
+    return stepM4HandleExhaustedLoop(deps, run, state, evidence, loop.blockingGaps, history, guardrails)
   }
 
-  state.gaps = loop.blockingGaps
+  state.gaps = sortGapsForDispatch(loop.blockingGaps, history)
+  run.state = state
+  run.currentStage = 'M5_TARGETED_DEEP_DIVES'
+  return run
+}
+
+/**
+ * Reached once per exhausted maxLoopIterations budget. Never brute-force
+ * (never simply grants more iterations against the SAME plan) — instead
+ * classifies every still-blocking gap and relaxes only what's proven
+ * (via real, plateaued research) to be an unrealistic target, then
+ * grants one fresh maxLoopIterations budget against the revised plan.
+ * Bounded overall by guardrails.maxPlanRelaxationRounds: a metro that
+ * still can't close its (by-then-already-relaxed) gaps after that many
+ * rounds is a genuine product decision, never a planning mistake Winston
+ * keeps grinding on unattended.
+ */
+function stepM4HandleExhaustedLoop(
+  deps: MetroDriverDeps,
+  run: PlaybookRunRecord,
+  state: MetroDriverState,
+  evidence: CoverageAuditEvidence,
+  blockingGaps: CoverageGap[],
+  history: GapResearchHistory,
+  guardrails: DriverGuardrails
+): PlaybookRunRecord {
+  const round = state.planRelaxationRounds ?? 0
+  if (round >= guardrails.maxPlanRelaxationRounds) {
+    return escalate(
+      run,
+      `Metro coverage gap loop exceeded ${guardrails.maxLoopIterations} iterations per round across ${round} bounded plan-relaxation round(s) without closing — this is a genuine product decision Winston cannot self-repair further (every automatically-relaxable target already was).`,
+      {
+        decisionNeeded: 'Approve a further category-minimum/district-depth exception, provide additional research direction, or accept the metro at its current coverage.',
+        why: `${blockingGaps.length} blocking gap(s) remain after ${guardrails.maxPlanRelaxationRounds} bounded relaxation round(s) (${(state.planRelaxations ?? []).length} target(s) already relaxed — see planRelaxations).`,
+        evidence: blockingGaps,
+        planRelaxations: state.planRelaxations ?? [],
+      }
+    )
+  }
+
+  const classifications = classifyGapsForRelaxation(blockingGaps, history, guardrails.minResearchDispatchesBeforeRelaxation)
+  const eligible = classifications.filter((c) => c.eligibleForRelaxation).map((c) => c.gap)
+
+  if (eligible.length > 0) {
+    const relaxed = relaxPlanForGaps({
+      plan: state.plan ?? { targets: [] },
+      depthTargets: state.depthTargets ?? [],
+      neighborhoods: state.neighborhoods ?? [],
+      categoryCounts: evidence.categoryCounts,
+      neighborhoodCounts: evidence.neighborhoodCounts,
+      gapsToRelax: eligible,
+      round: round + 1,
+    })
+    state.plan = relaxed.plan
+    state.depthTargets = relaxed.depthTargets
+    state.neighborhoods = relaxed.neighborhoods
+    state.planRelaxations = [...(state.planRelaxations ?? []), ...relaxed.relaxations]
+  }
+  state.planRelaxationRounds = round + 1
+  run.loopIteration = 0
+
+  // Re-audit immediately against the (possibly revised) plan — relaxed
+  // targets may already close every gap without spending another
+  // research pass; gaps still not eligible (genuine missing coverage)
+  // simply get one more full, fresh, bounded round.
+  const { evidence: revisedEvidence } = buildAuditEvidence(state)
+  const revisedGaps = auditCoverage(revisedEvidence)
+  const revisedLoop = deriveMetroLoopAction(revisedGaps)
+  if (revisedLoop.action === 'PROCEED_TO_VERIFICATION') {
+    state.gaps = []
+    run.state = state
+    run.currentStage = state.hasRunM6 ? 'M6_5_CHECKOFF_EDITOR' : 'M6_QUALITY_VERIFICATION'
+    return run
+  }
+  state.gaps = sortGapsForDispatch(revisedLoop.blockingGaps, history)
   run.state = state
   run.currentStage = 'M5_TARGETED_DEEP_DIVES'
   return run
@@ -494,6 +633,21 @@ async function stepM5(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
   }
 
   const scoped = gaps.slice(0, guardrails.maxConcurrentExecutions)
+
+  // Record real dispatch BEFORE awaiting research — an attempt was
+  // genuinely made regardless of outcome, which is exactly what
+  // coveragePlanRelaxation.ts's classification needs to count. Also
+  // rotates: gaps beyond maxConcurrentExecutions this pass (not in
+  // `scoped`) get priority next time via sortGapsForDispatch, so a long
+  // tail of gaps never starves at zero real attempts.
+  const dispatchHistory: GapResearchHistory = { ...(state.gapResearchHistory ?? {}) }
+  for (const gap of scoped) {
+    const key = gapHistoryKey(gap)
+    const rec = dispatchHistory[key] ?? { timesDispatched: 0, countAfterDispatch: [] }
+    dispatchHistory[key] = { ...rec, timesDispatched: rec.timesDispatched + 1 }
+  }
+  state.gapResearchHistory = dispatchHistory
+  state.lastDispatchedGapKeys = scoped.map(gapHistoryKey)
   // PARALLEL fan-out (spec section 7): each gap is its own independent
   // execution, tracked/validated separately, safe to run concurrently
   // because none mutates shared state — results are merged deterministically below.
@@ -915,10 +1069,26 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
   // GEO_ENRICHMENT_GATE — real, cached Google Places enrichment. A cache
   // hit (this exact venue already looked up for this metro, ever) never
   // repeats the paid call — see metroGeoEnrichmentDriver.ts.
+  //
+  // expectedCountry/metroCenterBias: derived from THIS metro's own
+  // resolved M0 decisions (metroCountry/metroCenter), never a hardcoded
+  // 'US' default — a Vienna run previously found that default silently
+  // misclassifying every real match as a country mismatch. deps.expectedCountry/
+  // deps.metroCenterBias remain as an explicit TEST-ONLY override (never
+  // exercised in production — m0DecisionsResolved already guarantees
+  // state.m0Decisions.metroCountry/metroCenter are set by the time M8 runs).
+  const resolvedM0 = state.m0Decisions
+  const expectedCountry = deps.expectedCountry ?? resolvedM0?.metroCountry
+  const metroCenterBias = deps.metroCenterBias ?? resolvedM0?.metroCenter
+  if (!expectedCountry || !metroCenterBias) {
+    throw new Error(
+      `stepM8BatchCertification: no metroCountry/metroCenter available (state.m0Decisions.metroCountry=${JSON.stringify(resolvedM0?.metroCountry)}, metroCenter=${JSON.stringify(resolvedM0?.metroCenter)}) — m0DecisionsResolved should have made this unreachable in production; only a test that skips M0 entirely (and doesn't inject deps.expectedCountry/deps.metroCenterBias) could hit this.`
+    )
+  }
   const geoCandidates: GeoEnrichmentCandidate[] = certified.map((r) => {
     const candidate = candidatesByName.get(r.candidateName)
     const mapsQuery = candidate?.address?.trim() || `${r.candidateName}, ${candidate?.neighborhood ?? run.projectId}`
-    return { candidateName: r.candidateName, body: r.finalBody, mapsQuery, expectedCountry: deps.expectedCountry ?? 'US', biasLat: deps.metroCenterBias?.lat ?? 0, biasLng: deps.metroCenterBias?.lng ?? 0 }
+    return { candidateName: r.candidateName, body: r.finalBody, mapsQuery, expectedCountry, biasLat: metroCenterBias.lat, biasLng: metroCenterBias.lng }
   })
   const geoRun = await enrichMetroCatalogGeo(run.projectId, geoCandidates, {
     cache: deps.geoEnrichmentCache ?? new FileGeoEnrichmentCacheStore(),

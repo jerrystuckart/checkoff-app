@@ -39,6 +39,8 @@ const RESOLVED_M0 = {
   categoryCatalogTargets: 'Food & drink (1/2), Arts & Culture (1/1)',
   launchSeason: null,
   executionGoAhead: true,
+  metroCountry: 'AT',
+  metroCenter: { lat: 48.2082, lng: 16.3738 }, // Vienna, Stephansplatz-area center
 }
 
 const SNAPSHOT: VerifiedTagSnapshot = {
@@ -181,7 +183,6 @@ async function driveToBoundary(executor: TestExecutor, checkImageReadiness: (pla
       verifiedTagSnapshot: SNAPSHOT,
       placesLookup: async (q: string) => ({ topResult: { placeId: 'p-' + q, name: q.includes('Gumpendorfer') ? 'Cafe Sperl' : 'Kunsthistorisches Museum', formattedAddress: q, lat: 48.2, lng: 16.37, websiteUri: 'https://example.at', country: 'AT', viewportRadiusM: null }, apiError: null }),
       geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
-      expectedCountry: 'AT',
       verifyHomeListRows,
       checkImageReadiness,
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
@@ -295,7 +296,6 @@ test('Vienna DRY RUN: once the missing images are resolved, METRO_LAUNCH_CERTIFI
       verifiedTagSnapshot: SNAPSHOT,
       placesLookup: async (q: string) => ({ topResult: { placeId: 'p-' + q, name: q.includes('Gumpendorfer') ? 'Cafe Sperl' : 'Kunsthistorisches Museum', formattedAddress: q, lat: 48.2, lng: 16.37, websiteUri: 'https://example.at', country: 'AT', viewportRadiusM: null }, apiError: null }),
       geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
-      expectedCountry: 'AT',
       verifyHomeListRows,
       checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: true })),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
@@ -336,7 +336,7 @@ test('Vienna DRY RUN: re-running M8_BATCH_CERTIFICATION (a resumed run re-evalua
   await runStore.put(seeded!)
 
   const firstPass = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor], verifiedTagSnapshot: SNAPSHOT, placesLookup, geoEnrichmentCache, expectedCountry: 'AT', verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }) },
+    { runStore, execStore, executors: [executor], verifiedTagSnapshot: SNAPSHOT, placesLookup, geoEnrichmentCache, verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }) },
     PROJECT_ID,
     { categoryPlan: PLAN }
   )
@@ -353,7 +353,7 @@ test('Vienna DRY RUN: re-running M8_BATCH_CERTIFICATION (a resumed run re-evalua
   await runStore.put(stored!)
 
   const secondPass = await driveMetroLaunch(
-    { runStore, execStore: new InMemoryExecutionStore(), executors: [executor], verifiedTagSnapshot: SNAPSHOT, placesLookup, geoEnrichmentCache, expectedCountry: 'AT', verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }) },
+    { runStore, execStore: new InMemoryExecutionStore(), executors: [executor], verifiedTagSnapshot: SNAPSHOT, placesLookup, geoEnrichmentCache, verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }) },
     PROJECT_ID,
     { categoryPlan: PLAN }
   )
@@ -393,7 +393,6 @@ test('Vienna DRY RUN: BUSINESS_ACTIVATION_KIT_GATE is invoked by the real driver
       verifiedTagSnapshot: SNAPSHOT,
       placesLookup: async (q: string) => ({ topResult: { placeId: 'p-' + q, name: q.includes('Gumpendorfer') ? 'Cafe Sperl' : 'Kunsthistorisches Museum', formattedAddress: q, lat: 48.2, lng: 16.37, websiteUri: 'https://example.at', country: 'AT', viewportRadiusM: null }, apiError: null }),
       geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
-      expectedCountry: 'AT',
       verifyHomeListRows,
       checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: true })),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
