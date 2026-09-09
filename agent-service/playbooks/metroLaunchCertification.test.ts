@@ -65,6 +65,48 @@ test('imageSelectionOnlyBlock: READY_TO_ACTIVATE even when IMAGE_READINESS_GATE 
   assert.deepEqual(result.missingGates, ['IMAGE_READINESS_GATE'])
 })
 
+// ---------------------------------------------------------------------------
+// pendingHumanStepsOnly (Chief Phase 2AG, 2026-09-09 instruction): the
+// SAME "known pending human step, not a data problem" exemption extends
+// to HOME_LIST_CERTIFICATION_GATE, but ONLY for "the generated SQL
+// patch just hasn't been applied yet" — never a genuine content problem
+// in an already-applied list.
+// ---------------------------------------------------------------------------
+
+test('pendingHumanStepsOnly: READY TO ACTIVATE with the "SQL apply and Home-card images still required" framing when HOME_LIST_CERTIFICATION_GATE fails ONLY because no rows exist yet, alongside missing images', () => {
+  const gates = allRequiredGatesPassing().map((g) => {
+    if (g.key === 'HOME_LIST_CERTIFICATION_GATE') {
+      return { ...g, verdict: 'FAIL' as const, reason: "4/4 intended Home-visible list(s) failed certification: Fall 2026 — Vienna Metro [no row exists in public.lists at all — curated_lists/curated_list_items alone never satisfy Home visibility] | Themed list: After Dark [no row exists in public.lists at all — curated_lists/curated_list_items alone never satisfy Home visibility]" }
+    }
+    if (g.key === 'IMAGE_READINESS_GATE') return { ...g, verdict: 'FAIL' as const, reason: '4 required Home card(s) still need an image.' }
+    return g
+  })
+  const result = certifyMetroLaunch({ metroName: 'Vienna, Austria', gates, summary: goodSummary({ imagesComplete: false, homeQueryPass: false }) })
+  assert.equal(result.verdict, 'READY_TO_ACTIVATE', 'a Home-list gate failing only because the SQL has not been applied yet must never block the build')
+  assert.equal(result.pendingHumanStepsOnly, true)
+  assert.match(result.reportText, /READY TO ACTIVATE — SQL apply and Home-card images still required/)
+  assert.doesNotMatch(result.reportText, /^Verdict: BLOCKED/m)
+})
+
+test('pendingHumanStepsOnly: false, and verdict stays BLOCKED, when a Home-list failure is a REAL content problem (not just "no row exists yet")', () => {
+  const gates = allRequiredGatesPassing().map((g) => {
+    if (g.key === 'HOME_LIST_CERTIFICATION_GATE') {
+      return { ...g, verdict: 'FAIL' as const, reason: "1/4 intended Home-visible list(s) failed certification: Fall 2026 — Vienna Metro [public.list_items count (28) does not match the intended membership size (30) — the mirror from the catalog is incomplete or stale]" }
+    }
+    return g
+  })
+  const result = certifyMetroLaunch({ metroName: 'Vienna, Austria', gates, summary: goodSummary({ homeQueryPass: false }) })
+  assert.equal(result.verdict, 'BLOCKED', 'a genuinely incomplete/stale list mirror is a real data problem, never treated as "just pending SQL apply"')
+  assert.equal(result.pendingHumanStepsOnly, false)
+  assert.doesNotMatch(result.reportText, /SQL apply and Home-card images still required/)
+})
+
+test('pendingHumanStepsOnly: false when everything passes — the field is only meaningful alongside a real pending-step exemption', () => {
+  const result = certifyMetroLaunch({ metroName: 'Vienna, Austria', gates: allRequiredGatesPassing(), summary: goodSummary() })
+  assert.equal(result.verdict, 'READY_TO_ACTIVATE')
+  assert.equal(result.pendingHumanStepsOnly, false)
+})
+
 test('a single failing required gate blocks the whole certification', () => {
   const gates = allRequiredGatesPassing().map((g) => (g.key === 'TAG_CERTIFICATION_GATE' ? { ...g, verdict: 'FAIL' as const, reason: '3 items have fewer than 6 tags' } : g))
   const result = certifyMetroLaunch({ metroName: 'Vienna, Austria', gates, summary: goodSummary({ tagsComplete: false }) })

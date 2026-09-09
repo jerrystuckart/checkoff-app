@@ -93,6 +93,35 @@ export interface MetroLaunchCertificationReport {
   reportText: string
   /** true when IMAGE_READINESS_GATE is the ONLY failing/missing gate — every other required gate passed. Never blocks the verdict (see certifyMetroLaunch's blockingFailures computation): `verdict` is READY_TO_ACTIVATE in this case, with reportText carrying the distinct "READY TO ACTIVATE — manual list images required before production activation" framing and the exact list of Home cards still needing one, as a human pre-activation task, never a build blocker. */
   imageSelectionOnlyBlock: boolean
+  /**
+   * Chief Phase 2AG (2026-09-09 instruction) — generalizes imageSelectionOnlyBlock:
+   * true when EVERY failing/missing gate is a known, already-generated pending
+   * human step rather than a genuine catalog/data problem — IMAGE_READINESS_GATE
+   * (images not yet selected), and/or HOME_LIST_CERTIFICATION_GATE ONLY when
+   * every failing list's sole issue is "no row exists in public.lists at all"
+   * (see isHomeListGatePendingSqlOnly) — i.e. the SQL patch simply hasn't been
+   * applied yet, never a wrong/incomplete list once applied. Any OTHER
+   * HOME_LIST_CERTIFICATION_GATE issue (wrong item count, broken membership,
+   * missing image on a list, runtime query mismatch) is a real data problem and
+   * keeps this false, same as any other required gate failing for a real reason.
+   */
+  pendingHumanStepsOnly: boolean
+}
+
+/**
+ * A HOME_LIST_CERTIFICATION_GATE failure is "pending SQL apply only" when
+ * every failing list's issue text is EXACTLY the "no row exists" case
+ * homeListCertification.ts's certifyHomeListRow produces (that function
+ * returns immediately after appending ONLY that one issue when a row
+ * doesn't exist — it is never combined with any other issue for the same
+ * list) — detected here by confirming the reason contains that phrase and
+ * none of the OTHER issue phrases certifyHomeListRow can produce for a
+ * row that does exist but fails some other check.
+ */
+function isHomeListGatePendingSqlOnly(reason: string): boolean {
+  if (!reason.includes('no row exists in public.lists at all')) return false
+  const otherIssuePhrases = ['is_official is not true', 'is_public is not true', 'metro_id (', 'is_featured_eligible is', 'does not match the intended membership size', 'does not resolve to a real current item', 'hero/card image is not populated', 'does NOT return this row']
+  return !otherIssuePhrases.some((p) => reason.includes(p))
 }
 
 /**
@@ -139,12 +168,25 @@ export function certifyMetroLaunch(input: MetroLaunchCertificationInput): MetroL
   // lists, activation-kit verification — still fails closed exactly as
   // before; only IMAGE_READINESS_GATE is exempted, and only when it is
   // the sole thing failing.
-  const blockingFailures = failingGates.filter((g) => g.key !== 'IMAGE_READINESS_GATE')
+  //
+  // Chief Phase 2AG (2026-09-09 instruction): the SAME "known pending
+  // human step, not a data problem" exemption extends to
+  // HOME_LIST_CERTIFICATION_GATE, but ONLY for the specific case of "the
+  // generated SQL patch just hasn't been applied yet" — a real content
+  // problem in an applied list (wrong item count, broken membership,
+  // missing image, runtime-query mismatch) is NOT exempted and still
+  // blocks, exactly like before.
+  const blockingFailures = failingGates.filter((g) => {
+    if (g.key === 'IMAGE_READINESS_GATE') return false
+    if (g.key === 'HOME_LIST_CERTIFICATION_GATE' && isHomeListGatePendingSqlOnly(g.reason)) return false
+    return true
+  })
   const verdict: MetroLaunchVerdict = missingGates.length === 0 && blockingFailures.length === 0 ? 'READY_TO_ACTIVATE' : 'BLOCKED'
+  const pendingHumanStepsOnly = verdict === 'READY_TO_ACTIVATE' && failingGates.length > 0
 
-  const reportText = buildReportText(input.metroName, verdict, input.summary, passingGates, failingGates, missingGates, imageSelectionOnlyBlock)
+  const reportText = buildReportText(input.metroName, verdict, input.summary, passingGates, failingGates, missingGates, imageSelectionOnlyBlock, pendingHumanStepsOnly)
 
-  return { verdict, metroName: input.metroName, passingGates, failingGates, missingGates, summary: input.summary, reportText, imageSelectionOnlyBlock }
+  return { verdict, metroName: input.metroName, passingGates, failingGates, missingGates, summary: input.summary, reportText, imageSelectionOnlyBlock, pendingHumanStepsOnly }
 }
 
 function buildReportText(
@@ -154,12 +196,19 @@ function buildReportText(
   passingGates: string[],
   failingGates: readonly StagingGateResult[],
   missingGates: readonly string[],
-  imageSelectionOnlyBlock: boolean
+  imageSelectionOnlyBlock: boolean,
+  pendingHumanStepsOnly: boolean
 ): string {
   const lines: string[] = []
   lines.push(`METRO_LAUNCH_CERTIFICATION — ${metroName}`)
   if (verdict === 'READY_TO_ACTIVATE') {
-    lines.push(imageSelectionOnlyBlock ? 'Verdict: READY TO ACTIVATE — manual list images required before production activation' : 'Verdict: READY_TO_ACTIVATE')
+    if (imageSelectionOnlyBlock) {
+      lines.push('Verdict: READY TO ACTIVATE — manual list images required before production activation')
+    } else if (pendingHumanStepsOnly) {
+      lines.push('Verdict: READY TO ACTIVATE — SQL apply and Home-card images still required')
+    } else {
+      lines.push('Verdict: READY_TO_ACTIVATE')
+    }
     lines.push('')
     lines.push(`Catalog: ${summary.catalogCount} items`)
     lines.push(`Geo coverage: ${summary.geoCoveragePercent}% (${summary.geoExceptionsCount} recorded exception(s))`)
@@ -169,10 +218,10 @@ function buildReportText(
     lines.push(`Themed lists: ${summary.themedListsCount}`)
     lines.push(`Images: ${summary.imagesComplete ? 'complete' : 'INCOMPLETE'}`)
     lines.push(`Runtime Home query: ${summary.homeQueryPass ? 'PASS' : 'FAIL'}`)
-    if (imageSelectionOnlyBlock) {
+    if (pendingHumanStepsOnly) {
       lines.push('')
-      lines.push('Human pre-activation task (does NOT block this build; select/upload before Jerry approves public activation):')
-      lines.push(`  - ${failingGates[0].reason}`)
+      lines.push('Human pre-activation task(s) (do NOT block this build; complete before Jerry approves public activation):')
+      for (const g of failingGates) lines.push(`  - ${g.reason}`)
     }
   } else {
     lines.push('Verdict: BLOCKED')
