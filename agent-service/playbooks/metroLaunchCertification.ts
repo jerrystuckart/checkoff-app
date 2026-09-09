@@ -91,7 +91,7 @@ export interface MetroLaunchCertificationReport {
   summary: MetroLaunchCertificationSummary
   /** Human-readable, ready-to-paste report matching the exact shape Jerry specified. */
   reportText: string
-  /** true when the ONLY thing keeping this metro from READY_TO_ACTIVATE is IMAGE_READINESS_GATE — every other required gate passed. The pipeline still reports BLOCKED (image selection is a genuine human decision), but with the distinct "BLOCKED — image selection required" framing rather than a generic blocked report, and only ever computed AFTER every other gate has already run. */
+  /** true when IMAGE_READINESS_GATE is the ONLY failing/missing gate — every other required gate passed. Never blocks the verdict (see certifyMetroLaunch's blockingFailures computation): `verdict` is READY_TO_ACTIVATE in this case, with reportText carrying the distinct "READY TO ACTIVATE — manual list images required before production activation" framing and the exact list of Home cards still needing one, as a human pre-activation task, never a build blocker. */
   imageSelectionOnlyBlock: boolean
 }
 
@@ -123,10 +123,24 @@ export function certifyMetroLaunch(input: MetroLaunchCertificationInput): MetroL
     else passingGates.push(key)
   }
 
-  const verdict: MetroLaunchVerdict = missingGates.length === 0 && failingGates.length === 0 ? 'READY_TO_ACTIVATE' : 'BLOCKED'
-  // "The only unresolved thing is images" — computed AFTER every other
-  // gate already ran, never used to short-circuit the pipeline earlier.
-  const imageSelectionOnlyBlock = verdict === 'BLOCKED' && missingGates.length === 0 && failingGates.length === 1 && failingGates[0].key === 'IMAGE_READINESS_GATE'
+  // "The only unresolved thing is images" — computed regardless of the
+  // final verdict, from the exact same failingGates/missingGates this
+  // function already derived above.
+  const imageSelectionOnlyBlock = missingGates.length === 0 && failingGates.length === 1 && failingGates[0].key === 'IMAGE_READINESS_GATE'
+
+  // Images are a deliberate, permanent exception to "every required gate
+  // must pass": Winston cannot autonomously select/upload Home-card
+  // images (a real human/business judgment call — see imageReadiness.ts)
+  // and missing images are a manual step Jerry performs AFTER the build,
+  // BEFORE public activation — never a reason the build itself reports
+  // BLOCKED (Jerry, 2026-09-09, correcting the prior "BLOCKED — image
+  // selection required" framing, which was still a blocking verdict).
+  // Every OTHER required gate — catalog, editorial, tags, metadata, geo,
+  // lists, activation-kit verification — still fails closed exactly as
+  // before; only IMAGE_READINESS_GATE is exempted, and only when it is
+  // the sole thing failing.
+  const blockingFailures = failingGates.filter((g) => g.key !== 'IMAGE_READINESS_GATE')
+  const verdict: MetroLaunchVerdict = missingGates.length === 0 && blockingFailures.length === 0 ? 'READY_TO_ACTIVATE' : 'BLOCKED'
 
   const reportText = buildReportText(input.metroName, verdict, input.summary, passingGates, failingGates, missingGates, imageSelectionOnlyBlock)
 
@@ -143,20 +157,10 @@ function buildReportText(
   imageSelectionOnlyBlock: boolean
 ): string {
   const lines: string[] = []
-  if (imageSelectionOnlyBlock) {
-    lines.push(`METRO_LAUNCH_CERTIFICATION — ${metroName}`)
-    lines.push('Verdict: BLOCKED — image selection required')
-    lines.push('')
-    lines.push('Every other required gate passed. The only remaining step is selecting/uploading images for the Home cards below — a human/business judgment call, never an automated pick:')
-    lines.push(`  - ${failingGates[0].reason}`)
-    lines.push('')
-    lines.push(`Passing gates (${passingGates.length}): ${passingGates.join(', ')}`)
-    return lines.join('\n')
-  }
   lines.push(`METRO_LAUNCH_CERTIFICATION — ${metroName}`)
-  lines.push(`Verdict: ${verdict}`)
-  lines.push('')
   if (verdict === 'READY_TO_ACTIVATE') {
+    lines.push(imageSelectionOnlyBlock ? 'Verdict: READY TO ACTIVATE — manual list images required before production activation' : 'Verdict: READY_TO_ACTIVATE')
+    lines.push('')
     lines.push(`Catalog: ${summary.catalogCount} items`)
     lines.push(`Geo coverage: ${summary.geoCoveragePercent}% (${summary.geoExceptionsCount} recorded exception(s))`)
     lines.push(`Tags: ${summary.tagsComplete ? 'complete (6-8 canonical tags/item)' : 'INCOMPLETE'}`)
@@ -165,7 +169,14 @@ function buildReportText(
     lines.push(`Themed lists: ${summary.themedListsCount}`)
     lines.push(`Images: ${summary.imagesComplete ? 'complete' : 'INCOMPLETE'}`)
     lines.push(`Runtime Home query: ${summary.homeQueryPass ? 'PASS' : 'FAIL'}`)
+    if (imageSelectionOnlyBlock) {
+      lines.push('')
+      lines.push('Human pre-activation task (does NOT block this build; select/upload before Jerry approves public activation):')
+      lines.push(`  - ${failingGates[0].reason}`)
+    }
   } else {
+    lines.push('Verdict: BLOCKED')
+    lines.push('')
     lines.push('BLOCKED — the following are true human blockers or unresolved gate failures:')
     for (const key of missingGates) lines.push(`  - ${key}: never ran (missing from certification input)`)
     for (const gate of failingGates) lines.push(`  - ${gate.key}: ${gate.reason}`)

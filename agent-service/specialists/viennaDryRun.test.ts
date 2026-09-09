@@ -185,6 +185,8 @@ async function driveToBoundary(executor: TestExecutor, checkImageReadiness: (pla
       verifyHomeListRows,
       checkImageReadiness,
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      // No real DB in this dry run — a fake standing in for agent.projects bootstrap, exactly like every other real side effect this driver injects.
+      ensureProject: async () => ({ projectId: 'dry-run-project-id', created: false }),
     },
     PROJECT_ID,
     { categoryPlan: PLAN }
@@ -232,19 +234,26 @@ test('Vienna DRY RUN: the real driver invokes every required phase, self-repairs
   assert.match(state.homeListSqlPatch, /INSERT INTO public\.lists/)
   assert.doesNotMatch(state.homeListSqlPatch, /CREATE TEMP(ORARY)? TABLE/i, 'no cross-statement TEMP-table dependence in the generated patch')
 
-  // Final certification: BLOCKED on images only — every other real gate passed.
+  // Final certification: READY_TO_ACTIVATE on images-only — every other
+  // real gate passed, and missing list images alone must never block the
+  // build (Jerry, 2026-09-09) — only a distinct non-blocking framing.
   const report = state.finalCertificationReport
-  assert.equal(report.verdict, 'BLOCKED')
+  assert.equal(report.verdict, 'READY_TO_ACTIVATE')
   assert.equal(report.imageSelectionOnlyBlock, true, 'every other required gate passed — only image selection remains')
-  assert.match(report.reportText, /BLOCKED — image selection required/)
+  assert.match(report.reportText, /READY TO ACTIVATE — manual list images required before production activation/)
   assert.match(run.jerryReason ?? '', /launch-readiness boundary/)
-  assert.match(String(run.decisionPacket?.chiefRecommendation ?? ''), /image selection required/)
+  assert.match(String(run.decisionPacket?.chiefRecommendation ?? ''), /manual list images required/)
 })
 
-test('Vienna DRY RUN: once the missing images are resolved, METRO_LAUNCH_CERTIFICATION reaches READY_TO_ACTIVATE', async () => {
+test('Vienna DRY RUN: once the missing images are resolved, METRO_LAUNCH_CERTIFICATION reaches READY_TO_ACTIVATE with imageSelectionOnlyBlock cleared', async () => {
   const executor = buildExecutor()
   const { run, runStore } = await driveToBoundary(executor, async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })))
-  assert.equal((run.state as any).finalCertificationReport.verdict, 'BLOCKED')
+  // Already READY_TO_ACTIVATE even with images outstanding (images-only
+  // is never a build blocker) — the assertion this test actually proves
+  // is that resolving images clears imageSelectionOnlyBlock and its
+  // "manual list images required" framing, not that the verdict flips.
+  assert.equal((run.state as any).finalCertificationReport.verdict, 'READY_TO_ACTIVATE')
+  assert.equal((run.state as any).finalCertificationReport.imageSelectionOnlyBlock, true)
 
   // Reset to re-run M10 with the SAME run, now with images satisfied —
   // exactly how a real resumed run re-evaluates after Jerry finishes a
@@ -290,6 +299,7 @@ test('Vienna DRY RUN: once the missing images are resolved, METRO_LAUNCH_CERTIFI
       verifyHomeListRows,
       checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: true })),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'dry-run-project-id', created: false }),
     },
     PROJECT_ID,
     { categoryPlan: PLAN }
@@ -299,7 +309,9 @@ test('Vienna DRY RUN: once the missing images are resolved, METRO_LAUNCH_CERTIFI
   assert.equal(finalReport.verdict, 'READY_TO_ACTIVATE', `expected READY_TO_ACTIVATE, got BLOCKED: ${finalReport.failingGates?.map((g: any) => g.key + ': ' + g.reason).join(' | ')}`)
   assert.equal(finalReport.missingGates.length, 0)
   assert.equal(finalReport.failingGates.length, 0)
+  assert.equal(finalReport.imageSelectionOnlyBlock, false, 'images are now satisfied — the manual-images framing must be cleared')
   assert.match(finalReport.reportText, /READY_TO_ACTIVATE/)
+  assert.doesNotMatch(finalReport.reportText, /manual list images required/)
   assert.match(String(resumed.decisionPacket?.chiefRecommendation ?? ''), /READY_TO_ACTIVATE/)
   // Public launch is STILL always a human decision — this driver never
   // auto-flips metro_areas.is_active, even when every gate is green.

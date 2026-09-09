@@ -33,24 +33,36 @@ test('a fully passing metro certifies READY_TO_ACTIVATE', () => {
   assert.match(result.reportText, /150 items/)
 })
 
-test('imageSelectionOnlyBlock: BLOCKED with the special "image selection required" framing when IMAGE_READINESS_GATE is the ONLY failing gate', () => {
+test('imageSelectionOnlyBlock: READY_TO_ACTIVATE (never BLOCKED) with the "manual list images required" framing when IMAGE_READINESS_GATE is the ONLY failing gate', () => {
   const gates = allRequiredGatesPassing().map((g) => (g.key === 'IMAGE_READINESS_GATE' ? { ...g, verdict: 'FAIL' as const, reason: '2 required Home card(s) still need an image: Primary seasonal list, Themed list: Hidden Vienna.' } : g))
   const result = certifyMetroLaunch({ metroName: 'Vienna, Austria', gates, summary: goodSummary({ imagesComplete: false }) })
-  assert.equal(result.verdict, 'BLOCKED')
+  assert.equal(result.verdict, 'READY_TO_ACTIVATE', 'missing list images alone must never block the build')
   assert.equal(result.imageSelectionOnlyBlock, true)
-  assert.match(result.reportText, /BLOCKED — image selection required/)
+  assert.match(result.reportText, /READY TO ACTIVATE — manual list images required before production activation/)
   assert.match(result.reportText, /Primary seasonal list, Themed list: Hidden Vienna/)
+  assert.doesNotMatch(result.reportText, /^Verdict: BLOCKED/m)
 })
 
-test('imageSelectionOnlyBlock: false when images fail alongside another gate — never framed as "just images" when it is not', () => {
+test('imageSelectionOnlyBlock: false, and verdict stays BLOCKED, when images fail alongside another gate — never framed as "just images" when it is not', () => {
   const gates = allRequiredGatesPassing().map((g) => {
     if (g.key === 'IMAGE_READINESS_GATE') return { ...g, verdict: 'FAIL' as const, reason: 'missing images' }
     if (g.key === 'TAG_CERTIFICATION_GATE') return { ...g, verdict: 'FAIL' as const, reason: 'missing tags' }
     return g
   })
   const result = certifyMetroLaunch({ metroName: 'Vienna, Austria', gates, summary: goodSummary() })
+  assert.equal(result.verdict, 'BLOCKED')
   assert.equal(result.imageSelectionOnlyBlock, false)
-  assert.doesNotMatch(result.reportText, /image selection required/)
+  assert.doesNotMatch(result.reportText, /manual list images required/)
+})
+
+test('imageSelectionOnlyBlock: READY_TO_ACTIVATE even when IMAGE_READINESS_GATE is MISSING entirely (never evaluated), as long as it is the only gap', () => {
+  const gates = allRequiredGatesPassing().filter((g) => g.key !== 'IMAGE_READINESS_GATE')
+  const result = certifyMetroLaunch({ metroName: 'Vienna, Austria', gates, summary: goodSummary({ imagesComplete: false }) })
+  // A missing gate is tracked separately from a failing one — this proves
+  // the exemption applies only to an explicit IMAGE_READINESS_GATE FAIL,
+  // never to it being silently absent from the input.
+  assert.equal(result.verdict, 'BLOCKED')
+  assert.deepEqual(result.missingGates, ['IMAGE_READINESS_GATE'])
 })
 
 test('a single failing required gate blocks the whole certification', () => {

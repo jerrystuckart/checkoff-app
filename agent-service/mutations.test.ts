@@ -36,7 +36,7 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomUUID } from 'node:crypto'
-import { createTask, transitionTask, updateTaskPlan } from './mutations'
+import { createTask, transitionTask, updateTaskPlan, ensureProject } from './mutations'
 import { query, withWriteTransaction, closePool } from './db'
 import {
   TaskNotFoundError,
@@ -653,4 +653,72 @@ test('updateTaskPlan: optimistic concurrency conflict is rejected with no mutati
     ConcurrencyConflictError
   )
   assert.deepEqual(await eventTypesFor(created.task.id), ['CREATED'])
+})
+
+// ---------------------------------------------------------------------------
+// ensureProject — Chief Phase 2X, the metro_launch ENSURE_METRO_PROJECT
+// bootstrap step's underlying mutation.
+// ---------------------------------------------------------------------------
+
+function ensureProjectTestKey(label: string): string {
+  return `phase0d_test_ensure_project-${RUN_ID}-${label}`
+}
+
+test('ensureProject: a genuinely missing project is created exactly once', { skip }, async () => {
+  const key = ensureProjectTestKey('missing')
+  const result = await ensureProject({ projectKey: key, name: 'Ensure Project Test', projectType: 'METRO', ownerKey: ACTOR })
+  assert.equal(result.created, true)
+  assert.ok(result.projectId)
+
+  const row = await query<{ project_key: string; project_type: string }>('SELECT project_key, project_type FROM agent.projects WHERE project_key = $1', [key])
+  assert.equal(row.length, 1)
+  assert.equal(row[0].project_type, 'METRO')
+})
+
+test('ensureProject: an existing project is reused exactly — never duplicated', { skip }, async () => {
+  const key = ensureProjectTestKey('reuse')
+  const first = await ensureProject({ projectKey: key, name: 'Ensure Project Test', projectType: 'METRO', ownerKey: ACTOR })
+  assert.equal(first.created, true)
+
+  const second = await ensureProject({ projectKey: key, name: 'Ensure Project Test (retry)', projectType: 'METRO', ownerKey: ACTOR })
+  assert.equal(second.created, false)
+  assert.equal(second.projectId, first.projectId, 'the SAME row must be returned, never a new one')
+
+  const rows = await query('SELECT id FROM agent.projects WHERE project_key = $1', [key])
+  assert.equal(rows.length, 1, 'exactly one row for this project_key — no duplicate was created')
+})
+
+test('ensureProject: a resumed/repeated call (simulating a resumed run) never creates a duplicate, even across many repeats', { skip }, async () => {
+  const key = ensureProjectTestKey('resumed')
+  const results: Awaited<ReturnType<typeof ensureProject>>[] = []
+  for (let i = 0; i < 4; i++) {
+    results.push(await ensureProject({ projectKey: key, name: 'Ensure Project Test', projectType: 'METRO', ownerKey: ACTOR }))
+  }
+  assert.equal(results[0].created, true)
+  assert.ok(results.slice(1).every((r) => r.created === false))
+  assert.ok(results.every((r) => r.projectId === results[0].projectId))
+
+  const rows = await query('SELECT id FROM agent.projects WHERE project_key = $1', [key])
+  assert.equal(rows.length, 1)
+})
+
+test('ensureProject: an existing project with a DIFFERENT project_type fails closed — never silently reused as an ambiguous identity', { skip }, async () => {
+  const key = ensureProjectTestKey('type-mismatch')
+  await ensureProject({ projectKey: key, name: 'Ensure Project Test', projectType: 'DESTINATION_HUB', ownerKey: ACTOR })
+
+  await assert.rejects(() => ensureProject({ projectKey: key, name: 'Ensure Project Test', projectType: 'METRO', ownerKey: ACTOR }), IdempotencyConflictError)
+
+  // The original row is untouched — a failed ensureProject call never
+  // mutates the conflicting existing row.
+  const rows = await query<{ project_type: string }>('SELECT project_type FROM agent.projects WHERE project_key = $1', [key])
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].project_type, 'DESTINATION_HUB')
+})
+
+test('ensureProject: an unresolvable owner fails closed with a clear error, not a silently ownerless row', { skip }, async () => {
+  const key = ensureProjectTestKey('bad-owner')
+  await assert.rejects(() => ensureProject({ projectKey: key, name: 'Ensure Project Test', projectType: 'METRO', ownerKey: 'no_such_owner_key' }))
+
+  const rows = await query('SELECT id FROM agent.projects WHERE project_key = $1', [key])
+  assert.equal(rows.length, 0, 'no row should have been created when owner resolution fails')
 })

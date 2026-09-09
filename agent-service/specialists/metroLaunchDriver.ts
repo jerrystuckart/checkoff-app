@@ -59,6 +59,7 @@ import {
 import { resolveCanonicalTagVocabulary, loadGeneratedTagSnapshot, type VerifiedTagSnapshot } from './tagVocabularyProvider'
 import { evaluateActivationKitGate, validateActivationKitReference, UNIVERSAL_BUSINESS_ACTIVATION_KIT_URL } from '../playbooks/businessActivationKit'
 import { checkActivationKitUrlLive, type ActivationKitLiveCheckResult } from './businessActivationKitCheck'
+import { ensureProject as ensureProjectMutation, type EnsureProjectInput, type EnsureProjectResult } from '../mutations'
 
 export const METRO_LAUNCH_DRIVER_PLAYBOOK_KEY = 'metro_launch'
 
@@ -181,6 +182,8 @@ export interface MetroDriverDeps {
   outreachCopy?: string
   /** M10 BUSINESS_ACTIVATION_KIT_GATE: the ONE bounded network check (canonical URL live?) — defaults to a real fetch with an 8s timeout, never retried in a loop by the driver itself. Inject a fake in tests. */
   checkActivationKitLive?: (url: string) => Promise<ActivationKitLiveCheckResult>
+  /** ENSURE_METRO_PROJECT (bootstrap, before M0): resolves-or-creates the agent.projects row this run's task-store identity requires (createTask's projectKey lookup — see dbPlaybookRunStore.ts/dbExecutionStore.ts). Defaults to the real ensureProject mutation (mutations.ts) — tests inject a fake, exactly like every other real side effect in this file. */
+  ensureProject?: (input: EnsureProjectInput) => Promise<EnsureProjectResult>
 }
 
 export function executionId(runId: string, stage: string, label: string): string {
@@ -1143,10 +1146,10 @@ async function stepLaunchBoundary(run: PlaybookRunRecord): Promise<PlaybookRunRe
     why: 'metro_launch.public_launch is APPROVAL_REQUIRED with no exception path.',
     chiefRecommendation: finalReport
       ? finalReport.verdict === 'READY_TO_ACTIVATE'
-        ? `METRO_LAUNCH_CERTIFICATION: READY_TO_ACTIVATE — every required gate (item certification, distinctive-experience, venue quoting, opening distribution, tags, metadata, geo enrichment, Home-list mirror, image readiness) passed. Recommend approving launch.`
-        : finalReport.imageSelectionOnlyBlock
-          ? `METRO_LAUNCH_CERTIFICATION: BLOCKED — image selection required. Every other required gate passed; only image selection for the Home cards below remains.`
-          : `METRO_LAUNCH_CERTIFICATION: BLOCKED — ${finalReport.failingGates.length} failing / ${finalReport.missingGates.length} missing required gate(s). See metroLaunchCertification below for the exact list.`
+        ? finalReport.imageSelectionOnlyBlock
+          ? `METRO_LAUNCH_CERTIFICATION: READY TO ACTIVATE — manual list images required before production activation. Every other required gate (item certification, distinctive-experience, venue quoting, opening distribution, tags, metadata, geo enrichment, Home-list mirror) passed; only image selection for the Home cards below remains as a human pre-activation task, not a build blocker.`
+          : `METRO_LAUNCH_CERTIFICATION: READY_TO_ACTIVATE — every required gate (item certification, distinctive-experience, venue quoting, opening distribution, tags, metadata, geo enrichment, Home-list mirror, image readiness) passed. Recommend approving launch.`
+        : `METRO_LAUNCH_CERTIFICATION: BLOCKED — ${finalReport.failingGates.length} failing / ${finalReport.missingGates.length} missing required gate(s). See metroLaunchCertification below for the exact list.`
       : gates.every((g) => g.verdict === 'PASS')
         ? 'All computed gates pass — recommend proceeding to real M7-M13 build once Jerry approves.'
         : 'Some gates show synthetic placeholder data only in this driver phase — a real build would need real M9/M13 evidence before this recommendation carries weight.',
@@ -1169,6 +1172,50 @@ export interface DriveMetroLaunchOptions {
   depthTargets?: GeographicDepthTarget[]
   /** Bounds how many stage-steps ONE call will perform — prevents an unbounded synchronous loop even with guardrails misconfigured. */
   maxSteps?: number
+  /** ENSURE_METRO_PROJECT: overrides the derived agent.projects.name for this metro. Defaults to a humanized form of projectId (e.g. "vienna_austria" -> "Vienna Austria Metro"). */
+  projectName?: string
+  /** ENSURE_METRO_PROJECT: overrides the derived agent.projects.summary for this metro. */
+  projectSummary?: string
+}
+
+export const METRO_BUILDER_OWNER_KEY = 'metro_builder'
+export const METRO_PROJECT_TYPE = 'METRO'
+
+/** "vienna_austria" -> "Vienna Austria Metro" — a readable default, never used to derive anything other than the agent.projects display name (project identity itself is always the exact projectId/project_key, never reparsed from this). */
+export function deriveMetroProjectName(projectId: string): string {
+  const words = projectId
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+  return `${words.join(' ')} Metro`
+}
+
+/**
+ * ENSURE_METRO_PROJECT — the bootstrap step that always runs before M0.
+ * Idempotent: an existing agent.projects row for this projectId is
+ * reused exactly (never duplicated, never re-created); a genuinely
+ * missing row is created automatically so "Winston, build <metro>" never
+ * has a hidden "first go create a project row in Supabase" prerequisite.
+ * Fails closed (throws) if the existing row's project_type isn't METRO —
+ * an ambiguous identity collision, never silently reused. This is
+ * agent.* operational bookkeeping, never public.* production content, so
+ * it needs no Jerry-run SQL and no elevated privileges beyond what
+ * agent_service already has (see mutations.ts's ensureProject).
+ */
+export interface EnsureMetroProjectDeps {
+  /** Defaults to the real ensureProject mutation (mutations.ts) — tests inject a fake. */
+  ensureProject?: (input: EnsureProjectInput) => Promise<EnsureProjectResult>
+}
+
+export async function ensureMetroProject(deps: EnsureMetroProjectDeps, projectId: string, options: Pick<DriveMetroLaunchOptions, 'projectName' | 'projectSummary'> = {}): Promise<EnsureProjectResult> {
+  const ensure = deps.ensureProject ?? ensureProjectMutation
+  return ensure({
+    projectKey: projectId,
+    name: options.projectName ?? deriveMetroProjectName(projectId),
+    projectType: METRO_PROJECT_TYPE,
+    ownerKey: METRO_BUILDER_OWNER_KEY,
+    summary: options.projectSummary ?? `Metro launch build for "${projectId}" — bootstrapped automatically by the metro_launch driver's ENSURE_METRO_PROJECT step.`,
+  })
 }
 
 /**
@@ -1178,6 +1225,15 @@ export interface DriveMetroLaunchOptions {
  * this IS the resumability contract (spec section 2).
  */
 export async function driveMetroLaunch(deps: MetroDriverDeps, projectId: string, options: DriveMetroLaunchOptions): Promise<PlaybookRunRecord> {
+  // ENSURE_METRO_PROJECT runs before anything else, every call — the
+  // FIRST persisted write for a brand-new run (getOrCreateRun's own
+  // put(), below) already requires this row to exist (createTask
+  // resolves projectKey -> agent.projects), so bootstrap cannot happen
+  // any later than this. Idempotent, so re-running it on every resumed
+  // call (not just the very first) is deliberate, not wasted work — see
+  // ensureMetroProject's doc.
+  await ensureMetroProject(deps, projectId, { projectName: options.projectName, projectSummary: options.projectSummary })
+
   let run = await getOrCreateRun(deps.runStore, METRO_LAUNCH_DRIVER_PLAYBOOK_KEY, projectId, 'M0_METRO_DEFINITION')
   if (run.status === 'PAUSED' || run.status === 'DONE') return run
   if (run.status === 'NEEDS_JERRY' || run.status === 'BLOCKED') {

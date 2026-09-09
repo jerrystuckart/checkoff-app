@@ -43,7 +43,7 @@ import type { SpecialistResultEnvelope } from './specialists/types'
 import type { PlaybookRunStore, PlaybookRunRecord } from './specialists/playbookRun'
 import { playbookRunId, pauseRun, resumeRun, recordJerryDecision, getOrCreateRun } from './specialists/playbookRun'
 import { DbPlaybookRunStore } from './specialists/dbPlaybookRunStore'
-import { driveMetroLaunch, type MetroM0Decisions } from './specialists/metroLaunchDriver'
+import { driveMetroLaunch, ensureMetroProject, type MetroM0Decisions } from './specialists/metroLaunchDriver'
 import { driveDestinationHub } from './specialists/destinationHubDriver'
 import { RemoteAiExecutor } from './specialists/remoteAiExecutor'
 import { AnthropicMessagesAdapter } from './specialists/remoteAiExecutor'
@@ -131,6 +131,19 @@ async function main() {
     const [playbookKey, projectId, ...flags] = rest0
     const executors = buildDefaultExecutors()
     if (playbookKey === 'metro_launch') {
+      const projectNameFlagIdx = flags.indexOf('--project-name')
+      const projectName: string | undefined = projectNameFlagIdx >= 0 ? flags[projectNameFlagIdx + 1] : undefined
+      const projectSummaryFlagIdx = flags.indexOf('--project-summary')
+      const projectSummary: string | undefined = projectSummaryFlagIdx >= 0 ? flags[projectSummaryFlagIdx + 1] : undefined
+      // ENSURE_METRO_PROJECT — must happen before ANYTHING else touches
+      // runStore below: even the --m0 seeding path (a few lines down)
+      // calls runStore.put() on a brand-new run, which requires the
+      // agent.projects row to already exist (createTask resolves
+      // projectKey). driveMetroLaunch() also calls this itself
+      // (idempotent, defense-in-depth for direct callers), so calling it
+      // here too is deliberate belt-and-suspenders, never wasted work.
+      await ensureMetroProject({}, projectId, { projectName, projectSummary })
+
       const planFlagIdx = flags.indexOf('--category-plan')
       const categoryPlan: CategoryCoveragePlan = planFlagIdx >= 0 ? readJson(flags[planFlagIdx + 1]) : SAN_DIEGO_CATEGORY_PLAN
       const geoDepthFlagIdx = flags.indexOf('--geo-depth-plan')

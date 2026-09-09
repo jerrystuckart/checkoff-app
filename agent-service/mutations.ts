@@ -1,7 +1,8 @@
-// Phase 0D (+ Phase 2A's recordPlaybookStage) — the ONLY write surface
-// into agent.*. Four explicitly designed operations, nothing generic:
-// createTask, transitionTask, updateTaskPlan, recordPlaybookStage. No
-// generic updateTask(arbitraryFields), no raw SQL exposed to callers.
+// Phase 0D (+ Phase 2A's recordPlaybookStage, Phase 2X's ensureProject) —
+// the ONLY write surface into agent.*. Five explicitly designed
+// operations, nothing generic: createTask, transitionTask,
+// updateTaskPlan, recordPlaybookStage, ensureProject. No generic
+// updateTask(arbitraryFields), no raw SQL exposed to callers.
 //
 // Every mutation runs inside withWriteTransaction (db.ts) — the task
 // update and its task_events row are always in the same transaction, so
@@ -647,4 +648,105 @@ export async function recordPlaybookStage(input: RecordPlaybookStageInput): Prom
     )
     return { recorded: true }
   })
+}
+
+// ---------------------------------------------------------------------------
+// ensureProject — Chief Phase 2X. A FIFTH, deliberately narrow write
+// operation: resolve-or-create exactly one agent.projects row, keyed by
+// project_key. This exists so a playbook driver (e.g. metroLaunchDriver's
+// ENSURE_METRO_PROJECT step) can bootstrap its own operational project
+// row automatically, the same way createTask already resolves-or-fails
+// on projectKey — agent.projects is Chief's own internal bookkeeping
+// (never public.* production content), so this never requires Jerry to
+// run bootstrap SQL by hand before every new metro/destination build.
+//
+// Idempotent by construction: a second call with the same projectKey
+// reuses the existing row exactly, never creates a duplicate (DB-enforced
+// via projects_project_key_key, the same pattern createTask's
+// (source_type, source_ref) uniqueness uses). Fails closed — never
+// silently reuses — when an existing row's projectType doesn't match
+// what the caller asked for: that's an ambiguous identity (the key
+// collides with a project that is NOT what the caller thinks it is),
+// never resolved automatically.
+// ---------------------------------------------------------------------------
+
+export interface EnsureProjectInput {
+  projectKey: string
+  name: string
+  projectType: string
+  /** Resolved via agent.owners — never a hardcoded/embedded UUID. Omit for no owner. */
+  ownerKey?: string
+  summary?: string
+}
+
+export interface EnsureProjectResult {
+  projectId: string
+  /** false when an existing row (same project_key) was reused instead of inserting. */
+  created: boolean
+}
+
+export async function ensureProject(input: EnsureProjectInput): Promise<EnsureProjectResult> {
+  if (!isMeaningful(input.projectKey)) throw new InvalidStateFieldsError('projectKey is required')
+  if (!isMeaningful(input.name)) throw new InvalidStateFieldsError('name is required')
+  if (!isMeaningful(input.projectType)) throw new InvalidStateFieldsError('projectType is required')
+
+  return withWriteTransaction(async (client) => {
+    // Resolved even when reusing an existing row: fail closed on a
+    // genuinely unresolvable owner rather than silently proceeding
+    // ownerless, same discipline as createTask's ownerKey handling.
+    const ownerId = input.ownerKey ? await resolveOwnerId(client, input.ownerKey) : null
+
+    const existing = await client.query<{ id: string; project_type: string }>(
+      'SELECT id, project_type FROM agent.projects WHERE project_key = $1',
+      [input.projectKey]
+    )
+    if (existing.rows.length > 0) {
+      return assertReusableProjectType(input, existing.rows[0])
+    }
+
+    let inserted: { rows: Array<{ id: string }> }
+    try {
+      inserted = await client.query<{ id: string }>(
+        `INSERT INTO agent.projects (project_key, name, project_type, status, owner_id, summary)
+         VALUES ($1, $2, $3, 'ACTIVE', $4, $5)
+         ON CONFLICT (project_key) DO NOTHING
+         RETURNING id`,
+        [input.projectKey, input.name, input.projectType, ownerId, input.summary ?? null]
+      )
+    } catch (err) {
+      if (isMissingConflictTargetError(err)) {
+        throw new Error(
+          `ensureProject: agent.projects is missing the required project_key unique index (projects_project_key_key). ` +
+            'This index is part of the Phase 0A schema — see docs/agent-platform/ for setup notes.'
+        )
+      }
+      throw err
+    }
+
+    if (inserted.rows.length === 0) {
+      // Lost a race to a concurrent ensureProject call with the same
+      // projectKey — fetch the winner and apply the exact same
+      // reuse-or-fail-closed check as the pre-existing-row path above.
+      const winner = await client.query<{ id: string; project_type: string }>(
+        'SELECT id, project_type FROM agent.projects WHERE project_key = $1',
+        [input.projectKey]
+      )
+      if (winner.rows.length === 0) {
+        throw new Error(`ensureProject: ON CONFLICT fired for project_key "${input.projectKey}" but no matching row was found afterward`)
+      }
+      return assertReusableProjectType(input, winner.rows[0])
+    }
+
+    return { projectId: inserted.rows[0].id, created: true }
+  })
+}
+
+function assertReusableProjectType(input: EnsureProjectInput, existing: { id: string; project_type: string }): EnsureProjectResult {
+  if (existing.project_type !== input.projectType) {
+    throw new IdempotencyConflictError(
+      `project ${input.projectKey}`,
+      `existing project_type '${existing.project_type}' differs from requested '${input.projectType}' — refusing to reuse an ambiguous project identity`
+    )
+  }
+  return { projectId: existing.id, created: false }
 }
