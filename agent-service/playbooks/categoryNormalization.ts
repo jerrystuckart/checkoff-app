@@ -136,6 +136,25 @@ export function classifyCategory(rawCategory: string | null | undefined): Catego
   return { raw, canonical: firstMatch.canonical, ambiguous: false }
 }
 
+/**
+ * Chief Phase 2AC — a bounded fallback for METADATA_COMPLETENESS_GATE
+ * specifically: when the raw category label itself carries no
+ * recognizable venue-type signal (e.g. "District", a bare neighborhood/
+ * civic-initiative label), the item's own already-certified body text
+ * very often DOES name the real thing explicitly ("...at the garden",
+ * "...climb the tower") — this reuses the EXACT SAME deterministic
+ * classifyCategory rules against that body text, never a different or
+ * looser heuristic. Still returns null (never a guess) when neither
+ * source carries a recognizable signal.
+ */
+export function classifyCategoryWithFallback(rawCategory: string | null | undefined, body: string | null | undefined): CategoryClassification {
+  const primary = classifyCategory(rawCategory)
+  if (primary.canonical) return primary
+  const fallback = classifyCategory(body)
+  if (fallback.canonical) return { raw: primary.raw, canonical: fallback.canonical, ambiguous: false }
+  return primary
+}
+
 export interface UnclassifiedCategory {
   raw: string
   ambiguous: boolean

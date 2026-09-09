@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { classifyCategory, countByCanonicalCategory, CANONICAL_CHECKOFF_CATEGORIES } from './categoryNormalization'
+import { classifyCategory, classifyCategoryWithFallback, countByCanonicalCategory, CANONICAL_CHECKOFF_CATEGORIES } from './categoryNormalization'
 
 test('classifyCategory: an exact canonical label always matches itself', () => {
   for (const c of CANONICAL_CHECKOFF_CATEGORIES) {
@@ -238,4 +238,36 @@ test('countByCanonicalCategory: unclassified labels are reported, not counted to
   assert.equal(unclassified[0].raw, 'Upscale Contemporary')
   const foodCount = counts.find((c) => c.categoryName === 'Food & drink')?.count
   assert.equal(foodCount, 1)
+})
+
+// ---------------------------------------------------------------------------
+// classifyCategoryWithFallback (Chief Phase 2AC) — a bounded fallback
+// used ONLY by METADATA_COMPLETENESS_GATE: when the raw category label
+// itself carries no venue-type signal, try the item's own certified
+// body text via the EXACT SAME deterministic rules.
+// ---------------------------------------------------------------------------
+
+test('classifyCategoryWithFallback: uses the raw category when it already classifies — body is never even consulted', () => {
+  const result = classifyCategoryWithFallback('Restaurant (Japanese/izakaya)', 'this text is irrelevant')
+  assert.equal(result.canonical, 'Food & drink')
+})
+
+test('classifyCategoryWithFallback: falls back to the body when the raw category has no venue-type signal', () => {
+  const result = classifyCategoryWithFallback('Innere Stadt, landscape', "Wander the formal garden paths at 'Burggarten'.")
+  assert.equal(result.canonical, 'Adventure') // "garden" keyword in the body
+})
+
+test('classifyCategoryWithFallback: still returns null (never a guess) when NEITHER the category nor the body carries a recognizable signal', () => {
+  const result = classifyCategoryWithFallback('district', 'Explore the area and see what is around.')
+  assert.equal(result.canonical, null)
+})
+
+test('classifyCategoryWithFallback: preserves the ORIGINAL raw category text even when the fallback resolves it — never substitutes the body as the reported raw label', () => {
+  const result = classifyCategoryWithFallback('Innere Stadt, landscape', "Wander the formal garden paths at 'Burggarten'.")
+  assert.equal(result.raw, 'Innere Stadt, landscape')
+})
+
+test('classifyCategoryWithFallback: a real Vienna civic-initiative label with no venue-type signal anywhere stays unclassified — correctly signals "drop candidate", never forces a guess', () => {
+  const result = classifyCategoryWithFallback('district', 'Leopoldstadt (2nd District) is a diverse district worth exploring.')
+  assert.equal(result.canonical, null)
 })

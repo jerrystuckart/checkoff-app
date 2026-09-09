@@ -131,7 +131,23 @@ export function evaluateItemCritique(body: string, venueName: string, answers: I
 // The bounded loop itself.
 // ---------------------------------------------------------------------------
 
-export type ItemCertificationOutcome = 'ITEM_CERTIFIED' | 'REJECTED_NO_DISTINCTIVE_EXPERIENCE' | 'EXHAUSTED_RETRIES'
+/**
+ * The three REJECTED_* pruning outcomes (Chief Phase 2AD) are set only by
+ * metroLaunchDriver.ts's M8.5 CATALOG_PRUNING stage, never by this loop —
+ * they cover an item that reached ITEM_CERTIFIED here (a genuine,
+ * distinctive, well-written body) but could not clear a LATER batch gate
+ * (tag/geo/metadata) even after that gate's own bounded repair pass. Kept
+ * in this union (rather than a separate driver-only type) so every
+ * ITEM_CERTIFICATION_GATE/reporting call site that already switches on
+ * `outcome` sees the real, final disposition of every candidate.
+ */
+export type ItemCertificationOutcome =
+  | 'ITEM_CERTIFIED'
+  | 'REJECTED_NO_DISTINCTIVE_EXPERIENCE'
+  | 'EXHAUSTED_RETRIES'
+  | 'REJECTED_GEO_UNRESOLVED'
+  | 'REJECTED_INSUFFICIENT_TAG_CONTEXT'
+  | 'REJECTED_UNCLASSIFIABLE_METADATA'
 
 export interface ItemCertificationRecord {
   venueName: string

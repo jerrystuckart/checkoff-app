@@ -1741,10 +1741,16 @@ test('driveMetroLaunch: TAG_ASSIGNMENT exhausts its own bounded retry budget on 
     { categoryPlan: PLAN, maxSteps: 10 }
   )
 
-  assert.equal(tagCalls, MAX_TAG_ASSIGNMENT_ATTEMPTS, `bounded at exactly ${MAX_TAG_ASSIGNMENT_ATTEMPTS} attempts, never unlimited`)
+  // M7.5's own bounded loop exhausts at MAX_TAG_ASSIGNMENT_ATTEMPTS, then
+  // M8 routes the still-invalid item to M8.5 CATALOG_PRUNING, which makes
+  // ONE more bounded attempt series (a genuinely NEW attempt series, not
+  // an idempotent replay — see assignTagsForOneItem's labelPrefix) before
+  // giving up and dropping the item (Chief Phase 2AD, 2026-09-09
+  // instruction: never hand a thin/unresolved item to Jerry in bulk).
+  assert.equal(tagCalls, MAX_TAG_ASSIGNMENT_ATTEMPTS * 2, `bounded at exactly ${MAX_TAG_ASSIGNMENT_ATTEMPTS} original attempts plus ${MAX_TAG_ASSIGNMENT_ATTEMPTS} M8.5 repair attempts, never unlimited`)
   const state = run.state as { itemCertifications: Record<string, DriverItemCertificationRecord>; tagAssignmentResults: Record<string, { tags: string[] | null }> }
   assert.equal(state.tagAssignmentResults['Cafe Sperl'].tags, null, 'exhausted — no invalid set is ever silently accepted')
-  assert.equal(state.itemCertifications['Cafe Sperl'].outcome, 'ITEM_CERTIFIED', 'the item certification itself is untouched by a tag-only failure')
+  assert.equal(state.itemCertifications['Cafe Sperl'].outcome, 'REJECTED_INSUFFICIENT_TAG_CONTEXT', 'a tag-only failure that survives even the M8.5 widened-shortlist repair attempt is dropped from the catalog, never left as a silent ITEM_CERTIFIED with invalid tags and never sent to Jerry for bulk review')
 })
 
 test('driveMetroLaunch: TAG_ASSIGNMENT infra failures (429) are retried and do NOT consume a tag-selection attempt', async () => {
@@ -1875,4 +1881,222 @@ test('driveMetroLaunch: an idempotent-replay acceptance (already COMPLETE) never
 
   const state = finalRun.state as { usageByStage: Record<string, { calls: number }> }
   assert.equal(state.usageByStage['M7_5_TAG_ASSIGNMENT']?.calls, 1, 'a second driveMetroLaunch call against the SAME completed state must not re-record usage')
+})
+
+// ---------------------------------------------------------------------------
+// M8.5 CATALOG_PRUNING (Chief Phase 2AD, 2026-09-09 instruction) — a
+// catalog-wide TAG/METADATA/GEO gate FAIL is never handed to Jerry as a
+// bulk review. Each failing item gets exactly ONE bounded repair-or-drop
+// decision: TAG failures get a genuinely NEW widened-shortlist attempt
+// series; METADATA/GEO failures with real evidence already exhausted at
+// M8 are dropped directly; a GEO failure with NO real Places evidence at
+// all (an apiError/never-enriched case) is left untouched rather than
+// silently dropped, since there is nothing there to have judged.
+// ---------------------------------------------------------------------------
+
+async function seedForBatchCertification(
+  runStore: InstanceType<typeof InMemoryPlaybookRunStore>,
+  projectId: string,
+  candidates: Array<{ name: string; category: string; neighborhood: string; claimSupported: string; source: string; needsVerification: boolean }>,
+  certs: Record<string, DriverItemCertificationRecord>
+) {
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  seeded!.state = { m0Decisions: RESOLVED_M0, candidates, neighborhoods: [], plan: PLAN, hasRunM6: true, itemCertifications: certs }
+  seeded!.currentStage = 'M8_BATCH_CERTIFICATION'
+  await runStore.put(seeded!)
+}
+
+test('driveMetroLaunch: M8.5 drops a TAG_CERTIFICATION_GATE failure only after a genuinely NEW widened-shortlist repair attempt fails too — never a silent idempotent replay', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  executor.scriptWhen(
+    (r) => (r.inputs as { mode?: string }).mode === 'TAG_SELECTION',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { tags: ['coffee', 'historic'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+  )
+  const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl is a historic Vienna coffeehouse.', source: 'https://example.com/sperl', needsVerification: false }
+  const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: ['coffee', 'historic'], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+
+  const projectId = 'vienna-m85-tag-drop'
+  await seedForBatchCertification(runStore, projectId, [candidate], { [cert.candidateName]: cert })
+
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      verifiedTagSnapshot: TEST_TAG_VOCAB,
+      placesLookup: async (q: string) => ({ topResult: { placeId: 'p1', name: 'Cafe Sperl', formattedAddress: q, lat: 48.2, lng: 16.36, websiteUri: null, country: 'AT', viewportRadiusM: null }, apiError: null }),
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+    },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 15 }
+  )
+
+  const state = run.state as { itemCertifications: Record<string, DriverItemCertificationRecord>; catalogPruningDrops?: Array<{ candidateName: string; reason: string }> }
+  assert.equal(state.itemCertifications['Cafe Sperl'].outcome, 'REJECTED_INSUFFICIENT_TAG_CONTEXT', 'starting finalTags had only 2 (below the 6 minimum) and no fake response was scripted for TAG_SELECTION, so both the original and the M8.5 repair series exhaust — dropped, never left invalid, never escalated to Jerry')
+  assert.ok(state.catalogPruningDrops?.some((d) => d.candidateName === 'Cafe Sperl' && d.reason === 'REJECTED_INSUFFICIENT_TAG_CONTEXT'))
+})
+
+test('driveMetroLaunch: M8.5 repairs a TAG_CERTIFICATION_GATE failure when the widened-shortlist attempt now succeeds — item stays certified, body untouched', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  scriptTagSelection(executor)
+  const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl is a historic Vienna coffeehouse.', source: 'https://example.com/sperl', needsVerification: false }
+  const originalBody = "Order the 'Sperl Torte' at 'Cafe Sperl'."
+  const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: originalBody, finalTags: ['coffee', 'historic'], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+
+  const projectId = 'vienna-m85-tag-repair'
+  await seedForBatchCertification(runStore, projectId, [candidate], { [cert.candidateName]: cert })
+
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      verifiedTagSnapshot: TEST_TAG_VOCAB,
+      placesLookup: async (q: string) => ({ topResult: { placeId: 'p1', name: 'Cafe Sperl', formattedAddress: q, lat: 48.2, lng: 16.36, websiteUri: null, country: 'AT', viewportRadiusM: null }, apiError: null }),
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+    },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 15 }
+  )
+
+  const state = run.state as { itemCertifications: Record<string, DriverItemCertificationRecord>; catalogPruningRepairs?: Array<{ candidateName: string; repaired: string }> }
+  const rec = state.itemCertifications['Cafe Sperl']
+  assert.equal(rec.outcome, 'ITEM_CERTIFIED', 'a repaired tag set keeps the item certified')
+  assert.equal(rec.finalBody, originalBody, 'M8.5 tag repair never touches the already-certified editorial body')
+  assert.ok(rec.finalTags.length >= 6 && rec.finalTags.length <= 8, 'the widened-shortlist repair produced a valid 6-8 tag set')
+  assert.ok(state.catalogPruningRepairs?.some((r) => r.candidateName === 'Cafe Sperl' && r.repaired === 'TAGS'))
+})
+
+test('driveMetroLaunch: M8.5 drops a GEO_ENRICHMENT_GATE failure only when a REAL Places result was actually evaluated (an ambiguous/rejected match) — never a bare apiError/no-result case', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  scriptTagSelection(executor)
+  // Two candidates: one whose Places lookup returns a real but genuinely
+  // unmatched result (should DROP), one whose lookup fails entirely
+  // (should be LEFT UNTOUCHED — no evidence to have judged).
+  const ambiguous = { name: 'Vienna Hofburg Orchestra', category: 'Arts & Culture', neighborhood: 'Innere Stadt', claimSupported: 'Real chamber concert.', source: 'https://example.com/orch', needsVerification: false }
+  const noEvidence = { name: 'Untraceable Pop-Up Market', category: 'Shopping', neighborhood: 'Neubau', claimSupported: 'Real weekend market stalls.', source: 'https://example.com/market', needsVerification: false }
+  const ambiguousCert: DriverItemCertificationRecord = { candidateName: ambiguous.name, venueName: ambiguous.name, attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Hear Mozart at the 'Vienna Hofburg Orchestra'.", finalTags: ['classical music', 'art'], supportingFact: ambiguous.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+  const noEvidenceCert: DriverItemCertificationRecord = { candidateName: noEvidence.name, venueName: noEvidence.name, attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Browse local stalls at the 'Untraceable Pop-Up Market'.", finalTags: ['hidden gem', 'art'], supportingFact: noEvidence.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+
+  const projectId = 'vienna-m85-geo-selective-drop'
+  await seedForBatchCertification(runStore, projectId, [ambiguous, noEvidence], { [ambiguousCert.candidateName]: ambiguousCert, [noEvidenceCert.candidateName]: noEvidenceCert })
+
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      verifiedTagSnapshot: TEST_TAG_VOCAB,
+      placesLookup: async (q: string) => {
+        if (q.includes('Untraceable')) return { topResult: null, apiError: 'no network access in tests' }
+        // A real result, but for a totally different, unrelated venue — genuinely evaluated and rejected/ambiguous.
+        return { topResult: { placeId: 'p-unrelated', name: 'Vienna Premium Concert Hall Rentals', formattedAddress: q, lat: 48.2, lng: 16.37, websiteUri: null, country: 'AT', viewportRadiusM: null }, apiError: null }
+      },
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+    },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 15 }
+  )
+
+  const state = run.state as { itemCertifications: Record<string, DriverItemCertificationRecord>; catalogPruningDrops?: Array<{ candidateName: string; reason: string }> }
+  assert.equal(state.itemCertifications[ambiguous.name].outcome, 'REJECTED_GEO_UNRESOLVED', 'a genuinely evaluated, still-unconfident Places match is dropped by M8.5')
+  assert.equal(state.itemCertifications[noEvidence.name].outcome, 'ITEM_CERTIFIED', 'an item whose Places lookup never returned any real evidence is left untouched — never silently dropped over an infra gap')
+  assert.ok(state.catalogPruningDrops?.some((d) => d.candidateName === ambiguous.name && d.reason === 'REJECTED_GEO_UNRESOLVED'))
+  assert.ok(!state.catalogPruningDrops?.some((d) => d.candidateName === noEvidence.name))
+})
+
+test('driveMetroLaunch: M8.5 drops a METADATA_COMPLETENESS_GATE failure when neither the raw category nor the body carries a classifiable signal', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  scriptTagSelection(executor)
+  const candidate = { name: 'Local District Initiative', category: 'District', neighborhood: 'Ottakring', claimSupported: 'A real neighborhood civic initiative.', source: 'https://example.com/district', needsVerification: false }
+  const cert: DriverItemCertificationRecord = { candidateName: candidate.name, venueName: candidate.name, attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Join the 'Local District Initiative' meeting.", finalTags: ['hidden gem', 'art'], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+
+  const projectId = 'vienna-m85-metadata-drop'
+  await seedForBatchCertification(runStore, projectId, [candidate], { [cert.candidateName]: cert })
+
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      verifiedTagSnapshot: TEST_TAG_VOCAB,
+      placesLookup: async (q: string) => ({ topResult: { placeId: 'p1', name: candidate.name, formattedAddress: q, lat: 48.2, lng: 16.33, websiteUri: null, country: 'AT', viewportRadiusM: null }, apiError: null }),
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+    },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 15 }
+  )
+
+  const state = run.state as { itemCertifications: Record<string, DriverItemCertificationRecord>; catalogPruningDrops?: Array<{ candidateName: string; reason: string }> }
+  assert.equal(state.itemCertifications[candidate.name].outcome, 'REJECTED_UNCLASSIFIABLE_METADATA', 'neither "District" nor the body text names a recognizable venue-type keyword — dropped, never forced into an arbitrary category')
+  assert.ok(state.catalogPruningDrops?.some((d) => d.candidateName === candidate.name && d.reason === 'REJECTED_UNCLASSIFIABLE_METADATA'))
+})
+
+test('driveMetroLaunch: M8.5 pruning is idempotent — a resumed run never re-spends a second real tag-repair call on an item already given its one pruning decision', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  let tagRepairCalls = 0
+  executor.scriptWhen(
+    (r) => (r.inputs as { mode?: string }).mode === 'TAG_SELECTION',
+    (r) => {
+      tagRepairCalls += 1
+      return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { tags: ['coffee', 'historic'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    }
+  )
+  const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl is a historic Vienna coffeehouse.', source: 'https://example.com/sperl', needsVerification: false }
+  const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: ['coffee', 'historic'], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+
+  const projectId = 'vienna-m85-idempotent'
+  await seedForBatchCertification(runStore, projectId, [candidate], { [cert.candidateName]: cert })
+
+  const deps = {
+    runStore,
+    execStore,
+    executors: [executor],
+    verifiedTagSnapshot: TEST_TAG_VOCAB,
+    placesLookup: async (q: string) => ({ topResult: { placeId: 'p1', name: 'Cafe Sperl', formattedAddress: q, lat: 48.2, lng: 16.36, websiteUri: null, country: 'AT', viewportRadiusM: null }, apiError: null }),
+    geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+    verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+    checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+    ensureProject: async () => ({ projectId: 'test-project', created: false }),
+  }
+
+  const first = await driveMetroLaunch(deps, projectId, { categoryPlan: PLAN, maxSteps: 15 })
+  const firstState = first.state as { itemCertifications: Record<string, DriverItemCertificationRecord> }
+  assert.equal(firstState.itemCertifications['Cafe Sperl'].outcome, 'REJECTED_INSUFFICIENT_TAG_CONTEXT')
+  const callsAfterFirstRun = tagRepairCalls
+  assert.ok(callsAfterFirstRun > 0)
+
+  // Force the run back to M8_BATCH_CERTIFICATION to simulate a resume —
+  // catalogPruningAttempted (state, never reset) must prevent a second
+  // real repair call on the same item.
+  const stored = await runStore.get(playbookRunId('metro_launch', projectId))
+  stored!.currentStage = 'M8_BATCH_CERTIFICATION'
+  stored!.status = 'RUNNING'
+  await runStore.put(stored!)
+
+  await driveMetroLaunch(deps, projectId, { categoryPlan: PLAN, maxSteps: 15 })
+  assert.equal(tagRepairCalls, callsAfterFirstRun, 'a resumed run must never re-spend a second real tag-repair call on an item that already received its one bounded M8.5 decision')
 })

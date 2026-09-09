@@ -29,7 +29,7 @@ import {
   type CoverageGap,
   type MetroGateEvidence,
 } from '../playbooks/metroLaunch'
-import { countByCanonicalCategory, classifyCategory, type UnclassifiedCategory } from '../playbooks/categoryNormalization'
+import { countByCanonicalCategory, classifyCategory, classifyCategoryWithFallback, type UnclassifiedCategory } from '../playbooks/categoryNormalization'
 import { runExecutionRouted } from './routing'
 import type { ExecutionStore, SpecialistExecutor, SpecialistExecutionRequest } from './executor'
 import { getOrCreateRun, type PlaybookRunStore, type PlaybookRunRecord } from './playbookRun'
@@ -41,7 +41,7 @@ import { evaluateItemCritique, evaluateItemCertificationGate, type ItemCritiqueA
 import { evaluateTagCertificationGate, validateItemTags, type ItemTagProposal } from '../playbooks/metroTagCertification'
 import { deriveTagShortlist } from '../playbooks/tagShortlist'
 import { evaluateItemMetadata, evaluateMetadataCompletenessGate, type MetadataEnrichmentResult } from '../playbooks/metroMetadataEnrichment'
-import { evaluateGeoEnrichmentCertificationGate, type GeoEnrichmentItemResult } from '../playbooks/metroGeoEnrichment'
+import { evaluateGeoEnrichmentCertificationGate, CONFIDENT_TIERS, ACCEPTABLE_EXCEPTION_TIERS, type GeoEnrichmentItemResult, type PlacesMatchClassification } from '../playbooks/metroGeoEnrichment'
 import { enrichMetroCatalogGeo, buildRealPlacesLookup, FileGeoEnrichmentCacheStore, type GeoEnrichmentCacheStore, type PlacesLookupFn, type GeoEnrichmentCandidate } from './metroGeoEnrichmentDriver'
 import { readRealHomeListRows, type HomeListReadPathFailure } from './homeListReadPath'
 import { certifyHomeListRow, evaluateHomeListCertificationGate, certifyCuratedListRow, evaluateCuratedListLayerGate, type HomeListRow, type CuratedListRow } from '../playbooks/homeListCertification'
@@ -147,6 +147,14 @@ interface MetroDriverState {
   geoEnrichmentCacheHits?: number
   geoEnrichmentResults?: Array<{ candidateName: string; classification: string; placeId: string | null; formattedAddress: string | null; lat: number | null; lng: number | null; websiteUrl: string | null; geoRadiusM: number | null }>
   activationKitCheckDetail?: string
+  /** Certified items excluded from CATALOG_GATE's intakeRecords because classifyCategoryWithFallback (raw category AND finalBody) still found no canonical category — tracked explicitly, mirrors METADATA_COMPLETENESS_GATE's unclassifiedForMetadata list so this is never a silent drop. Recomputed fresh every M10 pass. */
+  unclassifiedForIntake?: string[]
+  /** M8.5 CATALOG_PRUNING (Chief Phase 2AD) — names of items already given their ONE bounded pruning-stage repair-or-drop decision, across the WHOLE run (never reset by resume/reopen at M8.5+, so a resumed run never re-spends a second real tag-repair call on the same item, and never flip-flops a drop back to a retry). See stepM8_5CatalogPruning. */
+  catalogPruningAttempted?: string[]
+  /** Every item permanently dropped by M8.5, with the specific reason and gate — the durable, reportable record of "reject weak/unresolved items rather than hand them to Jerry in bulk" (2026-09-09 instruction). Accumulated across the whole run, never reset. */
+  catalogPruningDrops?: Array<{ candidateName: string; reason: 'REJECTED_GEO_UNRESOLVED' | 'REJECTED_INSUFFICIENT_TAG_CONTEXT' | 'REJECTED_UNCLASSIFIABLE_METADATA'; detail: string }>
+  /** Every item M8.5 successfully repaired (currently only tag repair has a real second attempt) rather than dropping — reportable alongside catalogPruningDrops. */
+  catalogPruningRepairs?: Array<{ candidateName: string; repaired: 'TAGS' }>
 }
 
 /**
@@ -1170,13 +1178,19 @@ async function assignTagsForOneItem(
   claimSupported: string,
   category: string | null,
   shortlist: readonly string[],
-  knownRealTagNames: ReadonlySet<string>
+  knownRealTagNames: ReadonlySet<string>,
+  // Distinguishes a genuinely NEW attempt series (M8.5's widened-shortlist
+  // repair) from M7.5's original series — without this, a repair call
+  // reuses the exact same executionId/idempotencyKey as the original
+  // exhausted attempt and the idempotency layer just replays the old
+  // (already-invalid) result instead of ever calling the executor again.
+  labelPrefix: string = 'tag'
 ): Promise<{ tags: string[] | null; attempts: number; rejectionReasons: string[] }> {
   const safeName = candidateName.replace(/[^a-zA-Z0-9_-]/g, '_')
   const rejectionReasons: string[] = []
 
   for (let attempt = 1; attempt <= MAX_TAG_ASSIGNMENT_ATTEMPTS; attempt++) {
-    const label = `tag-${safeName}-attempt${attempt}`
+    const label = `${labelPrefix}-${safeName}-attempt${attempt}`
     const request: SpecialistExecutionRequest = {
       specialist: 'checkoff_editor',
       playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
@@ -1247,7 +1261,7 @@ async function stepTagAssignment(deps: MetroDriverDeps, run: PlaybookRunRecord):
     batch.map(async (name) => {
       const rec = certifications[name]
       const candidate = candidatesByName.get(name)
-      const canonical = classifyCategory(candidate?.category ?? null).canonical
+      const canonical = classifyCategoryWithFallback(candidate?.category ?? null, rec.finalBody ?? null).canonical
       const shortlist = deriveTagShortlist(vocabList, { category: canonical, body: rec.finalBody ?? '', claimSupported: rec.supportingFact, neighborhood: candidate?.neighborhood ?? null })
       const result = await assignTagsForOneItem(deps, run, name, rec.finalBody ?? '', rec.supportingFact, canonical, shortlist, knownRealTagNames)
       return { name, ...result }
@@ -1324,7 +1338,7 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
   const metadataResults: MetadataEnrichmentResult[] = []
   for (const r of certified) {
     const candidate = candidatesByName.get(r.candidateName)
-    const canonical = classifyCategory(candidate?.category ?? null).canonical
+    const canonical = classifyCategoryWithFallback(candidate?.category ?? null, r.finalBody ?? null).canonical
     const dbCategory: RealDbCategory | null = canonical ? CANONICAL_TO_DB_CATEGORY[canonical] : null
     if (!dbCategory) {
       unclassifiedForMetadata.push(r.candidateName)
@@ -1385,8 +1399,157 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
 
   const gates: StagingGateResult[] = [...distinctivenessGates, itemCertificationGate, tagGate, metadataGate, geoGate]
   state.batchCertificationGates = gates
+
+  // M8.5 routing (Chief Phase 2AD, 2026-09-09 instruction): a catalog-wide
+  // TAG/METADATA/GEO gate FAIL is never sent to Jerry as a bulk review —
+  // it is either bounded-repaired or the specific failing item(s) are
+  // dropped. Only the item-level failure sets below (never the whole
+  // gate) are handed to the pruning stage, and only for items that
+  // haven't already had their one pruning attempt (state.catalogPruningAttempted).
+  const alreadyPruned = new Set(state.catalogPruningAttempted ?? [])
+  const tagFailingNames = tagVocabulary.status === 'FAILED' ? [] : evaluateTagCertificationGate(certified.map((r) => ({ candidateName: r.candidateName, tags: r.finalTags })), tagVocabulary.tagNames).perItem.filter((p) => !p.valid).map((p) => p.candidateName)
+  const geoFailingNames = geoRun.records.filter((r) => !CONFIDENT_TIERS.includes(r.classification) && !ACCEPTABLE_EXCEPTION_TIERS.includes(r.classification)).map((r) => r.candidateName)
+  const needsPruning = [...new Set([...tagFailingNames, ...unclassifiedForMetadata, ...geoFailingNames])].filter((n) => !alreadyPruned.has(n))
+
   run.state = state
-  run.currentStage = 'M9_HOME_LIST_MIRROR'
+  run.currentStage = needsPruning.length > 0 ? 'M8_5_CATALOG_PRUNING' : 'M9_HOME_LIST_MIRROR'
+  return run
+}
+
+// ---------------------------------------------------------------------------
+// M8.5 — CATALOG_PRUNING (Chief Phase 2AD). Runs only when M8 found item-
+// level TAG/METADATA/GEO failures. Per the 2026-09-09 instruction, these
+// are never bulk Jerry-review items: each gets exactly ONE bounded
+// repair-or-drop decision, tracked in state.catalogPruningAttempted so a
+// resumed run never re-spends a second real call on the same item and
+// never re-drops/re-flips a decision already made.
+//
+//   TAG failures  — one additional real tag-selection call with a WIDER
+//                   shortlist (the only dimension with a genuine second
+//                   attempt available: the model may simply not have
+//                   been offered the right names the first time). Kept
+//                   if it now validates; dropped otherwise.
+//   GEO failures  — the bounded second pass (geoSecondPassResolver.ts)
+//                   already ran automatically inside M8's
+//                   enrichMetroCatalogGeo call, on the SAME cached Places
+//                   result, for every item — there is no further real
+//                   evidence to try without a new paid Places call, which
+//                   the instruction explicitly forbids absent necessity.
+//                   Dropped directly.
+//   METADATA fail — classifyCategoryWithFallback (raw category, THEN
+//                   finalBody) already ran inside M8 — that fallback IS
+//                   the "existing candidate evidence" pass. No further
+//                   source exists. Dropped directly.
+//
+// After processing, control returns to M8_BATCH_CERTIFICATION so gates
+// are recomputed cleanly against the pruned set — this stage never
+// recomputes a gate itself, avoiding duplicate gate logic.
+// ---------------------------------------------------------------------------
+
+async function stepM8_5CatalogPruning(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const certifications = state.itemCertifications ?? {}
+  const certified = Object.values(certifications).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
+  if (certified.length === 0) {
+    run.currentStage = 'M8_BATCH_CERTIFICATION'
+    return run
+  }
+
+  const candidatesByName = new Map((state.candidates ?? []).map((c) => [c.name, c]))
+
+  const tagVocabulary = await resolveCanonicalTagVocabulary(
+    deps.queryLiveTags ?? (async () => { throw new Error('no live tag query configured for this run') }),
+    deps.verifiedTagSnapshot !== undefined ? deps.verifiedTagSnapshot : loadGeneratedTagSnapshot()
+  )
+  const knownRealTagNames = tagVocabulary.status === 'FAILED' ? null : tagVocabulary.tagNames
+  const vocabList = knownRealTagNames ? [...knownRealTagNames] : []
+
+  const alreadyPruned = new Set(state.catalogPruningAttempted ?? [])
+  const tagFailingNames = new Set(
+    knownRealTagNames ? evaluateTagCertificationGate(certified.map((r) => ({ candidateName: r.candidateName, tags: r.finalTags })), knownRealTagNames).perItem.filter((p) => !p.valid).map((p) => p.candidateName) : []
+  )
+  const metadataFailingNames = new Set(
+    certified
+      .filter((r) => !classifyCategoryWithFallback(candidatesByName.get(r.candidateName)?.category ?? null, r.finalBody ?? null).canonical)
+      .map((r) => r.candidateName)
+  )
+  const geoResultsByName = new Map((state.geoEnrichmentResults ?? []).map((r) => [r.candidateName, r]))
+  const geoFailingNames = new Set(
+    certified
+      .filter((r) => {
+        const g = geoResultsByName.get(r.candidateName)
+        return !g || (!CONFIDENT_TIERS.includes(g.classification as PlacesMatchClassification) && !ACCEPTABLE_EXCEPTION_TIERS.includes(g.classification as PlacesMatchClassification))
+      })
+      .map((r) => r.candidateName)
+  )
+
+  const toProcess = certified.filter((r) => !alreadyPruned.has(r.candidateName) && (tagFailingNames.has(r.candidateName) || metadataFailingNames.has(r.candidateName) || geoFailingNames.has(r.candidateName)))
+
+  if (toProcess.length === 0) {
+    run.currentStage = 'M8_BATCH_CERTIFICATION'
+    return run
+  }
+
+  const batch = toProcess.slice(0, (deps.guardrails ?? DEFAULT_DRIVER_GUARDRAILS).maxConcurrentExecutions)
+  const itemCertifications = { ...certifications }
+  const attempted = new Set(alreadyPruned)
+  const drops = [...(state.catalogPruningDrops ?? [])]
+  const repairs = [...(state.catalogPruningRepairs ?? [])]
+
+  for (const r of batch) {
+    const candidate = candidatesByName.get(r.candidateName)
+    let record = itemCertifications[r.candidateName]
+
+    // GEO: only droppable when a REAL Places result was actually found and
+    // evaluated (placeId present) — the "134 ambiguous cases" scenario
+    // this stage exists for. A geo failure with NO Places result at all
+    // (placeId null — an apiError, or a genuine zero-result search) means
+    // the check never got real evidence to judge, which is a different,
+    // infra-shaped problem than "genuinely ambiguous" — never silently
+    // drop a real venue over that; it stays ITEM_CERTIFIED and the
+    // GEO_ENRICHMENT_GATE keeps failing/surfacing it honestly, same as
+    // before this stage existed. Still marked attempted so the M8<->M8.5
+    // loop terminates instead of retrying forever.
+    const g = geoFailingNames.has(r.candidateName) ? geoResultsByName.get(r.candidateName) : undefined
+    if (g && g.placeId !== null) {
+      record = { ...record, outcome: 'REJECTED_GEO_UNRESOLVED', rejectionReasons: [...record.rejectionReasons, `M8.5: geo second pass exhausted — ${g.classification}`] }
+      drops.push({ candidateName: r.candidateName, reason: 'REJECTED_GEO_UNRESOLVED', detail: `classification=${g.classification}` })
+    } else if (metadataFailingNames.has(r.candidateName)) {
+      record = { ...record, outcome: 'REJECTED_UNCLASSIFIABLE_METADATA', rejectionReasons: [...record.rejectionReasons, `M8.5: no canonical category from raw label "${candidate?.category ?? ''}" or body text`] }
+      drops.push({ candidateName: r.candidateName, reason: 'REJECTED_UNCLASSIFIABLE_METADATA', detail: `raw category="${candidate?.category ?? ''}"` })
+    } else if (tagFailingNames.has(r.candidateName) && knownRealTagNames) {
+      // ONE additional real tag-selection call, widened shortlist —
+      // the genuine second-attempt case.
+      const canonical = classifyCategoryWithFallback(candidate?.category ?? null, record.finalBody ?? null).canonical
+      const widerShortlist = deriveTagShortlist(vocabList, { category: canonical, body: record.finalBody ?? '', claimSupported: record.supportingFact, neighborhood: candidate?.neighborhood ?? null }, 120)
+      const result = await assignTagsForOneItem(deps, run, r.candidateName, record.finalBody ?? '', record.supportingFact, canonical, widerShortlist, knownRealTagNames, 'tag-repair')
+      if (result.tags) {
+        record = { ...record, finalTags: result.tags }
+        repairs.push({ candidateName: r.candidateName, repaired: 'TAGS' })
+      } else {
+        record = { ...record, outcome: 'REJECTED_INSUFFICIENT_TAG_CONTEXT', rejectionReasons: [...record.rejectionReasons, `M8.5: widened tag shortlist (${widerShortlist.length} names) still insufficient — ${result.rejectionReasons.join('; ')}`] }
+        drops.push({ candidateName: r.candidateName, reason: 'REJECTED_INSUFFICIENT_TAG_CONTEXT', detail: result.rejectionReasons.join('; ') })
+      }
+    } else if (tagFailingNames.has(r.candidateName)) {
+      // tagFailingNames matched but no live vocabulary — cannot even
+      // attempt repair; drop rather than loop forever.
+      record = { ...record, outcome: 'REJECTED_INSUFFICIENT_TAG_CONTEXT', rejectionReasons: [...record.rejectionReasons, 'M8.5: tag vocabulary unavailable, cannot attempt repair'] }
+      drops.push({ candidateName: r.candidateName, reason: 'REJECTED_INSUFFICIENT_TAG_CONTEXT', detail: 'tag vocabulary unavailable' })
+    }
+    // else: this item's only failure was a geo check that never got real
+    // Places evidence (no placeId) — left untouched (see comment above);
+    // GEO_ENRICHMENT_GATE keeps failing honestly, nothing is dropped.
+
+    itemCertifications[r.candidateName] = record
+    attempted.add(r.candidateName)
+  }
+
+  state.itemCertifications = itemCertifications
+  state.catalogPruningAttempted = [...attempted]
+  state.catalogPruningDrops = drops
+  state.catalogPruningRepairs = repairs
+  run.state = state
+  run.currentStage = 'M8_BATCH_CERTIFICATION'
   return run
 }
 
@@ -1517,12 +1680,16 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
   // driver's own M6/M7 already produced everything those gates need
   // (candidateName, body, category, a real specific location string).
   const candidatesByNameForIntake = new Map((state.candidates ?? []).map((c) => [c.name, c]))
+  const unclassifiedForIntake: string[] = []
   const intakeRecords: ItemIntakeRecord[] = certified
     .map((r) => {
       const candidate = candidatesByNameForIntake.get(r.candidateName)
-      const canonical = classifyCategory(candidate?.category ?? null).canonical
+      const canonical = classifyCategoryWithFallback(candidate?.category ?? null, r.finalBody ?? null).canonical
       const dbCategory = canonical ? CANONICAL_TO_DB_CATEGORY[canonical] : null
-      if (!dbCategory) return null
+      if (!dbCategory) {
+        unclassifiedForIntake.push(r.candidateName)
+        return null
+      }
       const mapsQuery = candidate?.address?.trim() || `${r.candidateName}, ${candidate?.neighborhood ?? run.projectId}`
       return {
         candidateName: r.candidateName,
@@ -1535,6 +1702,11 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
       } satisfies ItemIntakeRecord
     })
     .filter((r): r is ItemIntakeRecord => r !== null)
+  // Tracked, not silent — mirrors the same METADATA_COMPLETENESS_GATE
+  // unclassifiedForMetadata list above so a category-unclassifiable
+  // certified item is never dropped from the catalog without a reason
+  // that shows up in both gates identically.
+  state.unclassifiedForIntake = unclassifiedForIntake
 
   const catalogGate = evaluateCatalogGate({ expectedCanonicalCount: intakeRecords.length, stagedRecords: intakeRecords, intakeFailures: [], duplicates: { clean: intakeRecords, collidesWithProduction: [], collidesWithinBatch: [] } })
   const locationGate = evaluateLocationGate({ records: intakeRecords })
@@ -1740,6 +1912,9 @@ export async function driveMetroLaunch(deps: MetroDriverDeps, projectId: string,
         break
       case 'M8_BATCH_CERTIFICATION':
         run = await stepM8BatchCertification(deps, run)
+        break
+      case 'M8_5_CATALOG_PRUNING':
+        run = await stepM8_5CatalogPruning(deps, run)
         break
       case 'M9_HOME_LIST_MIRROR':
         run = await stepM9HomeListMirror(deps, run)
