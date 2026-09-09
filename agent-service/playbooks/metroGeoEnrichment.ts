@@ -33,7 +33,7 @@ function normalizeVenueName(s: string): string {
     .trim()
 }
 
-function levenshtein(a: string, b: string): number {
+export function levenshtein(a: string, b: string): number {
   const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0))
   for (let i = 0; i <= a.length; i++) dp[i][0] = i
   for (let j = 0; j <= b.length; j++) dp[0][j] = j
