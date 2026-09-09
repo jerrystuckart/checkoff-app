@@ -68,6 +68,7 @@ import {
   type GapResearchHistory,
   type PlanRelaxationRecord,
 } from '../playbooks/coveragePlanRelaxation'
+import { extractCanonicalVenueOptions, resolveDefaultCanonicalVenueName, resolveConfirmedCanonicalVenueName } from '../playbooks/canonicalVenueName'
 
 export const METRO_LAUNCH_DRIVER_PLAYBOOK_KEY = 'metro_launch'
 
@@ -103,7 +104,8 @@ interface MetroDriverState {
   gaps?: CoverageGap[]
   removedCandidateNames?: string[]
   hasRunM6?: boolean
-  checkoffizedItems?: Array<{ name: string; checkoffizedItem: string; tags: string[] }>
+  /** canonicalVenueName: the RESOLVED/CONFIRMED clean venue identity (canonicalVenueName.ts) — never the raw discovery label. What VENUE_QUOTING_GATE actually checks against. */
+  checkoffizedItems?: Array<{ name: string; checkoffizedItem: string; tags: string[]; canonicalVenueName: string }>
   awaitingExecutionLabels?: string[] // labels of executions this run is currently waiting on, for the current stage
   /** Raw candidate categories buildAuditEvidence could not map to the canonical taxonomy — flagged for review, never silently binned. Recomputed fresh every M4 pass, never accumulated. */
   unclassifiedCategories?: UnclassifiedCategory[]
@@ -222,6 +224,8 @@ export interface MetroDriverDeps {
   checkActivationKitLive?: (url: string) => Promise<ActivationKitLiveCheckResult>
   /** ENSURE_METRO_PROJECT (bootstrap, before M0): resolves-or-creates the agent.projects row this run's task-store identity requires (createTask's projectKey lookup — see dbPlaybookRunStore.ts/dbExecutionStore.ts). Defaults to the real ensureProject mutation (mutations.ts) — tests inject a fake, exactly like every other real side effect in this file. */
   ensureProject?: (input: EnsureProjectInput) => Promise<EnsureProjectResult>
+  /** runStepWithInfraRetry's backoff delay — a real setTimeout-based sleep by default, instant in tests. */
+  sleepImpl?: (ms: number) => Promise<void>
 }
 
 export function executionId(runId: string, stage: string, label: string): string {
@@ -326,6 +330,40 @@ async function runStepWithRetry(deps: MetroDriverDeps, run: PlaybookRunRecord, r
     await persist(run, deps) // record the retry attempt durably before trying again
   }
 }
+
+async function realSleep(ms: number): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, ms))
+}
+
+/**
+ * Wraps runStepWithRetry with a SEPARATE, bounded retry budget for
+ * infrastructure/provider failures (EXECUTOR_UNAVAILABLE/BLOCKED — a
+ * rate limit that survived even OpenAiAdapter's own internal backoff, a
+ * timeout, a transient 5xx) — see requirement #5, Chief Phase 2Z. This
+ * is DELIBERATELY separate from runStepWithRetry's own retry loop, which
+ * only ever retries a genuine evidence-validation failure (a returned
+ * body that's malformed/incomplete) and is what M7's bounded
+ * content-repair attempts are meant to count. Retrying the EXACT SAME
+ * request (same executionId/idempotencyKey) is safe and correct:
+ * registerExecution returns the existing non-COMPLETE record and
+ * runExecution re-executes it — the same mechanism unblockRun's
+ * playbook-level recovery relies on, just applied inline instead of
+ * requiring an operator to notice and re-invoke.
+ */
+async function runStepWithInfraRetry(deps: MetroDriverDeps, run: PlaybookRunRecord, request: SpecialistExecutionRequest): Promise<StepExecutionOutcome> {
+  const guardrails = deps.guardrails ?? DEFAULT_DRIVER_GUARDRAILS
+  const sleep = deps.sleepImpl ?? realSleep
+  let outcome = await runStepWithRetry(deps, run, request)
+  let infraAttempt = 0
+  while (outcome.kind === 'BLOCKED' && infraAttempt < guardrails.maxInfraRetriesPerStep) {
+    infraAttempt += 1
+    await sleep(INFRA_RETRY_BASE_DELAY_MS * infraAttempt)
+    outcome = await runStepWithRetry(deps, run, request)
+  }
+  return outcome
+}
+
+const INFRA_RETRY_BASE_DELAY_MS = 3000
 
 // ---------------------------------------------------------------------------
 // Stage implementations — each performs ONE unit of work and returns the
@@ -798,13 +836,22 @@ async function stepEditor(deps: MetroDriverDeps, run: PlaybookRunRecord): Promis
   const results = await Promise.all(
     batch.map(async (candidate, i) => {
       const label = `editor-${i}-${candidate.name}`.replace(/[^a-zA-Z0-9_-]/g, '_')
+      // Canonical venue identity (canonicalVenueName.ts) — resolved BEFORE
+      // the editorial call, never the raw discovery label itself. Tiers
+      // 1 (Places) / 2 (verified research name) aren't wired into this
+      // pipeline stage yet, so this resolves tier 3 (deterministic
+      // cleanup) as the default hint; the editor may instead confirm one
+      // of `alternatives` when the discovery label bundled several
+      // distinct venues (extractCanonicalVenueOptions).
+      const { alternatives } = extractCanonicalVenueOptions(candidate.name)
+      const defaultCanonicalVenueName = resolveDefaultCanonicalVenueName({ discoveryName: candidate.name })
       const request: SpecialistExecutionRequest = {
         specialist: 'checkoff_editor',
         playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
         stage: 'M6_5_CHECKOFF_EDITOR',
         objective: `${run.projectId}: checkoffize ${candidate.name}`,
-        inputs: { factualSource: candidate.claimSupported, businessOrPlace: candidate.name },
-        requiredEvidenceKeys: ['factualSource', 'checkoffizedItem', 'tags'],
+        inputs: { factualSource: candidate.claimSupported, businessOrPlace: candidate.name, canonicalVenueName: defaultCanonicalVenueName, canonicalVenueAlternatives: alternatives },
+        requiredEvidenceKeys: ['factualSource', 'checkoffizedItem', 'tags', 'canonicalVenueUsed'],
         methodologyId: 'checkoff_editor',
         methodologyVersion: 'v1',
         executionId: executionId(run.runId, 'EDITOR', label),
@@ -815,7 +862,18 @@ async function stepEditor(deps: MetroDriverDeps, run: PlaybookRunRecord): Promis
         authorityOperations: ['metro_launch.build_internal_artifact'],
         idempotencyKey: executionId(run.runId, 'EDITOR', label),
       }
-      return { name: candidate.name, outcome: await runStepWithRetry(deps, run, request) }
+      // Infra retry (429/timeout/5xx) — never consumes anything from the
+      // bounded content-repair budget (that's M7's job); a provider/
+      // network failure here is retried on its own small bounded budget.
+      const outcome = await runStepWithInfraRetry(deps, run, request)
+      const editorChoice = outcome.kind === 'ACCEPTED' ? (outcome.envelope?.evidence.canonicalVenueUsed as string | undefined) : undefined
+      const confirmed = resolveConfirmedCanonicalVenueName(editorChoice, defaultCanonicalVenueName, alternatives)
+      // A confirmed-null (editor echoed a name outside the allowed set)
+      // falls back to the default rather than failing this stage outright
+      // — checkVenueQuoted at M7 will correctly reject a body that
+      // doesn't actually contain the default quoted, triggering a real,
+      // correctly-instructed rewrite attempt there.
+      return { name: candidate.name, outcome, canonicalVenueName: confirmed ?? defaultCanonicalVenueName }
     })
   )
 
@@ -836,7 +894,7 @@ async function stepEditor(deps: MetroDriverDeps, run: PlaybookRunRecord): Promis
 
   state.checkoffizedItems = [
     ...(state.checkoffizedItems ?? []),
-    ...accepted.map((r) => ({ name: r.name, checkoffizedItem: String(r.outcome.envelope?.evidence.checkoffizedItem ?? ''), tags: (r.outcome.envelope?.evidence.tags as string[] | undefined) ?? [] })),
+    ...accepted.map((r) => ({ name: r.name, checkoffizedItem: String(r.outcome.envelope?.evidence.checkoffizedItem ?? ''), tags: (r.outcome.envelope?.evidence.tags as string[] | undefined) ?? [], canonicalVenueName: r.canonicalVenueName })),
   ]
   run.state = state
 
@@ -881,10 +939,17 @@ async function certifyOneItemDriverNative(
   deps: MetroDriverDeps,
   run: PlaybookRunRecord,
   candidate: RawCandidate,
-  item: { name: string; checkoffizedItem: string; tags: string[] }
+  item: { name: string; checkoffizedItem: string; tags: string[]; canonicalVenueName: string }
 ): Promise<DriverItemCertificationRecord> {
   let body = item.checkoffizedItem
   let tags = item.tags
+  // The RESOLVED/CONFIRMED canonical venue identity (canonicalVenueName.ts)
+  // — never candidate.name (the raw, often compound/parenthetical
+  // discovery label). This is what checkVenueQuoted/checkDistinctiveExperience
+  // actually validate against below. A rewrite may legitimately re-confirm
+  // a DIFFERENT bundled alternative (see the REWRITE branch).
+  let canonicalVenueName = item.canonicalVenueName
+  const { alternatives } = extractCanonicalVenueOptions(candidate.name)
   const rejectionReasons: string[] = []
   const safeName = candidate.name.replace(/[^a-zA-Z0-9_-]/g, '_')
 
@@ -895,7 +960,7 @@ async function certifyOneItemDriverNative(
       playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
       stage: 'M7_ITEM_CERTIFICATION',
       objective: `${run.projectId}: independently critique the CheckOff item written for ${candidate.name} (attempt ${attempt}) — a separate pass from the one that wrote it, never the same call self-grading its own output`,
-      inputs: { mode: 'CRITIQUE', venueName: candidate.name, body, factualSource: candidate.claimSupported },
+      inputs: { mode: 'CRITIQUE', venueName: canonicalVenueName, body, factualSource: candidate.claimSupported },
       requiredEvidenceKeys: ITEM_CERTIFICATION_CRITIQUE_KEYS,
       methodologyId: 'checkoff_editor',
       methodologyVersion: 'v1',
@@ -907,7 +972,9 @@ async function certifyOneItemDriverNative(
       authorityOperations: ['metro_launch.build_internal_artifact'],
       idempotencyKey: executionId(run.runId, 'M7_CRITIQUE', critiqueLabel),
     }
-    const critiqueOutcome = await runStepWithRetry(deps, run, critiqueRequest)
+    // Infra retry (429/timeout/5xx) — never consumes this attempt slot;
+    // only a genuine returned-and-graded body does (requirement #5).
+    const critiqueOutcome = await runStepWithInfraRetry(deps, run, critiqueRequest)
     if (critiqueOutcome.kind !== 'ACCEPTED') {
       rejectionReasons.push(`critique attempt ${attempt}: ${critiqueOutcome.reason ?? 'executor unavailable'}`)
       break
@@ -925,10 +992,11 @@ async function certifyOneItemDriverNative(
     }
     // The two deterministic sub-checks (swap-10-competitors test, venue
     // quoting) are computed HERE, never asked of the AI critique step —
-    // see evaluateItemCritique's own doc.
-    const critique = evaluateItemCritique(body, candidate.name, answers)
+    // see evaluateItemCritique's own doc. Against the CANONICAL name,
+    // never the raw discovery label — this is the Vienna 1/450 fix.
+    const critique = evaluateItemCritique(body, canonicalVenueName, answers)
     if (critique.pass) {
-      return { candidateName: candidate.name, venueName: candidate.name, attempts: attempt, outcome: 'ITEM_CERTIFIED', finalBody: body, finalTags: tags, supportingFact: candidate.claimSupported, verifiedAt: (deps.now ?? (() => new Date().toISOString()))(), rejectionReasons }
+      return { candidateName: candidate.name, venueName: canonicalVenueName, attempts: attempt, outcome: 'ITEM_CERTIFIED', finalBody: body, finalTags: tags, supportingFact: candidate.claimSupported, verifiedAt: (deps.now ?? (() => new Date().toISOString()))(), rejectionReasons }
     }
     rejectionReasons.push(`attempt ${attempt}: ${critique.failureReasons.join('; ')}`)
     if (attempt === MAX_ITEM_CERTIFICATION_ATTEMPTS) break
@@ -939,8 +1007,16 @@ async function certifyOneItemDriverNative(
       playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
       stage: 'M7_ITEM_CERTIFICATION',
       objective: `${run.projectId}: rewrite the CheckOff item for ${candidate.name} with a genuinely stronger, more distinctive hook — previous attempt rejected (${critique.failureReasons.join('; ')}), research/rewrite rather than reword the same weak hook`,
-      inputs: { mode: 'REWRITE', factualSource: candidate.claimSupported, businessOrPlace: candidate.name, previousBody: body, rejectionReasons: critique.failureReasons },
-      requiredEvidenceKeys: ['checkoffizedItem', 'tags'],
+      inputs: {
+        mode: 'REWRITE',
+        factualSource: candidate.claimSupported,
+        businessOrPlace: candidate.name,
+        previousBody: body,
+        rejectionReasons: critique.failureReasons,
+        canonicalVenueName,
+        canonicalVenueAlternatives: alternatives,
+      },
+      requiredEvidenceKeys: ['checkoffizedItem', 'tags', 'canonicalVenueUsed'],
       methodologyId: 'checkoff_editor',
       methodologyVersion: 'v1',
       executionId: executionId(run.runId, 'M7_REWRITE', rewriteLabel),
@@ -951,19 +1027,27 @@ async function certifyOneItemDriverNative(
       authorityOperations: ['metro_launch.build_internal_artifact'],
       idempotencyKey: executionId(run.runId, 'M7_REWRITE', rewriteLabel),
     }
-    const rewriteOutcome = await runStepWithRetry(deps, run, rewriteRequest)
+    const rewriteOutcome = await runStepWithInfraRetry(deps, run, rewriteRequest)
     if (rewriteOutcome.kind !== 'ACCEPTED') {
       rejectionReasons.push(`rewrite attempt ${attempt}: ${rewriteOutcome.reason ?? 'executor unavailable'}`)
       break
     }
     body = String(rewriteOutcome.envelope?.evidence.checkoffizedItem ?? body)
     tags = (rewriteOutcome.envelope?.evidence.tags as string[] | undefined) ?? tags
+    // A rewrite may legitimately re-focus on a different bundled
+    // alternative (e.g. the first draft tried the compound label, the
+    // rewrite correctly narrows to one real sub-venue) — re-confirm
+    // against the SAME allowed option set, never silently accept
+    // whatever string the editor echoes.
+    const rewriteChoice = rewriteOutcome.envelope?.evidence.canonicalVenueUsed as string | undefined
+    const confirmed = resolveConfirmedCanonicalVenueName(rewriteChoice, item.canonicalVenueName, alternatives)
+    canonicalVenueName = confirmed ?? canonicalVenueName
   }
 
   // Bounded retry budget exhausted (or the executor genuinely could not
   // complete a step) — never manufacture filler. This candidate is
   // rejected out of the final catalog, not force-included.
-  return { candidateName: candidate.name, venueName: candidate.name, attempts: MAX_ITEM_CERTIFICATION_ATTEMPTS, outcome: 'EXHAUSTED_RETRIES', finalBody: null, finalTags: [], supportingFact: candidate.claimSupported, verifiedAt: null, rejectionReasons }
+  return { candidateName: candidate.name, venueName: canonicalVenueName, attempts: MAX_ITEM_CERTIFICATION_ATTEMPTS, outcome: 'EXHAUSTED_RETRIES', finalBody: null, finalTags: [], supportingFact: candidate.claimSupported, verifiedAt: null, rejectionReasons }
 }
 
 async function stepM7ItemCertification(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {

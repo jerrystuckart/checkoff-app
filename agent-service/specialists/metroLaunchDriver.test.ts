@@ -10,7 +10,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { driveMetroLaunch, executionId, m0DecisionsResolved, buildAuditEvidence, m1GeographyExecutionLabel, type MetroM0Decisions } from './metroLaunchDriver'
+import { driveMetroLaunch, executionId, m0DecisionsResolved, buildAuditEvidence, m1GeographyExecutionLabel, MAX_ITEM_CERTIFICATION_ATTEMPTS, type MetroM0Decisions } from './metroLaunchDriver'
 import { InMemoryPlaybookRunStore, getOrCreateRun, playbookRunId } from './playbookRun'
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
@@ -148,8 +148,9 @@ function scriptSynthetic(executor: TestExecutor) {
         objective: r.objective,
         evidence: {
           factualSource: (r.inputs as { factualSource?: string }).factualSource ?? '',
-          checkoffizedItem: `Checkoffized: order the 'signature dish' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`,
+          checkoffizedItem: `Checkoffized: order the 'signature dish' at '${(r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`,
           tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'],
+          canonicalVenueUsed: (r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace,
         },
         methodologyId: 'checkoff_editor',
         methodologyVersion: 'v1',
@@ -294,7 +295,7 @@ test('driveMetroLaunch: a plateaued district-depth gap (Carlsbad 4/5) self-relax
   )
   executor.scriptWhen(
     (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
-    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'], canonicalVenueUsed: (r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
   )
   executor.scriptWhen(
     (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
@@ -403,7 +404,7 @@ test('driveMetroLaunch: launch-boundary GEOGRAPHY_GATE genuinely PASSES once a d
   )
   executor.scriptWhen(
     (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
-    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'], canonicalVenueUsed: (r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
   )
   executor.scriptWhen(
     (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
@@ -459,7 +460,7 @@ test('driveMetroLaunch: a category with genuinely zero real-world inventory (Spo
   )
   executor.scriptWhen(
     (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
-    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'], canonicalVenueUsed: (r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
   )
   executor.scriptWhen(
     (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
@@ -528,7 +529,7 @@ test('driveMetroLaunch: launch-boundary CATEGORY_GATE evaluates NORMALIZED categ
   )
   executor.scriptWhen(
     (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
-    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'], canonicalVenueUsed: (r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
   )
   executor.scriptWhen(
     (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
@@ -630,7 +631,7 @@ test('driveMetroLaunch: a coverage gap that plateaus rather than closing self-re
   )
   executor.scriptWhen(
     (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
-    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'], canonicalVenueUsed: (r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
   )
   executor.scriptWhen(
     (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
@@ -896,7 +897,7 @@ test('driveMetroLaunch: a configured depth target with only token coverage trigg
   )
   executor.scriptWhen(
     (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
-    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'], canonicalVenueUsed: (r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
   )
   executor.scriptWhen(
     (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
@@ -1003,7 +1004,7 @@ test('driveMetroLaunch: re-entering a stage whose execution is already COMPLETE 
   )
   executor.scriptWhen(
     (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
-    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'], canonicalVenueUsed: (r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
   )
   executor.scriptWhen(
     (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
@@ -1200,7 +1201,7 @@ function scriptThroughM8(executor: TestExecutor, candidateName: string, neighbor
   )
   executor.scriptWhen(
     (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
-    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'x', checkoffizedItem: `Order the 'signature item' at '${(r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: ['tag-a', 'tag-b', 'tag-c', 'tag-d', 'tag-e', 'tag-f'], canonicalVenueUsed: (r.inputs as { canonicalVenueName?: string; businessOrPlace?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
   )
   executor.scriptWhen(
     (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
@@ -1291,4 +1292,208 @@ test('m0DecisionsResolved: missing metroCountry or metroCenter resolves false �
   const { metroCenter, ...withoutCenter } = RESOLVED_M0
   assert.equal(m0DecisionsResolved(withoutCenter), false)
   assert.equal(m0DecisionsResolved({ ...RESOLVED_M0, metroCenter: { lat: 48.2, lng: NaN as unknown as number } }), true) // NaN is still typeof 'number' — a distinct, not-this-function's-job validation concern
+})
+
+// ---------------------------------------------------------------------------
+// Canonical venue identity (Chief Phase 2Z) — the Vienna 1/450
+// certification regression. VENUE_QUOTING_GATE was validating against
+// the raw M3 discovery label instead of a resolved canonical venue
+// name; these tests exercise the REAL driver (M6.5 write -> M7
+// critique/rewrite) end to end, not just the pure canonicalVenueName.ts
+// unit tests.
+// ---------------------------------------------------------------------------
+
+async function seedForM7(
+  runStore: InstanceType<typeof InMemoryPlaybookRunStore>,
+  projectId: string,
+  candidate: { name: string; category: string; neighborhood: string; claimSupported: string; source: string; needsVerification: boolean },
+  item: { name: string; checkoffizedItem: string; tags: string[]; canonicalVenueName: string }
+) {
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  seeded!.state = { m0Decisions: RESOLVED_M0, candidates: [candidate], checkoffizedItems: [item], neighborhoods: [], plan: PLAN, hasRunM6: true }
+  seeded!.currentStage = 'M7_ITEM_CERTIFICATION'
+  await runStore.put(seeded!)
+}
+
+function bundledCandidate(claimSupported = 'The Spanish Riding School performs a real, specific Lipizzaner dressage routine most mornings.') {
+  return {
+    name: 'Hofburg Palace Complex (incl. Sisi Museum, Spanish Riding School)',
+    category: 'Arts & Culture',
+    neighborhood: 'Innere Stadt',
+    claimSupported,
+    source: 'https://example.com/hofburg',
+    needsVerification: false,
+  }
+}
+
+test('driveMetroLaunch: a bundled discovery label certifies when the body quotes the RESOLVED canonical alternative — the compound label is never required verbatim', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const candidate = bundledCandidate()
+  const item = { name: candidate.name, checkoffizedItem: "Watch the Lipizzaner stallions train at 'Spanish Riding School'.", tags: ['t1', 't2', 't3', 't4', 't5', 't6'], canonicalVenueName: 'Spanish Riding School' }
+
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { hasConcreteAction: true, moreSpecificThanVenuePurpose: true, supportedByResearch: true, isCurrent: true, tellsUsefulNonObviousDetail: true, soundsLikeCheckoff: true, concise: true, critiqueNotes: 'ok' },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+      })
+  )
+
+  const projectId = 'vienna-bundled-venue-certifies'
+  await seedForM7(runStore, projectId, candidate, item)
+
+  const run = await driveMetroLaunch(
+    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 5 }
+  )
+
+  const state = run.state as { itemCertifications: Record<string, { outcome: string; venueName: string; rejectionReasons: string[] }> }
+  const cert = state.itemCertifications[candidate.name]
+  assert.equal(cert.outcome, 'ITEM_CERTIFIED', `expected certified, got: ${JSON.stringify(cert)}`)
+  assert.equal(cert.venueName, 'Spanish Riding School', 'certified against the resolved alternative, never the compound discovery label')
+  // Never required the parenthetical discovery metadata in the final copy.
+  assert.equal(cert.rejectionReasons.length, 0)
+})
+
+test('driveMetroLaunch: the SAME bundled item fails venue quoting when the body does not contain the canonical name quoted — deterministic, never fuzzy', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const candidate = bundledCandidate()
+  // Body never wraps ANY canonical option in single quotes.
+  const item = { name: candidate.name, checkoffizedItem: 'Watch the Lipizzaner stallions train at the Spanish Riding School.', tags: ['t1', 't2', 't3', 't4', 't5', 't6'], canonicalVenueName: 'Hofburg Palace Complex' }
+
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { hasConcreteAction: true, moreSpecificThanVenuePurpose: true, supportedByResearch: true, isCurrent: true, tellsUsefulNonObviousDetail: true, soundsLikeCheckoff: true, concise: true, critiqueNotes: 'ok' },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+      })
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'REWRITE',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { checkoffizedItem: 'Watch the Lipizzaner stallions train at the Spanish Riding School, still unquoted.', tags: ['t1', 't2', 't3', 't4', 't5', 't6'], canonicalVenueUsed: 'Hofburg Palace Complex' }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+  )
+
+  const projectId = 'vienna-bundled-venue-unquoted-fails'
+  await seedForM7(runStore, projectId, candidate, item)
+
+  const run = await driveMetroLaunch(
+    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 5 }
+  )
+
+  const state = run.state as { itemCertifications: Record<string, { outcome: string; rejectionReasons: string[] }> }
+  const cert = state.itemCertifications[candidate.name]
+  assert.equal(cert.outcome, 'EXHAUSTED_RETRIES')
+  assert.ok(cert.rejectionReasons.some((r) => r.includes('destination venue wrapped in single quotes')), `expected a quoting failure, got: ${JSON.stringify(cert.rejectionReasons)}`)
+})
+
+test('driveMetroLaunch: 429/infra failures during critique are retried and do NOT consume an editorial content-repair attempt', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl serves a real, specific Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
+  const item = { name: candidate.name, checkoffizedItem: "Order the 'Sperl Torte' at 'Cafe Sperl'.", tags: ['t1', 't2', 't3', 't4', 't5', 't6'], canonicalVenueName: 'Cafe Sperl' }
+
+  let critiqueDispatches = 0
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
+    (r) => {
+      critiqueDispatches += 1
+      // First 2 dispatches for this SAME executionId simulate a
+      // provider/network failure (surfaces as EXECUTOR_UNAVAILABLE,
+      // exactly like an OpenAI 429 after OpenAiAdapter's own retries are
+      // exhausted); the 3rd genuinely succeeds.
+      if (critiqueDispatches <= 2) return { unavailable: true, reason: 'openai: OpenAI Responses API returned 429 after 6 retries: rate limited' }
+      return fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { hasConcreteAction: true, moreSpecificThanVenuePurpose: true, supportedByResearch: true, isCurrent: true, tellsUsefulNonObviousDetail: true, soundsLikeCheckoff: true, concise: true, critiqueNotes: 'ok' },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+      })
+    }
+  )
+
+  const projectId = 'vienna-infra-retry-no-attempt-consumed'
+  await seedForM7(runStore, projectId, candidate, item)
+
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }),
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      sleepImpl: async () => {}, // instant — the retry COUNT is under test, not real backoff timing
+    },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 5 }
+  )
+
+  assert.equal(critiqueDispatches, 3, '2 infra failures + 1 real dispatch — proves the infra retry actually happened')
+  const state = run.state as { itemCertifications: Record<string, { outcome: string; attempts: number }> }
+  const cert = state.itemCertifications[candidate.name]
+  assert.equal(cert.outcome, 'ITEM_CERTIFIED')
+  assert.equal(cert.attempts, 1, 'the 2 infra failures must NOT count as editorial content-repair attempts — only 1 real attempt was ever graded')
+})
+
+test('driveMetroLaunch: three genuine bad editorial bodies still exhaust the content retry limit — infra-retry exemption never becomes unlimited retries', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl serves a real, specific Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
+  const item = { name: candidate.name, checkoffizedItem: 'Visit Cafe Sperl, a nice coffeehouse.', tags: ['t1', 't2', 't3', 't4', 't5', 't6'], canonicalVenueName: 'Cafe Sperl' }
+
+  let critiqueCalls = 0
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
+    (r) => {
+      critiqueCalls += 1
+      // Genuinely, repeatedly generic — every real content attempt fails.
+      return fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { hasConcreteAction: false, moreSpecificThanVenuePurpose: false, supportedByResearch: true, isCurrent: true, tellsUsefulNonObviousDetail: false, soundsLikeCheckoff: false, concise: true, critiqueNotes: 'still generic, venue-level' },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+      })
+    }
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'REWRITE',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { checkoffizedItem: 'Visit Cafe Sperl again, still generic.', tags: ['t1', 't2', 't3', 't4', 't5', 't6'], canonicalVenueUsed: 'Cafe Sperl' }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+  )
+
+  const projectId = 'vienna-genuine-repeated-failure-exhausts'
+  await seedForM7(runStore, projectId, candidate, item)
+
+  const run = await driveMetroLaunch(
+    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), sleepImpl: async () => {} },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 5 }
+  )
+
+  assert.equal(critiqueCalls, MAX_ITEM_CERTIFICATION_ATTEMPTS, 'exactly 3 genuine content critique passes — never more, never fewer')
+  const state = run.state as { itemCertifications: Record<string, { outcome: string; attempts: number }> }
+  const cert = state.itemCertifications[candidate.name]
+  assert.equal(cert.outcome, 'EXHAUSTED_RETRIES')
+  assert.equal(cert.attempts, MAX_ITEM_CERTIFICATION_ATTEMPTS)
 })

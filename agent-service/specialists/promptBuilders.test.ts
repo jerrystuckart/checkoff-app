@@ -122,3 +122,71 @@ test('buildDestinationRelationshipManagerPrompt: includes the runtime date conte
   const { systemPrompt } = buildDestinationRelationshipManagerPrompt(relReq, '2026-09-08T12:00:00.000Z')
   assert.match(systemPrompt, /2026-09-08T12:00:00\.000Z/)
 })
+
+// ---------------------------------------------------------------------------
+// Canonical venue name quoting instruction (Chief Phase 2Z — the Vienna
+// 1/450 certification regression: VENUE_QUOTING_GATE was validating
+// against the raw discovery label instead of a resolved canonical
+// venue name; the editor itself was never even told to quote a venue
+// name at all).
+// ---------------------------------------------------------------------------
+
+test('buildCheckoffEditorPrompt: a WRITE-mode request with canonicalVenueName instructs the exact quoted string and requires canonicalVenueUsed evidence', () => {
+  const editorReq: SpecialistExecutionRequest = {
+    ...req(),
+    specialist: 'checkoff_editor',
+    methodologyId: 'checkoff_editor',
+    methodologyVersion: 'v1',
+    inputs: { factualSource: 'fact', canonicalVenueName: 'Hofburg', canonicalVenueAlternatives: [] },
+  }
+  const { systemPrompt } = buildCheckoffEditorPrompt(editorReq)
+  assert.match(systemPrompt, /'Hofburg'/)
+  assert.match(systemPrompt, /canonicalVenueUsed/)
+  assert.match(systemPrompt, /not a suggestion/)
+})
+
+test('buildCheckoffEditorPrompt: canonicalVenueAlternatives are listed as legitimate alternate choices, with an explicit instruction never to quote the full compound label', () => {
+  const editorReq: SpecialistExecutionRequest = {
+    ...req(),
+    specialist: 'checkoff_editor',
+    methodologyId: 'checkoff_editor',
+    methodologyVersion: 'v1',
+    inputs: { factualSource: 'fact', canonicalVenueName: 'Hofburg Palace Complex', canonicalVenueAlternatives: ['Sisi Museum', 'Spanish Riding School'] },
+  }
+  const { systemPrompt } = buildCheckoffEditorPrompt(editorReq)
+  assert.match(systemPrompt, /"Sisi Museum"/)
+  assert.match(systemPrompt, /"Spanish Riding School"/)
+  assert.match(systemPrompt, /never the full compound\/bundled label/)
+})
+
+test('buildCheckoffEditorPrompt: REWRITE mode also gets the canonical-venue quoting instruction', () => {
+  const editorReq: SpecialistExecutionRequest = {
+    ...req(),
+    specialist: 'checkoff_editor',
+    methodologyId: 'checkoff_editor',
+    methodologyVersion: 'v1',
+    inputs: { mode: 'REWRITE', factualSource: 'fact', canonicalVenueName: 'Cafe Sperl' },
+  }
+  const { systemPrompt } = buildCheckoffEditorPrompt(editorReq)
+  assert.match(systemPrompt, /'Cafe Sperl'/)
+})
+
+test('buildCheckoffEditorPrompt: CRITIQUE mode never gets the canonical-venue quoting instruction — that check is deterministic, not asked of the AI', () => {
+  const editorReq: SpecialistExecutionRequest = {
+    ...req(),
+    specialist: 'checkoff_editor',
+    methodologyId: 'checkoff_editor',
+    methodologyVersion: 'v1',
+    inputs: { mode: 'CRITIQUE', venueName: 'Cafe Sperl', body: 'x', factualSource: 'fact' },
+  }
+  const { systemPrompt } = buildCheckoffEditorPrompt(editorReq)
+  assert.doesNotMatch(systemPrompt, /canonicalVenueUsed/)
+  assert.doesNotMatch(systemPrompt, /CANONICAL VENUE NAME/)
+})
+
+test('buildCheckoffEditorPrompt: a request with no canonicalVenueName at all (e.g. an older caller) omits the instruction entirely — no crash, no stray "undefined"', () => {
+  const editorReq: SpecialistExecutionRequest = { ...req(), specialist: 'checkoff_editor', methodologyId: 'checkoff_editor', methodologyVersion: 'v1', inputs: { factualSource: 'fact', businessOrPlace: 'Cafe Sperl' } }
+  const { systemPrompt } = buildCheckoffEditorPrompt(editorReq)
+  assert.doesNotMatch(systemPrompt, /CANONICAL VENUE NAME/)
+  assert.doesNotMatch(systemPrompt, /undefined/)
+})

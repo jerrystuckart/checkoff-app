@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { InMemoryPlaybookRunStore, getOrCreateRun, unblockRun, resumeRun, recordJerryDecision, playbookRunId } from './playbookRun'
+import { InMemoryPlaybookRunStore, getOrCreateRun, unblockRun, resumeRun, recordJerryDecision, reopenStage, playbookRunId } from './playbookRun'
 
 test('unblockRun: a BLOCKED run resumes to RUNNING, with jerryReason cleared and state untouched', async () => {
   const store = new InMemoryPlaybookRunStore()
@@ -52,4 +52,75 @@ test('unblockRun and recordJerryDecision are NOT interchangeable — each only a
 
   // resume (PAUSED-only) must refuse an already-RUNNING run.
   await assert.rejects(() => resumeRun(store, playbookRunId('metro_launch', 'proj-4')), /is not PAUSED \(currently RUNNING\)/)
+})
+
+// ---------------------------------------------------------------------------
+// reopenStage — Chief Phase 2Z. Used to repair Vienna after the
+// VENUE_QUOTING_GATE canonical-name fix without discarding the 450
+// already-researched candidates.
+// ---------------------------------------------------------------------------
+
+test('reopenStage: moves currentStage back, clears exactly the named state keys, and preserves everything else', async () => {
+  const store = new InMemoryPlaybookRunStore()
+  const run = await getOrCreateRun(store, 'metro_launch', 'vienna-repair', 'LAUNCH_READINESS_BOUNDARY')
+  run.status = 'NEEDS_JERRY'
+  run.jerryReason = 'Metro build reached the launch-readiness boundary'
+  run.loopIteration = 3
+  run.state = {
+    candidates: ['A', 'B', 'C'],
+    neighborhoods: ['Innere Stadt'],
+    checkoffizedItems: [{ name: 'A', checkoffizedItem: 'wrong', tags: [] }],
+    itemCertifications: { A: { outcome: 'EXHAUSTED_RETRIES' } },
+    finalCertificationReport: { verdict: 'BLOCKED' },
+  }
+  await store.put(run)
+
+  const result = await reopenStage(store, playbookRunId('metro_launch', 'vienna-repair'), 'M6_5_CHECKOFF_EDITOR', {
+    checkoffizedItems: [],
+    itemCertifications: {},
+    finalCertificationReport: null,
+  })
+
+  assert.equal(result.status, 'RUNNING')
+  assert.equal(result.currentStage, 'M6_5_CHECKOFF_EDITOR')
+  assert.equal(result.jerryReason, null)
+  assert.equal(result.decisionPacket, null)
+  assert.equal(result.loopIteration, 0)
+  assert.deepEqual(result.state.candidates, ['A', 'B', 'C'], 'the paid-for research is NEVER discarded')
+  assert.deepEqual(result.state.neighborhoods, ['Innere Stadt'])
+  assert.deepEqual(result.state.checkoffizedItems, [], 'invalidated-by-the-fix state is cleared')
+  assert.deepEqual(result.state.itemCertifications, {})
+  assert.equal(result.state.finalCertificationReport, null)
+})
+
+test('reopenStage: with no stateReset given, only moves the stage — every key in state is preserved', async () => {
+  const store = new InMemoryPlaybookRunStore()
+  const run = await getOrCreateRun(store, 'metro_launch', 'vienna-repair-2', 'M8_BATCH_CERTIFICATION')
+  run.status = 'BLOCKED'
+  run.state = { candidates: ['X'] }
+  await store.put(run)
+
+  const result = await reopenStage(store, playbookRunId('metro_launch', 'vienna-repair-2'), 'M7_ITEM_CERTIFICATION')
+  assert.equal(result.currentStage, 'M7_ITEM_CERTIFICATION')
+  assert.deepEqual(result.state, { candidates: ['X'] })
+})
+
+test('reopenStage: throws on a RUNNING run — never reopens a stage out from under an active step', async () => {
+  const store = new InMemoryPlaybookRunStore()
+  await getOrCreateRun(store, 'metro_launch', 'vienna-repair-3', 'M6_QUALITY_VERIFICATION')
+  await assert.rejects(() => reopenStage(store, playbookRunId('metro_launch', 'vienna-repair-3'), 'M1_GEOGRAPHY_MAP'), /is not NEEDS_JERRY or BLOCKED \(currently RUNNING\)/)
+})
+
+test('reopenStage: throws on a run id that does not exist', async () => {
+  const store = new InMemoryPlaybookRunStore()
+  await assert.rejects(() => reopenStage(store, playbookRunId('metro_launch', 'does-not-exist'), 'M1_GEOGRAPHY_MAP'), /No playbook run/)
+})
+
+test('reopenStage: works from BLOCKED, not just NEEDS_JERRY', async () => {
+  const store = new InMemoryPlaybookRunStore()
+  const run = await getOrCreateRun(store, 'metro_launch', 'vienna-repair-4', 'M6_5_CHECKOFF_EDITOR')
+  run.status = 'BLOCKED'
+  await store.put(run)
+  const result = await reopenStage(store, playbookRunId('metro_launch', 'vienna-repair-4'), 'M6_5_CHECKOFF_EDITOR', { checkoffizedItems: [] })
+  assert.equal(result.status, 'RUNNING')
 })

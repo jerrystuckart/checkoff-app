@@ -91,9 +91,9 @@ function buildExecutor(): TestExecutor {
   executor.scriptWhen(
     (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
     (r) => {
-      const venue = (r.inputs as { businessOrPlace?: string }).businessOrPlace ?? ''
+      const venue = (r.inputs as { canonicalVenueName?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace ?? ''
       const body = venue === 'Kunsthistorisches Museum' ? `Explore exhibits at '${venue}'.` : `Order the 'Sperl Torte' at '${venue}'.`
-      return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: (r.inputs as { factualSource?: string }).factualSource ?? '', checkoffizedItem: body, tags: VALID_TAGS }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+      return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: (r.inputs as { factualSource?: string }).factualSource ?? '', checkoffizedItem: body, tags: VALID_TAGS, canonicalVenueUsed: venue }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
     }
   )
 
@@ -128,14 +128,16 @@ function buildExecutor(): TestExecutor {
   // critique fails. Returns a genuinely specific second draft.
   executor.scriptWhen(
     (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'REWRITE',
-    (r) =>
-      fakeEnvelope({
+    (r) => {
+      const venue = (r.inputs as { canonicalVenueName?: string }).canonicalVenueName ?? (r.inputs as { businessOrPlace?: string }).businessOrPlace ?? ''
+      return fakeEnvelope({
         taskId: r.executionId,
         objective: r.objective,
-        evidence: { checkoffizedItem: `See Klimt's 'Kiss' preparatory sketch at '${(r.inputs as { businessOrPlace?: string }).businessOrPlace}'.`, tags: VALID_TAGS },
+        evidence: { checkoffizedItem: `See Klimt's 'Kiss' preparatory sketch at '${venue}'.`, tags: VALID_TAGS, canonicalVenueUsed: venue },
         methodologyId: 'checkoff_editor',
         methodologyVersion: 'v1',
       })
+    }
   )
 
   return executor

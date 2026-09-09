@@ -22,6 +22,7 @@
 //   tsx agent-service/cli.ts pause <playbookKey> <projectKey>
 //   tsx agent-service/cli.ts resume <playbookKey> <projectKey>
 //   tsx agent-service/cli.ts unblock <playbookKey> <projectKey>   (BLOCKED -> RUNNING, retriable infra failures only — no decision payload)
+//   tsx agent-service/cli.ts reopen-stage <playbookKey> <projectKey> <toStage> [stateReset.json]   (methodology fix invalidated a later stage's output — moves currentStage back, clears named state keys, keeps the rest)
 //   tsx agent-service/cli.ts decide <playbookKey> <projectKey> <decision.json>   (records a pending Jerry decision and resumes)
 //
 // STORE SELECTION (Phase 2E): by default this uses the real, durable
@@ -42,7 +43,7 @@ import { buildManualAssignmentPackage } from './specialists/manualExecutor'
 import { DbExecutionStore } from './specialists/dbExecutionStore'
 import type { SpecialistResultEnvelope } from './specialists/types'
 import type { PlaybookRunStore, PlaybookRunRecord } from './specialists/playbookRun'
-import { playbookRunId, pauseRun, resumeRun, unblockRun, recordJerryDecision, getOrCreateRun } from './specialists/playbookRun'
+import { playbookRunId, pauseRun, resumeRun, unblockRun, reopenStage, recordJerryDecision, getOrCreateRun } from './specialists/playbookRun'
 import { DbPlaybookRunStore } from './specialists/dbPlaybookRunStore'
 import { driveMetroLaunch, ensureMetroProject, type MetroM0Decisions } from './specialists/metroLaunchDriver'
 import { driveDestinationHub } from './specialists/destinationHubDriver'
@@ -228,6 +229,20 @@ async function main() {
     // just "try again": `tsx agent-service/cli.ts unblock <playbookKey> <projectKey>`.
     const [playbookKey, projectId] = rest0
     const run = await unblockRun(runStore, playbookRunId(playbookKey, projectId))
+    console.log(JSON.stringify(run, null, 2))
+    return
+  }
+
+  if (command === 'reopen-stage') {
+    // A methodology defect invalidated a LATER stage's output without
+    // invalidating the research the run already paid for — moves
+    // currentStage back and clears exactly the state keys named in
+    // stateReset.json, leaving everything else (candidates, neighborhoods,
+    // plan, research history, ...) untouched:
+    //   tsx agent-service/cli.ts reopen-stage <playbookKey> <projectKey> <toStage> <stateReset.json>
+    const [playbookKey, projectId, toStage, stateResetFile] = rest0
+    const stateReset = stateResetFile ? readJson<Record<string, unknown>>(stateResetFile) : {}
+    const run = await reopenStage(runStore, playbookRunId(playbookKey, projectId), toStage, stateReset)
     console.log(JSON.stringify(run, null, 2))
     return
   }

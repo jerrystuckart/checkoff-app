@@ -137,7 +137,36 @@ export function buildResearchVerifierPrompt(request: SpecialistExecutionRequest,
   return { systemPrompt, userPrompt }
 }
 
+/**
+ * WRITE and REWRITE calls carry a resolved canonical venue identity in
+ * `inputs.canonicalVenueName` (+ optional `inputs.canonicalVenueAlternatives`
+ * when the discovery label bundled several distinct venues) — see
+ * canonicalVenueName.ts. CRITIQUE calls never carry these (nothing to
+ * write), so this returns null for them; the quoting requirement itself
+ * is a deterministic, code-side check (checkVenueQuoted), never asked
+ * of the AI critique step.
+ */
+function canonicalVenueQuotingInstruction(request: SpecialistExecutionRequest): string | null {
+  const mode = request.inputs.mode
+  if (mode === 'CRITIQUE') return null
+  const canonicalVenueName = request.inputs.canonicalVenueName
+  if (typeof canonicalVenueName !== 'string' || !canonicalVenueName.trim()) return null
+  const alternatives = Array.isArray(request.inputs.canonicalVenueAlternatives) ? (request.inputs.canonicalVenueAlternatives as unknown[]).filter((a): a is string => typeof a === 'string') : []
+  const altClause =
+    alternatives.length > 0
+      ? ` The discovery label bundles several distinct venues/experiences together — if this item is genuinely about one of the OTHER specific venues instead, use that exact name instead: ${alternatives.map((a) => `"${a}"`).join(', ')}. Use exactly ONE of these names (the default or one alternative), never the full compound/bundled label, and never a name that is not one of the options given.`
+      : ''
+  return (
+    `CANONICAL VENUE NAME (required formatting, not a suggestion): the final sentence in checkoffizedItem MUST contain the exact string '${canonicalVenueName}' ` +
+    `(that literal text wrapped in single quotes, straight or curly) — this is the clean venue/place name, never the raw research label with its ` +
+    `parenthetical annotations, bundled venue lists, category text, or neighborhood notes.${altClause} ` +
+    `evidence must also include canonicalVenueUsed: the exact name you actually used (verbatim, matching what you wrapped in quotes) — this is how ` +
+    `Chief confirms which of the allowed names you picked.`
+  )
+}
+
 export function buildCheckoffEditorPrompt(request: SpecialistExecutionRequest, now: string = new Date().toISOString()): { systemPrompt: string; userPrompt: string } {
+  const quotingInstruction = canonicalVenueQuotingInstruction(request)
   const systemPrompt = [
     methodologyPreamble(request),
     runtimeDateContextLine(now),
@@ -180,8 +209,11 @@ export function buildCheckoffEditorPrompt(request: SpecialistExecutionRequest, n
     'evidence must include: factualSource (verbatim, unchanged from what you were given), checkoffizedItem (the final wording), ' +
       'and fidelityAssessment (one or two sentences confirming every fact in checkoffizedItem traces directly back to factualSource, ' +
       'or naming exactly what could not be preserved).',
+    quotingInstruction,
     envelopeInstructions(request),
-  ].join('\n\n')
+  ]
+    .filter((line): line is string => line !== null)
+    .join('\n\n')
 
   const userPrompt = [`Objective: ${request.objective}`, `Verified factual candidate + supporting evidence: ${JSON.stringify(request.inputs)}`].join('\n')
 

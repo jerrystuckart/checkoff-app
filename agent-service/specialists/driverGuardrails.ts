@@ -24,6 +24,18 @@ export interface DriverGuardrails {
   maxPlanRelaxationRounds: number
   /** Min real dispatched-research attempts a gap needs before it can be classified as an unrealistic target rather than genuine missing coverage — see coveragePlanRelaxation.ts's classifyGapForRelaxation. */
   minResearchDispatchesBeforeRelaxation: number
+  /**
+   * Max additional retries for an INFRASTRUCTURE/provider failure
+   * (EXECUTOR_UNAVAILABLE/BLOCKED — a rate limit, timeout, transient
+   * 5xx) at ONE checkoff_editor step (write/critique/rewrite), on top of
+   * whatever retry OpenAiAdapter itself already did internally. This
+   * budget is DELIBERATELY separate from maxRetriesPerExecution: an
+   * infra retry must never consume one of the bounded editorial
+   * content-repair attempts (requirement #5, Chief Phase 2Z) — only a
+   * genuine returned body that fails critique/gates should count as a
+   * real attempt.
+   */
+  maxInfraRetriesPerStep: number
 }
 
 export const DEFAULT_DRIVER_GUARDRAILS: DriverGuardrails = Object.freeze({
@@ -32,6 +44,7 @@ export const DEFAULT_DRIVER_GUARDRAILS: DriverGuardrails = Object.freeze({
   maxConcurrentExecutions: 6,
   maxPlanRelaxationRounds: 3,
   minResearchDispatchesBeforeRelaxation: 2,
+  maxInfraRetriesPerStep: 3,
 })
 
 export class GuardrailExceededError extends Error {
