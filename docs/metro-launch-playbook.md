@@ -774,6 +774,38 @@ production tag list. This is not something Winston can close on its own without 
 plausible-looking list here would violate the explicit "never invent a tag" rule this whole module
 exists to enforce.
 
+## Part 10 — Universal Business Activation Kit (permanent, recorded 2026-09-08)
+
+City-specific Featured Kits (one zip per metro — Phoenix/Milwaukee/Tucson/Denver) are permanently
+retired. There is now exactly one universal, canonical Business Activation Kit at
+`https://getcheckoff.com/downloads/featured-kit`, reused identically for every past and future
+metro/destination — Vienna included. Improve it centrally, once; never rebuild it per metro.
+
+Winston **never** triggers Claude/ChatGPT/Canva/image generation to create a normal city-specific
+kit again. For every future metro, Winston's only job is **`UNIVERSAL BUSINESS ACTIVATION KIT
+VERIFIED`** (`agent-service/playbooks/businessActivationKit.ts`) — permanently replacing any prior
+`CREATE FEATURED KIT` / `METRO-SPECIFIC FEATURED KIT READY` concept:
+
+1. the canonical URL is confirmed live
+2. its universal asset files are accessible
+3. this metro's business-outreach copy references only that canonical URL — never a metro-specific
+   one (`validateActivationKitReference()` catches any `featured-kit-<city>`-shaped reference)
+4. business-specific `/confirm/<token>` links (item verification/photo submission — a completely
+   separate system) exist separately where applicable, and are never used as customer-facing
+   signage/kit material
+
+Positioning preserved in all future outreach: businesses are featured for free because a great
+CheckOff app needs great places; optional paid tools/services are a separate, later upsell — the
+Activation Kit itself is always free. The primary customer concept is now **"What's Good Here?"**
+(discovery/activation), with "Featured on CheckOff" recognition kept as secondary badge material,
+never the lead message.
+
+**Status as of 2026-09-08**: the validation/verification logic is real and tested (8 tests,
+`businessActivationKit.test.ts`) but is not yet wired as a hard-blocking stage in
+`metroLaunchDriver.ts`'s `REQUIRED_GATE_CATEGORIES` — no outreach is sent by the driver yet, so
+this was correctly scoped as "executable and ready to wire in" rather than rushing a live-network
+stage into the certification sequence tonight. Wiring it as a real gate is the next increment.
+
 ## Provenance
 
 Built and verified against the Denver/Boulder/Longmont launch cycle, 2026-08-21 —

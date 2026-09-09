@@ -163,7 +163,7 @@ export const SECRET_BUSINESS_OUTREACH_PLAYBOOK: PlaybookDefinition<SecretBusines
   key: 'secret_business_outreach',
   name: 'Secret Business Outreach',
   purpose:
-    'Contact a business tied to a secret/spoiler item without exposing the secret text — the business may still submit a venue/business photo, request a cling, or download the Featured Kit; there is no generic item-confirmation step for a secret item.',
+    'Contact a business tied to a secret/spoiler item without exposing the secret text — the business may still submit a venue/business photo, request a cling, or download the universal Business Activation Kit (https://getcheckoff.com/downloads/featured-kit — never a metro-specific kit, see businessActivationKit.ts); there is no generic item-confirmation step for a secret item.',
   entryConditions: ['a live business_outreach_tokens row exists for a secret item (items.is_secret = true)', 'the DB-level Secret Item Protection trigger remains in force unchanged'],
   stages: SECRET_STAGES,
   successCriteria: ['photo reviewed by Jerry (if one was submitted)', 'cling fulfilled (if one was requested)', 'no further action needed'],
