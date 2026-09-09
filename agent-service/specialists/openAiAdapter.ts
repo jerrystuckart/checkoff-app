@@ -46,12 +46,61 @@ export interface OpenAiAdapterOptions {
    * if the configured model doesn't support it.
    */
   supportsLiveWebResearch?: boolean
+  /**
+   * Max automatic retries for a 429 (rate limit) response, WITHIN this
+   * one complete() call — never for any other HTTP status (an auth
+   * failure, a bad request, a 5xx, etc. still throw immediately; a rate
+   * limit is categorically transient in a way those aren't). Found
+   * necessary building Vienna, 2026-09-09: a metro with hundreds of
+   * candidates fans M6.5 checkoff_editor calls out concurrently
+   * (DriverGuardrails.maxConcurrentExecutions), which can trip this
+   * account's real per-minute token budget even though every individual
+   * call is well-formed — the previous behavior (throw immediately, no
+   * retry) surfaced that as EXECUTOR_UNAVAILABLE and BLOCKED the entire
+   * run, requiring a human to notice and manually retry over and over.
+   * Bounded exactly like every other retry loop in this codebase — see
+   * runStepWithRetry's own doc.
+   */
+  maxRateLimitRetries?: number
+  /** Test-only override for the actual delay between retries — real backoff by default (see resolveRetryDelayMs), instant in tests. */
+  sleepImpl?: (ms: number) => Promise<void>
 }
 
 function envFlag(name: string, defaultValue: boolean): boolean {
   const raw = process.env[name]
   if (raw === undefined) return defaultValue
   return raw === '1' || raw.toLowerCase() === 'true'
+}
+
+export const DEFAULT_MAX_RATE_LIMIT_RETRIES = 4
+
+/**
+ * How long to wait before retrying a 429. Prefers the API's own stated
+ * wait (a `retry-after` header, in seconds; or the error body's "Please
+ * try again in <N>ms/s" text OpenAI's rate-limit errors include) — the
+ * server knows its own reset window better than a guess would. Falls
+ * back to a small exponential backoff (attempt 1 -> 1s, 2 -> 2s, 3 -> 4s,
+ * ...) when neither is present/parseable, capped so a single retry never
+ * waits an unreasonable amount of time.
+ */
+export function resolveRetryDelayMs(attempt: number, retryAfterHeader: string | null, errorBodyText: string): number {
+  if (retryAfterHeader) {
+    const seconds = Number(retryAfterHeader)
+    if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1000, 30000)
+  }
+  const match = errorBodyText.match(/try again in\s+([\d.]+)\s*(ms|s)\b/i)
+  if (match) {
+    const value = Number(match[1])
+    if (Number.isFinite(value)) {
+      const ms = match[2].toLowerCase() === 's' ? value * 1000 : value
+      return Math.min(Math.max(ms, 0), 30000)
+    }
+  }
+  return Math.min(1000 * 2 ** (attempt - 1), 30000)
+}
+
+async function realSleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 export class OpenAiAdapter implements ProviderAdapter {
@@ -63,6 +112,8 @@ export class OpenAiAdapter implements ProviderAdapter {
   /** Hard override only — undefined means "route per-call" (the normal path). */
   private readonly explicitModel: string | undefined
   private readonly fetchImpl: typeof fetch
+  private readonly maxRateLimitRetries: number
+  private readonly sleepImpl: (ms: number) => Promise<void>
 
   constructor(options: OpenAiAdapterOptions = {}) {
     this.apiKey = options.apiKey ?? process.env.OPENAI_API_KEY
@@ -70,6 +121,8 @@ export class OpenAiAdapter implements ProviderAdapter {
     this.explicitModel = options.model
     this.fetchImpl = options.fetchImpl ?? fetch
     this.supportsLiveWebResearch = options.supportsLiveWebResearch ?? envFlag('CHIEF_OPENAI_SUPPORTS_WEB_SEARCH', true)
+    this.maxRateLimitRetries = options.maxRateLimitRetries ?? DEFAULT_MAX_RATE_LIMIT_RETRIES
+    this.sleepImpl = options.sleepImpl ?? realSleep
   }
 
   isConfigured(): boolean {
@@ -103,18 +156,31 @@ export class OpenAiAdapter implements ProviderAdapter {
       body.tools = [{ type: 'web_search' }]
     }
 
-    const response = await this.fetchImpl(`${this.baseUrl}/v1/responses`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify(body),
-    })
-
-    if (!response.ok) {
-      const errText = await response.text().catch(() => '<no body>')
-      throw new Error(`OpenAI Responses API returned ${response.status}: ${errText}`)
+    let response: Awaited<ReturnType<typeof this.fetchImpl>> | undefined
+    let lastErrText = ''
+    for (let attempt = 1; attempt <= this.maxRateLimitRetries + 1; attempt++) {
+      response = await this.fetchImpl(`${this.baseUrl}/v1/responses`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify(body),
+      })
+      if (response.ok) break
+      if (response.status !== 429) {
+        const errText = await response.text().catch(() => '<no body>')
+        throw new Error(`OpenAI Responses API returned ${response.status}: ${errText}`)
+      }
+      lastErrText = await response.text().catch(() => '<no body>')
+      if (attempt > this.maxRateLimitRetries) {
+        throw new Error(`OpenAI Responses API returned 429 after ${this.maxRateLimitRetries} retr${this.maxRateLimitRetries === 1 ? 'y' : 'ies'}: ${lastErrText}`)
+      }
+      const delayMs = resolveRetryDelayMs(attempt, response.headers.get('retry-after'), lastErrText)
+      await this.sleepImpl(delayMs)
+    }
+    if (!response) {
+      throw new Error('OpenAiAdapter.complete: unreachable — the retry loop always assigns a response before exiting')
     }
 
     const json = (await response.json()) as {
