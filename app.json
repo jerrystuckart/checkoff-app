@@ -2,7 +2,7 @@
   "expo": {
     "name": "CheckOff",
     "slug": "checkoff",
-    "version": "1.1.6",
+    "version": "1.1.7",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -22,7 +22,7 @@
       "supportsTablet": false,
       "bundleIdentifier": "com.checkoff.app",
       "usesAppleSignIn": true,
-      "buildNumber": "137",
+      "buildNumber": "147",
       "associatedDomains": [
         "applinks:getcheckoff.com",
         "webcredentials:getcheckoff.com"
@@ -65,11 +65,26 @@
           "action": "VIEW",
           "autoVerify": true,
           "data": [
-            { "scheme": "https", "host": "getcheckoff.com", "pathPrefix": "/join" },
-            { "scheme": "https", "host": "getcheckoff.com", "pathPrefix": "/reset-password" },
-            { "scheme": "https", "host": "getcheckoff.com", "pathPrefix": "/auth/confirm" }
+            {
+              "scheme": "https",
+              "host": "getcheckoff.com",
+              "pathPrefix": "/join"
+            },
+            {
+              "scheme": "https",
+              "host": "getcheckoff.com",
+              "pathPrefix": "/reset-password"
+            },
+            {
+              "scheme": "https",
+              "host": "getcheckoff.com",
+              "pathPrefix": "/auth/confirm"
+            }
           ],
-          "category": ["BROWSABLE", "DEFAULT"]
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ]
         }
       ]
     },
@@ -109,7 +124,8 @@
           "color": "#F5A623"
         }
       ],
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "@sentry/react-native"
     ],
     "extra": {
       "supabaseUrl": "https://uggusbbswybyplypkbxz.supabase.co",
