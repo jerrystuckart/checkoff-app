@@ -148,6 +148,32 @@ export type ItemCertificationOutcome =
   | 'REJECTED_GEO_UNRESOLVED'
   | 'REJECTED_INSUFFICIENT_TAG_CONTEXT'
   | 'REJECTED_UNCLASSIFIABLE_METADATA'
+  /**
+   * Chief Phase 2AG (2026-09-09 instruction) — a final human-directed
+   * semantic cleanup pass on an already-frozen certified catalog: two
+   * (or more) candidates turned out, on manual review cross-referencing
+   * Google placeId/address, to be the SAME real venue offering
+   * essentially the SAME CheckOff experience. The weaker duplicate is
+   * rejected here; the stronger one keeps ITEM_CERTIFIED untouched. When
+   * the same venue instead supports genuinely distinct experiences, both
+   * are kept — this outcome is never used to collapse those. Set by a
+   * one-off audit script, never a new automated pipeline stage (the
+   * judgment call — "same experience" vs "distinct experience" — is not
+   * something this codebase claims to have made deterministic).
+   */
+  | 'REJECTED_DUPLICATE_VENUE'
+  /**
+   * Chief Phase 2AG — the same kind of final human-directed cleanup pass
+   * as REJECTED_DUPLICATE_VENUE, but for a candidate that is not a
+   * launch-quality visitor-facing CheckOff item at all: a closed/
+   * renovating venue presented as bookable, a civic/social-service task,
+   * a vague district-wide placeholder, a multi-venue mashup that is not
+   * one coherent destination, or a generic "walk through the park"-style
+   * body with no distinctive fact or hook. Never used to weaken any
+   * automated gate — this is a manual editorial judgment recorded with
+   * its specific reason in rejectionReasons.
+   */
+  | 'REJECTED_NOT_LAUNCH_QUALITY'
 
 export interface ItemCertificationRecord {
   venueName: string
