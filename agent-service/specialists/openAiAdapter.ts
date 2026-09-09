@@ -72,7 +72,16 @@ function envFlag(name: string, defaultValue: boolean): boolean {
   return raw === '1' || raw.toLowerCase() === 'true'
 }
 
-export const DEFAULT_MAX_RATE_LIMIT_RETRIES = 4
+// 6, not 4: real production traffic (Vienna, 2026-09-09) showed a batch
+// of concurrent M6.5 calls can keep the account's per-MINUTE token
+// budget saturated for several seconds at a time — every sibling call
+// in the same fan-out batch is retrying on roughly the same schedule,
+// so a short retry budget can exhaust itself before the 60s window
+// actually rolls over. 6 retries against the capped exponential backoff
+// below (1+2+4+8+16+30 = 61s worst case) is sized to cover one full
+// per-minute window — proportionate to what's actually being waited on,
+// not an arbitrary large number.
+export const DEFAULT_MAX_RATE_LIMIT_RETRIES = 6
 
 /**
  * How long to wait before retrying a 429. Prefers the API's own stated

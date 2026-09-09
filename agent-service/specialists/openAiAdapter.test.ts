@@ -105,8 +105,8 @@ test('OpenAiAdapter: retries a 429 and succeeds once the API stops rate-limiting
   assert.equal(sleeps.length, 2)
 })
 
-test('OpenAiAdapter: DEFAULT_MAX_RATE_LIMIT_RETRIES is a real, small, bounded number', () => {
-  assert.equal(DEFAULT_MAX_RATE_LIMIT_RETRIES, 4)
+test('OpenAiAdapter: DEFAULT_MAX_RATE_LIMIT_RETRIES is a real, small, bounded number sized to cover one per-minute rate-limit window', () => {
+  assert.equal(DEFAULT_MAX_RATE_LIMIT_RETRIES, 6)
 })
 
 test('OpenAiAdapter: a 429 that never resolves is retried exactly maxRateLimitRetries times, then throws — bounded, never an infinite retry', async () => {
