@@ -102,7 +102,7 @@ function normalizeSeparators(text: string): string {
  * Only used for the MATCH — `raw` (returned to the caller) is never
  * altered, so evidence/debugging always shows the real original label.
  */
-function stripDiacritics(text: string): string {
+export function stripDiacritics(text: string): string {
   return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
 }
 

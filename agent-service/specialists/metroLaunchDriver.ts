@@ -40,6 +40,7 @@ import { certifyEditorialDistinctiveness, checkDistinctiveExperience, checkVenue
 import { evaluateItemCritique, evaluateItemCertificationGate, type ItemCritiqueAnswers, type ItemCertificationOutcome, type CatalogItemCertificationCheck, type ItemCertificationRecord } from '../playbooks/itemCertificationLoop'
 import { evaluateTagCertificationGate, validateItemTags, type ItemTagProposal } from '../playbooks/metroTagCertification'
 import { deriveTagShortlist } from '../playbooks/tagShortlist'
+import { buildEditorialThemedLists, selectFlagshipList, THEMED_LIST_DEFINITIONS, type ThemeableItem } from '../playbooks/homeListThemes'
 import { evaluateItemMetadata, evaluateMetadataCompletenessGate, type MetadataEnrichmentResult } from '../playbooks/metroMetadataEnrichment'
 import { evaluateGeoEnrichmentCertificationGate, CONFIDENT_TIERS, ACCEPTABLE_EXCEPTION_TIERS, type GeoEnrichmentItemResult, type PlacesMatchClassification } from '../playbooks/metroGeoEnrichment'
 import { enrichMetroCatalogGeo, buildRealPlacesLookup, FileGeoEnrichmentCacheStore, type GeoEnrichmentCacheStore, type PlacesLookupFn, type GeoEnrichmentCandidate } from './metroGeoEnrichmentDriver'
@@ -269,6 +270,14 @@ export interface MetroDriverDeps {
    * belong to someone else.
    */
   officialListCreatorId?: string
+  /**
+   * M9: the real, visitor-facing title for the flagship Home list (e.g.
+   * "Fall 2026 — Vienna Metro") — a genuine per-metro editorial/seasonal
+   * decision, never guessed or hardcoded inside this general-purpose
+   * driver. Omit to keep the generic system label "Primary seasonal
+   * list".
+   */
+  flagshipListTitle?: string
   /** M10: which Home cards already have an image. Omit to correctly report every required card as still needing one — Winston never fabricates image readiness. */
   checkImageReadiness?: (plan: readonly HomeListPlanEntry[]) => Promise<ImageReadinessCard[]>
   /** M10 BUSINESS_ACTIVATION_KIT_GATE: the actual outreach copy this metro would send — validated deterministically (no network call) for a metro-specific kit reference or a misused /confirm/<token> link. Defaults to a clean template referencing only the canonical URL, since no outreach is sent during a metro build itself. */
@@ -1614,56 +1623,39 @@ async function stepM8_5CatalogPruning(deps: MetroDriverDeps, run: PlaybookRunRec
 // ---------------------------------------------------------------------------
 
 /**
- * A fixed, deterministic visitor-facing title for each real production
- * category — Chief Phase 2AE (2026-09-09 instruction): the themed-list
- * generator must never surface a raw category/classification string
- * (or, worse, a raw un-normalized candidate.category label) as a list
- * title. This is a lookup table, never an AI call — same discipline as
- * every other deterministic classifier in this codebase.
+ * Chief Phase 2AF (2026-09-09 instruction) — a real production category
+ * (dbCategory) is NOT the same thing as a visitor-facing themed list.
+ * Bucketing straight by dbCategory (Phase 2AE) fixed the "Museum"/
+ * "museum" capitalization-split bug but produced category dumps
+ * ("Arts & Culture", 81 items), not curated visitor experiences. This
+ * build:
+ *   - the flagship Home list is a balanced ~30-item selection (never
+ *     all certified items) via homeListThemes.ts's selectFlagshipList —
+ *     proportional across dbCategory, near-duplicate venues collapsed.
+ *   - themed lists are editorially curated, keyword/tag-grounded, and
+ *     may cross category lines (homeListThemes.ts's
+ *     buildEditorialThemedLists) — only the ones the real, frozen
+ *     catalog actually supports (>= minItems) ship; there is no fixed
+ *     count, per metro or per run.
+ * dbCategory itself is untouched and still persisted on every item
+ * (DriverItemCertificationRecord.dbCategory) — this only changes how
+ * Home lists are curated FROM that already-correct classification.
  */
-const THEMED_LIST_TITLE: Record<RealDbCategory, string> = {
-  'Food & drink': 'Food & Drink',
-  'Bar & drinks': 'Bars & Drinks',
-  Adventure: 'Outdoor Adventures',
-  'Arts & Culture': 'Arts & Culture',
-  Shopping: 'Shopping & Markets',
-  Sports: 'Sports & Recreation',
-  Social: 'Social & Community',
-  Travel: 'Sightseeing & Landmarks',
-  Nightlife: 'Nightlife',
-  'Spa & self-care': 'Spa & Self-Care',
-  Misc: 'Hidden Gems',
-  Play: 'Games & Play',
-}
+const FLAGSHIP_LIST_TARGET_SIZE = 30
+const THEMED_LIST_MIN_ITEMS = 8
 
-/**
- * Groups certified items into themed Home lists by their PERSISTED
- * dbCategory (DriverItemCertificationRecord.dbCategory, resolved once by
- * stepM8BatchCertification's METADATA_COMPLETENESS_GATE pass) — never by
- * the raw candidate.category free-text discovery label. Vienna,
- * 2026-09-09: grouping by the raw label previously produced separate
- * "restaurant" / "Museum" / "museum" / "Adventure & outdoors" lists —
- * three of those four aren't even real production categories, and
- * "Museum"/"museum" were the SAME category split only by capitalization.
- * A certified item with no dbCategory (should be structurally
- * unreachable — M8's metadata gate/M8.5 pruning guarantee every
- * surviving certified item has one) is skipped from theming rather than
- * silently bucketed into a guessed category.
- */
-function buildHomeListPlan(state: MetroDriverState): HomeListPlanEntry[] {
+function buildHomeListPlan(state: MetroDriverState, flagshipListTitle: string): HomeListPlanEntry[] {
   const certified = Object.values(state.itemCertifications ?? {}).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
   const names = certified.map((r) => r.candidateName)
-  const plan: HomeListPlanEntry[] = [{ label: 'Primary seasonal list', kind: 'PRIMARY_SEASONAL', itemCandidateNames: names, requiresImage: true }]
-  const byDbCategory = new Map<RealDbCategory, string[]>()
-  for (const r of certified) {
-    if (!r.dbCategory) continue
-    byDbCategory.set(r.dbCategory, [...(byDbCategory.get(r.dbCategory) ?? []), r.candidateName])
+  const themeable: ThemeableItem[] = certified.filter((r) => r.dbCategory).map((r) => ({ candidateName: r.candidateName, venueName: r.venueName, finalBody: r.finalBody, finalTags: r.finalTags, dbCategory: r.dbCategory!, attempts: r.attempts }))
+
+  const flagshipNames = selectFlagshipList(themeable, FLAGSHIP_LIST_TARGET_SIZE)
+  const plan: HomeListPlanEntry[] = [{ label: flagshipListTitle, kind: 'PRIMARY_SEASONAL', itemCandidateNames: flagshipNames, requiresImage: true }]
+
+  for (const theme of buildEditorialThemedLists(themeable, THEMED_LIST_DEFINITIONS, THEMED_LIST_MIN_ITEMS)) {
+    plan.push({ label: `Themed list: ${theme.title}`, kind: 'THEMED', itemCandidateNames: theme.candidateNames, requiresImage: true })
   }
-  for (const [dbCategory, itemNames] of byDbCategory) {
-    if (itemNames.length >= 4) {
-      plan.push({ label: `Themed list: ${THEMED_LIST_TITLE[dbCategory]}`, kind: 'THEMED', itemCandidateNames: itemNames, requiresImage: true })
-    }
-  }
+
   plan.push({ label: 'Curated-layer mirror', kind: 'CURATED_MIRROR', itemCandidateNames: names, requiresImage: false })
   return plan
 }
@@ -1775,7 +1767,7 @@ function sqlQuote(s: string): string {
 
 async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
   const state = readState(run)
-  const plan = buildHomeListPlan(state)
+  const plan = buildHomeListPlan(state, deps.flagshipListTitle ?? 'Primary seasonal list')
   state.homeListPlan = plan
   const itemBodyByCandidateName = new Map(
     Object.values(state.itemCertifications ?? {})

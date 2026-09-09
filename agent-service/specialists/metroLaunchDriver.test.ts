@@ -2153,7 +2153,7 @@ test('driveMetroLaunch: M9 Home-list SQL creates metro_areas, reuses lists idemp
   const executor = new TestExecutor()
   const candidate = food('Cafe Sperl', 'Mariahilf')
   const body = "Order the 'Sperl Torte' at 'Cafe Sperl'."
-  const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: body, finalTags: ['coffee', 'historic'], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+  const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: body, finalTags: ['coffee', 'historic'], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [], dbCategory: 'Food & drink' }
 
   const projectId = 'vienna-m9-sql-full'
   await seedForHomeListMirror(runStore, projectId, [candidate], { [cert.candidateName]: cert })
@@ -2198,7 +2198,7 @@ test('driveMetroLaunch: M9 Home-list SQL creates metro_areas, reuses lists idemp
 // visitor-facing name, never the raw label.
 // ---------------------------------------------------------------------------
 
-test('driveMetroLaunch: themed Home lists group by the real, persisted dbCategory — never by raw candidate.category text — so "Museum"/"museum" merge into one canonical Arts & Culture list and "restaurant" becomes a visitor-facing Food & Drink title', async () => {
+test('driveMetroLaunch: dbCategory is resolved and persisted from the real, normalized production classification — never the raw candidate.category text — regardless of case/wording variants like "Museum"/"museum"/"restaurant"', async () => {
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
@@ -2253,16 +2253,77 @@ test('driveMetroLaunch: themed Home lists group by the real, persisted dbCategor
     assert.equal(state.itemCertifications[name].dbCategory, 'Food & drink', `${name} (raw category "restaurant") must resolve to the real Food & drink production category`)
   }
 
-  // 2. exactly ONE Arts & Culture themed list, containing all 7 museum items — "Museum" and "museum" never split into two lists.
-  const themed = state.homeListPlan.filter((p) => p.kind === 'THEMED')
-  const artsLists = themed.filter((p) => p.label.includes('Arts & Culture'))
-  assert.equal(artsLists.length, 1, 'exactly one themed list for Arts & Culture — "Museum" and "museum" must merge, never split by capitalization')
-  assert.equal(artsLists[0]!.itemCandidateNames.length, museumNames.length + lowerMuseumNames.length)
-  assert.ok(!themed.some((p) => p.label === 'Themed list: Museum' || p.label === 'Themed list: museum'), 'the raw, un-normalized label must never appear as a list title')
+  // 2. the flagship list is built from the real dbCategory-tagged pool (Chief Phase 2AF) — with only
+  // 12 certified items total (well under the flagship target size), every one is included.
+  const flagship = state.homeListPlan.find((p) => p.kind === 'PRIMARY_SEASONAL')!
+  assert.equal(flagship.itemCandidateNames.length, museumNames.length + lowerMuseumNames.length + restaurantNames.length)
 
-  // 3. the Food & drink list uses the fixed visitor-facing title, never the raw "restaurant" string.
-  const foodLists = themed.filter((p) => p.label.toLowerCase().includes('food'))
-  assert.equal(foodLists.length, 1)
-  assert.equal(foodLists[0]!.label, 'Themed list: Food & Drink')
-  assert.ok(!themed.some((p) => p.label === 'Themed list: restaurant'), 'the raw "restaurant" label must never appear as a list title')
+  // 3. no themed list ever surfaces a raw, un-normalized category label as its title — whatever
+  // themed lists DO ship (Chief Phase 2AF's editorial theme engine, keyword/tag-grounded) use a
+  // fixed visitor-facing title, never "Museum"/"museum"/"restaurant" verbatim.
+  const themed = state.homeListPlan.filter((p) => p.kind === 'THEMED')
+  assert.ok(!themed.some((p) => p.label === 'Themed list: Museum' || p.label === 'Themed list: museum' || p.label === 'Themed list: restaurant'), 'a raw, un-normalized category label must never appear as a list title')
+})
+
+test('driveMetroLaunch: the flagship Home list is capped at ~30 balanced items (never all certified items), and editorial themed lists cross real production category lines — never a bare per-category dump', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  scriptTagSelection(executor)
+
+  const validTags = ['coffee', 'historic', 'family friendly', 'live music', 'outdoor', 'art']
+  const candidates: Array<{ name: string; category: string; neighborhood: string; claimSupported: string; source: string; needsVerification: boolean }> = []
+  const certs: Record<string, DriverItemCertificationRecord> = {}
+
+  // 50 generic Arts & Culture museums — no theme keywords, just bulk category inventory.
+  for (let i = 0; i < 50; i++) {
+    const name = `Museum Number ${String(i).padStart(3, '0')}`
+    candidates.push({ name, category: 'Museum', neighborhood: 'Innere Stadt', claimSupported: `${name} has a real exhibit.`, source: `https://example.com/${i}`, needsVerification: false })
+    certs[name] = { candidateName: name, venueName: name, attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: `See the exhibit at '${name}'.`, finalTags: validTags, supportingFact: `${name} has a real exhibit.`, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+  }
+  // 10 genuine Imperial-keyword items (Arts & Culture) — a real cross-cutting editorial theme.
+  const imperialNames: string[] = []
+  for (let i = 0; i < 10; i++) {
+    const name = `Palace Number ${String(i).padStart(3, '0')}`
+    imperialNames.push(name)
+    candidates.push({ name, category: 'Palace', neighborhood: 'Innere Stadt', claimSupported: `${name} is a real imperial residence.`, source: `https://example.com/palace${i}`, needsVerification: false })
+    certs[name] = { candidateName: name, venueName: name, attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: `Tour the imperial palace at '${name}'.`, finalTags: validTags, supportingFact: `${name} is a real imperial residence.`, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+  }
+  // 3 Sports items — a thin real category that must still get at least one flagship slot.
+  for (let i = 0; i < 3; i++) {
+    const name = `Stadium Number ${String(i).padStart(3, '0')}`
+    candidates.push({ name, category: 'Sports venue', neighborhood: 'Prater', claimSupported: `${name} hosts real matches.`, source: `https://example.com/stadium${i}`, needsVerification: false })
+    certs[name] = { candidateName: name, venueName: name, attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: `Watch a match at '${name}'.`, finalTags: validTags, supportingFact: `${name} hosts real matches.`, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+  }
+
+  const projectId = 'vienna-m9-flagship-scale'
+  await seedForBatchCertification(runStore, projectId, candidates, certs)
+
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      verifiedTagSnapshot: TEST_TAG_VOCAB,
+      placesLookup: async (q: string) => ({ topResult: { placeId: `p-${q}`, name: q, formattedAddress: q, lat: 48.2, lng: 16.37, websiteUri: null, country: 'AT', viewportRadiusM: null }, apiError: null }),
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+    },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 20 }
+  )
+
+  const state = run.state as { homeListPlan: Array<{ label: string; kind: string; itemCandidateNames: string[] }> }
+  const flagship = state.homeListPlan.find((p) => p.kind === 'PRIMARY_SEASONAL')!
+  assert.ok(flagship.itemCandidateNames.length < 63, 'the flagship list must never be all 63 certified items')
+  assert.ok(flagship.itemCandidateNames.length >= 28 && flagship.itemCandidateNames.length <= 32, `expected ~30 flagship items, got ${flagship.itemCandidateNames.length}`)
+  assert.ok(flagship.itemCandidateNames.some((n) => n.startsWith('Stadium')), 'a real, non-trivial Sports category must still get at least one flagship slot, never zeroed out')
+
+  const themed = state.homeListPlan.filter((p) => p.kind === 'THEMED')
+  const imperialList = themed.find((p) => p.label.includes('Imperial'))
+  assert.ok(imperialList, 'a real, keyword-supported cross-cutting theme (Imperial & Grand Landmarks) must ship')
+  assert.deepEqual(imperialList!.itemCandidateNames.sort(), imperialNames.sort())
+  assert.ok(!themed.some((p) => p.label === 'Themed list: Arts & Culture'), 'the bare, un-curated 60-item Arts & Culture category dump must never ship as a themed list')
 })

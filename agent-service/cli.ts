@@ -16,7 +16,7 @@
 // Phase 2F — the HIGH-LEVEL commands (spec section 4). Jerry does not
 // manage individual execution ids for normal operation; these drive a
 // whole playbook run to completion/NEEDS_JERRY/BLOCKED in one command:
-//   tsx agent-service/cli.ts run metro_launch <projectKey> [--category-plan file.json] [--m0 decisions.json] [--metro-area-facts facts.json] [--official-list-creator-id uuid]
+//   tsx agent-service/cli.ts run metro_launch <projectKey> [--category-plan file.json] [--m0 decisions.json] [--metro-area-facts facts.json] [--official-list-creator-id uuid] [--flagship-list-title "Fall 2026 — Vienna Metro"]
 //   tsx agent-service/cli.ts run destination_hub_lifecycle <projectKey> --candidate candidate.json
 //   tsx agent-service/cli.ts status <playbookKey> <projectKey>
 //   tsx agent-service/cli.ts pause <playbookKey> <projectKey>
@@ -181,7 +181,9 @@ async function main() {
       const metroAreaFacts: { name: string; state: string; timezone: string } | undefined = metroAreaFactsFlagIdx >= 0 ? readJson(flags[metroAreaFactsFlagIdx + 1]) : undefined
       const officialListCreatorIdFlagIdx = flags.indexOf('--official-list-creator-id')
       const officialListCreatorId: string | undefined = officialListCreatorIdFlagIdx >= 0 ? flags[officialListCreatorIdFlagIdx + 1] : undefined
-      const run = await driveMetroLaunch({ runStore, execStore: store, executors, metroAreaFacts, officialListCreatorId }, projectId, { categoryPlan, depthTargets })
+      const flagshipListTitleFlagIdx = flags.indexOf('--flagship-list-title')
+      const flagshipListTitle: string | undefined = flagshipListTitleFlagIdx >= 0 ? flags[flagshipListTitleFlagIdx + 1] : undefined
+      const run = await driveMetroLaunch({ runStore, execStore: store, executors, metroAreaFacts, officialListCreatorId, flagshipListTitle }, projectId, { categoryPlan, depthTargets })
       console.log(JSON.stringify(run, null, 2))
       return
     }
