@@ -12,7 +12,7 @@ import { supabase } from '../lib/supabase'
 import { haversineMeters } from '../lib/distance'
 import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { isItemInSeason } from '../lib/seasonFilter'
-import { isWithinNearbyRadius, distLabel, rankNearbyItems } from '../lib/nearbyRanking'
+import { isWithinNearbyRadius, distLabel, rankNearbyItems, hasUsableCoordinates } from '../lib/nearbyRanking'
 import { mergeSearchMatchCounts } from '../lib/searchMatch'
 
 const AMBER = '#F5A623'
@@ -32,14 +32,19 @@ const RINGS = [
 // enforce the automatic Nearby radius — tag/text search must stay within the
 // same geographic universe as default Nearby, never expand nationwide just
 // because an item matches strongly. Items whose distance is known and beyond
-// the radius are dropped outright (hard cutoff, no banding); items with no
-// location data are left in rather than excluded, since we can't tell
-// whether they're in range.
+// the radius are dropped outright (hard cutoff, no banding). Items with no
+// usable coordinates at all (never geocoded — e.g. Admin's "Find & confirm
+// location" hasn't run yet) are EXCLUDED, not deprioritized: no fallback
+// distance, no sorting-in at the bottom. A missing location isn't "far
+// away," it isn't proximity-eligible at all — see hasUsableCoordinates() in
+// lib/nearbyRanking.js, the single shared gate for this across Nearby/
+// Discover/Home.
 function augmentWithDistance(rawItems, userCoords) {
   return (rawItems ?? [])
     .map(item => {
+      const locatable = hasUsableCoordinates(item.maps_lat, item.maps_lng)
       let dist = null
-      if (item.maps_lat && item.maps_lng && userCoords) {
+      if (locatable && userCoords) {
         dist = haversineMeters(userCoords.latitude, userCoords.longitude, item.maps_lat, item.maps_lng)
       }
       return {
@@ -62,13 +67,14 @@ function augmentWithDistance(rawItems, userCoords) {
         has_alcohol:      item.has_alcohol ?? false,
         checked:          false,
         isUniversal:      false,
-        hasExactLocation: !!(item.maps_lat && item.maps_lng),
-        dist_m:           dist ?? 99999999,
+        hasExactLocation: locatable,
+        dist_m:           dist,
         dist_label:       dist ? distLabel(dist) : null,
         // Raw admin-set classification, passed through unmodified for
         // display (see RINGS above) — not used for radius/ranking here.
         ring_weight:      item.ring_weight ?? 0,
-        withinRadius:     dist === null || isWithinNearbyRadius(dist),
+        // No coords at all -> never eligible, regardless of radius.
+        withinRadius:     dist !== null && isWithinNearbyRadius(dist),
       }
     })
     .filter(item => item.withinRadius)
