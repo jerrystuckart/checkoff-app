@@ -89,7 +89,16 @@ export const STANDING_AUTHORITY: Readonly<Record<string, AuthorityLevel>> = Obje
   'metro_launch.create_draft_task': 'AUTO',
   'metro_launch.build_internal_artifact': 'AUTO',
   'metro_launch.deterministic_db_bookkeeping': 'AUTO',
-  'metro_launch.stage_catalog_write': 'AUTO', // staged (is_active=false) writes only — see gate/APPROVAL_REQUIRED entries below for anything public-facing
+  // Chief Phase 2AH (2026-09-09 correction): the real write boundary is
+  // agent.* bookkeeping (Chief's own operational schema, always AUTO)
+  // versus public.* content (Chief never writes it directly — it always
+  // generates SQL for Jerry to run, regardless of AUTO/APPROVAL_REQUIRED
+  // status). is_active is NOT the staging mechanism — it is a normal
+  // production flag on public.metro_areas (true from creation, same as
+  // any other new row), never a "not yet public" gate. Do not read
+  // "AUTO" here as authorization to auto-apply public.* SQL; it only
+  // covers Chief building and staging that SQL, never executing it.
+  'metro_launch.stage_catalog_write': 'AUTO',
   'metro_launch.public_launch': 'APPROVAL_REQUIRED',
   'metro_launch.destructive_data_change': 'APPROVAL_REQUIRED',
 

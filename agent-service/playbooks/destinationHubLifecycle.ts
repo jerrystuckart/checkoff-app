@@ -90,7 +90,15 @@ export const DESTINATION_HUB_STAGE_ORDER: readonly DestinationHubStage[] = [
   'D12_PROPOSAL_PITCH',
   'D13_RELATIONSHIP_FOLLOWUP',
   'D14_CLOSE_AGREEMENT', // APPROVAL_REQUIRED — destination_hub.commercial_offer / partner_commitment
-  'D15_HUB_ACTIVATION', // APPROVAL_REQUIRED — destination_hub.hub_activation
+  // APPROVAL_REQUIRED — destination_hub.hub_activation. Chief Phase 2AH
+  // (2026-09-09 product-rule update): "activation" here means the
+  // business decision to publicly announce/promote the destination — it
+  // is NOT the same thing as any is_active flag a future destination row
+  // might carry. is_active is a normal production flag (safe to be true
+  // from row creation, same as metro_areas), never a staging/launch gate
+  // Chief must keep false and later flip — see the identical correction
+  // in metroLaunchDriver.ts's stepLaunchBoundary/standingAuthority.ts.
+  'D15_HUB_ACTIVATION',
   'D16_LOCAL_BUSINESS_ACTIVATION', // hands off to the existing Business Photo Outreach playbook (Phase 2A)
   'D17_ONGOING_RELATIONSHIP',
 ]

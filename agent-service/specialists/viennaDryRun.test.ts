@@ -254,7 +254,7 @@ test('Vienna DRY RUN: the real driver invokes every required phase, self-repairs
   assert.equal(report.imageSelectionOnlyBlock, true, 'every other required gate passed — only image selection remains')
   assert.match(report.reportText, /READY TO ACTIVATE — manual list images required before production activation/)
   assert.match(run.jerryReason ?? '', /launch-readiness boundary/)
-  assert.match(String(run.decisionPacket?.chiefRecommendation ?? ''), /manual list images required/)
+  assert.match(String(run.decisionPacket?.chiefRecommendation ?? ''), /pending human step/)
 })
 
 test('Vienna DRY RUN: once the missing images are resolved, METRO_LAUNCH_CERTIFICATION reaches READY_TO_ACTIVATE with imageSelectionOnlyBlock cleared', async () => {

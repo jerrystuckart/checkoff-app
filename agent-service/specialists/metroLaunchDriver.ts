@@ -1931,22 +1931,32 @@ async function stepLaunchBoundary(run: PlaybookRunRecord): Promise<PlaybookRunRe
   // state (metro_launch.public_launch has no AUTO/AUTO_TELL path) — the
   // driver stops here every time, by design, not as a failure mode.
   const finalReport = state.finalCertificationReport
-  return escalate(run, 'Metro build reached the launch-readiness boundary — public launch always requires Jerry.', {
-    decisionNeeded: 'Approve launch (flip metro_areas.is_active=true) or hold for further review.',
-    why: 'metro_launch.public_launch is APPROVAL_REQUIRED with no exception path.',
+  return escalate(run, 'Metro build reached the launch-readiness boundary — public launch (announcing/promoting the metro) always requires Jerry.', {
+    // Chief Phase 2AH (2026-09-09 product-rule update): is_active does
+    // NOT mean "officially announced/marketed" for CheckOff — it is a
+    // normal production flag, already true from the moment a metro row
+    // is created (see buildHomeListSqlPatch's metro_areas ensure-insert),
+    // never a staging/launch gate. There is no "flip active" step. The
+    // real remaining human actions are mechanical (apply the generated
+    // SQL, add Home-card images, do a final content review) plus the one
+    // genuine business decision this boundary exists for: WHEN to
+    // announce/promote the market — never automated, regardless of gate
+    // state (metro_launch.public_launch has no AUTO/AUTO_TELL path).
+    decisionNeeded: 'Approve public launch (announce/promote) or hold for further review. The metro/catalog content itself is already live-ready once the generated SQL is applied — is_active is not a gate here.',
+    why: 'metro_launch.public_launch is APPROVAL_REQUIRED with no exception path — deciding WHEN to publicly announce/promote a market is always a human business call, never a database flag Chief flips.',
     chiefRecommendation: finalReport
       ? finalReport.verdict === 'READY_TO_ACTIVATE'
-        ? finalReport.imageSelectionOnlyBlock
-          ? `METRO_LAUNCH_CERTIFICATION: READY TO ACTIVATE — manual list images required before production activation. Every other required gate (item certification, distinctive-experience, venue quoting, opening distribution, tags, metadata, geo enrichment, Home-list mirror) passed; only image selection for the Home cards below remains as a human pre-activation task, not a build blocker.`
-          : `METRO_LAUNCH_CERTIFICATION: READY_TO_ACTIVATE — every required gate (item certification, distinctive-experience, venue quoting, opening distribution, tags, metadata, geo enrichment, Home-list mirror, image readiness) passed. Recommend approving launch.`
+        ? finalReport.pendingHumanStepsOnly
+          ? `METRO_LAUNCH_CERTIFICATION: READY TO ACTIVATE — every required gate that measures real catalog/content quality passed. Only known, already-generated pending human steps remain (see the reportText below: applying the SQL patch and/or adding Home-card images) — never a build blocker.`
+          : `METRO_LAUNCH_CERTIFICATION: READY_TO_ACTIVATE — every required gate passed. Recommend approving public launch (announce/promote) whenever the business is ready.`
         : `METRO_LAUNCH_CERTIFICATION: BLOCKED — ${finalReport.failingGates.length} failing / ${finalReport.missingGates.length} missing required gate(s). See metroLaunchCertification below for the exact list.`
       : gates.every((g) => g.verdict === 'PASS')
         ? 'All computed gates pass — recommend proceeding to real M7-M13 build once Jerry approves.'
         : 'Some gates show synthetic placeholder data only in this driver phase — a real build would need real M9/M13 evidence before this recommendation carries weight.',
     evidence: { candidateCount: (state.candidates ?? []).length, checkoffizedCount: (state.checkoffizedItems ?? []).length, gates },
     metroLaunchCertification: finalReport ?? null,
-    impact: 'No public-facing change happens until Jerry explicitly approves — this boundary is inert by itself.',
-    options: ['Approve launch readiness and proceed to M7 catalog construction (out of scope for this driver phase)', 'Hold for more research', 'Request changes to the candidate/editorial set'],
+    impact: 'No PROMOTION/ANNOUNCEMENT happens until Jerry explicitly approves that business decision — this boundary is inert by itself. The metro row, catalog, and lists become live (is_active=true, the normal production default) as soon as the generated SQL is applied; that is a mechanical step, not the thing this approval gates.',
+    options: ['Approve public launch (announce/promote)', 'Hold for more research', 'Request changes to the candidate/editorial set'],
   })
 }
 

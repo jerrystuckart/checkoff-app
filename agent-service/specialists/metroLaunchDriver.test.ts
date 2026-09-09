@@ -2177,12 +2177,46 @@ test('driveMetroLaunch: M9 Home-list SQL creates metro_areas, reuses lists idemp
   const sql = state.homeListSqlPatch
   assert.ok(sql.includes("INSERT INTO public.metro_areas (name, slug, state, timezone, is_active, center_lat, center_lng)"), 'metroAreaFacts + a real metroCenter produce a real ensure-insert, never a guess')
   assert.ok(sql.includes("'Vienna Metro'") && sql.includes("'Vienna'") && sql.includes("'Europe/Vienna'"))
+  // Chief Phase 2AH (2026-09-09 product-rule update): is_active is a
+  // normal production flag, never a staging/launch gate — the generated
+  // ensure-insert must write is_active=true from creation, never false.
+  assert.ok(sql.includes(`VALUES ('Vienna Metro', ${JSON.stringify(projectId).replace(/"/g, "'")}, 'Vienna', 'Europe/Vienna', true,`), 'metro_areas is created with is_active=true, never staged as false')
   assert.ok(sql.includes('SELECT id INTO v_list_id FROM public.lists WHERE metro_id = v_metro_id AND title'), 'idempotent existence check before ever inserting a list')
   assert.ok(sql.includes("'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'"), 'uses the supplied creator id, never a silently different default')
   assert.ok(sql.includes(`FROM public.items WHERE body = '${body.replace(/'/g, "''")}'`), 'list_items population matches the real, exact certified body text — never a name-based guess')
   assert.ok(sql.includes('has this item been created yet via Item Intake'), 'a missing items row fails closed with an honest, specific reason, never silently skipped')
   assert.ok(sql.includes('ON CONFLICT (list_id, item_id) DO NOTHING'), 'list_items linking is idempotent on re-apply')
   assert.ok(sql.includes('postflight: expected at least'), 'a postflight assertion verifies the real applied state, not just that the block ran without error')
+})
+
+test('driveMetroLaunch: the launch-readiness decisionPacket never frames the human decision as "flip metro_areas.is_active" — is_active is a normal production flag, not a launch gate', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const candidate = food('Cafe Sperl', 'Mariahilf')
+  const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: ['coffee', 'historic'], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [], dbCategory: 'Food & drink' }
+
+  const projectId = 'vienna-decisionpacket-language'
+  await seedForHomeListMirror(runStore, projectId, [candidate], { [cert.candidateName]: cert })
+
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+    },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 3 }
+  )
+
+  const packet = run.decisionPacket as { decisionNeeded?: string; why?: string; impact?: string; options?: string[] } | null
+  const wholePacket = JSON.stringify(packet)
+  assert.ok(!wholePacket.includes('flip metro_areas.is_active'), 'the decision must never be framed as flipping is_active — it is a normal production flag, not a launch gate')
+  assert.match(packet?.decisionNeeded ?? '', /public launch|announce|promote/i)
+  assert.match(packet?.impact ?? '', /is_active/i, 'the impact text should explain is_active is the normal production default, not the thing being gated')
 })
 
 // ---------------------------------------------------------------------------
