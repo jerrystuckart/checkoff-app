@@ -800,11 +800,17 @@ Activation Kit itself is always free. The primary customer concept is now **"Wha
 (discovery/activation), with "Featured on CheckOff" recognition kept as secondary badge material,
 never the lead message.
 
-**Status as of 2026-09-08**: the validation/verification logic is real and tested (8 tests,
-`businessActivationKit.test.ts`) but is not yet wired as a hard-blocking stage in
-`metroLaunchDriver.ts`'s `REQUIRED_GATE_CATEGORIES` — no outreach is sent by the driver yet, so
-this was correctly scoped as "executable and ready to wire in" rather than rushing a live-network
-stage into the certification sequence tonight. Wiring it as a real gate is the next increment.
+**Status as of 2026-09-08 (updated same night)**: `BUSINESS_ACTIVATION_KIT_GATE` is now wired as a
+hard-blocking stage — added to `REQUIRED_GATE_CATEGORIES` under `Outreach`, evaluated in
+`stepM10FinalCertification`. A metro cannot reach `READY_TO_ACTIVATE` while its outreach copy
+references a metro-specific kit. Verification-only, never asset generation — the reference/text
+checks (`validateActivationKitReference()`) and the "no metro-specific kit configured" check are
+deterministic, zero network calls; the ONE genuinely network-dependent fact (is the canonical URL
+live) is a single bounded fetch with an 8s timeout (`agent-service/specialists/businessActivationKitCheck.ts`),
+never retried in a loop by the driver — a transient failure just fails that one gate evaluation.
+Proven at the real-driver level (not a library call) by `viennaDryRun.test.ts`'s 4th test: a
+metro-specific kit reference in outreach copy surfaces as a real `BUSINESS_ACTIVATION_KIT_GATE`
+failure in the driver's own output and blocks `READY_TO_ACTIVATE`.
 
 ## Provenance
 

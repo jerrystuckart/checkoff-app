@@ -56,6 +56,11 @@ export const REQUIRED_GATE_CATEGORIES: Readonly<Record<string, readonly string[]
   // is fine. What is not fine is treating a missing image as an
   // early-exit instead of one more named, complete gate.
   Images: ['IMAGE_READINESS_GATE'],
+  // Outreach: verification-only, never an asset-generation stage — see
+  // businessActivationKit.ts. A metro can never reach READY_TO_ACTIVATE
+  // while proposing/referencing a metro-specific Featured Kit instead of
+  // the one permanent, universal URL.
+  Outreach: ['BUSINESS_ACTIVATION_KIT_GATE'],
 })
 
 export interface MetroLaunchCertificationSummary {

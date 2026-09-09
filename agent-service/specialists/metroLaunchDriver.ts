@@ -57,6 +57,8 @@ import {
   type ItemIntakeRecord,
 } from '../playbooks/metroCatalog'
 import { resolveCanonicalTagVocabulary, loadGeneratedTagSnapshot, type VerifiedTagSnapshot } from './tagVocabularyProvider'
+import { evaluateActivationKitGate, validateActivationKitReference, UNIVERSAL_BUSINESS_ACTIVATION_KIT_URL } from '../playbooks/businessActivationKit'
+import { checkActivationKitUrlLive, type ActivationKitLiveCheckResult } from './businessActivationKitCheck'
 
 export const METRO_LAUNCH_DRIVER_PLAYBOOK_KEY = 'metro_launch'
 
@@ -105,6 +107,7 @@ interface MetroDriverState {
   geoEnrichmentPaidCalls?: number
   geoEnrichmentCacheHits?: number
   geoEnrichmentResults?: Array<{ candidateName: string; classification: string; placeId: string | null; formattedAddress: string | null; lat: number | null; lng: number | null; websiteUrl: string | null; geoRadiusM: number | null }>
+  activationKitCheckDetail?: string
 }
 
 /**
@@ -174,6 +177,10 @@ export interface MetroDriverDeps {
   verifyHomeListRows?: (plan: readonly HomeListPlanEntry[]) => Promise<HomeListRow[] | HomeListReadPathFailure>
   /** M10: which Home cards already have an image. Omit to correctly report every required card as still needing one — Winston never fabricates image readiness. */
   checkImageReadiness?: (plan: readonly HomeListPlanEntry[]) => Promise<ImageReadinessCard[]>
+  /** M10 BUSINESS_ACTIVATION_KIT_GATE: the actual outreach copy this metro would send — validated deterministically (no network call) for a metro-specific kit reference or a misused /confirm/<token> link. Defaults to a clean template referencing only the canonical URL, since no outreach is sent during a metro build itself. */
+  outreachCopy?: string
+  /** M10 BUSINESS_ACTIVATION_KIT_GATE: the ONE bounded network check (canonical URL live?) — defaults to a real fetch with an 8s timeout, never retried in a loop by the driver itself. Inject a fake in tests. */
+  checkActivationKitLive?: (url: string) => Promise<ActivationKitLiveCheckResult>
 }
 
 export function executionId(runId: string, stage: string, label: string): string {
@@ -1034,6 +1041,16 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
     : plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false }))
   const { gate: imageGate } = evaluateImageReadinessGate(imageCards)
 
+  // BUSINESS_ACTIVATION_KIT_GATE — verification-only, never asset
+  // generation. The reference/text checks are deterministic (no network
+  // call); the ONE bounded live-URL check is real by default but never
+  // retried in a loop by this stage — a transient failure just fails
+  // this evaluation, exactly like any other gate result.
+  const outreachCopy = deps.outreachCopy ?? `Free Business Activation Kit: ${UNIVERSAL_BUSINESS_ACTIVATION_KIT_URL}`
+  const liveCheck = await (deps.checkActivationKitLive ?? checkActivationKitUrlLive)(UNIVERSAL_BUSINESS_ACTIVATION_KIT_URL)
+  const activationKitGate = evaluateActivationKitGate({ kitUrlLive: liveCheck.live, assetsAccessible: liveCheck.live, outreachCopy })
+  state.activationKitCheckDetail = liveCheck.reason
+
   const certified = Object.values(state.itemCertifications ?? {}).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
   const rejected = Object.values(state.itemCertifications ?? {}).filter((r) => r.outcome !== 'ITEM_CERTIFIED')
 
@@ -1079,7 +1096,7 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
     homeQueryPass: existingGates.some((g) => g.key === 'HOME_LIST_CERTIFICATION_GATE' && g.verdict === 'PASS'),
   }
 
-  const report = certifyMetroLaunch({ metroName: run.projectId, gates: [...existingGates, imageGate, catalogGate, locationGate, presentationGate, editorialGate], summary })
+  const report = certifyMetroLaunch({ metroName: run.projectId, gates: [...existingGates, imageGate, catalogGate, locationGate, presentationGate, editorialGate, activationKitGate], summary })
   state.finalCertificationReport = report
   state.rejectedItemCount = rejected.length
   run.state = state

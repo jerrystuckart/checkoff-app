@@ -184,6 +184,7 @@ async function driveToBoundary(executor: TestExecutor, checkImageReadiness: (pla
       expectedCountry: 'AT',
       verifyHomeListRows,
       checkImageReadiness,
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
     },
     PROJECT_ID,
     { categoryPlan: PLAN }
@@ -288,6 +289,7 @@ test('Vienna DRY RUN: once the missing images are resolved, METRO_LAUNCH_CERTIFI
       expectedCountry: 'AT',
       verifyHomeListRows,
       checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: true })),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
     },
     PROJECT_ID,
     { categoryPlan: PLAN }
@@ -322,7 +324,7 @@ test('Vienna DRY RUN: re-running M8_BATCH_CERTIFICATION (a resumed run re-evalua
   await runStore.put(seeded!)
 
   const firstPass = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor], verifiedTagSnapshot: SNAPSHOT, placesLookup, geoEnrichmentCache, expectedCountry: 'AT', verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })) },
+    { runStore, execStore, executors: [executor], verifiedTagSnapshot: SNAPSHOT, placesLookup, geoEnrichmentCache, expectedCountry: 'AT', verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }) },
     PROJECT_ID,
     { categoryPlan: PLAN }
   )
@@ -339,10 +341,60 @@ test('Vienna DRY RUN: re-running M8_BATCH_CERTIFICATION (a resumed run re-evalua
   await runStore.put(stored!)
 
   const secondPass = await driveMetroLaunch(
-    { runStore, execStore: new InMemoryExecutionStore(), executors: [executor], verifiedTagSnapshot: SNAPSHOT, placesLookup, geoEnrichmentCache, expectedCountry: 'AT', verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })) },
+    { runStore, execStore: new InMemoryExecutionStore(), executors: [executor], verifiedTagSnapshot: SNAPSHOT, placesLookup, geoEnrichmentCache, expectedCountry: 'AT', verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }) },
     PROJECT_ID,
     { categoryPlan: PLAN }
   )
   assert.equal(paidCalls, 2, 'REGRESSION: the second pass through M8 must make ZERO additional Places calls — the cache is metro-scoped and durable across driver re-entries')
   assert.equal((secondPass.state as any).geoEnrichmentCacheHits, 2)
+})
+
+// ---------------------------------------------------------------------------
+// BUSINESS_ACTIVATION_KIT_GATE — proves the REAL driver, not a standalone
+// library call, invokes this gate and that it genuinely blocks
+// READY_TO_ACTIVATE when outreach copy references a metro-specific kit.
+// ---------------------------------------------------------------------------
+
+test('Vienna DRY RUN: BUSINESS_ACTIVATION_KIT_GATE is invoked by the real driver and blocks READY_TO_ACTIVATE when outreach copy references a metro-specific kit', async () => {
+  const executor = buildExecutor()
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  await getOrCreateRun(runStore, 'metro_launch', PROJECT_ID, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', PROJECT_ID))
+  seeded!.state = { m0Decisions: RESOLVED_M0 }
+  await runStore.put(seeded!)
+
+  const verifyHomeListRows = async (plan: readonly { label: string; kind: string; itemCandidateNames: string[] }[]): Promise<HomeListRow[]> =>
+    plan
+      .filter((p) => p.kind !== 'CURATED_MIRROR')
+      .map((p) => ({
+        label: p.label, exists: true, isOfficial: true, isPublic: true, metroId: PROJECT_ID, expectedMetroId: PROJECT_ID,
+        startsAt: null, endsAt: null, goesPublicAt: null,
+        isFeaturedEligible: p.kind === 'PRIMARY_SEASONAL', expectedFeaturedEligible: p.kind === 'PRIMARY_SEASONAL',
+        listItemsCount: p.itemCandidateNames.length, expectedItemCount: p.itemCandidateNames.length,
+        everyMembershipResolves: true, requiresImage: true, hasImage: true, returnedByRuntimeQuery: true,
+      }))
+
+  const run = await driveMetroLaunch(
+    {
+      runStore, execStore, executors: [executor],
+      verifiedTagSnapshot: SNAPSHOT,
+      placesLookup: async (q: string) => ({ topResult: { placeId: 'p-' + q, name: q.includes('Gumpendorfer') ? 'Cafe Sperl' : 'Kunsthistorisches Museum', formattedAddress: q, lat: 48.2, lng: 16.37, websiteUri: 'https://example.at', country: 'AT', viewportRadiusM: null }, apiError: null }),
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      expectedCountry: 'AT',
+      verifyHomeListRows,
+      checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: true })),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      // The regression: outreach copy wrongly references a metro-specific kit instead of the universal URL.
+      outreachCopy: 'Download your free checkoff-featured-kit-vienna.zip for table stands and signage.',
+    },
+    PROJECT_ID,
+    { categoryPlan: PLAN }
+  )
+
+  const report = (run.state as any).finalCertificationReport
+  const activationGate = report.failingGates.find((g: any) => g.key === 'BUSINESS_ACTIVATION_KIT_GATE')
+  assert.ok(activationGate, 'BUSINESS_ACTIVATION_KIT_GATE must appear in the real driver output — proves it was actually invoked, not skipped')
+  assert.match(activationGate.reason, /metro-specific kit/)
+  assert.notEqual(report.verdict, 'READY_TO_ACTIVATE', 'a metro-specific kit reference must block READY_TO_ACTIVATE')
 })
