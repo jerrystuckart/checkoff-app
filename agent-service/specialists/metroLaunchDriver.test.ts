@@ -1497,3 +1497,63 @@ test('driveMetroLaunch: three genuine bad editorial bodies still exhaust the con
   assert.equal(cert.outcome, 'EXHAUSTED_RETRIES')
   assert.equal(cert.attempts, MAX_ITEM_CERTIFICATION_ATTEMPTS)
 })
+
+test('driveMetroLaunch: a single candidate that genuinely exhausts M6.5 write-evidence retries is REJECTED and recorded — never escalates the whole metro build to NEEDS_JERRY for one isolated failure', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const goodCandidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl serves a real, specific Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
+  const badCandidate = { name: 'Thin Source Museum', category: 'Arts & Culture', neighborhood: 'Innere Stadt', claimSupported: 'Exists.', source: 'https://example.com/thin', needsVerification: false }
+
+  executor.scriptWhen(
+    (r) => r.stage === 'M6_5_CHECKOFF_EDITOR',
+    (r) => {
+      const venue = (r.inputs as { canonicalVenueName?: string }).canonicalVenueName ?? ''
+      if (venue === 'Thin Source Museum') {
+        // Genuinely, repeatedly missing `tags` — a real evidence-shape failure, never a rate limit.
+        return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: 'Exists.', checkoffizedItem: 'Nothing specific to say.', canonicalVenueUsed: venue }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+      }
+      return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { factualSource: (r.inputs as { factualSource?: string }).factualSource ?? '', checkoffizedItem: `Order the 'Sperl Torte' at '${venue}'.`, tags: ['t1', 't2', 't3', 't4', 't5', 't6'], canonicalVenueUsed: venue }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    }
+  )
+  executor.scriptWhen(
+    (r) => r.stage === 'M7_ITEM_CERTIFICATION' && (r.inputs as { mode?: string }).mode === 'CRITIQUE',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { hasConcreteAction: true, moreSpecificThanVenuePurpose: true, supportedByResearch: true, isCurrent: true, tellsUsefulNonObviousDetail: true, soundsLikeCheckoff: true, concise: true, critiqueNotes: 'ok' },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+      })
+  )
+
+  const projectId = 'vienna-isolated-write-failure-rejected'
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  seeded!.state = { m0Decisions: RESOLVED_M0, candidates: [goodCandidate, badCandidate], neighborhoods: [], plan: PLAN, hasRunM6: true }
+  seeded!.currentStage = 'M6_5_CHECKOFF_EDITOR'
+  await runStore.put(seeded!)
+
+  const run = await driveMetroLaunch(
+    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 10 }
+  )
+
+  const state = run.state as {
+    checkoffizedItems: Array<{ name: string }>
+    editorRejectedCandidates: Array<{ name: string; reason: string }>
+    itemCertifications: Record<string, { outcome: string }>
+  }
+  assert.deepEqual(
+    state.editorRejectedCandidates.map((c) => c.name),
+    ['Thin Source Museum']
+  )
+  assert.match(state.editorRejectedCandidates[0].reason, /tags/)
+  assert.ok(state.checkoffizedItems.some((i) => i.name === 'Cafe Sperl'), 'the good candidate is never held back by the bad one')
+  assert.equal(state.itemCertifications['Cafe Sperl']?.outcome, 'ITEM_CERTIFIED')
+  assert.equal(state.itemCertifications['Thin Source Museum'], undefined, 'the rejected candidate never reaches M7 at all')
+  // The run must have PROGRESSED, never stopped at M6.5 with NEEDS_JERRY over one isolated failure.
+  assert.notEqual(run.currentStage, 'M6_5_CHECKOFF_EDITOR')
+})

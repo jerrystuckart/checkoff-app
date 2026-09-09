@@ -106,6 +106,8 @@ interface MetroDriverState {
   hasRunM6?: boolean
   /** canonicalVenueName: the RESOLVED/CONFIRMED clean venue identity (canonicalVenueName.ts) — never the raw discovery label. What VENUE_QUOTING_GATE actually checks against. */
   checkoffizedItems?: Array<{ name: string; checkoffizedItem: string; tags: string[]; canonicalVenueName: string }>
+  /** Candidates whose M6.5 write genuinely, repeatedly failed evidence validation (e.g. the model omitting a required field) — rejected, same as an M7 EXHAUSTED_RETRIES, never silently dropped and never escalated to NEEDS_JERRY for what is an ordinary bounded rejection. Permanently excluded from `remaining` (see stepEditor's alreadyDone). */
+  editorRejectedCandidates?: Array<{ name: string; reason: string }>
   awaitingExecutionLabels?: string[] // labels of executions this run is currently waiting on, for the current stage
   /** Raw candidate categories buildAuditEvidence could not map to the canonical taxonomy — flagged for review, never silently binned. Recomputed fresh every M4 pass, never accumulated. */
   unclassifiedCategories?: UnclassifiedCategory[]
@@ -817,7 +819,7 @@ async function stepM5B(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<P
 async function stepEditor(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
   const state = readState(run)
   const verified = state.candidates ?? []
-  const alreadyDone = new Set((state.checkoffizedItems ?? []).map((c) => c.name))
+  const alreadyDone = new Set([...(state.checkoffizedItems ?? []).map((c) => c.name), ...(state.editorRejectedCandidates ?? []).map((c) => c.name)])
   const remaining = verified.filter((c) => !alreadyDone.has(c.name))
 
   if (remaining.length === 0) {
@@ -885,9 +887,22 @@ async function stepEditor(deps: MetroDriverDeps, run: PlaybookRunRecord): Promis
   // checkoffizedItems, and — because `remaining` is recomputed from
   // checkoffizedItems every call — the SAME failing candidate(s) were
   // reprocessed identically on every subsequent step, forever, never
-  // escalating and never advancing. Any non-ACCEPTED result now stops
-  // this stage and reports the run's real status, while still keeping
-  // whatever candidates DID succeed in this batch (never thrown away).
+  // escalating and never advancing.
+  //
+  // Second correction (Vienna, 2026-09-09): the original fix above then
+  // escalated the WHOLE metro build to NEEDS_JERRY the moment even ONE
+  // candidate, out of a batch of hundreds, genuinely exhausted its
+  // retries (e.g. the model repeatedly omitting `tags` for one
+  // thin-source candidate) — a single isolated write failure stopped
+  // metro-wide progress and required a human to manually drop that one
+  // candidate and resume, every time. A candidate whose evidence
+  // genuinely, repeatedly fails to generate is exactly "no strong
+  // experience could be certified" (the CORE QUALITY RULE's own
+  // rejection case, same as an M7 EXHAUSTED_RETRIES) — it is REJECTED
+  // and recorded, never silently dropped (still permanently excluded
+  // from `remaining` via editorRejectedCandidates, so the original
+  // infinite-loop bug stays fixed) and never escalated to a human for
+  // what is an ordinary, bounded, automatable rejection.
   const accepted = results.filter((r) => r.outcome.kind === 'ACCEPTED')
   const blockedResults = results.filter((r) => r.outcome.kind === 'BLOCKED')
   const needsJerryResults = results.filter((r) => r.outcome.kind === 'NEEDS_JERRY')
@@ -896,16 +911,14 @@ async function stepEditor(deps: MetroDriverDeps, run: PlaybookRunRecord): Promis
     ...(state.checkoffizedItems ?? []),
     ...accepted.map((r) => ({ name: r.name, checkoffizedItem: String(r.outcome.envelope?.evidence.checkoffizedItem ?? ''), tags: (r.outcome.envelope?.evidence.tags as string[] | undefined) ?? [], canonicalVenueName: r.canonicalVenueName })),
   ]
+  state.editorRejectedCandidates = [
+    ...(state.editorRejectedCandidates ?? []),
+    ...needsJerryResults.map((r) => ({ name: r.name, reason: r.outcome.reason ?? 'evidence validation failed' })),
+  ]
   run.state = state
 
   if (blockedResults.length > 0) {
     return block(run, `checkoff_editor unavailable for ${blockedResults.length} candidate(s): ${blockedResults.map((r) => `${r.name}: ${r.outcome.reason}`).join('; ')}`)
-  }
-  if (needsJerryResults.length > 0) {
-    return escalate(run, `checkoff_editor evidence validation failed for ${needsJerryResults.length} candidate(s) after exhausting retries.`, {
-      decisionNeeded: 'Review why checkoff_editor could not produce valid evidence for these candidates — a methodology/prompt issue, or a genuine data gap.',
-      why: needsJerryResults.map((r) => `${r.name}: ${r.outcome.reason}`).join(' | '),
-    })
   }
 
   // Stage advances only once every verified candidate has been
@@ -1355,7 +1368,7 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
 
   const report = certifyMetroLaunch({ metroName: run.projectId, gates: [...existingGates, imageGate, catalogGate, locationGate, presentationGate, editorialGate, activationKitGate], summary })
   state.finalCertificationReport = report
-  state.rejectedItemCount = rejected.length
+  state.rejectedItemCount = rejected.length + (state.editorRejectedCandidates ?? []).length
   run.state = state
   run.currentStage = 'LAUNCH_READINESS_BOUNDARY'
   return run
