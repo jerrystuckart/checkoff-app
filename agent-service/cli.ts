@@ -21,6 +21,7 @@
 //   tsx agent-service/cli.ts status <playbookKey> <projectKey>
 //   tsx agent-service/cli.ts pause <playbookKey> <projectKey>
 //   tsx agent-service/cli.ts resume <playbookKey> <projectKey>
+//   tsx agent-service/cli.ts unblock <playbookKey> <projectKey>   (BLOCKED -> RUNNING, retriable infra failures only — no decision payload)
 //   tsx agent-service/cli.ts decide <playbookKey> <projectKey> <decision.json>   (records a pending Jerry decision and resumes)
 //
 // STORE SELECTION (Phase 2E): by default this uses the real, durable
@@ -41,7 +42,7 @@ import { buildManualAssignmentPackage } from './specialists/manualExecutor'
 import { DbExecutionStore } from './specialists/dbExecutionStore'
 import type { SpecialistResultEnvelope } from './specialists/types'
 import type { PlaybookRunStore, PlaybookRunRecord } from './specialists/playbookRun'
-import { playbookRunId, pauseRun, resumeRun, recordJerryDecision, getOrCreateRun } from './specialists/playbookRun'
+import { playbookRunId, pauseRun, resumeRun, unblockRun, recordJerryDecision, getOrCreateRun } from './specialists/playbookRun'
 import { DbPlaybookRunStore } from './specialists/dbPlaybookRunStore'
 import { driveMetroLaunch, ensureMetroProject, type MetroM0Decisions } from './specialists/metroLaunchDriver'
 import { driveDestinationHub } from './specialists/destinationHubDriver'
@@ -214,6 +215,19 @@ async function main() {
   if (command === 'resume') {
     const [playbookKey, projectId] = rest0
     const run = await resumeRun(runStore, playbookRunId(playbookKey, projectId))
+    console.log(JSON.stringify(run, null, 2))
+    return
+  }
+
+  if (command === 'unblock') {
+    // BLOCKED is reserved for retriable infrastructure/provider failures
+    // (a rate limit, a timeout, a momentarily-unavailable executor) —
+    // never a genuine product decision (that's NEEDS_JERRY + `decide`).
+    // An operator who has judged it's safe to retry (e.g. the rate limit
+    // has since reset) uses this — no decision payload, no state edit,
+    // just "try again": `tsx agent-service/cli.ts unblock <playbookKey> <projectKey>`.
+    const [playbookKey, projectId] = rest0
+    const run = await unblockRun(runStore, playbookRunId(playbookKey, projectId))
     console.log(JSON.stringify(run, null, 2))
     return
   }

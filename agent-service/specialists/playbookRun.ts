@@ -126,3 +126,27 @@ export async function resumeRun(store: PlaybookRunStore, runId: string, now: () 
   await store.put(record)
   return record
 }
+
+/**
+ * The generic "an operator has judged it's safe to retry" primitive for
+ * a BLOCKED run. BLOCKED is deliberately distinct from NEEDS_JERRY (see
+ * block()'s own doc in each driver): it's reserved for retriable
+ * infrastructure/provider failures — a transient rate limit, a timeout,
+ * a momentarily-unavailable executor — never a genuine product/strategy
+ * decision (that's what NEEDS_JERRY + recordJerryDecision is for). A
+ * BLOCKED run was never meant to require hand-editing run state to
+ * recover: this is that recovery's sanctioned, generic entry point,
+ * exactly parallel to resumeRun for PAUSED. Deliberately takes no
+ * decision payload (unlike recordJerryDecision) — an unblock is "try
+ * again," not "here's new information."
+ */
+export async function unblockRun(store: PlaybookRunStore, runId: string, now: () => string = () => new Date().toISOString()): Promise<PlaybookRunRecord> {
+  const record = await store.get(runId)
+  if (!record) throw new Error(`No playbook run "${runId}".`)
+  if (record.status !== 'BLOCKED') throw new Error(`Playbook run "${runId}" is not BLOCKED (currently ${record.status}) — nothing to unblock.`)
+  record.status = 'RUNNING'
+  record.jerryReason = null
+  record.updatedAt = now()
+  await store.put(record)
+  return record
+}
