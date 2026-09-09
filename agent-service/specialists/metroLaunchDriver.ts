@@ -35,7 +35,7 @@ import type { ExecutionStore, SpecialistExecutor, SpecialistExecutionRequest } f
 import { getOrCreateRun, type PlaybookRunStore, type PlaybookRunRecord } from './playbookRun'
 import { dedupeCandidates, findSuspectedDuplicates, type RawCandidate } from './candidateMerge'
 import { DEFAULT_DRIVER_GUARDRAILS, type DriverGuardrails } from './driverGuardrails'
-import type { SpecialistResultEnvelope } from './types'
+import type { SpecialistResultEnvelope, ProviderUsageInfo } from './types'
 import { certifyEditorialDistinctiveness, checkDistinctiveExperience, checkVenueQuoted, type DistinctivenessCertificationItem } from '../playbooks/editorialDistinctiveness'
 import { evaluateItemCritique, evaluateItemCertificationGate, type ItemCritiqueAnswers, type ItemCertificationOutcome, type CatalogItemCertificationCheck, type ItemCertificationRecord } from '../playbooks/itemCertificationLoop'
 import { evaluateTagCertificationGate, validateItemTags, type ItemTagProposal } from '../playbooks/metroTagCertification'
@@ -111,6 +111,10 @@ interface MetroDriverState {
   editorRejectedCandidates?: Array<{ name: string; reason: string }>
   /** M7.5 TAG_ASSIGNMENT results, keyed by candidate name — `tags: null` means the bounded tag-selection retry budget was exhausted (the item KEEPS its original body/certification; only its tags stay whatever the last attempt produced, which the TAG_CERTIFICATION_GATE will then correctly fail on, rather than silently accepting an invalid set). */
   tagAssignmentResults?: Record<string, { tags: string[] | null; attempts: number; rejectionReasons: string[] }>
+  /** Real OpenAI usage/cost, keyed by playbook stage — accumulated across the WHOLE run (never reset by a resume/reopen), recorded only on a genuinely fresh acceptance, never an idempotent replay. See recordStageUsage. */
+  usageByStage?: Record<string, { calls: number; inputTokens: number; outputTokens: number; costUsd: number; unknownCostCalls: number }>
+  /** Count of provider/infra retries (429/timeout/5xx that survived even OpenAiAdapter's own internal backoff), keyed by stage — these never consume a content-repair attempt (see runStepWithInfraRetry); tracked separately so the two are never conflated in reporting. */
+  infraRetriesByStage?: Record<string, number>
   awaitingExecutionLabels?: string[] // labels of executions this run is currently waiting on, for the current stage
   /** Raw candidate categories buildAuditEvidence could not map to the canonical taxonomy — flagged for review, never silently binned. Recomputed fresh every M4 pass, never accumulated. */
   unclassifiedCategories?: UnclassifiedCategory[]
@@ -298,6 +302,41 @@ interface StepExecutionOutcome {
   reason?: string
 }
 
+/**
+ * Cost/usage instrumentation (Chief Phase 2Z — multiple real OpenAI
+ * usage alerts during the Vienna run). Accumulates onto run.state
+ * directly (readState(run) returns the SAME object reference as
+ * run.state once a run exists — see getOrCreateRun's `state: {}`
+ * initialization — so this is safe to call from within
+ * runStepWithRetry/runStepWithInfraRetry without racing whatever the
+ * calling step function does with its own `state` variable afterward).
+ * Recorded ONLY on a genuinely fresh acceptance — never on an idempotent
+ * COMPLETE replay, which would double-count a cost already paid (and
+ * recorded, if instrumentation existed then) in an earlier call.
+ */
+function recordStageUsage(run: PlaybookRunRecord, stage: string, usage: ProviderUsageInfo | null | undefined): void {
+  const state = readState(run)
+  const byStage = { ...(state.usageByStage ?? {}) }
+  const existing = byStage[stage] ?? { calls: 0, inputTokens: 0, outputTokens: 0, costUsd: 0, unknownCostCalls: 0 }
+  byStage[stage] = {
+    calls: existing.calls + 1,
+    inputTokens: existing.inputTokens + (usage?.inputTokens ?? 0),
+    outputTokens: existing.outputTokens + (usage?.outputTokens ?? 0),
+    costUsd: existing.costUsd + (usage?.costUsd ?? 0),
+    unknownCostCalls: existing.unknownCostCalls + (usage?.costUsd == null ? 1 : 0),
+  }
+  state.usageByStage = byStage
+  run.state = state
+}
+
+function recordInfraRetry(run: PlaybookRunRecord, stage: string): void {
+  const state = readState(run)
+  const byStage = { ...(state.infraRetriesByStage ?? {}) }
+  byStage[stage] = (byStage[stage] ?? 0) + 1
+  state.infraRetriesByStage = byStage
+  run.state = state
+}
+
 async function runStepWithRetry(deps: MetroDriverDeps, run: PlaybookRunRecord, request: SpecialistExecutionRequest): Promise<StepExecutionOutcome> {
   const guardrails = deps.guardrails ?? DEFAULT_DRIVER_GUARDRAILS
   let attempt = 0
@@ -308,6 +347,7 @@ async function runStepWithRetry(deps: MetroDriverDeps, run: PlaybookRunRecord, r
       return { kind: 'BLOCKED', reason: outcome.errorReason ?? 'EXECUTOR_UNAVAILABLE' }
     }
     if ('accepted' in outcome && outcome.accepted) {
+      recordStageUsage(run, request.stage, outcome.record.envelope?.providerUsage)
       return { kind: 'ACCEPTED', envelope: outcome.record.envelope ?? undefined }
     }
     // Bug fix (found resuming the real San Diego run after a manual
@@ -362,6 +402,7 @@ async function runStepWithInfraRetry(deps: MetroDriverDeps, run: PlaybookRunReco
   let infraAttempt = 0
   while (outcome.kind === 'BLOCKED' && infraAttempt < guardrails.maxInfraRetriesPerStep) {
     infraAttempt += 1
+    recordInfraRetry(run, request.stage)
     await sleep(INFRA_RETRY_BASE_DELAY_MS * infraAttempt)
     outcome = await runStepWithRetry(deps, run, request)
   }

@@ -1779,3 +1779,100 @@ test('driveMetroLaunch: TAG_ASSIGNMENT infra failures (429) are retried and do N
   assert.equal(state.tagAssignmentResults['Cafe Sperl'].attempts, 1, 'infra retries never counted as a real tag-selection attempt')
   assert.ok(state.tagAssignmentResults['Cafe Sperl'].tags !== null)
 })
+
+// ---------------------------------------------------------------------------
+// Cost/usage instrumentation (Chief Phase 2Z — multiple real OpenAI
+// usage alerts during the Vienna run).
+// ---------------------------------------------------------------------------
+
+test('driveMetroLaunch: real provider usage is accumulated per stage, and infra retries are tracked separately from a fresh acceptance', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl serves a real, specific Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
+  const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: [], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+
+  let tagDispatches = 0
+  executor.scriptWhen(
+    (r) => (r.inputs as { mode?: string }).mode === 'TAG_SELECTION',
+    (r) => {
+      tagDispatches += 1
+      if (tagDispatches === 1) return { unavailable: true, reason: 'openai: 429 rate limited' }
+      const shortlist = (r.inputs as { shortlist?: string[] }).shortlist ?? []
+      return fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { tags: shortlist.slice(0, 6) },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+        providerUsage: { provider: 'openai', model: 'gpt-4.1', inputTokens: 500, outputTokens: 100, totalTokens: 600, costUsd: 0.0018, pricingVersion: '2026-09-08', available: true },
+      })
+    }
+  )
+
+  const projectId = 'vienna-usage-instrumentation'
+  await seedForTagAssignment(runStore, projectId, candidate, cert)
+
+  const run = await driveMetroLaunch(
+    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), sleepImpl: async () => {} },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 10 }
+  )
+
+  const state = run.state as {
+    usageByStage: Record<string, { calls: number; inputTokens: number; outputTokens: number; costUsd: number; unknownCostCalls: number }>
+    infraRetriesByStage: Record<string, number>
+  }
+  const tagUsage = state.usageByStage['M7_5_TAG_ASSIGNMENT']
+  assert.equal(tagUsage.calls, 1, 'the infra-failed attempt is never counted as a real usage-recording call — only the genuine acceptance is')
+  assert.equal(tagUsage.inputTokens, 500)
+  assert.equal(tagUsage.outputTokens, 100)
+  assert.ok(Math.abs(tagUsage.costUsd - 0.0018) < 1e-9)
+  assert.equal(state.infraRetriesByStage['M7_5_TAG_ASSIGNMENT'], 1, 'exactly one infra retry was recorded')
+})
+
+test('driveMetroLaunch: an idempotent-replay acceptance (already COMPLETE) never double-counts usage', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl serves a real, specific Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
+  const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: [], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+  executor.scriptWhen(
+    (r) => (r.inputs as { mode?: string }).mode === 'TAG_SELECTION',
+    (r) => {
+      const shortlist = (r.inputs as { shortlist?: string[] }).shortlist ?? []
+      return fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: { tags: shortlist.slice(0, 6) },
+        methodologyId: 'checkoff_editor',
+        methodologyVersion: 'v1',
+        providerUsage: { provider: 'openai', model: 'gpt-4.1', inputTokens: 500, outputTokens: 100, totalTokens: 600, costUsd: 0.0018, pricingVersion: '2026-09-08', available: true },
+      })
+    }
+  )
+
+  const projectId = 'vienna-usage-no-double-count'
+  await seedForTagAssignment(runStore, projectId, candidate, cert)
+  const deps = { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }
+
+  await driveMetroLaunch(deps, projectId, { categoryPlan: PLAN, maxSteps: 10 })
+
+  // Force a re-entry into M7.5 for the SAME item — clearing
+  // tagAssignmentResults (but NOT the execStore, which still holds the
+  // original COMPLETE execution record under the same deterministic
+  // executionId) reproduces exactly the idempotent-replay path: the
+  // driver dispatches the "same" attempt-1 request again, and
+  // runExecution returns the already-COMPLETE record rather than
+  // re-invoking the executor.
+  const stored = await runStore.get(playbookRunId('metro_launch', projectId))
+  stored!.state = { ...stored!.state, tagAssignmentResults: {} }
+  stored!.currentStage = 'M7_5_TAG_ASSIGNMENT'
+  stored!.status = 'RUNNING'
+  await runStore.put(stored!)
+
+  const finalRun = await driveMetroLaunch(deps, projectId, { categoryPlan: PLAN, maxSteps: 10 })
+
+  const state = finalRun.state as { usageByStage: Record<string, { calls: number }> }
+  assert.equal(state.usageByStage['M7_5_TAG_ASSIGNMENT']?.calls, 1, 'a second driveMetroLaunch call against the SAME completed state must not re-record usage')
+})
