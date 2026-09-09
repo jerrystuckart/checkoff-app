@@ -23,6 +23,7 @@ import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
 import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { isItemInSeason } from '../lib/seasonFilter'
 import { useWhatsGood } from '../lib/useWhatsGood'
+import { useCurrentLocation } from '../lib/currentLocation'
 import { attachActiveCoverImages, attachDisplayEligibleImagePools } from '../lib/coverCandidates'
 import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
 import WhatsGoodDebugPanel from '../components/WhatsGoodDebugPanel'
@@ -111,10 +112,13 @@ export default function HomeScreen({ navigation }) {
   const [nearbyZone, setNearbyZone] = useState(null)
   const [zoneBannerDismissed, setZoneBannerDismissed] = useState(false)
 
-  // "Near you right now" rail — B1. userLocation is the same one-shot fix
-  // already used for metro auto-select + zone detection above, reused here
-  // rather than requesting location a second time.
-  const [userLocation, setUserLocation] = useState(null)
+  // "Near you right now" rail — userLocation comes from the shared
+  // lib/currentLocation.js store (not its own one-shot fetch): this is what
+  // lets a Home pull-to-refresh force a real GPS re-fix, and what lets the
+  // app-wide 5-minute foreground-stale check update this rail automatically
+  // after the user has traveled while the app was backgrounded. See
+  // requestFreshLocation() call in the RefreshControl below.
+  const { location: userLocation, refreshLocation: refreshUserLocation } = useCurrentLocation()
   const [sessionTier, setSessionTier] = useState(null)
   const [rawNearbyItems, setRawNearbyItems] = useState([]) // unsorted candidate pool
   const [checkedItemIds, setCheckedItemIds] = useState(new Set())
@@ -679,40 +683,16 @@ async function loadNearbyRail(userId) {
     return () => clearInterval(id)
   }, [])
 
-  // Dedicated, patient location fetch for the "Near you right now" rail —
-  // BUG FIX: this used to reuse init()'s location result, which comes from
-  // a 3-second race (Accuracy.Low, no getLastKnownPositionAsync fallback)
-  // built for fast-but-best-effort metro auto-selection. On a real device,
-  // a cold GPS fix very often takes longer than 3s, so userLocation stayed
-  // null far more often than the user's actual location-permission state
-  // would suggest — and with 289 universal items in the DB (far more than
-  // the rail's slice of 5), proximitySort's correct, spec'd no-location
-  // fallback (universal items first) meant the rail's .slice(0, 5) never
-  // reached the real, correctly-fetched located items, regardless of
-  // metro. This effect gives the rail its own fetch matching the pattern
-  // already used in ListScreen.jsx/CuratedListPreviewScreen.jsx: a longer
-  // 6s race plus a getLastKnownPositionAsync fallback. init()'s original
-  // 3s race is untouched — still used only for metro auto-selection and
-  // zone-banner detection, which have their own reasons to stay fast.
+  // Initial fix for the "Near you right now" rail comes from the shared
+  // lib/currentLocation.js store (force:false — reuses another screen's
+  // recent-enough fix if one already exists, matching this effect's old
+  // "patient" long-race + getLastKnownPositionAsync-fallback behavior when
+  // a fresh device fetch is actually needed). init()'s own separate 3s-race
+  // fetch (metro auto-selection, zone-banner detection) is untouched — that
+  // one has its own reasons to stay fast and is out of scope here.
   useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync()
-        if (status !== 'granted') return
-        const pos = await Promise.race([
-          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-          new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 6000)),
-        ]).catch(() => Location.getLastKnownPositionAsync({}))
-        if (!cancelled && pos?.coords) {
-          setUserLocation({ latitude: pos.coords.latitude, longitude: pos.coords.longitude })
-        }
-      } catch {
-        // location unavailable — proximitySort's no-location fallback handles this
-      }
-    })()
-    return () => { cancelled = true }
-  }, [])
+    refreshUserLocation(false)
+  }, []) // eslint-disable-line
 
   // Density tier for the "Near you right now" rail — session-cached by
   // getSessionDensityTier, computed against the full item candidate set
@@ -740,10 +720,12 @@ async function loadNearbyRail(userId) {
     return sorted.filter(item => !checkedItemIds.has(item.id)).slice(0, 5)
   }, [rawNearbyItems, userLocation, sessionTier, checkedItemIds])
 
-  // What's Good V1 — behind the `whats_good_v1` feature flag (disabled
-  // globally). Owns its own location/refresh cycle entirely separate from
-  // userLocation above; see lib/useWhatsGood.js's module doc for why. No
-  // effect on existing Home Rail behavior when the flag is off.
+  // What's Good V1 / "What's the Thing" — behind the `whats_good_v1`
+  // feature flag (disabled globally). Now reads the same shared
+  // lib/currentLocation.js location as userLocation above (previously its
+  // own independent fetch — see lib/useWhatsGood.js's module doc), so a
+  // Home pull-to-refresh or the 5-minute foreground-stale check updates it
+  // too. No effect on existing Home Rail behavior when the flag is off.
   const homeRailItemIds = useMemo(() => nearbyRailItems.map(item => item.id), [nearbyRailItems])
   const whatsGood = useWhatsGood({
     userId: user?.id ?? null,
@@ -1117,11 +1099,17 @@ async function loadNearbyRail(userId) {
         <RefreshControl
           refreshing={refreshing}
           onRefresh={() => {
+            // Manual refresh always forces a fresh device GPS fix first —
+            // never just re-runs queries against whatever coords happen to
+            // be cached. userLocation updating (from the shared store)
+            // cascades into nearbyRailItems/sessionTier/What's Good
+            // automatically since they're all derived from it.
+            setRefreshing(true)
+            const refreshes = [refreshUserLocation(true)]
             if (selectedMetro) {
-              setRefreshing(true)
-              loadForMetro(selectedMetro.id, user?.id, selectedMetro.slug)
-                .finally(() => setRefreshing(false))
+              refreshes.push(loadForMetro(selectedMetro.id, user?.id, selectedMetro.slug))
             }
+            Promise.all(refreshes).finally(() => setRefreshing(false))
           }}
           tintColor={AMBER}
         />

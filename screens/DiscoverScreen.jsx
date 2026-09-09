@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import {
   View, Text, FlatList, TouchableOpacity, StyleSheet, TextInput,
   ActivityIndicator, Animated, Platform, Linking, ScrollView,
-  KeyboardAvoidingView, Keyboard,
+  KeyboardAvoidingView, Keyboard, RefreshControl,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
@@ -13,6 +13,7 @@ import { haversineMeters } from '../lib/distance'
 import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { isItemInSeason } from '../lib/seasonFilter'
 import { isWithinNearbyRadius, distLabel, rankNearbyItems } from '../lib/nearbyRanking'
+import { mergeSearchMatchCounts } from '../lib/searchMatch'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
@@ -80,7 +81,10 @@ export default function DiscoverScreen({ navigation, route }) {
   const styles = useMemo(() => createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT_2 }),
     [BG, CARD, TEXT, MUTED, BORDER, SOFT_2])
 
-  const { items: nearbyItems, loading: nearbyLoading, locError, location } = useNearby()
+  const {
+    items: nearbyItems, loading: nearbyLoading, locError, location,
+    refresh: refreshNearby, refreshing: nearbyRefreshing,
+  } = useNearby()
 
   // Keep a ref to the latest location so async functions get fresh coords
   const locationRef = useRef(null)
@@ -95,10 +99,9 @@ export default function DiscoverScreen({ navigation, route }) {
   const [categories, setCategories]         = useState([])
   const [activeCategoryName, setActiveCategoryName] = useState('All')
 
-  // Result state — either direct DB items (tag search) or null (use nearbyItems)
+  // Result state — either direct DB items (tag/text search) or null (use nearbyItems)
   const [tagResultItems, setTagResultItems] = useState(null)  // array|null
   const [tagMatchData, setTagMatchData]     = useState({ counts: {} })
-  const [bodyMatchIds, setBodyMatchIds]     = useState(null)  // Set<string>|null — body fallback
   const [loadingSearch, setLoadingSearch]   = useState(false)
   const [discoverUserId, setDiscoverUserId] = useState(null)
 
@@ -174,7 +177,6 @@ export default function DiscoverScreen({ navigation, route }) {
     setActiveTags([])
     setTagResultItems(null)
     setTagMatchData({ counts: {} })
-    setBodyMatchIds(null)
     setSearchText('')
     setSuggestions([])
     setActiveCategoryName('All')
@@ -187,7 +189,6 @@ export default function DiscoverScreen({ navigation, route }) {
       setSuggestions([])
       if (activeTags.length === 0) {
         setTagResultItems(null)
-        setBodyMatchIds(null)
       }
       return
     }
@@ -195,94 +196,87 @@ export default function DiscoverScreen({ navigation, route }) {
     return () => clearTimeout(debounceRef.current)
   }, [searchText])
 
-  // Primary search: query item_tags joined to tags so we bypass any direct
-  // tags-table RLS restrictions. Falls back to body text if no tag match.
+  // Primary search: tag-name matches (via item_tags, bypassing direct
+  // tags-table RLS restrictions) UNION'd with a direct item-body text match.
+  // Both always run together (when no tag chips are active) — an item's own
+  // body text must be able to surface it even when the query also happens
+  // to substring-match some unrelated tag name. Searching "house" matching
+  // the tags "steakhouse"/"lighthouse" must not hide "House of Honey" just
+  // because House of Honey isn't tagged with either of those — the old
+  // either/or branching (tag match found -> body text never even queried)
+  // silently dropped items exactly like this from search results.
   async function runSearch(text) {
     setLoadingSearch(true)
-    console.log('[tag search] input:', text)
     try {
-      // Step 1: find matching tags by name (direct query — works with user session JWT)
+      // Find matching tags by name (direct query — works with user session JWT)
       const { data: tagRows, error: tagErr } = await supabase
         .from('tags')
         .select('id, name')
         .ilike('name', `%${text}%`)
         .limit(50)
-
-      console.log('[tag search] item_tags query result:', tagRows, tagErr)
+      if (__DEV__ && tagErr) console.log('[search] tags error:', tagErr?.message)
 
       const matchedTags = tagRows ?? []
-      const tagNames = matchedTags.map(t => t.name)
-      console.log('[tag search] matched tag names:', tagNames)
-
       const activeIds = new Set(activeTags.map(t => String(t.id)))
       setSuggestions(matchedTags.filter(t => !activeIds.has(String(t.id))).slice(0, 8))
 
+      if (activeTags.length > 0) {
+        // Tag chips already drive tagResultItems via fetchTagResultItems —
+        // typed text here only refines tag suggestions, never replaces results.
+        setLoadingSearch(false)
+        return
+      }
+
+      let tagItemRows = []
       if (matchedTags.length > 0) {
         const tagIds = matchedTags.map(t => t.id)
-
-        // Step 2: find item_ids that have any of these tags
-        const { data: tagItemRows, error: tiErr } = await supabase
+        const { data, error: tiErr } = await supabase
           .from('item_tags')
           .select('item_id, tag_id')
           .in('tag_id', tagIds)
           .limit(500)
+        if (__DEV__ && tiErr) console.log('[search] item_tags error:', tiErr?.message)
+        tagItemRows = data ?? []
+      }
 
-        if (__DEV__ && tiErr) console.log('[tag search] item_tags error:', tiErr?.message)
+      const { data: bodyItems, error: bodyErr } = await supabase
+        .from('items').select('id')
+        .ilike('body', `%${text}%`)
+        .eq('is_active', true).eq('is_approved', true).eq('is_universal', false)
+        .limit(100)
+      if (__DEV__ && bodyErr) console.log('[search] body error:', bodyErr?.message)
 
-        const counts = {}
-        ;(tagItemRows ?? []).forEach(row => {
-          const key = String(row.item_id)
-          counts[key] = (counts[key] ?? 0) + 1
-        })
-        const matchedIds = Object.keys(counts)
-        console.log('[tag search] matched item IDs:', matchedIds.length, 'items')
+      const counts = mergeSearchMatchCounts(tagItemRows, (bodyItems ?? []).map(i => i.id))
+      setTagMatchData({ counts })
 
-        setTagMatchData({ counts })
-        setBodyMatchIds(null)
-
-        if (matchedIds.length === 0) {
-          setTagResultItems([])
-        } else {
-          const uuidIds = matchedIds.slice(0, 100)  // items.id is UUID — no parseInt
-          const { data: rawItems, error: itemErr } = await supabase
-            .from('items')
-            .select(`
-              id, body, difficulty, maps_lat, maps_lng, is_active, is_approved,
-              is_secret, secret_reveal_text, has_alcohol, season_tag, ring_weight,
-              partner_id, maps_query, website_url, geo_radius_m,
-              categories(name, color_hex),
-              neighborhoods!items_neighborhood_id_fkey(name),
-              partners!items_partner_id_fkey(business_name)
-            `)
-            .in('id', uuidIds)
-            .eq('is_active', true)
-            .eq('is_approved', true)
-          console.log('[tag search] items query result:', rawItems?.length ?? 0, 'items', itemErr)
-
-          // Locked Bonus Drops must not leak into search results — they only
-          // exist inside their own list until unlocked or already checked.
-          const maskedItems = await filterMaskedBonusDrops(rawItems ?? [], discoverUserId)
-          const augmented = augmentWithDistance(maskedItems.filter(isItemInSeason), locationRef.current ?? location)
-          setTagResultItems(augmented)
-          console.log('[tag search] displayItems after merge:', augmented.length)
-        }
-      } else if (activeTags.length === 0) {
-        // No tag matches — fall back to body text search on nearbyItems
-        setTagResultItems(null)
-        setTagMatchData({ counts: {} })
-        const { data: bodyItems } = await supabase
-          .from('items').select('id')
-          .ilike('body', `%${text}%`)
-          .eq('is_active', true).eq('is_approved', true).eq('is_universal', false)
-          .limit(100)
-        setBodyMatchIds(new Set((bodyItems ?? []).map(i => String(i.id))))
+      const matchedIds = Object.keys(counts)
+      if (matchedIds.length === 0) {
+        setTagResultItems([])
       } else {
-        setTagResultItems(null)
-        setTagMatchData({ counts: {} })
-        setBodyMatchIds(null)
+        const uuidIds = matchedIds.slice(0, 100)  // items.id is UUID — no parseInt
+        const { data: rawItems, error: itemErr } = await supabase
+          .from('items')
+          .select(`
+            id, body, difficulty, maps_lat, maps_lng, is_active, is_approved,
+            is_secret, secret_reveal_text, has_alcohol, season_tag, ring_weight,
+            partner_id, maps_query, website_url, geo_radius_m,
+            categories(name, color_hex),
+            neighborhoods!items_neighborhood_id_fkey(name),
+            partners!items_partner_id_fkey(business_name)
+          `)
+          .in('id', uuidIds)
+          .eq('is_active', true)
+          .eq('is_approved', true)
+        if (__DEV__ && itemErr) console.log('[search] items error:', itemErr?.message)
+
+        // Locked Bonus Drops must not leak into search results — they only
+        // exist inside their own list until unlocked or already checked.
+        const maskedItems = await filterMaskedBonusDrops(rawItems ?? [], discoverUserId)
+        const augmented = augmentWithDistance(maskedItems.filter(isItemInSeason), locationRef.current ?? location)
+        setTagResultItems(augmented)
       }
     } catch (e) {
-      if (__DEV__) console.log('[tag search] runSearch error:', e?.message)
+      if (__DEV__) console.log('[search] runSearch error:', e?.message)
     }
     setLoadingSearch(false)
   }
@@ -389,11 +383,6 @@ export default function DiscoverScreen({ navigation, route }) {
       }
     }
 
-    // Body text fallback filter on nearbyItems (only when no tag results)
-    if (tagResultItems === null && bodyMatchIds !== null) {
-      base = base.filter(i => bodyMatchIds.has(String(i.id)))
-    }
-
     // Category filter — AND with any active tag search
     if (activeCategoryName && activeCategoryName !== 'All') {
       base = base.filter(i => i.categoryName === activeCategoryName)
@@ -404,7 +393,7 @@ export default function DiscoverScreen({ navigation, route }) {
     // cliffs. A far item can never be discounted enough to beat a close
     // one — see lib/nearbyRanking.js.
     return rankNearbyItems(base, tagMatchData.counts)
-  }, [nearbyItems, tagResultItems, postCheckin, tagMatchData, bodyMatchIds, activeCategoryName])
+  }, [nearbyItems, tagResultItems, postCheckin, tagMatchData, activeCategoryName])
 
   // ── Navigation ───────────────────────────────────────────────────────────
   function openItem(item) {
@@ -483,7 +472,7 @@ export default function DiscoverScreen({ navigation, route }) {
     )
   }
 
-  const hasActiveSearch = tagResultItems !== null || bodyMatchIds !== null || (activeCategoryName !== null && activeCategoryName !== 'All')
+  const hasActiveSearch = tagResultItems !== null || (activeCategoryName !== null && activeCategoryName !== 'All')
 
   const emptyReason = hasActiveSearch
     ? 'No items match these filters. Try removing one or adjusting your search.'
@@ -531,6 +520,13 @@ export default function DiscoverScreen({ navigation, route }) {
           contentContainerStyle={{ paddingBottom: insets.bottom + 40 }}
           keyboardShouldPersistTaps="handled"
           ItemSeparatorComponent={() => <View style={styles.sep} />}
+          refreshControl={
+            <RefreshControl
+              refreshing={!!nearbyRefreshing}
+              onRefresh={refreshNearby}
+              tintColor={AMBER}
+            />
+          }
           ListHeaderComponent={
             <ListHeader
               styles={styles}
