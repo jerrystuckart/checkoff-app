@@ -66,6 +66,7 @@ test('reopenStage: moves currentStage back, clears exactly the named state keys,
   run.status = 'NEEDS_JERRY'
   run.jerryReason = 'Metro build reached the launch-readiness boundary'
   run.loopIteration = 3
+  run.totalRetries = 205
   run.state = {
     candidates: ['A', 'B', 'C'],
     neighborhoods: ['Innere Stadt'],
@@ -86,6 +87,7 @@ test('reopenStage: moves currentStage back, clears exactly the named state keys,
   assert.equal(result.jerryReason, null)
   assert.equal(result.decisionPacket, null)
   assert.equal(result.loopIteration, 0)
+  assert.equal(result.totalRetries, 0, 'a stale cumulative retry count from before the fix must not immediately re-trip the global retry cap on the very next ordinary retry')
   assert.deepEqual(result.state.candidates, ['A', 'B', 'C'], 'the paid-for research is NEVER discarded')
   assert.deepEqual(result.state.neighborhoods, ['Innere Stadt'])
   assert.deepEqual(result.state.checkoffizedItems, [], 'invalidated-by-the-fix state is cleared')

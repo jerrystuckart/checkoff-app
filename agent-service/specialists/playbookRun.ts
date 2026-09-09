@@ -196,6 +196,15 @@ export async function reopenStage(
   record.jerryReason = null
   record.decisionPacket = null
   record.loopIteration = 0
+  // totalRetries is a CUMULATIVE counter across the run's entire history
+  // (runStepWithRetry's guardrails.maxRetriesPerExecution * 10 cap) — a
+  // reopened stage is a deliberate, operator-scoped fresh start, so a
+  // high count accumulated BEFORE the fix that prompted this reopen must
+  // not immediately re-trip that global cap on the very next ordinary
+  // retry (found live, 2026-09-09: a Vienna reopen left totalRetries at
+  // 205, so the very next genuine evidence-validation retry escalated
+  // after a single attempt instead of the real per-execution budget).
+  record.totalRetries = 0
   record.updatedAt = now()
   await store.put(record)
   return record
