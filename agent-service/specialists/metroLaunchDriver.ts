@@ -1372,7 +1372,7 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
     // identity key for the cache/output record/itemCertifications
     // cross-reference.
     const mapsQuery = candidate?.address?.trim() || `${r.candidateName}, ${candidate?.neighborhood ?? run.projectId}`
-    return { candidateName: r.candidateName, matchName: r.venueName, body: r.finalBody, mapsQuery, expectedCountry, biasLat: metroCenterBias.lat, biasLng: metroCenterBias.lng }
+    return { candidateName: r.candidateName, matchName: r.venueName, neighborhood: candidate?.neighborhood ?? null, body: r.finalBody, mapsQuery, expectedCountry, biasLat: metroCenterBias.lat, biasLng: metroCenterBias.lng }
   })
   const geoRun = await enrichMetroCatalogGeo(run.projectId, geoCandidates, {
     cache: deps.geoEnrichmentCache ?? new FileGeoEnrichmentCacheStore(),

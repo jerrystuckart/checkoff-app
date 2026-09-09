@@ -129,3 +129,35 @@ test('enrichMetroCatalogGeo: matchName does NOT change the cache key — mapsQue
   assert.equal(calls, 1, 'adding matchName must never trigger a fresh paid call for an already-cached query')
   assert.equal(second.records[0].fromCache, true)
 })
+
+test('enrichMetroCatalogGeo: the bounded second pass (Chief Phase 2AB) runs automatically and upgrades a corroborated ambiguous match — never a new paid call', async () => {
+  let calls = 0
+  const cache = new InMemoryGeoEnrichmentCacheStore()
+  const lookup: PlacesLookupFn = async () => {
+    calls++
+    // A weak plain-similarity match against the raw compound label, but
+    // a real district + distinctive-word match against the canonical name.
+    return { topResult: { placeId: 'p1', name: 'Musikverein Wien', formattedAddress: 'Musikvereinspl. 1, 1010 Wien, Austria', lat: 48.2, lng: 16.37, websiteUri: null, country: 'AT', viewportRadiusM: null }, apiError: null }
+  }
+  const c = candidate({
+    candidateName: 'Musikverein (Golden Hall, Brahms Hall, New Halls)',
+    matchName: 'Musikverein',
+    neighborhood: 'Innere Stadt (1st district)',
+    mapsQuery: 'Musikverein (Golden Hall, Brahms Hall, New Halls), Innere Stadt',
+  })
+  const result = await enrichMetroCatalogGeo('vienna-second-pass', [c], { cache, lookup })
+  assert.equal(calls, 1)
+  assert.equal(result.records[0].classification, 'EXACT', `expected the second pass to upgrade this, got: ${JSON.stringify(result.records[0])}`)
+  assert.match(result.records[0].reason, /Second pass/)
+})
+
+test('enrichMetroCatalogGeo: the second pass never upgrades a genuinely wrong match, even with a matching district (the real "Café Central" -> "DECENTRAL" false-positive regression)', async () => {
+  const cache = new InMemoryGeoEnrichmentCacheStore()
+  const lookup: PlacesLookupFn = async () => ({
+    topResult: { placeId: 'p1', name: 'DECENTRAL', formattedAddress: 'Freyung 3/1, 1010 Wien, Austria', lat: 48.2, lng: 16.37, websiteUri: null, country: 'AT', viewportRadiusM: null },
+    apiError: null,
+  })
+  const c = candidate({ candidateName: 'Café Central', matchName: 'Café Central', neighborhood: '1st district (Innere Stadt)', mapsQuery: 'Café Central, 1st district' })
+  const result = await enrichMetroCatalogGeo('vienna-second-pass-2', [c], { cache, lookup })
+  assert.notEqual(result.records[0].classification, 'EXACT')
+})

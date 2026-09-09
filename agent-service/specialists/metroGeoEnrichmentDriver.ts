@@ -16,6 +16,7 @@
 // this codebase injects its executor.
 
 import { classifyPlacesMatch, type ClassifyMatchResult, type GeoEnrichmentItemResult, type PlacesResultLike } from '../playbooks/metroGeoEnrichment'
+import { resolveGeoSecondPass } from '../playbooks/geoSecondPassResolver'
 
 // ---------------------------------------------------------------------------
 // Cache — keyed by (metroId, cacheKey). A cache HIT means the paid Places
@@ -193,6 +194,8 @@ export interface GeoEnrichmentCandidate {
    * (canonicalVenueName.ts) should pass it here.
    */
   matchName?: string
+  /** Free text carrying whatever district/neighborhood context is already known for this candidate — fed to the bounded second pass (geoSecondPassResolver.ts) as corroborating evidence, never fetched fresh. */
+  neighborhood?: string | null
 }
 
 export interface GeoEnrichmentRecord extends GeoEnrichmentItemResult {
@@ -244,10 +247,24 @@ export async function enrichMetroCatalogGeo(metroId: string, candidates: readonl
     }
 
     const match = classifyPlacesMatch({ candidateName: candidate.matchName ?? candidate.candidateName, body: candidate.body, expectedCountry: candidate.expectedCountry, topResult: cached.topResult, apiError: cached.apiError })
+    // Bounded second pass (Chief Phase 2AB) — never a new paid call
+    // (operates on the SAME cached/just-fetched topResult above), never
+    // touches an already-confident or already-exception classification,
+    // never invents confidence: see geoSecondPassResolver.ts's own
+    // false-positive regression tests for exactly what this refuses to
+    // upgrade.
+    const secondPass = resolveGeoSecondPass({
+      matchName: candidate.matchName ?? candidate.candidateName,
+      neighborhoodContext: candidate.neighborhood ?? null,
+      primaryClassification: match.classification,
+      topResult: cached.topResult,
+    })
+    const classification = secondPass.classification
+    const reason = secondPass.upgraded ? secondPass.reason : match.reason
     records.push({
       candidateName: candidate.candidateName,
-      classification: match.classification,
-      reason: match.reason,
+      classification,
+      reason,
       match,
       fromCache,
       placeId: cached.topResult?.placeId ?? null,
