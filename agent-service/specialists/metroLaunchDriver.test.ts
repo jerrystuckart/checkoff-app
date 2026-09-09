@@ -10,7 +10,18 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { driveMetroLaunch, executionId, m0DecisionsResolved, buildAuditEvidence, m1GeographyExecutionLabel, MAX_ITEM_CERTIFICATION_ATTEMPTS, type MetroM0Decisions } from './metroLaunchDriver'
+import {
+  driveMetroLaunch,
+  executionId,
+  m0DecisionsResolved,
+  buildAuditEvidence,
+  m1GeographyExecutionLabel,
+  MAX_ITEM_CERTIFICATION_ATTEMPTS,
+  MAX_TAG_ASSIGNMENT_ATTEMPTS,
+  type MetroM0Decisions,
+  type DriverItemCertificationRecord,
+} from './metroLaunchDriver'
+import type { VerifiedTagSnapshot } from './tagVocabularyProvider'
 import { InMemoryPlaybookRunStore, getOrCreateRun, playbookRunId } from './playbookRun'
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
@@ -40,8 +51,20 @@ function shop(name: string, neighborhood: string) {
   return { name, category: 'Shopping', neighborhood, claimSupported: `${name} is a specific local shop experience`, source: `https://example.com/${name}`, needsVerification: true }
 }
 
+/** M7.5 TAG_ASSIGNMENT fake: echoes the first 6 entries of the REAL shortlist the driver computed and sent (always a subset of the real canonical vocabulary, so this is always valid — never a fabricated tag name). */
+function scriptTagSelection(executor: TestExecutor) {
+  executor.scriptWhen(
+    (r) => (r.inputs as { mode?: string }).mode === 'TAG_SELECTION',
+    (r) => {
+      const shortlist = (r.inputs as { shortlist?: string[] }).shortlist ?? []
+      return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { tags: shortlist.slice(0, 6) }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    }
+  )
+}
+
 /** Scripts a full, deterministic TestExecutor for the synthetic scenario described above. */
 function scriptSynthetic(executor: TestExecutor) {
+  scriptTagSelection(executor)
   executor.scriptWhen(
     (r) => r.stage === 'M1_GEOGRAPHY_MAP',
     (r) =>
@@ -175,6 +198,7 @@ test('driveMetroLaunch: with NO M0 decisions recorded, stops at NEEDS_JERRY befo
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, 'san-diego-no-decisions', { categoryPlan: PLAN })
   assert.equal(run.status, 'NEEDS_JERRY')
   assert.equal(run.currentStage, 'M0_METRO_DEFINITION')
@@ -185,6 +209,7 @@ test('San Diego FULL SYNTHETIC driver run: sequences M0 through the launch-readi
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   scriptSynthetic(executor)
 
   const projectId = 'san-diego-synthetic'
@@ -239,6 +264,7 @@ test('driveMetroLaunch: QUALITY_GATE genuinely FAILS the launch boundary when a 
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   scriptSynthetic(executor)
 
   const projectId = 'san-diego-leftover-duplicate-test'
@@ -284,6 +310,7 @@ test('driveMetroLaunch: a plateaued district-depth gap (Carlsbad 4/5) self-relax
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
 
   executor.scriptWhen(
     (r) => r.stage === 'M1_GEOGRAPHY_MAP',
@@ -371,6 +398,7 @@ test('driveMetroLaunch: launch-boundary GEOGRAPHY_GATE genuinely PASSES once a d
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
 
   executor.scriptWhen(
     (r) => r.stage === 'M1_GEOGRAPHY_MAP',
@@ -441,6 +469,7 @@ test('driveMetroLaunch: a category with genuinely zero real-world inventory (Spo
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
 
   executor.scriptWhen(
     (r) => r.stage === 'M1_GEOGRAPHY_MAP',
@@ -500,6 +529,7 @@ test('driveMetroLaunch: launch-boundary CATEGORY_GATE evaluates NORMALIZED categ
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
 
   executor.scriptWhen(
     (r) => r.stage === 'M1_GEOGRAPHY_MAP',
@@ -566,6 +596,7 @@ test('driveMetroLaunch: RESUME — a second call against the same run store cont
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   scriptSynthetic(executor)
   const projectId = 'san-diego-resume-test'
 
@@ -601,6 +632,7 @@ test('driveMetroLaunch: a coverage gap that plateaus rather than closing self-re
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   const shoplessPlan: CategoryCoveragePlan = { targets: [{ categoryName: 'Shopping', minimumViable: 4, healthyTarget: 8, qualityNotes: [] }] }
 
   executor.scriptWhen(
@@ -665,6 +697,7 @@ test('driveMetroLaunch: a TRULY unsatisfiable metro (relaxation-round budget alr
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   const shoplessPlan: CategoryCoveragePlan = { targets: [{ categoryName: 'Shopping', minimumViable: 4, healthyTarget: 8, qualityNotes: [] }] }
 
   executor.scriptWhen(
@@ -714,6 +747,7 @@ test('driveMetroLaunch: EXECUTOR_UNAVAILABLE blocks the run rather than NEEDS_JE
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   executor.makeSpecialistUnavailable('research_verifier')
 
   const projectId = 'san-diego-unavailable-test'
@@ -731,6 +765,7 @@ test('driveMetroLaunch: a rejected evidence result retries up to the guardrail, 
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   // Every M1 attempt returns an envelope MISSING the required evidence key.
   executor.scriptWhen(
     (r) => r.stage === 'M1_GEOGRAPHY_MAP',
@@ -762,6 +797,7 @@ test('driveMetroLaunch: M1 request inputs carry the M0 geographicScope decision,
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   let capturedGeographicScope: unknown = 'NEVER_CALLED'
 
   executor.scriptWhen(
@@ -849,6 +885,7 @@ test('driveMetroLaunch: a configured depth target with only token coverage trigg
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   const gapDepthRequests: unknown[] = []
 
   executor.scriptWhen(
@@ -932,6 +969,7 @@ test('driveMetroLaunch: M1 output missing a valid neighborhood "kind" fails evid
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   let m1Attempts = 0
 
   executor.scriptWhen(
@@ -971,6 +1009,7 @@ test('driveMetroLaunch: re-entering a stage whose execution is already COMPLETE 
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   let m1CallCount = 0
 
   executor.scriptWhen(
@@ -1220,6 +1259,7 @@ test('driveMetroLaunch: a US metro (metroCountry "US") resolves geo enrichment a
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   scriptThroughM8(executor, 'DowntownDiner', 'Downtown')
 
   const projectId = 'us-metro-country-test'
@@ -1254,6 +1294,7 @@ test('driveMetroLaunch: a non-US metro (Vienna, metroCountry "AT") resolves geo 
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   scriptThroughM8(executor, 'CafeWien', 'Innere Stadt')
 
   const projectId = 'at-metro-country-test'
@@ -1331,6 +1372,7 @@ test('driveMetroLaunch: a bundled discovery label certifies when the body quotes
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   const candidate = bundledCandidate()
   const item = { name: candidate.name, checkoffizedItem: "Watch the Lipizzaner stallions train at 'Spanish Riding School'.", tags: ['t1', 't2', 't3', 't4', 't5', 't6'], canonicalVenueName: 'Spanish Riding School' }
 
@@ -1367,6 +1409,7 @@ test('driveMetroLaunch: the SAME bundled item fails venue quoting when the body 
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   const candidate = bundledCandidate()
   // Body never wraps ANY canonical option in single quotes.
   const item = { name: candidate.name, checkoffizedItem: 'Watch the Lipizzaner stallions train at the Spanish Riding School.', tags: ['t1', 't2', 't3', 't4', 't5', 't6'], canonicalVenueName: 'Hofburg Palace Complex' }
@@ -1406,6 +1449,7 @@ test('driveMetroLaunch: 429/infra failures during critique are retried and do NO
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl serves a real, specific Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
   const item = { name: candidate.name, checkoffizedItem: "Order the 'Sperl Torte' at 'Cafe Sperl'.", tags: ['t1', 't2', 't3', 't4', 't5', 't6'], canonicalVenueName: 'Cafe Sperl' }
 
@@ -1459,6 +1503,7 @@ test('driveMetroLaunch: three genuine bad editorial bodies still exhaust the con
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl serves a real, specific Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
   const item = { name: candidate.name, checkoffizedItem: 'Visit Cafe Sperl, a nice coffeehouse.', tags: ['t1', 't2', 't3', 't4', 't5', 't6'], canonicalVenueName: 'Cafe Sperl' }
 
@@ -1502,6 +1547,7 @@ test('driveMetroLaunch: a single candidate that genuinely exhausts M6.5 write-ev
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptTagSelection(executor)
   const goodCandidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl serves a real, specific Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
   const badCandidate = { name: 'Thin Source Museum', category: 'Arts & Culture', neighborhood: 'Innere Stadt', claimSupported: 'Exists.', source: 'https://example.com/thin', needsVerification: false }
 
@@ -1556,4 +1602,180 @@ test('driveMetroLaunch: a single candidate that genuinely exhausts M6.5 write-ev
   assert.equal(state.itemCertifications['Thin Source Museum'], undefined, 'the rejected candidate never reaches M7 at all')
   // The run must have PROGRESSED, never stopped at M6.5 with NEEDS_JERRY over one isolated failure.
   assert.notEqual(run.currentStage, 'M6_5_CHECKOFF_EDITOR')
+})
+
+// ---------------------------------------------------------------------------
+// M7.5 TAG_ASSIGNMENT (Chief Phase 2AA) — a dedicated stage, decoupled
+// from M6.5/M7 editorial writing. Vienna certified 299 real items whose
+// bodies must never be re-spent just to fix tags.
+// ---------------------------------------------------------------------------
+
+const TEST_TAG_VOCAB: VerifiedTagSnapshot = {
+  version: 1,
+  capturedAt: '2026-09-09',
+  justification: 'test fixture standing in for a real captured production tag export',
+  tagNames: ['coffee', 'historic', 'family friendly', 'live music', 'outdoor', 'museum', 'hidden gem', 'wine', 'dessert', 'art', 'classical music', 'palace', 'garden'],
+}
+
+async function seedForTagAssignment(runStore: InstanceType<typeof InMemoryPlaybookRunStore>, projectId: string, candidate: { name: string; category: string; neighborhood: string; claimSupported: string; source: string; needsVerification: boolean }, cert: DriverItemCertificationRecord) {
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  seeded!.state = { m0Decisions: RESOLVED_M0, candidates: [candidate], neighborhoods: [], plan: PLAN, hasRunM6: true, itemCertifications: { [cert.candidateName]: cert } }
+  seeded!.currentStage = 'M7_5_TAG_ASSIGNMENT'
+  await runStore.put(seeded!)
+}
+
+test('driveMetroLaunch: TAG_ASSIGNMENT replaces finalTags on an already-certified item without touching finalBody/outcome — the editorial artifact is never re-spent', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl is a historic Vienna coffeehouse serving a real Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
+  const cert: DriverItemCertificationRecord = {
+    candidateName: 'Cafe Sperl',
+    venueName: 'Cafe Sperl',
+    attempts: 1,
+    outcome: 'ITEM_CERTIFIED',
+    finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.",
+    finalTags: ['invented-tag-a', 'invented-tag-b'], // exactly the Vienna bug: whatever the write call guessed
+    supportingFact: candidate.claimSupported,
+    verifiedAt: '2026-09-09T00:00:00.000Z',
+    rejectionReasons: [],
+  }
+
+  let editorialCallsMade = 0
+  executor.scriptWhen(
+    (r) => r.stage === 'M6_5_CHECKOFF_EDITOR' || r.stage === 'M7_ITEM_CERTIFICATION',
+    () => {
+      editorialCallsMade += 1
+      throw new Error('editorial stages must never be re-invoked by a tag repair')
+    }
+  )
+  executor.scriptWhen(
+    (r) => (r.inputs as { mode?: string }).mode === 'TAG_SELECTION',
+    (r) => {
+      const shortlist = (r.inputs as { shortlist?: string[] }).shortlist ?? []
+      return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { tags: shortlist.slice(0, 6) }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    }
+  )
+
+  const projectId = 'vienna-tag-repair-preserves-body'
+  await seedForTagAssignment(runStore, projectId, candidate, cert)
+
+  const run = await driveMetroLaunch(
+    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 10 }
+  )
+
+  assert.equal(editorialCallsMade, 0, 'the editorial write/critique stages were never re-invoked')
+  const state = run.state as { itemCertifications: Record<string, DriverItemCertificationRecord> }
+  const updated = state.itemCertifications['Cafe Sperl']
+  assert.equal(updated.finalBody, "Order the 'Sperl Torte' at 'Cafe Sperl'.", 'body untouched')
+  assert.equal(updated.outcome, 'ITEM_CERTIFIED', 'outcome untouched')
+  assert.equal(updated.attempts, 1, 'editorial attempt count untouched')
+  assert.notDeepEqual(updated.finalTags, ['invented-tag-a', 'invented-tag-b'])
+  for (const t of updated.finalTags) assert.ok(TEST_TAG_VOCAB.tagNames.includes(t), `tag "${t}" must be from the real canonical vocabulary`)
+  assert.ok(updated.finalTags.length >= 6 && updated.finalTags.length <= 8)
+})
+
+test('driveMetroLaunch: TAG_ASSIGNMENT rejects a tag outside the supplied shortlist and retries ONLY the tagging call, bounded', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl is a historic Vienna coffeehouse.', source: 'https://example.com/sperl', needsVerification: false }
+  const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: [], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+
+  let tagCalls = 0
+  executor.scriptWhen(
+    (r) => (r.inputs as { mode?: string }).mode === 'TAG_SELECTION',
+    (r) => {
+      tagCalls += 1
+      if (tagCalls === 1) {
+        // Invents a tag not in the shortlist — must never be accepted.
+        return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { tags: ['invented-not-in-shortlist', 'coffee', 'historic', 'wine', 'dessert', 'art'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+      }
+      const shortlist = (r.inputs as { shortlist?: string[] }).shortlist ?? []
+      return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { tags: shortlist.slice(0, 6) }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    }
+  )
+
+  const projectId = 'vienna-tag-repair-rejects-invented'
+  await seedForTagAssignment(runStore, projectId, candidate, cert)
+
+  const run = await driveMetroLaunch(
+    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 10 }
+  )
+
+  assert.equal(tagCalls, 2, 'the invented-tag attempt was retried exactly once more, not accepted, not treated as permanently failed')
+  const state = run.state as { itemCertifications: Record<string, DriverItemCertificationRecord> }
+  const updated = state.itemCertifications['Cafe Sperl']
+  assert.ok(!updated.finalTags.includes('invented-not-in-shortlist'))
+  for (const t of updated.finalTags) assert.ok(TEST_TAG_VOCAB.tagNames.includes(t))
+})
+
+test('driveMetroLaunch: TAG_ASSIGNMENT exhausts its own bounded retry budget on repeated invalid selections — never falls back to inventing/accepting an invalid set', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl is a historic Vienna coffeehouse.', source: 'https://example.com/sperl', needsVerification: false }
+  const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: [], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+
+  let tagCalls = 0
+  executor.scriptWhen(
+    (r) => (r.inputs as { mode?: string }).mode === 'TAG_SELECTION',
+    (r) => {
+      tagCalls += 1
+      // Only 2 tags, every time — genuinely, repeatedly invalid (below the 6 minimum).
+      return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { tags: ['coffee', 'historic'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    }
+  )
+
+  const projectId = 'vienna-tag-repair-exhausts'
+  await seedForTagAssignment(runStore, projectId, candidate, cert)
+
+  const run = await driveMetroLaunch(
+    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 10 }
+  )
+
+  assert.equal(tagCalls, MAX_TAG_ASSIGNMENT_ATTEMPTS, `bounded at exactly ${MAX_TAG_ASSIGNMENT_ATTEMPTS} attempts, never unlimited`)
+  const state = run.state as { itemCertifications: Record<string, DriverItemCertificationRecord>; tagAssignmentResults: Record<string, { tags: string[] | null }> }
+  assert.equal(state.tagAssignmentResults['Cafe Sperl'].tags, null, 'exhausted — no invalid set is ever silently accepted')
+  assert.equal(state.itemCertifications['Cafe Sperl'].outcome, 'ITEM_CERTIFIED', 'the item certification itself is untouched by a tag-only failure')
+})
+
+test('driveMetroLaunch: TAG_ASSIGNMENT infra failures (429) are retried and do NOT consume a tag-selection attempt', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl is a historic Vienna coffeehouse.', source: 'https://example.com/sperl', needsVerification: false }
+  const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: [], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+
+  let dispatches = 0
+  executor.scriptWhen(
+    (r) => (r.inputs as { mode?: string }).mode === 'TAG_SELECTION',
+    (r) => {
+      dispatches += 1
+      if (dispatches <= 2) return { unavailable: true, reason: 'openai: 429 rate limited' }
+      const shortlist = (r.inputs as { shortlist?: string[] }).shortlist ?? []
+      return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { tags: shortlist.slice(0, 6) }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    }
+  )
+
+  const projectId = 'vienna-tag-repair-infra-retry'
+  await seedForTagAssignment(runStore, projectId, candidate, cert)
+
+  const run = await driveMetroLaunch(
+    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), sleepImpl: async () => {} },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 10 }
+  )
+
+  assert.equal(dispatches, 3, '2 infra failures + 1 real dispatch')
+  const state = run.state as { tagAssignmentResults: Record<string, { tags: string[] | null; attempts: number }> }
+  assert.equal(state.tagAssignmentResults['Cafe Sperl'].attempts, 1, 'infra retries never counted as a real tag-selection attempt')
+  assert.ok(state.tagAssignmentResults['Cafe Sperl'].tags !== null)
 })

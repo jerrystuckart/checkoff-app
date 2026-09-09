@@ -190,3 +190,34 @@ test('buildCheckoffEditorPrompt: a request with no canonicalVenueName at all (e.
   assert.doesNotMatch(systemPrompt, /CANONICAL VENUE NAME/)
   assert.doesNotMatch(systemPrompt, /undefined/)
 })
+
+// ---------------------------------------------------------------------------
+// TAG_SELECTION mode (Chief Phase 2AA — dedicated TAG_ASSIGNMENT stage)
+// ---------------------------------------------------------------------------
+
+test('buildCheckoffEditorPrompt: TAG_SELECTION mode lists the exact shortlist and requires choosing only from it', () => {
+  const tagReq: SpecialistExecutionRequest = {
+    ...req(),
+    specialist: 'checkoff_editor',
+    methodologyId: 'checkoff_editor',
+    methodologyVersion: 'v1',
+    inputs: { mode: 'TAG_SELECTION', body: "Order the 'Sperl Torte' at 'Cafe Sperl'.", category: 'Coffeehouse culture', claimSupported: 'Since 1880.', shortlist: ['coffee', 'historic', 'dessert'] },
+  }
+  const { systemPrompt } = buildCheckoffEditorPrompt(tagReq)
+  assert.match(systemPrompt, /\["coffee","historic","dessert"\]/)
+  assert.match(systemPrompt, /COMPLETE set you may choose from/)
+  assert.match(systemPrompt, /Never invent a tag/)
+  assert.doesNotMatch(systemPrompt, /THE CORE RULE/, 'never leaks WRITE-mode editorial instructions into a tagging call')
+})
+
+test('buildCheckoffEditorPrompt: TAG_SELECTION mode never includes the canonical-venue-quoting instruction — that is a WRITE/REWRITE concern only', () => {
+  const tagReq: SpecialistExecutionRequest = { ...req(), specialist: 'checkoff_editor', methodologyId: 'checkoff_editor', methodologyVersion: 'v1', inputs: { mode: 'TAG_SELECTION', body: 'x', category: null, claimSupported: '', shortlist: ['a', 'b'] } }
+  const { systemPrompt } = buildCheckoffEditorPrompt(tagReq)
+  assert.doesNotMatch(systemPrompt, /CANONICAL VENUE NAME/)
+})
+
+test('buildCheckoffEditorPrompt: TAG_SELECTION mode instructs considering the whole venue, not just the narrow sentence', () => {
+  const tagReq: SpecialistExecutionRequest = { ...req(), specialist: 'checkoff_editor', methodologyId: 'checkoff_editor', methodologyVersion: 'v1', inputs: { mode: 'TAG_SELECTION', body: 'x', category: null, claimSupported: '', shortlist: [] } }
+  const { systemPrompt } = buildCheckoffEditorPrompt(tagReq)
+  assert.match(systemPrompt, /WHOLE venue\/business/)
+})

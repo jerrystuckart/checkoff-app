@@ -53,6 +53,15 @@ const VALID_TAGS = ['coffee', 'historic', 'family friendly', 'live music', 'outd
 
 function buildExecutor(): TestExecutor {
   const executor = new TestExecutor()
+  // M7.5 TAG_ASSIGNMENT fake: echoes the first 6 entries of the REAL
+  // shortlist the driver computed (always a real-vocabulary subset).
+  executor.scriptWhen(
+    (r) => (r.inputs as { mode?: string }).mode === 'TAG_SELECTION',
+    (r) => {
+      const shortlist = (r.inputs as { shortlist?: string[] }).shortlist ?? []
+      return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { tags: shortlist.slice(0, 6) }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    }
+  )
 
   executor.scriptWhen(
     (r) => r.stage === 'M1_GEOGRAPHY_MAP',

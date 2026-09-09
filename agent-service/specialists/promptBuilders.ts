@@ -165,7 +165,51 @@ function canonicalVenueQuotingInstruction(request: SpecialistExecutionRequest): 
   )
 }
 
+/**
+ * TAG_ASSIGNMENT stage (Chief Phase 2AA) — a dedicated call, separate
+ * from editorial writing, that selects 6-8 tags for an ALREADY-CERTIFIED
+ * item from a compact, pre-narrowed shortlist (tagShortlist.ts — never
+ * the full ~857-name vocabulary; that would waste tokens on every call
+ * and is not this call's job to filter). The shortlist IS the entire
+ * canonical vocabulary this call may choose from — inventing a name
+ * outside it is refused just as hard as an unknown tag anywhere else in
+ * this codebase (metroTagCertification.ts never relaxes that).
+ */
+function buildTagSelectionPrompt(request: SpecialistExecutionRequest, now: string): { systemPrompt: string; userPrompt: string } {
+  const shortlist = Array.isArray(request.inputs.shortlist) ? (request.inputs.shortlist as unknown[]).filter((t): t is string => typeof t === 'string') : []
+  const body = typeof request.inputs.body === 'string' ? request.inputs.body : ''
+  const category = typeof request.inputs.category === 'string' ? request.inputs.category : null
+  const claimSupported = typeof request.inputs.claimSupported === 'string' ? request.inputs.claimSupported : ''
+
+  const systemPrompt = [
+    methodologyPreamble(request),
+    runtimeDateContextLine(now),
+    'You select tags for an ALREADY-WRITTEN, already-certified CheckOff item. You do NOT edit, rewrite, or judge the wording — that ' +
+      'work is already done and finished. Your only job is choosing which tags genuinely apply.',
+    `The candidate tag list below (${shortlist.length} name(s)) is the COMPLETE set you may choose from — it is a pre-narrowed shortlist ` +
+      'from the real canonical production vocabulary, not an example or a starting point. You MUST pick your 6-8 tags from this exact ' +
+      'list, using the exact spelling/wording given. Never invent a tag, never singularize/pluralize/rephrase one to "fix" it, never ' +
+      'pick a tag not in this list even if a better-sounding one occurs to you — if the right tag genuinely is not in the list, that is ' +
+      'a real limitation of this pass, not something to work around by improvising a similar-sounding name.',
+    'Consider the WHOLE venue/business this item belongs to (its category, its general character, its neighborhood) — not only the ' +
+      'narrow action described in the CheckOff sentence itself. E.g. a specific-dish item at a historic coffeehouse can genuinely carry ' +
+      'both a food-specific tag and a venue-character tag like "historic" or "coffeehouse", when those are in the shortlist.',
+    'Pick 6-8 tags — prefer 8 when that many are genuinely, individually relevant; never pad with a marginal or generic tag merely to ' +
+      'reach a count, and never drop a clearly relevant one to stay under 8.',
+    `Item category: ${category ?? '(none classified)'}`,
+    `Item body (final, already certified — for context only, do not edit): ${body}`,
+    `Supporting research evidence: ${claimSupported}`,
+    `Candidate tag shortlist (choose ONLY from these ${shortlist.length}): ${JSON.stringify(shortlist)}`,
+    envelopeInstructions(request),
+  ].join('\n\n')
+
+  const userPrompt = [`Objective: ${request.objective}`, `Item + shortlist: ${JSON.stringify({ body, category, shortlist })}`].join('\n')
+
+  return { systemPrompt, userPrompt }
+}
+
 export function buildCheckoffEditorPrompt(request: SpecialistExecutionRequest, now: string = new Date().toISOString()): { systemPrompt: string; userPrompt: string } {
+  if (request.inputs.mode === 'TAG_SELECTION') return buildTagSelectionPrompt(request, now)
   const quotingInstruction = canonicalVenueQuotingInstruction(request)
   const systemPrompt = [
     methodologyPreamble(request),

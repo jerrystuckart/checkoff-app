@@ -38,7 +38,8 @@ import { DEFAULT_DRIVER_GUARDRAILS, type DriverGuardrails } from './driverGuardr
 import type { SpecialistResultEnvelope } from './types'
 import { certifyEditorialDistinctiveness, checkDistinctiveExperience, checkVenueQuoted, type DistinctivenessCertificationItem } from '../playbooks/editorialDistinctiveness'
 import { evaluateItemCritique, evaluateItemCertificationGate, type ItemCritiqueAnswers, type ItemCertificationOutcome, type CatalogItemCertificationCheck, type ItemCertificationRecord } from '../playbooks/itemCertificationLoop'
-import { evaluateTagCertificationGate, type ItemTagProposal } from '../playbooks/metroTagCertification'
+import { evaluateTagCertificationGate, validateItemTags, type ItemTagProposal } from '../playbooks/metroTagCertification'
+import { deriveTagShortlist } from '../playbooks/tagShortlist'
 import { evaluateItemMetadata, evaluateMetadataCompletenessGate, type MetadataEnrichmentResult } from '../playbooks/metroMetadataEnrichment'
 import { evaluateGeoEnrichmentCertificationGate, type GeoEnrichmentItemResult } from '../playbooks/metroGeoEnrichment'
 import { enrichMetroCatalogGeo, buildRealPlacesLookup, FileGeoEnrichmentCacheStore, type GeoEnrichmentCacheStore, type PlacesLookupFn, type GeoEnrichmentCandidate } from './metroGeoEnrichmentDriver'
@@ -108,6 +109,8 @@ interface MetroDriverState {
   checkoffizedItems?: Array<{ name: string; checkoffizedItem: string; tags: string[]; canonicalVenueName: string }>
   /** Candidates whose M6.5 write genuinely, repeatedly failed evidence validation (e.g. the model omitting a required field) — rejected, same as an M7 EXHAUSTED_RETRIES, never silently dropped and never escalated to NEEDS_JERRY for what is an ordinary bounded rejection. Permanently excluded from `remaining` (see stepEditor's alreadyDone). */
   editorRejectedCandidates?: Array<{ name: string; reason: string }>
+  /** M7.5 TAG_ASSIGNMENT results, keyed by candidate name — `tags: null` means the bounded tag-selection retry budget was exhausted (the item KEEPS its original body/certification; only its tags stay whatever the last attempt produced, which the TAG_CERTIFICATION_GATE will then correctly fail on, rather than silently accepting an invalid set). */
+  tagAssignmentResults?: Record<string, { tags: string[] | null; attempts: number; rejectionReasons: string[] }>
   awaitingExecutionLabels?: string[] // labels of executions this run is currently waiting on, for the current stage
   /** Raw candidate categories buildAuditEvidence could not map to the canonical taxonomy — flagged for review, never silently binned. Recomputed fresh every M4 pass, never accumulated. */
   unclassifiedCategories?: UnclassifiedCategory[]
@@ -1070,7 +1073,7 @@ async function stepM7ItemCertification(deps: MetroDriverDeps, run: PlaybookRunRe
   const remaining = items.filter((i) => !alreadyCertified.has(i.name))
 
   if (remaining.length === 0) {
-    run.currentStage = 'M8_BATCH_CERTIFICATION'
+    run.currentStage = 'M7_5_TAG_ASSIGNMENT'
     return run
   }
 
@@ -1094,6 +1097,136 @@ async function stepM7ItemCertification(deps: MetroDriverDeps, run: PlaybookRunRe
   const itemCertifications = { ...(state.itemCertifications ?? {}) }
   for (const rec of results) itemCertifications[rec.candidateName] = rec
   state.itemCertifications = itemCertifications
+  run.state = state
+
+  if (remaining.length <= batch.length) {
+    run.currentStage = 'M7_5_TAG_ASSIGNMENT'
+  }
+  return run
+}
+
+// ---------------------------------------------------------------------------
+// M7.5 — TAG_ASSIGNMENT (Chief Phase 2AA). A dedicated stage, separate
+// from editorial writing/critique: the 299-certified-item Vienna run
+// showed TAG_CERTIFICATION_GATE failing 298/299 because the SAME
+// write/rewrite call that produces the body was also asked for tags,
+// with NO canonical vocabulary ever given to it — the model invented
+// plausible-sounding tags. This stage never touches finalBody, never
+// triggers an M6.5/M7 rewrite, and never re-spends editorial work — it
+// only replaces finalTags on an ALREADY-CERTIFIED item, from a
+// deterministic, per-item shortlist (tagShortlist.ts) of the real
+// canonical vocabulary, validated with the same never-invent discipline
+// as everywhere else.
+// ---------------------------------------------------------------------------
+
+export const MAX_TAG_ASSIGNMENT_ATTEMPTS = 3
+
+async function assignTagsForOneItem(
+  deps: MetroDriverDeps,
+  run: PlaybookRunRecord,
+  candidateName: string,
+  body: string,
+  claimSupported: string,
+  category: string | null,
+  shortlist: readonly string[],
+  knownRealTagNames: ReadonlySet<string>
+): Promise<{ tags: string[] | null; attempts: number; rejectionReasons: string[] }> {
+  const safeName = candidateName.replace(/[^a-zA-Z0-9_-]/g, '_')
+  const rejectionReasons: string[] = []
+
+  for (let attempt = 1; attempt <= MAX_TAG_ASSIGNMENT_ATTEMPTS; attempt++) {
+    const label = `tag-${safeName}-attempt${attempt}`
+    const request: SpecialistExecutionRequest = {
+      specialist: 'checkoff_editor',
+      playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
+      stage: 'M7_5_TAG_ASSIGNMENT',
+      objective: `${run.projectId}: select 6-8 canonical tags for ${candidateName} from a ${shortlist.length}-name shortlist`,
+      inputs: { mode: 'TAG_SELECTION', body, category, claimSupported, shortlist },
+      requiredEvidenceKeys: ['tags'],
+      methodologyId: 'checkoff_editor',
+      methodologyVersion: 'v1',
+      executionId: executionId(run.runId, 'TAG', label),
+      projectId: run.projectId,
+      destinationId: null,
+      metroId: run.projectId,
+      allowedCapabilities: ['content_editorial'],
+      authorityOperations: ['metro_launch.build_internal_artifact'],
+      idempotencyKey: executionId(run.runId, 'TAG', label),
+    }
+    // Infra retry (429/timeout/5xx) never consumes a content attempt —
+    // same discipline as the editorial loop (requirement #5).
+    const outcome = await runStepWithInfraRetry(deps, run, request)
+    if (outcome.kind !== 'ACCEPTED') {
+      rejectionReasons.push(`attempt ${attempt}: ${outcome.reason ?? 'executor unavailable'}`)
+      break
+    }
+    const proposedTags = ((outcome.envelope?.evidence.tags as unknown[] | undefined) ?? []).filter((t): t is string => typeof t === 'string')
+    const validation = validateItemTags({ candidateName, tags: proposedTags }, knownRealTagNames)
+    if (validation.valid) {
+      return { tags: proposedTags, attempts: attempt, rejectionReasons }
+    }
+    rejectionReasons.push(`attempt ${attempt}: ${validation.issues.join('; ')}`)
+  }
+  return { tags: null, attempts: MAX_TAG_ASSIGNMENT_ATTEMPTS, rejectionReasons }
+}
+
+async function stepTagAssignment(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const certifications = state.itemCertifications ?? {}
+  const certifiedNames = Object.values(certifications)
+    .filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
+    .map((r) => r.candidateName)
+
+  const tagVocabulary = await resolveCanonicalTagVocabulary(
+    deps.queryLiveTags ?? (async () => { throw new Error('no live tag query configured for this run') }),
+    deps.verifiedTagSnapshot !== undefined ? deps.verifiedTagSnapshot : loadGeneratedTagSnapshot()
+  )
+  if (tagVocabulary.status === 'FAILED') {
+    return escalate(run, `Tag vocabulary unavailable — cannot run TAG_ASSIGNMENT: ${tagVocabulary.reason}`, {
+      decisionNeeded: 'Provide a live public.tags read path or a fresh verified snapshot before Chief can assign any tags.',
+      why: tagVocabulary.reason,
+    })
+  }
+  state.tagVocabularyDetail = tagVocabulary.detail
+  const knownRealTagNames = tagVocabulary.tagNames
+
+  const alreadyAssigned = new Set(Object.keys(state.tagAssignmentResults ?? {}))
+  const remaining = certifiedNames.filter((n) => !alreadyAssigned.has(n))
+
+  if (remaining.length === 0) {
+    run.currentStage = 'M8_BATCH_CERTIFICATION'
+    return run
+  }
+
+  const batch = remaining.slice(0, (deps.guardrails ?? DEFAULT_DRIVER_GUARDRAILS).maxConcurrentExecutions)
+  const candidatesByName = new Map((state.candidates ?? []).map((c) => [c.name, c]))
+  const vocabList = [...knownRealTagNames]
+
+  const results = await Promise.all(
+    batch.map(async (name) => {
+      const rec = certifications[name]
+      const candidate = candidatesByName.get(name)
+      const canonical = classifyCategory(candidate?.category ?? null).canonical
+      const shortlist = deriveTagShortlist(vocabList, { category: canonical, body: rec.finalBody ?? '', claimSupported: rec.supportingFact, neighborhood: candidate?.neighborhood ?? null })
+      const result = await assignTagsForOneItem(deps, run, name, rec.finalBody ?? '', rec.supportingFact, canonical, shortlist, knownRealTagNames)
+      return { name, ...result }
+    })
+  )
+
+  const itemCertifications = { ...certifications }
+  const tagAssignmentResults = { ...(state.tagAssignmentResults ?? {}) }
+  for (const r of results) {
+    tagAssignmentResults[r.name] = { tags: r.tags, attempts: r.attempts, rejectionReasons: r.rejectionReasons }
+    if (r.tags) {
+      // Replaces ONLY finalTags on the existing certification record —
+      // finalBody/outcome/attempts (the editorial history) are completely
+      // untouched. This is the one place besides certifyOneItemDriverNative
+      // that ever writes itemCertifications, and it never changes body/outcome.
+      itemCertifications[r.name] = { ...itemCertifications[r.name], finalTags: r.tags }
+    }
+  }
+  state.itemCertifications = itemCertifications
+  state.tagAssignmentResults = tagAssignmentResults
   run.state = state
 
   if (remaining.length <= batch.length) {
@@ -1547,6 +1680,9 @@ export async function driveMetroLaunch(deps: MetroDriverDeps, projectId: string,
         break
       case 'M7_ITEM_CERTIFICATION':
         run = await stepM7ItemCertification(deps, run)
+        break
+      case 'M7_5_TAG_ASSIGNMENT':
+        run = await stepTagAssignment(deps, run)
         break
       case 'M8_BATCH_CERTIFICATION':
         run = await stepM8BatchCertification(deps, run)
