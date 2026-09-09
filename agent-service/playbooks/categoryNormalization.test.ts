@@ -154,6 +154,84 @@ test('countByCanonicalCategory: regression — the real San Diego run data no lo
   assert.equal(totalAccounted, REAL_SAN_DIEGO_RUN_RAW_CATEGORIES.length)
 })
 
+// ---------------------------------------------------------------------------
+// Regression: the real Vienna metro_launch repair run (2026-09-09) —
+// 106/299 certified items reported "no classifiable category" against
+// their REAL raw category labels. Two distinct defects, both fixed
+// here, not just individually patched labels:
+//   1. missing keywords (orchestra/concert/opera/church/palace/heritage/
+//      architecture/garden/attraction/viewpoint/parkour/etc. were never
+//      recognized at all) and missing pluralization (theat(er|re) didn't
+//      match "Theaters", landmark didn't match "landmarks") — the same
+//      class of gap the original San Diego fix addressed, just a
+//      different, larger set of real labels.
+//   2. a genuine Unicode bug: JS regex \b does not treat an accented
+//      letter (é, ö, ...) as a word character, so "café" failed to
+//      match caf[eé] the moment it was followed by anything but
+//      whitespace/string-end (e.g. "café/community space") — this is
+//      international-metro-specific and will recur for German/French/
+//      Spanish-etc. labels in any future non-English-heavy metro unless
+//      stripDiacritics keeps normalizing it away.
+// ---------------------------------------------------------------------------
+
+test('classifyCategory: real Vienna raw category labels that previously fell through unclassified (2026-09-09 repair run)', () => {
+  const cases: Array<[string, string]> = [
+    ['Nightlife - Club', 'Nightlife'],
+    ['Nightlife - Club / Disco', 'Nightlife'],
+    ['Disco', 'Nightlife'],
+    ['LGBTQ+ Club', 'Nightlife'],
+    ['traditional Viennese coffeehouse', 'Food & drink'],
+    ['café/community space', 'Food & drink'], // the diacritics-boundary bug, specifically
+    ['Food/Ice cream', 'Food & drink'],
+    ['food/retail', 'Shopping'], // "retail" wins — Shopping is checked before Food & drink
+    ['Music & classical performance', 'Arts & Culture'],
+    ['Chamber ensemble', 'Arts & Culture'],
+    ['Chamber orchestra (contemporary)', 'Arts & Culture'],
+    ['Orchestra', 'Arts & Culture'],
+    ['concert venue', 'Arts & Culture'],
+    ['Theaters', 'Arts & Culture'], // plural — "theat(er|re)" alone didn't match
+    ['Opera house', 'Arts & Culture'],
+    ['Palace / Imperial Residence', 'Arts & Culture'],
+    ['Church Venue', 'Arts & Culture'],
+    ['Religious architecture', 'Arts & Culture'],
+    ['Heritage/Religious', 'Arts & Culture'],
+    ['Culture/Cinema', 'Arts & Culture'],
+    ['Retail/Design', 'Shopping'],
+    ['Attraction', 'Travel'],
+    ['Tourist Attraction / Family', 'Travel'],
+    ['Scenic Viewpoint / Lookout', 'Travel'],
+    ['Travel & landmarks', 'Arts & Culture'], // "landmarks" plural — Arts & Culture's landmark rule wins (checked before Travel)
+    ['Heritage / Walking tour', 'Arts & Culture'], // "Heritage" wins — Arts & Culture is checked before Travel
+    ['Indoor parkour / trampolines', 'Adventure'],
+    ['Green Spaces', 'Adventure'],
+    ['Public parks / green spaces', 'Adventure'],
+    ['Gardens/Parks', 'Adventure'],
+    ['gardens/horticultural site', 'Adventure'],
+    ['aquarium', 'Adventure'],
+    ['public leisure / swimming facility', 'Adventure'],
+    ['shopping_street', 'Shopping'], // underscore-as-boundary bug
+    ['library', 'Arts & Culture'],
+  ]
+  for (const [raw, expected] of cases) {
+    assert.equal(classifyCategory(raw).canonical, expected, `expected "${raw}" -> ${expected}, got ${JSON.stringify(classifyCategory(raw))}`)
+  }
+})
+
+test('classifyCategory: an accented letter is treated as a real word character for boundary purposes — "café" matches even directly followed by punctuation, not just whitespace/string-end', () => {
+  assert.equal(classifyCategory('café/community space').canonical, 'Food & drink')
+  assert.equal(classifyCategory('café-community').canonical, 'Food & drink')
+  assert.equal(classifyCategory('Schönbrunn Palace Concerts').canonical, 'Arts & Culture')
+  // The ORIGINAL raw label (with diacritics intact) is still what's returned/preserved — normalization is match-only.
+  assert.equal(classifyCategory('café/community space').raw, 'café/community space')
+})
+
+test('classifyCategory: genuinely vague/non-tourist labels (municipal or civic-initiative style, no venue-type keyword at all) stay unclassified — never force-guessed into a category', () => {
+  const stillVague = ['District', 'modern facility', 'geographical feature', 'neighborhood/highlights', 'public district initiatives', 'Urban Development']
+  for (const raw of stillVague) {
+    assert.equal(classifyCategory(raw).canonical, null, `expected "${raw}" to stay unclassified (no reliable venue-type signal)`)
+  }
+})
+
 test('countByCanonicalCategory: unclassified labels are reported, not counted toward any canonical category', () => {
   const { counts, unclassified } = countByCanonicalCategory(['Upscale Contemporary', 'Food Hall'])
   assert.equal(unclassified.length, 1)

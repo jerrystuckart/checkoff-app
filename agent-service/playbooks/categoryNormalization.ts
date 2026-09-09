@@ -47,32 +47,64 @@ export interface CategoryClassification {
  * must NOT match a bare "pub" test against "cocktail lounge").
  */
 const RULES: ReadonlyArray<{ canonical: CanonicalCategory; pattern: RegExp }> = [
-  { canonical: 'Nightlife', pattern: /\b(night ?club|dance club|rave|edm club|adult entertainment|gentlemen'?s club|strip club|showgirls)\b/i },
+  // "Nightlife" itself (Vienna, 2026-09-09 international-metro regression:
+  // labels like "Nightlife - Club" name the canonical category directly
+  // but weren't recognized because "club" alone is too generic — the
+  // EXPLICIT "nightlife" word is what should win, checked before any
+  // narrower rule) — same discipline as exactCanonicalMatch, just for a
+  // compound label that CONTAINS the canonical word rather than being it.
+  { canonical: 'Nightlife', pattern: /\bnightlife\b/i },
+  { canonical: 'Misc', pattern: /\bmisc(ellaneous)?\b/i },
+  { canonical: 'Nightlife', pattern: /\b(night ?club|dance club|rave|edm club|adult entertainment|gentlemen'?s club|strip club|showgirls|\bdiscos?\b|lgbtq\+? club)\b/i },
   { canonical: 'Bar & drinks', pattern: /\b(bar|cocktail|speakeasy|tiki|brewery|brewpub|taproom|wine bar|mezcal(er[ií]a)?|cantina|\bpub\b)\b/i },
   { canonical: 'Spa & self-care', pattern: /\b(spa|self-care|wellness center|massage|sauna|float tank)\b/i },
   {
     canonical: 'Adventure',
     pattern:
-      /\b(adventure|kayak|zip[- ]?line|glid(e|ing)|scuba|diving|surf(ing)?|hik(e|ing)|paraglid|parahawk|helicopter tour|horseback|whale watch|dolphin cruise|jet boat|speed ?boat|hot air balloon|theme park|amusement park|wildlife park|wildlife|safari|\bzoo\b|\bpark\b|\boutdoor\b|escape rooms?|\bvr\b|arcade)\b/i,
+      /\b(adventure|kayak|zip[- ]?line|glid(e|ing)|scuba|diving|surf(ing)?|hik(e|ing)|paraglid|parahawk|helicopter tour|horseback|whale watch|dolphin cruise|jet boat|speed ?boat|hot air balloon|theme park|amusement park|wildlife park|wildlife|safari|\bzoos?\b|aquariums?|\bparks?\b|gardens?|green spaces?|\btrails?\b|\blakes?\b|\bnature\b|\boutdoor\b|escape rooms?|\bvr\b|arcade|parkour|trampolines?|climbing gym|bouldering|\bswim(ming)?\b)\b/i,
   },
   { canonical: 'Sports', pattern: /\b(sports?( (venue|organization|club|event|league|teams?))?|professional (sports )?teams?|baseball|soccer|rugby|hockey|\bmlb\b|\bmls\b|\bahl\b|\bnfl\b|\bnba\b|\bnwsl\b|skate ?park|athletic)\b/i },
-  { canonical: 'Shopping', pattern: /\b(shopping|\bmalls?\b|outlet|\bboutiques?\b|antique district|retail (center|hub|district)|shopping (mall|center|district|outlet)|\bmarkets?\b|bookstores?|\bfashion\b)\b/i },
+  { canonical: 'Shopping', pattern: /\b(shopping|\bmalls?\b|outlet|\bboutiques?\b|antique district|\bretail\b|shopping (mall|center|district|outlet)|\bmarkets?\b|bookstores?|\bfashion\b)\b/i },
   {
     canonical: 'Arts & Culture',
     pattern:
-      /\b(museums?|galler(y|ies)|theat(er|re)|\barts?\b|\bcultural\b|performing arts|music venue|performance venue|glassblowing|historic(al)? (site|district|monument|park|landmark)|monument|landmark)\b/i,
+      /\b(museums?|galler(y|ies)|theat(er|re)s?|\barts?\b|\bcultural?\b|performing arts|\bmusic\b|performances?|glassblowing|historic(al)? (site|district|monuments?|parks?|landmarks?)|monuments?|landmarks?|orchestras?|chamber ensembles?|\bconcerts?\b|operas?( house)?|palace|imperial residence|church(es)?|cathedral|chapel|\bheritage\b|\barchitectur(e|al)\b|\blibrar(y|ies)\b|\bcinemas?\b)\b/i,
   },
   {
     canonical: 'Social',
-    pattern: /\b(social (club|group|communit(y|ies)|mixers?)|meetup|club for|singles (club|event)|reading club|book club|chess club|game (night|club)|community centers?|festival|pride\b)\b/i,
+    pattern:
+      /\b(social (club|group|communit(y|ies)|mixers?|enterprise|program)|meetup|club for|singles (club|event)|reading club|book club|chess club|game (night|club)|communit(y|ies) (center|centre)s?|festival|pride\b|expat|participat(ory|ion)|civic|neighbou?rhood initiative|residential area)\b/i,
   },
-  { canonical: 'Travel', pattern: /\b(guided tours?|sightseeing|travel (agency|agencies|experience|management|attraction)|passport|visa services|tour operator|\bferry\b)\b/i },
+  { canonical: 'Travel', pattern: /\b(guided tours?|walking tours?|sightseeing|travel (agency|agencies|experience|management|attraction)|passport|visa services|tour operator|\bferry\b|attractions?|viewpoints?|\blookout\b|\bscenic\b)\b/i },
   {
     canonical: 'Food & drink',
     pattern:
-      /\b(restaurant|caf[eé]|coffee|bakery|bistro|taco|pizza|seafood|dining|food ?hall|brunch|steak ?house|sushi|omakase|izakaya|trattoria|patisserie|chocolate shop|food truck|gastropub|eatery|grill|brasserie|fast.{0,2}casual|small.?plates|shared.?plates|cuisine|fine dining|italian|mexican|vietnamese|filipino|japanese|thai|korean|chinese|mediterranean|french|spanish|greek|tapas|dim sum|ramen|contemporary american|new american|dessert|frozen yogurt|doughnuts?|donuts?)\b/i,
+      /\b(restaurant|caf[eé]|coffee ?house|coffee|bakery|bistro|taco|pizza|seafood|dining|food ?hall|brunch|steak ?house|sushi|omakase|izakaya|trattoria|patisserie|chocolate shop|food truck|gastropub|eatery|grill|brasserie|fast.{0,2}casual|small.?plates|shared.?plates|cuisine|fine dining|italian|mexican|vietnamese|filipino|japanese|thai|korean|chinese|mediterranean|french|spanish|greek|tapas|dim sum|ramen|contemporary american|new american|dessert|ice ?cream|gelato|creamery|delicatessen|\bdelis?\b|frozen yogurt|doughnuts?|donuts?)\b/i,
   },
 ]
+
+/** An underscore used as a word separator (e.g. "shopping_street") is a \w character in JS regex, so it is NOT a \b boundary — normalized to a space before matching so every rule above sees it the same as a naturally-spaced label. Hyphens are deliberately left alone: several existing patterns (e.g. "self-care", "zip[- ]?line") depend on matching a literal hyphen. */
+function normalizeSeparators(text: string): string {
+  return text.replace(/_+/g, ' ')
+}
+
+/**
+ * International-metro regression (Vienna, 2026-09-09): JS regex `\b`
+ * only recognizes ASCII [A-Za-z0-9_] as "word" characters — an accented
+ * letter like "é" is NOT one, so `\bcaf[eé]\b` fails to match "café" the
+ * moment it's followed by anything other than whitespace/string-end
+ * (e.g. "café/community space" — the boundary check right after "é"
+ * sees a non-word-to-non-word transition and refuses to match, even
+ * though the word IS "café"). Stripping combining diacritics before
+ * matching (café -> cafe, Schönbrunn -> Schonbrunn) fixes this
+ * generally for every existing ASCII-authored pattern, rather than
+ * requiring every keyword in every rule to be rewritten Unicode-aware.
+ * Only used for the MATCH — `raw` (returned to the caller) is never
+ * altered, so evidence/debugging always shows the real original label.
+ */
+function stripDiacritics(text: string): string {
+  return text.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+}
 
 /** A model-emitted label that exactly matches a canonical name (any casing) always wins outright — covers the case where the model does the right thing. */
 function exactCanonicalMatch(text: string): CanonicalCategory | null {
@@ -98,7 +130,8 @@ export function classifyCategory(rawCategory: string | null | undefined): Catego
   const exact = exactCanonicalMatch(raw)
   if (exact) return { raw, canonical: exact, ambiguous: false }
 
-  const firstMatch = RULES.find((r) => r.pattern.test(raw))
+  const normalized = stripDiacritics(normalizeSeparators(raw))
+  const firstMatch = RULES.find((r) => r.pattern.test(normalized))
   if (!firstMatch) return { raw, canonical: null, ambiguous: false }
   return { raw, canonical: firstMatch.canonical, ambiguous: false }
 }
