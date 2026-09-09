@@ -145,7 +145,7 @@ interface MetroDriverState {
   rejectedItemCount?: number
   geoEnrichmentPaidCalls?: number
   geoEnrichmentCacheHits?: number
-  geoEnrichmentResults?: Array<{ candidateName: string; classification: string; placeId: string | null; formattedAddress: string | null; lat: number | null; lng: number | null; websiteUrl: string | null; geoRadiusM: number | null }>
+  geoEnrichmentResults?: Array<{ candidateName: string; classification: string; reason: string; placeId: string | null; formattedAddress: string | null; lat: number | null; lng: number | null; websiteUrl: string | null; geoRadiusM: number | null }>
   activationKitCheckDetail?: string
   /** Certified items excluded from CATALOG_GATE's intakeRecords because classifyCategoryWithFallback (raw category AND finalBody) still found no canonical category — tracked explicitly, mirrors METADATA_COMPLETENESS_GATE's unclassifiedForMetadata list so this is never a silent drop. Recomputed fresh every M10 pass. */
   unclassifiedForIntake?: string[]
@@ -233,6 +233,27 @@ export interface MetroDriverDeps {
   expectedCountry?: string
   /** M9: reads the REAL runtime state of the planned Home lists (public.lists/public.list_items) — Chief has no direct public.lists write access (standing boundary, unchanged) and, without this, no way to confirm a hand-run SQL patch actually took effect either. Omit to correctly report HOME_LIST_CERTIFICATION_GATE as pending human application of the generated SQL patch; a caller (production wiring, or a test) supplies this once a real read path exists. */
   verifyHomeListRows?: (plan: readonly HomeListPlanEntry[]) => Promise<HomeListRow[] | HomeListReadPathFailure>
+  /**
+   * M9: the real, known metro_areas identity facts for THIS metro (name,
+   * state/region, IANA timezone) — supplied by the caller the same way
+   * metroCountry/metroCenter already are, never invented inside the
+   * driver. When provided, the generated Home-list SQL package creates
+   * the metro_areas row itself if missing (Vienna, 2026-09-09: the
+   * generated SQL previously just RAISE EXCEPTION'd on a missing row,
+   * silently expecting Jerry to have created it by hand first — a hidden
+   * prerequisite). Omit to keep the old fail-closed check-only behavior
+   * (never silently proceeds with a guessed identity).
+   */
+  metroAreaFacts?: { name: string; state: string; timezone: string }
+  /**
+   * M9: the real public.users id every official (Winston-authored) list
+   * is created under. Defaults to the account already used for EVERY
+   * existing official list across every launched metro (San Diego,
+   * Denver, Tucson, Milwaukee — verified live, 2026-09-09) — never a
+   * fabricated account; a caller may override for a metro that should
+   * belong to someone else.
+   */
+  officialListCreatorId?: string
   /** M10: which Home cards already have an image. Omit to correctly report every required card as still needing one — Winston never fabricates image readiness. */
   checkImageReadiness?: (plan: readonly HomeListPlanEntry[]) => Promise<ImageReadinessCard[]>
   /** M10 BUSINESS_ACTIVATION_KIT_GATE: the actual outreach copy this metro would send — validated deterministically (no network call) for a metro-specific kit reference or a misused /confirm/<token> link. Defaults to a clean template referencing only the canonical URL, since no outreach is sent during a metro build itself. */
@@ -1394,7 +1415,7 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
   })
   state.geoEnrichmentPaidCalls = (state.geoEnrichmentPaidCalls ?? 0) + geoRun.paidCallsMade
   state.geoEnrichmentCacheHits = (state.geoEnrichmentCacheHits ?? 0) + geoRun.cacheHits
-  state.geoEnrichmentResults = geoRun.records.map((r) => ({ candidateName: r.candidateName, classification: r.classification, placeId: r.placeId, formattedAddress: r.formattedAddress, lat: r.lat, lng: r.lng, websiteUrl: r.websiteUrl, geoRadiusM: r.geoRadiusM }))
+  state.geoEnrichmentResults = geoRun.records.map((r) => ({ candidateName: r.candidateName, classification: r.classification, reason: r.reason, placeId: r.placeId, formattedAddress: r.formattedAddress, lat: r.lat, lng: r.lng, websiteUrl: r.websiteUrl, geoRadiusM: r.geoRadiusM }))
   const geoGate = evaluateGeoEnrichmentCertificationGate(geoRun.records.map((r): GeoEnrichmentItemResult => ({ candidateName: r.candidateName, classification: r.classification, reason: r.reason })))
 
   const gates: StagingGateResult[] = [...distinctivenessGates, itemCertificationGate, tagGate, metadataGate, geoGate]
@@ -1500,20 +1521,23 @@ async function stepM8_5CatalogPruning(deps: MetroDriverDeps, run: PlaybookRunRec
     const candidate = candidatesByName.get(r.candidateName)
     let record = itemCertifications[r.candidateName]
 
-    // GEO: only droppable when a REAL Places result was actually found and
-    // evaluated (placeId present) — the "134 ambiguous cases" scenario
-    // this stage exists for. A geo failure with NO Places result at all
-    // (placeId null — an apiError, or a genuine zero-result search) means
-    // the check never got real evidence to judge, which is a different,
-    // infra-shaped problem than "genuinely ambiguous" — never silently
-    // drop a real venue over that; it stays ITEM_CERTIFIED and the
-    // GEO_ENRICHMENT_GATE keeps failing/surfacing it honestly, same as
-    // before this stage existed. Still marked attempted so the M8<->M8.5
-    // loop terminates instead of retrying forever.
+    // GEO: droppable whenever the Places check genuinely RAN and still
+    // couldn't confidently resolve — either (a) a real result was found
+    // and evaluated (placeId present, the "134 ambiguous cases" scenario
+    // this stage exists for), or (b) the search genuinely completed and
+    // found nothing (a true zero-result response, no apiError — evidence
+    // in its own right that this candidate is not a single, real,
+    // geocodable venue). The ONE case left untouched is a bare apiError —
+    // the check never got to run at all, which is an infra-shaped problem,
+    // not "genuinely unresolvable" — never silently drop a real venue
+    // over that; it stays ITEM_CERTIFIED and GEO_ENRICHMENT_GATE keeps
+    // failing/surfacing it honestly, same as before this stage existed.
+    // Still marked attempted either way so the M8<->M8.5 loop terminates.
     const g = geoFailingNames.has(r.candidateName) ? geoResultsByName.get(r.candidateName) : undefined
-    if (g && g.placeId !== null) {
-      record = { ...record, outcome: 'REJECTED_GEO_UNRESOLVED', rejectionReasons: [...record.rejectionReasons, `M8.5: geo second pass exhausted — ${g.classification}`] }
-      drops.push({ candidateName: r.candidateName, reason: 'REJECTED_GEO_UNRESOLVED', detail: `classification=${g.classification}` })
+    const geoGenuinelyEvaluated = g && (g.placeId !== null || !g.reason.startsWith('Places API error'))
+    if (g && geoGenuinelyEvaluated) {
+      record = { ...record, outcome: 'REJECTED_GEO_UNRESOLVED', rejectionReasons: [...record.rejectionReasons, `M8.5: geo second pass exhausted — ${g.classification}: ${g.reason}`] }
+      drops.push({ candidateName: r.candidateName, reason: 'REJECTED_GEO_UNRESOLVED', detail: `classification=${g.classification} (${g.reason})` })
     } else if (metadataFailingNames.has(r.candidateName)) {
       record = { ...record, outcome: 'REJECTED_UNCLASSIFIABLE_METADATA', rejectionReasons: [...record.rejectionReasons, `M8.5: no canonical category from raw label "${candidate?.category ?? ''}" or body text`] }
       drops.push({ candidateName: r.candidateName, reason: 'REJECTED_UNCLASSIFIABLE_METADATA', detail: `raw category="${candidate?.category ?? ''}"` })
@@ -1582,30 +1606,104 @@ function buildHomeListPlan(state: MetroDriverState): HomeListPlanEntry[] {
   return plan
 }
 
-function buildHomeListSqlPatch(metroSlug: string, plan: readonly HomeListPlanEntry[]): string {
-  const primary = plan.find((p) => p.kind === 'PRIMARY_SEASONAL')
+/** Chief's own known-account default — the SAME real public.users id already used for every existing official list across every launched metro (San Diego, Denver, Tucson, Milwaukee — verified live, 2026-09-09), never a fabricated one. */
+export const DEFAULT_OFFICIAL_LIST_CREATOR_ID = '11275026-65be-4421-80a4-46c57195408b'
+
+/**
+ * Chief Phase 2AD (2026-09-09 instruction) — a single atomic, fail-closed
+ * SQL package: ensures the metro_areas row (creating it when real
+ * metroAreaFacts are supplied — never guessed), creates/reuses each
+ * planned Home list (idempotent — an existing row with the same
+ * metro_id+title is reused, never duplicated), and links each certified
+ * item into its list(s) via public.list_items.
+ *
+ * One real prerequisite this package deliberately does NOT create: the
+ * public.items rows themselves. Winston/Chief's metro-launch pipeline
+ * never collects checkin_type/difficulty/photo_required/has_alcohol/
+ * is_recurring for a certified candidate — those are genuine product
+ * decisions, never inferred — so each item must already exist (created
+ * via the existing per-item Item Intake SQL pattern, itemIntake.ts's
+ * buildItemIntakeSql, body text matching EXACTLY). This package matches
+ * against that real body text and RAISE EXCEPTIONs, by name, for any
+ * item not yet created — surfaced honestly, never silently skipped or
+ * worked around with a placeholder items row.
+ */
+function buildHomeListSqlPatch(
+  metroSlug: string,
+  plan: readonly HomeListPlanEntry[],
+  itemBodyByCandidateName: ReadonlyMap<string, string>,
+  metroCenter: { lat: number; lng: number } | undefined,
+  metroAreaFacts: { name: string; state: string; timezone: string } | undefined,
+  officialListCreatorId: string
+): string {
   const lines: string[] = []
   lines.push(`-- Generated by Winston metro_launch driver (M9_HOME_LIST_MIRROR) for metro "${metroSlug}".`)
-  lines.push('-- One atomic, self-certifying block — no cross-statement TEMP-table dependence, no MIN(uuid).')
+  lines.push('-- One atomic, self-certifying transaction — no cross-statement TEMP-table dependence, no MIN(uuid).')
+  lines.push('--')
+  lines.push('-- PREREQUISITE this package does NOT create: each certified item below must already')
+  lines.push('-- have a real public.items row (checkin_type/difficulty/photo_required/has_alcohol/')
+  lines.push('-- is_recurring are genuine product decisions Chief never guesses — create each item first')
+  lines.push('-- via the existing per-item Item Intake SQL, itemIntake.ts buildItemIntakeSql, body text')
+  lines.push('-- matching EXACTLY). This block RAISE EXCEPTIONs, by name, for any item not yet created.')
+  lines.push('BEGIN;')
   lines.push('DO $$')
   lines.push('DECLARE')
   lines.push('  v_metro_id uuid;')
+  lines.push('  v_list_id uuid;')
+  lines.push('  v_item_id uuid;')
   lines.push('  v_match_count int;')
   lines.push('BEGIN')
-  lines.push(`  SELECT count(*) INTO v_match_count FROM public.metro_areas WHERE slug = ${sqlQuote(metroSlug)};`)
-  lines.push("  IF v_match_count <> 1 THEN RAISE EXCEPTION 'expected exactly 1 metro_areas row for slug %, found %', " + sqlQuote(metroSlug) + ', v_match_count; END IF;')
+  if (metroAreaFacts) {
+    lines.push('  -- Ensure metro_areas exists (create it if this is the first launch for this metro).')
+    lines.push(`  IF NOT EXISTS (SELECT 1 FROM public.metro_areas WHERE slug = ${sqlQuote(metroSlug)}) THEN`)
+    lines.push(`    INSERT INTO public.metro_areas (name, slug, state, timezone, is_active${metroCenter ? ', center_lat, center_lng' : ''})`)
+    lines.push(
+      `    VALUES (${sqlQuote(metroAreaFacts.name)}, ${sqlQuote(metroSlug)}, ${sqlQuote(metroAreaFacts.state)}, ${sqlQuote(metroAreaFacts.timezone)}, true${metroCenter ? `, ${metroCenter.lat}, ${metroCenter.lng}` : ''});`
+    )
+    lines.push('  END IF;')
+  } else {
+    lines.push(`  SELECT count(*) INTO v_match_count FROM public.metro_areas WHERE slug = ${sqlQuote(metroSlug)};`)
+    lines.push(
+      `  IF v_match_count <> 1 THEN RAISE EXCEPTION 'expected exactly 1 metro_areas row for slug %, found % — no known metroAreaFacts were supplied for this build, so Chief could not create it automatically', ${sqlQuote(metroSlug)}, v_match_count; END IF;`
+    )
+  }
   lines.push(`  SELECT id INTO v_metro_id FROM public.metro_areas WHERE slug = ${sqlQuote(metroSlug)};`)
+  lines.push(`  IF v_metro_id IS NULL THEN RAISE EXCEPTION 'metro_areas row for slug % could not be found or created', ${sqlQuote(metroSlug)}; END IF;`)
   lines.push('')
+
   for (const entry of plan) {
     if (entry.kind === 'CURATED_MIRROR') continue // curated_lists layer is a separate, existing patch pattern (see itemIntake.ts) — not duplicated here
     lines.push(`  -- ${entry.label} (${entry.itemCandidateNames.length} item(s))`)
-    lines.push(`  INSERT INTO public.lists (metro_id, title, is_official, is_public${entry.kind === 'PRIMARY_SEASONAL' ? ', is_featured_eligible' : ''})`)
-    lines.push(`  VALUES (v_metro_id, ${sqlQuote(entry.label)}, true, true${entry.kind === 'PRIMARY_SEASONAL' ? ', true' : ''})`)
-    lines.push('  RETURNING id;')
+    lines.push(`  SELECT id INTO v_list_id FROM public.lists WHERE metro_id = v_metro_id AND title = ${sqlQuote(entry.label)} AND is_official = true;`)
+    lines.push('  IF v_list_id IS NULL THEN')
+    lines.push(`    INSERT INTO public.lists (metro_id, title, is_official, is_public, creator_id${entry.kind === 'PRIMARY_SEASONAL' ? ', is_featured_eligible' : ''})`)
+    lines.push(
+      `    VALUES (v_metro_id, ${sqlQuote(entry.label)}, true, true, ${sqlQuote(officialListCreatorId)}${entry.kind === 'PRIMARY_SEASONAL' ? ', true' : ''})`
+    )
+    lines.push('    RETURNING id INTO v_list_id;')
+    lines.push('  END IF;')
+    lines.push('')
+    for (const name of entry.itemCandidateNames) {
+      const body = itemBodyByCandidateName.get(name)
+      if (body === undefined) continue // structurally unreachable — the plan is built only from certified items, which always have a finalBody
+      lines.push(`  SELECT count(*) INTO v_match_count FROM public.items WHERE body = ${sqlQuote(body)};`)
+      lines.push(
+        `  IF v_match_count <> 1 THEN RAISE EXCEPTION 'expected exactly 1 public.items row with the certified body for "%", found % — has this item been created yet via Item Intake?', ${sqlQuote(name)}, v_match_count; END IF;`
+      )
+      lines.push(`  SELECT id INTO v_item_id FROM public.items WHERE body = ${sqlQuote(body)};`)
+      lines.push(`  INSERT INTO public.list_items (list_id, item_id) VALUES (v_list_id, v_item_id) ON CONFLICT (list_id, item_id) DO NOTHING;`)
+    }
     lines.push('')
   }
-  lines.push(`  -- list_items membership for each list above must be inserted by matching each item's certified candidate name to its real public.checkoff_items row (unique-match asserted per item, never MIN(uuid)).`)
+
+  const nonMirrorCount = plan.filter((p) => p.kind !== 'CURATED_MIRROR').length
+  lines.push('  -- Postflight assertions')
+  lines.push(`  SELECT count(*) INTO v_match_count FROM public.lists WHERE metro_id = v_metro_id AND is_official = true;`)
+  lines.push(
+    `  IF v_match_count < ${nonMirrorCount} THEN RAISE EXCEPTION 'postflight: expected at least % official list(s) for metro %, found %', ${nonMirrorCount}, ${sqlQuote(metroSlug)}, v_match_count; END IF;`
+  )
   lines.push('END $$;')
+  lines.push('COMMIT;')
   return lines.join('\n')
 }
 
@@ -1617,7 +1715,12 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
   const state = readState(run)
   const plan = buildHomeListPlan(state)
   state.homeListPlan = plan
-  state.homeListSqlPatch = buildHomeListSqlPatch(run.projectId, plan)
+  const itemBodyByCandidateName = new Map(
+    Object.values(state.itemCertifications ?? {})
+      .filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
+      .map((r) => [r.candidateName, r.finalBody])
+  )
+  state.homeListSqlPatch = buildHomeListSqlPatch(run.projectId, plan, itemBodyByCandidateName, state.m0Decisions?.metroCenter, deps.metroAreaFacts, deps.officialListCreatorId ?? DEFAULT_OFFICIAL_LIST_CREATOR_ID)
 
   // Real read path by default (readRealHomeListRows — an actual
   // public.lists/public.list_items query) — tests/production callers may

@@ -1983,16 +1983,21 @@ test('driveMetroLaunch: M8.5 drops a GEO_ENRICHMENT_GATE failure only when a REA
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
   scriptTagSelection(executor)
-  // Two candidates: one whose Places lookup returns a real but genuinely
-  // unmatched result (should DROP), one whose lookup fails entirely
-  // (should be LEFT UNTOUCHED — no evidence to have judged).
+  // Three candidates: one whose Places lookup returns a real but
+  // genuinely unmatched result (should DROP), one whose search genuinely
+  // completed and found nothing at all — a true zero-result response,
+  // no apiError (should ALSO DROP — the check ran and found no venue),
+  // and one whose lookup fails entirely with an infra error (should be
+  // LEFT UNTOUCHED — no evidence was ever gathered to judge).
   const ambiguous = { name: 'Vienna Hofburg Orchestra', category: 'Arts & Culture', neighborhood: 'Innere Stadt', claimSupported: 'Real chamber concert.', source: 'https://example.com/orch', needsVerification: false }
+  const zeroResults = { name: 'Folie 1 von 12 – Elstar', category: 'Misc', neighborhood: 'Neubau', claimSupported: 'A garbled, likely non-venue discovery artifact.', source: 'https://example.com/folie', needsVerification: false }
   const noEvidence = { name: 'Untraceable Pop-Up Market', category: 'Shopping', neighborhood: 'Neubau', claimSupported: 'Real weekend market stalls.', source: 'https://example.com/market', needsVerification: false }
   const ambiguousCert: DriverItemCertificationRecord = { candidateName: ambiguous.name, venueName: ambiguous.name, attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Hear Mozart at the 'Vienna Hofburg Orchestra'.", finalTags: ['classical music', 'art'], supportingFact: ambiguous.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+  const zeroResultsCert: DriverItemCertificationRecord = { candidateName: zeroResults.name, venueName: zeroResults.name, attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "See slide 1 of 12 at 'Folie 1 von 12 – Elstar'.", finalTags: ['hidden gem', 'art'], supportingFact: zeroResults.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
   const noEvidenceCert: DriverItemCertificationRecord = { candidateName: noEvidence.name, venueName: noEvidence.name, attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Browse local stalls at the 'Untraceable Pop-Up Market'.", finalTags: ['hidden gem', 'art'], supportingFact: noEvidence.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
 
   const projectId = 'vienna-m85-geo-selective-drop'
-  await seedForBatchCertification(runStore, projectId, [ambiguous, noEvidence], { [ambiguousCert.candidateName]: ambiguousCert, [noEvidenceCert.candidateName]: noEvidenceCert })
+  await seedForBatchCertification(runStore, projectId, [ambiguous, zeroResults, noEvidence], { [ambiguousCert.candidateName]: ambiguousCert, [zeroResultsCert.candidateName]: zeroResultsCert, [noEvidenceCert.candidateName]: noEvidenceCert })
 
   const run = await driveMetroLaunch(
     {
@@ -2002,6 +2007,7 @@ test('driveMetroLaunch: M8.5 drops a GEO_ENRICHMENT_GATE failure only when a REA
       verifiedTagSnapshot: TEST_TAG_VOCAB,
       placesLookup: async (q: string) => {
         if (q.includes('Untraceable')) return { topResult: null, apiError: 'no network access in tests' }
+        if (q.includes('Folie')) return { topResult: null, apiError: null }
         // A real result, but for a totally different, unrelated venue — genuinely evaluated and rejected/ambiguous.
         return { topResult: { placeId: 'p-unrelated', name: 'Vienna Premium Concert Hall Rentals', formattedAddress: q, lat: 48.2, lng: 16.37, websiteUri: null, country: 'AT', viewportRadiusM: null }, apiError: null }
       },
@@ -2016,8 +2022,10 @@ test('driveMetroLaunch: M8.5 drops a GEO_ENRICHMENT_GATE failure only when a REA
 
   const state = run.state as { itemCertifications: Record<string, DriverItemCertificationRecord>; catalogPruningDrops?: Array<{ candidateName: string; reason: string }> }
   assert.equal(state.itemCertifications[ambiguous.name].outcome, 'REJECTED_GEO_UNRESOLVED', 'a genuinely evaluated, still-unconfident Places match is dropped by M8.5')
-  assert.equal(state.itemCertifications[noEvidence.name].outcome, 'ITEM_CERTIFIED', 'an item whose Places lookup never returned any real evidence is left untouched — never silently dropped over an infra gap')
+  assert.equal(state.itemCertifications[zeroResults.name].outcome, 'REJECTED_GEO_UNRESOLVED', 'a search that genuinely completed and found zero results (no apiError) is real evidence the venue does not resolve — dropped, same as an ambiguous match')
+  assert.equal(state.itemCertifications[noEvidence.name].outcome, 'ITEM_CERTIFIED', 'an item whose Places lookup never returned any real evidence at all (an apiError) is left untouched — never silently dropped over an infra gap')
   assert.ok(state.catalogPruningDrops?.some((d) => d.candidateName === ambiguous.name && d.reason === 'REJECTED_GEO_UNRESOLVED'))
+  assert.ok(state.catalogPruningDrops?.some((d) => d.candidateName === zeroResults.name && d.reason === 'REJECTED_GEO_UNRESOLVED'))
   assert.ok(!state.catalogPruningDrops?.some((d) => d.candidateName === noEvidence.name))
 })
 
@@ -2099,4 +2107,80 @@ test('driveMetroLaunch: M8.5 pruning is idempotent — a resumed run never re-sp
 
   await driveMetroLaunch(deps, projectId, { categoryPlan: PLAN, maxSteps: 15 })
   assert.equal(tagRepairCalls, callsAfterFirstRun, 'a resumed run must never re-spend a second real tag-repair call on an item that already received its one bounded M8.5 decision')
+})
+
+// ---------------------------------------------------------------------------
+// M9 Home-list SQL package (Chief Phase 2AD, 2026-09-09 instruction) — a
+// single atomic, self-contained package: ensures metro_areas exists,
+// creates/reuses each planned list idempotently, and links certified
+// items via public.list_items, matched against a real (already-created)
+// public.items row by exact body text. Never silently proceeds with a
+// guessed metro identity when the caller hasn't supplied one.
+// ---------------------------------------------------------------------------
+
+async function seedForHomeListMirror(runStore: InstanceType<typeof InMemoryPlaybookRunStore>, projectId: string, candidates: Array<{ name: string; category: string; neighborhood: string; claimSupported: string; source: string; needsVerification: boolean }>, certs: Record<string, DriverItemCertificationRecord>) {
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  seeded!.state = { m0Decisions: RESOLVED_M0, candidates, neighborhoods: [], plan: PLAN, hasRunM6: true, itemCertifications: certs, batchCertificationGates: [] }
+  seeded!.currentStage = 'M9_HOME_LIST_MIRROR'
+  await runStore.put(seeded!)
+}
+
+test('driveMetroLaunch: M9 Home-list SQL keeps the old fail-closed metro_areas check when no metroAreaFacts are supplied — never guesses a metro identity', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const candidate = food('Cafe Sperl', 'Mariahilf')
+  const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: ['coffee', 'historic'], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+
+  const projectId = 'vienna-m9-sql-fail-closed'
+  await seedForHomeListMirror(runStore, projectId, [candidate], { [cert.candidateName]: cert })
+
+  const run = await driveMetroLaunch(
+    { runStore, execStore, executors: [executor], verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 3 }
+  )
+
+  const state = run.state as { homeListSqlPatch: string }
+  assert.ok(state.homeListSqlPatch.includes('no known metroAreaFacts were supplied'), 'without metroAreaFacts, the generated SQL still just checks-and-fails, never fabricates a metro_areas row')
+  assert.ok(!state.homeListSqlPatch.includes('INSERT INTO public.metro_areas'))
+})
+
+test('driveMetroLaunch: M9 Home-list SQL creates metro_areas, reuses lists idempotently, and matches list_items by exact certified body text when metroAreaFacts are supplied', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const candidate = food('Cafe Sperl', 'Mariahilf')
+  const body = "Order the 'Sperl Torte' at 'Cafe Sperl'."
+  const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: body, finalTags: ['coffee', 'historic'], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
+
+  const projectId = 'vienna-m9-sql-full'
+  await seedForHomeListMirror(runStore, projectId, [candidate], { [cert.candidateName]: cert })
+
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      metroAreaFacts: { name: 'Vienna Metro', state: 'Vienna', timezone: 'Europe/Vienna' },
+      officialListCreatorId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 3 }
+  )
+
+  const state = run.state as { homeListSqlPatch: string }
+  const sql = state.homeListSqlPatch
+  assert.ok(sql.includes("INSERT INTO public.metro_areas (name, slug, state, timezone, is_active, center_lat, center_lng)"), 'metroAreaFacts + a real metroCenter produce a real ensure-insert, never a guess')
+  assert.ok(sql.includes("'Vienna Metro'") && sql.includes("'Vienna'") && sql.includes("'Europe/Vienna'"))
+  assert.ok(sql.includes('SELECT id INTO v_list_id FROM public.lists WHERE metro_id = v_metro_id AND title'), 'idempotent existence check before ever inserting a list')
+  assert.ok(sql.includes("'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'"), 'uses the supplied creator id, never a silently different default')
+  assert.ok(sql.includes(`FROM public.items WHERE body = '${body.replace(/'/g, "''")}'`), 'list_items population matches the real, exact certified body text — never a name-based guess')
+  assert.ok(sql.includes('has this item been created yet via Item Intake'), 'a missing items row fails closed with an honest, specific reason, never silently skipped')
+  assert.ok(sql.includes('ON CONFLICT (list_id, item_id) DO NOTHING'), 'list_items linking is idempotent on re-apply')
+  assert.ok(sql.includes('postflight: expected at least'), 'a postflight assertion verifies the real applied state, not just that the block ran without error')
 })
