@@ -34,6 +34,25 @@ import { runExecutionRouted } from './routing'
 import type { ExecutionStore, SpecialistExecutor, SpecialistExecutionRequest } from './executor'
 import { getOrCreateRun, type PlaybookRunStore, type PlaybookRunRecord } from './playbookRun'
 import { dedupeCandidates, findSuspectedDuplicates, type RawCandidate } from './candidateMerge'
+
+/**
+ * Real research_verifier (OpenAI) output has, in practice, occasionally
+ * returned a candidate with `name`/`claimSupported` as null or empty
+ * despite the RawCandidate contract declaring them required strings —
+ * a genuine malformed-output case, not a hypothetical one (hit during
+ * the Green Bay metro launch: `normalizeText` in candidateMerge.ts
+ * crashed on `null.toLowerCase()` inside `dedupeCandidates`). A
+ * candidate with no name is not usable data — silently coercing it to
+ * an empty string would be worse than dropping it, since every
+ * empty-named candidate would then spuriously dedupe together as "the
+ * same thing." Drop and don't fabricate; never crash the whole stage
+ * over one bad research row.
+ */
+function sanitizeRawCandidates<T extends RawCandidate>(candidates: T[]): T[] {
+  return candidates.filter(
+    (c) => typeof c?.name === 'string' && c.name.trim().length > 0 && typeof c?.claimSupported === 'string' && c.claimSupported.trim().length > 0
+  )
+}
 import { DEFAULT_DRIVER_GUARDRAILS, type DriverGuardrails } from './driverGuardrails'
 import type { SpecialistResultEnvelope, ProviderUsageInfo } from './types'
 import { certifyEditorialDistinctiveness, checkDistinctiveExperience, checkVenueQuoted, type DistinctivenessCertificationItem } from '../playbooks/editorialDistinctiveness'
@@ -45,12 +64,17 @@ import { evaluateItemMetadata, evaluateMetadataCompletenessGate, type MetadataEn
 import { evaluateGeoEnrichmentCertificationGate, CONFIDENT_TIERS, ACCEPTABLE_EXCEPTION_TIERS, type GeoEnrichmentItemResult, type PlacesMatchClassification } from '../playbooks/metroGeoEnrichment'
 import { enrichMetroCatalogGeo, buildRealPlacesLookup, FileGeoEnrichmentCacheStore, type GeoEnrichmentCacheStore, type PlacesLookupFn, type GeoEnrichmentCandidate } from './metroGeoEnrichmentDriver'
 import { readRealHomeListRows, type HomeListReadPathFailure } from './homeListReadPath'
+import { fetchExistingProductionItemsForRegion } from './existingInventoryReadPath'
+import { evaluateOutOfMarketContaminationGate } from '../playbooks/outOfMarketContamination'
+import { reconcileAgainstExistingInventory, type ExistingProductionItem, type ReconciliationResult } from '../playbooks/existingInventoryReconciliation'
+import { deriveDefaultDepthTargets } from '../playbooks/defaultMetroManifest'
 import { certifyHomeListRow, evaluateHomeListCertificationGate, certifyCuratedListRow, evaluateCuratedListLayerGate, type HomeListRow, type CuratedListRow } from '../playbooks/homeListCertification'
 import { evaluateImageReadinessGate, type ImageReadinessCard } from '../playbooks/imageReadiness'
 import { certifyMetroLaunch, type MetroLaunchCertificationReport, type MetroLaunchCertificationSummary } from '../playbooks/metroLaunchCertification'
 import {
   CANONICAL_TO_DB_CATEGORY,
   evaluateCatalogGate,
+  checkForDuplicates,
   evaluateLocationGate,
   evaluatePresentationGate,
   evaluateEditorialQualityGate,
@@ -159,7 +183,7 @@ interface MetroDriverState {
   /** M8.5 CATALOG_PRUNING (Chief Phase 2AD) — names of items already given their ONE bounded pruning-stage repair-or-drop decision, across the WHOLE run (never reset by resume/reopen at M8.5+, so a resumed run never re-spends a second real tag-repair call on the same item, and never flip-flops a drop back to a retry). See stepM8_5CatalogPruning. */
   catalogPruningAttempted?: string[]
   /** Every item permanently dropped by M8.5, with the specific reason and gate — the durable, reportable record of "reject weak/unresolved items rather than hand them to Jerry in bulk" (2026-09-09 instruction). Accumulated across the whole run, never reset. */
-  catalogPruningDrops?: Array<{ candidateName: string; reason: 'REJECTED_GEO_UNRESOLVED' | 'REJECTED_INSUFFICIENT_TAG_CONTEXT' | 'REJECTED_UNCLASSIFIABLE_METADATA'; detail: string }>
+  catalogPruningDrops?: Array<{ candidateName: string; reason: 'REJECTED_GEO_UNRESOLVED' | 'REJECTED_INSUFFICIENT_TAG_CONTEXT' | 'REJECTED_UNCLASSIFIABLE_METADATA' | 'REJECTED_OUT_OF_MARKET' | 'REJECTED_DUPLICATE_VENUE'; detail: string }>
   /** Every item M8.5 successfully repaired (currently only tag repair has a real second attempt) rather than dropping — reportable alongside catalogPruningDrops. */
   catalogPruningRepairs?: Array<{ candidateName: string; repaired: 'TAGS' }>
   /** Chief Phase 3B (Vienna post-mortem item 3) — certified items whose GEO_ENRICHMENT result shares a Google Place ID with another certified item. Reporting-only, never an automatic drop (see venueDuplicateDetection.ts's own doc — same venue is not automatically a duplicate). Recomputed fresh every M8 pass. */
@@ -172,6 +196,12 @@ interface MetroDriverState {
   strategicReport?: StrategicCoverageReport
   /** Chief Phase 3B (item 7) — filenames actually handed to deps.writeStageArtifact at M10 (empty when no writer was configured — this driver never assumes disk access it wasn't given). */
   stageArtifactManifest?: string[]
+  /** Chief Phase 2AH — the real existing-production-inventory reconciliation result, computed once per run at M8 and never recomputed (a resumed run must not re-query production or re-spend judgment on items already classified). `skippedReason` is set (and reused/distinctSameVenue/unmatched left empty) when no real region search term was available — never silently treated as "confirmed nothing exists." */
+  existingInventoryReconciliation?: (ReconciliationResult & { skippedReason?: undefined }) | { reused: []; distinctSameVenue: []; unmatched: []; skippedReason: string }
+  /** Chief Phase 2AH — the raw existing-production-item snapshot fetched alongside existingInventoryReconciliation (same single fetch, cached the same way) — retained separately so M10's CATALOG_GATE can feed real maps_query values into metroCatalog.ts's checkForDuplicates(), which the driver previously always called with a hardcoded empty collidesWithProduction: []. */
+  existingProductionInventorySnapshot?: ExistingProductionItem[]
+  /** Chief Phase 2AH — real OUT_OF_MARKET_CONTAMINATION_GATE result from the M8 pass (before catalog certification), kept separately from batchCertificationGates' copy so M9's second, pre-SQL-generation pass can log exactly what changed between the two evaluations. */
+  outOfMarketGateAtM8?: StagingGateResult
 }
 
 /**
@@ -314,6 +344,32 @@ export interface MetroDriverDeps {
   sleepImpl?: (ms: number) => Promise<void>
   /** Chief Phase 3B (Vienna post-mortem item 7): persists one durable stage artifact (see metroStageArtifacts.ts). Defaults to a no-op — this driver never assumes filesystem access it wasn't explicitly given; a real production caller wires this to a file write under the metro's own temp/output directory. */
   writeStageArtifact?: (name: string, content: string) => Promise<void>
+  /**
+   * M8 (Chief Phase 2AH, Green Bay incident): fetches real, live
+   * production items that may already represent this metro's region
+   * under a DIFFERENT metro's ownership (see
+   * existingInventoryReadPath.ts's real query — the Green Bay/Milwaukee
+   * situation). Defaults to the real DB read, scoped by
+   * deps.metroAreaFacts.name (with " Metro" stripped) — a caller may
+   * override the search term via existingInventorySearchTerm, or inject
+   * a fake in tests. Never fabricated: if metroAreaFacts is absent and no
+   * override is supplied, reconciliation is skipped entirely (reported
+   * honestly in state.existingInventoryReconciliation as
+   * `skippedReason`, never silently treated as "nothing existing found").
+   */
+  fetchExistingProductionInventory?: (regionSearchTerm: string) => Promise<ExistingProductionItem[]>
+  /** Overrides the region search term used by fetchExistingProductionInventory's default real query — omit to derive it from deps.metroAreaFacts.name. */
+  existingInventorySearchTerm?: string
+  /**
+   * M9 (Chief Phase 2AH): the metro's REAL, established production slug
+   * convention (e.g. "green-bay", kebab-case, matching san-diego/
+   * milwaukee/denver precedent) — distinct from `projectId`, which is
+   * the CLI/task-tracking key (e.g. "green_bay_wisconsin") and was
+   * previously used as the literal `metro_areas.slug` value by mistake.
+   * Defaults to `projectId` for backward compatibility with existing
+   * runs/tests that never distinguished the two.
+   */
+  metroAreaSlug?: string
 }
 
 export function executionId(runId: string, stage: string, label: string): string {
@@ -566,13 +622,35 @@ async function stepM1(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
   return run
 }
 
-async function stepM2(deps: MetroDriverDeps, run: PlaybookRunRecord, defaultPlan: CategoryCoveragePlan, depthTargets: GeographicDepthTarget[]): Promise<PlaybookRunRecord> {
+async function stepM2(deps: MetroDriverDeps, run: PlaybookRunRecord, defaultPlan: CategoryCoveragePlan, depthTargets: GeographicDepthTarget[] | undefined, autoDeriveDepthTargetsFromGeography: boolean | undefined): Promise<PlaybookRunRecord> {
   // Deterministic — no specialist call needed once a plan is supplied
   // (per the Phase 2F task: "metro_builder or performs deterministic
   // target setup where already encoded").
   const state = readState(run)
   state.plan = defaultPlan
-  state.depthTargets = depthTargets
+  // An explicit depthTargets[] (a real --geo-depth-plan, or San Diego's
+  // own frozen historical manifest when THIS run genuinely is San Diego —
+  // see cli.ts) is always honored verbatim. Omitting it defaults to `[]`
+  // (plain zero-check only — GeographicDepthTarget's own doc: "Defaults
+  // to none") — the long-standing, safe, test-relied-upon default for any
+  // DIRECT driveMetroLaunch() caller.
+  //
+  // Chief Phase 2AH root-cause fix (Green Bay incident, 2026-09-10): the
+  // bare `cli.ts run metro_launch` entry point (never a direct
+  // driveMetroLaunch() test caller) additionally sets
+  // autoDeriveDepthTargetsFromGeography=true whenever it has no explicit
+  // --geo-depth-plan and isn't the frozen San Diego project (see cli.ts).
+  // ONLY in that specific case does omitting depthTargets derive generic
+  // floors from the CURRENT run's own real, already-researched M1
+  // neighborhoods (state.neighborhoods, set by stepM1 immediately before
+  // this stage runs) instead of the plain `[]` — satisfying "generate the
+  // metro-specific geo plan automatically from the normal planning
+  // methodology" for the actual bare-command path, while never changing
+  // the default for existing/direct callers that never opted in. Because
+  // this only ever reads THIS run's own M1 output, it can never reference
+  // a different metro's geography, unlike the SAN_DIEGO_GEOGRAPHIC_DEPTH_TARGETS
+  // default this replaced.
+  state.depthTargets = depthTargets ?? (autoDeriveDepthTargetsFromGeography ? deriveDefaultDepthTargets(state.neighborhoods ?? []) : [])
   run.state = state
   run.currentStage = 'M3_BROAD_DISCOVERY'
   return run
@@ -601,7 +679,7 @@ async function stepM3(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
   if (outcome.kind === 'NEEDS_JERRY') return escalate(run, outcome.reason ?? 'M3 needs Jerry', { decisionNeeded: 'M3 broad discovery could not complete.', why: outcome.reason })
 
   const state = readState(run)
-  const newCandidates = ((outcome.envelope?.evidence.candidates as (RawCandidate & { needsVerification: boolean })[]) ?? []).map((c) => ({ ...c, needsVerification: c.needsVerification ?? true }))
+  const newCandidates = sanitizeRawCandidates((outcome.envelope?.evidence.candidates as (RawCandidate & { needsVerification: boolean })[]) ?? []).map((c) => ({ ...c, needsVerification: c.needsVerification ?? true }))
   const merged = dedupeCandidates([...(state.candidates ?? []), ...newCandidates])
   state.candidates = merged.deduped
   run.state = state
@@ -845,7 +923,7 @@ async function stepM5(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
 
   const newCandidates = results
     .filter((r) => r.kind === 'ACCEPTED')
-    .flatMap((r) => ((r.envelope?.evidence.candidates as (RawCandidate & { needsVerification: boolean })[]) ?? []).map((c) => ({ ...c, needsVerification: c.needsVerification ?? true })))
+    .flatMap((r) => sanitizeRawCandidates((r.envelope?.evidence.candidates as (RawCandidate & { needsVerification: boolean })[]) ?? []).map((c) => ({ ...c, needsVerification: c.needsVerification ?? true })))
   const merged = dedupeCandidates([...(state.candidates ?? []), ...newCandidates])
   state.candidates = merged.deduped
   run.state = state
@@ -930,7 +1008,7 @@ async function stepM5B(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<P
   if (outcome.kind === 'BLOCKED') return block(run, outcome.reason ?? 'M5B blocked')
   if (outcome.kind === 'NEEDS_JERRY') return escalate(run, outcome.reason ?? 'M5B needs Jerry', { decisionNeeded: 'Replacement research could not complete.', why: outcome.reason })
 
-  const newCandidates = ((outcome.envelope?.evidence.candidates as (RawCandidate & { needsVerification: boolean })[]) ?? []).map((c) => ({ ...c, needsVerification: c.needsVerification ?? true }))
+  const newCandidates = sanitizeRawCandidates((outcome.envelope?.evidence.candidates as (RawCandidate & { needsVerification: boolean })[]) ?? []).map((c) => ({ ...c, needsVerification: c.needsVerification ?? true }))
   const merged = dedupeCandidates([...(state.candidates ?? []), ...newCandidates])
   state.candidates = merged.deduped
   state.removedCandidateNames = []
@@ -1489,7 +1567,60 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
   // membership never lingers stale.
   state.venueDuplicateClusters = clusterByPlaceId(certified.map((r) => ({ candidateName: r.candidateName, placeId: geoRun.records.find((g) => g.candidateName === r.candidateName)?.placeId ?? null, finalBody: r.finalBody })))
 
-  const gates: StagingGateResult[] = [...distinctivenessGates, itemCertificationGate, tagGate, metadataGate, geoGate]
+  const geoResultsByNameForContamination = new Map(geoRun.records.map((r) => [r.candidateName, r]))
+
+  // OUT_OF_MARKET_CONTAMINATION_GATE — first pass, before catalog
+  // certification (Chief Phase 2AH, Green Bay incident, 2026-09-10). See
+  // outOfMarketContamination.ts. Evaluated against real geo-enriched
+  // formatted addresses (just computed above) plus every candidate's own
+  // body text — never repaired, only ever dropped (see M8.5 below).
+  const targetMetroSlug = deps.metroAreaSlug ?? run.projectId
+  const contaminationResult = evaluateOutOfMarketContaminationGate({
+    targetMetro: { slug: targetMetroSlug, state: deps.metroAreaFacts?.state },
+    candidates: certified.map((r) => ({ candidateName: r.candidateName, body: r.finalBody, formattedAddress: geoResultsByNameForContamination.get(r.candidateName)?.formattedAddress ?? null })),
+  })
+  const outOfMarketGate: StagingGateResult = { key: 'OUT_OF_MARKET_CONTAMINATION_GATE', verdict: contaminationResult.verdict, reason: contaminationResult.reason }
+  state.outOfMarketGateAtM8 = outOfMarketGate
+  const contaminationFailingNames = new Set(contaminationResult.violations.map((v) => v.candidateName))
+
+  // Existing-production-inventory reconciliation (Chief Phase 2AH, Green
+  // Bay incident — second systemic gap) — computed ONCE per run and
+  // cached in state; a resumed run must never re-query production or
+  // re-judge an already-classified candidate. Real region search term is
+  // always derived from deps.metroAreaFacts.name (or an explicit
+  // override) — never guessed, never a generic/empty term (see
+  // existingInventoryReadPath.ts's own guard).
+  if (!state.existingInventoryReconciliation) {
+    const regionSearchTerm = deps.existingInventorySearchTerm ?? deps.metroAreaFacts?.name?.replace(/\s+metro\s*$/i, '').trim()
+    if (regionSearchTerm && regionSearchTerm.length >= 3) {
+      const fetchInventory = deps.fetchExistingProductionInventory ?? fetchExistingProductionItemsForRegion
+      const existingItems = await fetchInventory(regionSearchTerm)
+      state.existingProductionInventorySnapshot = existingItems
+      const reconciliationCandidates = certified.map((r) => {
+        const geo = geoResultsByNameForContamination.get(r.candidateName)
+        return {
+          candidateName: r.candidateName,
+          body: r.finalBody,
+          googlePlaceId: geo?.placeId ?? null,
+          formattedAddress: geo?.formattedAddress ?? null,
+          websiteUrl: geo?.websiteUrl ?? null,
+          lat: geo?.lat ?? null,
+          lng: geo?.lng ?? null,
+        }
+      })
+      state.existingInventoryReconciliation = reconcileAgainstExistingInventory(reconciliationCandidates, existingItems)
+    } else {
+      state.existingInventoryReconciliation = {
+        reused: [],
+        distinctSameVenue: [],
+        unmatched: [],
+        skippedReason: 'no metroAreaFacts.name/existingInventorySearchTerm available to derive a real, specific region search term — reconciliation not attempted rather than guessed at.',
+      }
+    }
+  }
+  const reuseMatchedNames = new Set((state.existingInventoryReconciliation && !('skippedReason' in state.existingInventoryReconciliation) ? state.existingInventoryReconciliation.reused : []).map((m) => m.candidateName))
+
+  const gates: StagingGateResult[] = [...distinctivenessGates, itemCertificationGate, tagGate, metadataGate, geoGate, outOfMarketGate]
   state.batchCertificationGates = gates
 
   // M8.5 routing (Chief Phase 2AD, 2026-09-09 instruction): a catalog-wide
@@ -1501,7 +1632,7 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
   const alreadyPruned = new Set(state.catalogPruningAttempted ?? [])
   const tagFailingNames = tagVocabulary.status === 'FAILED' ? [] : evaluateTagCertificationGate(certified.map((r) => ({ candidateName: r.candidateName, tags: r.finalTags })), tagVocabulary.tagNames).perItem.filter((p) => !p.valid).map((p) => p.candidateName)
   const geoFailingNames = geoRun.records.filter((r) => !CONFIDENT_TIERS.includes(r.classification) && !ACCEPTABLE_EXCEPTION_TIERS.includes(r.classification)).map((r) => r.candidateName)
-  const needsPruning = [...new Set([...tagFailingNames, ...unclassifiedForMetadata, ...geoFailingNames])].filter((n) => !alreadyPruned.has(n))
+  const needsPruning = [...new Set([...tagFailingNames, ...unclassifiedForMetadata, ...geoFailingNames, ...contaminationFailingNames, ...reuseMatchedNames])].filter((n) => !alreadyPruned.has(n))
 
   run.state = state
   run.currentStage = needsPruning.length > 0 ? 'M8_5_CATALOG_PRUNING' : 'M8_75_CATALOG_VOICE_PASS'
@@ -1575,7 +1706,25 @@ async function stepM8_5CatalogPruning(deps: MetroDriverDeps, run: PlaybookRunRec
       .map((r) => r.candidateName)
   )
 
-  const toProcess = certified.filter((r) => !alreadyPruned.has(r.candidateName) && (tagFailingNames.has(r.candidateName) || metadataFailingNames.has(r.candidateName) || geoFailingNames.has(r.candidateName)))
+  // Chief Phase 2AH (Green Bay incident) — recomputed here (pure, no I/O,
+  // cheap) from the same real geoEnrichmentResults/reconciliation state
+  // M8 already persisted, rather than duplicating a separate state field.
+  // Both are always DROPPED, never repaired here — there is no bounded
+  // "second attempt" for either (a wrong-city venue cannot be relocated;
+  // a same-venue/same-experience duplicate cannot be made "less
+  // duplicate").
+  const geoResultsByNameForContamination = new Map((state.geoEnrichmentResults ?? []).map((r) => [r.candidateName, r]))
+  const contaminationResult = evaluateOutOfMarketContaminationGate({
+    targetMetro: { slug: deps.metroAreaSlug ?? run.projectId, state: deps.metroAreaFacts?.state },
+    candidates: certified.map((r) => ({ candidateName: r.candidateName, body: r.finalBody, formattedAddress: geoResultsByNameForContamination.get(r.candidateName)?.formattedAddress ?? null })),
+  })
+  const contaminationFailingNames = new Set(contaminationResult.violations.map((v) => v.candidateName))
+  const reconciliation = state.existingInventoryReconciliation
+  const reuseMatches = new Map((reconciliation && !('skippedReason' in reconciliation) ? reconciliation.reused : []).map((m) => [m.candidateName, m]))
+
+  const toProcess = certified.filter(
+    (r) => !alreadyPruned.has(r.candidateName) && (tagFailingNames.has(r.candidateName) || metadataFailingNames.has(r.candidateName) || geoFailingNames.has(r.candidateName) || contaminationFailingNames.has(r.candidateName) || reuseMatches.has(r.candidateName))
+  )
 
   if (toProcess.length === 0) {
     run.currentStage = 'M8_BATCH_CERTIFICATION'
@@ -1606,7 +1755,19 @@ async function stepM8_5CatalogPruning(deps: MetroDriverDeps, run: PlaybookRunRec
     // Still marked attempted either way so the M8<->M8.5 loop terminates.
     const g = geoFailingNames.has(r.candidateName) ? geoResultsByName.get(r.candidateName) : undefined
     const geoGenuinelyEvaluated = g && (g.placeId !== null || !g.reason.startsWith('Places API error'))
-    if (g && geoGenuinelyEvaluated) {
+    if (contaminationFailingNames.has(r.candidateName)) {
+      const violation = contaminationResult.violations.find((v) => v.candidateName === r.candidateName)
+      record = { ...record, outcome: 'REJECTED_OUT_OF_MARKET', rejectionReasons: [...record.rejectionReasons, `M8.5: OUT_OF_MARKET_CONTAMINATION_GATE — ${violation?.reason ?? 'out-of-market signal detected'}`] }
+      drops.push({ candidateName: r.candidateName, reason: 'REJECTED_OUT_OF_MARKET', detail: violation?.reason ?? 'out-of-market signal detected' })
+    } else if (reuseMatches.has(r.candidateName)) {
+      const match = reuseMatches.get(r.candidateName)!
+      record = {
+        ...record,
+        outcome: 'REJECTED_DUPLICATE_VENUE',
+        rejectionReasons: [...record.rejectionReasons, `M8.5: existing-inventory reconciliation matched an already-live production item (${match.existingItemId}, matched by ${match.matchedBy}, experience similarity ${match.experienceSimilarity.toFixed(2)}) representing the same venue and the same CheckOff experience — reusing the existing item rather than creating a duplicate row.`],
+      }
+      drops.push({ candidateName: r.candidateName, reason: 'REJECTED_DUPLICATE_VENUE', detail: `reuse existing production item ${match.existingItemId} (matched by ${match.matchedBy})` })
+    } else if (g && geoGenuinelyEvaluated) {
       record = { ...record, outcome: 'REJECTED_GEO_UNRESOLVED', rejectionReasons: [...record.rejectionReasons, `M8.5: geo second pass exhausted — ${g.classification}: ${g.reason}`] }
       drops.push({ candidateName: r.candidateName, reason: 'REJECTED_GEO_UNRESOLVED', detail: `classification=${g.classification} (${g.reason})` })
     } else if (metadataFailingNames.has(r.candidateName)) {
@@ -1747,7 +1908,23 @@ async function stepCatalogVoicePass(deps: MetroDriverDeps, run: PlaybookRunRecor
   // attempt (mirrors M8.5's own batching-across-resumes pattern) —
   // never blocks on the diagnostic itself, so a resumed run always
   // makes forward progress even if some rewrites keep their original body.
-  run.currentStage = toProcess.length <= batch.length ? 'M9_HOME_LIST_MIRROR' : 'M8_75_CATALOG_VOICE_PASS'
+  //
+  // Chief Phase 2AH fix (Green Bay editorial cleanup cycle, 2026-09-10):
+  // once every flagged item in this pass has had its one attempt, this
+  // used to jump straight to M9 — meaning OPENING_DISTRIBUTION_GATE (and
+  // every other M8 gate) stayed frozen at whatever it computed BEFORE any
+  // voice-pass rewrite happened, silently reporting a stale, pre-rewrite
+  // verdict in the final certification (found via a real Green Bay run:
+  // the report said 17/96 "Order" opens, but the actual post-rewrite
+  // bodies were 11/96 — comfortably under the 15% threshold — because
+  // the gate was never recomputed after 6 successful rewrites). Now loops
+  // back through M8_BATCH_CERTIFICATION exactly once so gates are
+  // recomputed against the real, current bodies. This can never loop
+  // forever: M8 always routes back here when nothing needs pruning, but
+  // the SECOND visit's `toProcess` is guaranteed empty (every flagged name
+  // is already in catalogVoicePassAttempted), which falls through to the
+  // early-exit branch above and proceeds straight to M9.
+  run.currentStage = toProcess.length <= batch.length ? 'M8_BATCH_CERTIFICATION' : 'M8_75_CATALOG_VOICE_PASS'
   return run
 }
 
@@ -1827,7 +2004,9 @@ function buildHomeListSqlPatch(
   itemBodyByCandidateName: ReadonlyMap<string, string>,
   metroCenter: { lat: number; lng: number } | undefined,
   metroAreaFacts: { name: string; state: string; timezone: string } | undefined,
-  officialListCreatorId: string
+  officialListCreatorId: string,
+  /** Chief Phase 2AH (Green Bay incident) — real ids of already-live production items existing-inventory reconciliation classified REUSE (same venue + same experience as a candidate this run discovered independently). Linked directly by id into the flagship list — never re-created, never matched by body text, since the row already exists. */
+  reusedExistingItemIds: readonly string[] = []
 ): string {
   const lines: string[] = []
   lines.push(`-- Generated by Winston metro_launch driver (M9_HOME_LIST_MIRROR) for metro "${metroSlug}".`)
@@ -1863,6 +2042,23 @@ function buildHomeListSqlPatch(
   lines.push(`  SELECT id INTO v_metro_id FROM public.metro_areas WHERE slug = ${sqlQuote(metroSlug)};`)
   lines.push(`  IF v_metro_id IS NULL THEN RAISE EXCEPTION 'metro_areas row for slug % could not be found or created', ${sqlQuote(metroSlug)}; END IF;`)
   lines.push('')
+
+  const primaryEntry = plan.find((p) => p.kind === 'PRIMARY_SEASONAL')
+  if (reusedExistingItemIds.length > 0 && primaryEntry) {
+    lines.push(`  -- Existing-inventory reconciliation: ${reusedExistingItemIds.length} already-live production item(s) reused (same venue + same experience) rather than duplicated.`)
+    lines.push(`  SELECT id INTO v_list_id FROM public.lists WHERE metro_id = v_metro_id AND title = ${sqlQuote(primaryEntry.label)} AND is_official = true;`)
+    lines.push('  IF v_list_id IS NULL THEN')
+    lines.push(`    INSERT INTO public.lists (metro_id, title, is_official, is_public, creator_id, is_featured_eligible)`)
+    lines.push(`    VALUES (v_metro_id, ${sqlQuote(primaryEntry.label)}, true, true, ${sqlQuote(officialListCreatorId)}, true)`)
+    lines.push('    RETURNING id INTO v_list_id;')
+    lines.push('  END IF;')
+    for (const existingId of reusedExistingItemIds) {
+      lines.push(`  SELECT count(*) INTO v_match_count FROM public.items WHERE id = ${sqlQuote(existingId)};`)
+      lines.push(`  IF v_match_count <> 1 THEN RAISE EXCEPTION 'reused existing production item id % no longer exists — reconciliation ran against stale data, re-run before applying this patch', ${sqlQuote(existingId)}; END IF;`)
+      lines.push(`  INSERT INTO public.list_items (list_id, item_id) VALUES (v_list_id, ${sqlQuote(existingId)}) ON CONFLICT (list_id, item_id) DO NOTHING;`)
+    }
+    lines.push('')
+  }
 
   for (const entry of plan) {
     if (entry.kind === 'CURATED_MIRROR') continue // curated_lists layer is a separate, existing patch pattern (see itemIntake.ts) — not duplicated here
@@ -1906,19 +2102,44 @@ function sqlQuote(s: string): string {
 
 async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
   const state = readState(run)
+  const certifiedForRecheck = Object.values(state.itemCertifications ?? {}).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
+
+  // OUT_OF_MARKET_CONTAMINATION_GATE — SECOND, independent pass,
+  // immediately before SQL generation (Chief Phase 2AH — Jerry's
+  // explicit instruction: evaluate "again before production SQL
+  // generation," never trust the M8 pass alone to have been the only
+  // gate standing between research and a real SQL patch). By this point
+  // M8.5 should already have dropped every contaminated candidate, so
+  // this should always PASS in the normal case — its purpose is to
+  // FAIL CLOSED (refuse to generate any SQL at all) if some future code
+  // path ever reaches M9 with contamination still present, rather than
+  // relying solely on the earlier pass.
+  const geoResultsByNameForRecheck = new Map((state.geoEnrichmentResults ?? []).map((r) => [r.candidateName, r]))
+  const secondContaminationCheck = evaluateOutOfMarketContaminationGate({
+    targetMetro: { slug: deps.metroAreaSlug ?? run.projectId, state: deps.metroAreaFacts?.state },
+    candidates: certifiedForRecheck.map((r) => ({ candidateName: r.candidateName, body: r.finalBody, formattedAddress: geoResultsByNameForRecheck.get(r.candidateName)?.formattedAddress ?? null })),
+  })
+  if (secondContaminationCheck.verdict === 'FAIL') {
+    return block(
+      run,
+      `OUT_OF_MARKET_CONTAMINATION_GATE failed its second pass, immediately before production SQL generation — refusing to generate any SQL patch. This must never happen if M8.5 pruning ran correctly; treat this as a real driver bug, not a data issue, and fix the code path that reached M9 without dropping these candidates first. ${secondContaminationCheck.reason}`
+    )
+  }
+
   const plan = buildHomeListPlan(state, deps.flagshipListTitle ?? 'Primary seasonal list')
   state.homeListPlan = plan
   const itemBodyByCandidateName = new Map(
-    Object.values(state.itemCertifications ?? {})
-      .filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
-      .map((r) => [r.candidateName, r.finalBody])
+    certifiedForRecheck.map((r) => [r.candidateName, r.finalBody])
   )
-  state.homeListSqlPatch = buildHomeListSqlPatch(run.projectId, plan, itemBodyByCandidateName, state.m0Decisions?.metroCenter, deps.metroAreaFacts, deps.officialListCreatorId ?? DEFAULT_OFFICIAL_LIST_CREATOR_ID)
+  const reconciliation = state.existingInventoryReconciliation
+  const reusedExistingItemIds = (reconciliation && !('skippedReason' in reconciliation) ? reconciliation.reused : []).map((m) => m.existingItemId)
+  const metroSlug = deps.metroAreaSlug ?? run.projectId
+  state.homeListSqlPatch = buildHomeListSqlPatch(metroSlug, plan, itemBodyByCandidateName, state.m0Decisions?.metroCenter, deps.metroAreaFacts, deps.officialListCreatorId ?? DEFAULT_OFFICIAL_LIST_CREATOR_ID, reusedExistingItemIds)
 
   // Real read path by default (readRealHomeListRows — an actual
   // public.lists/public.list_items query) — tests/production callers may
   // still inject their own verifyHomeListRows to override it.
-  const verify = deps.verifyHomeListRows ?? ((p) => readRealHomeListRows(run.projectId, p))
+  const verify = deps.verifyHomeListRows ?? ((p) => readRealHomeListRows(metroSlug, p))
   const readResult = await verify(plan)
 
   let homeListGate: StagingGateResult
@@ -2011,7 +2232,24 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
   // that shows up in both gates identically.
   state.unclassifiedForIntake = unclassifiedForIntake
 
-  const catalogGate = evaluateCatalogGate({ expectedCanonicalCount: intakeRecords.length, stagedRecords: intakeRecords, intakeFailures: [], duplicates: { clean: intakeRecords, collidesWithProduction: [], collidesWithinBatch: [] } })
+  // Chief Phase 2AH (Green Bay incident) — checkForDuplicates() was
+  // previously always called with a hardcoded, always-empty
+  // collidesWithProduction: [], meaning CATALOG_GATE's real production-
+  // dedup check was fully implemented and tested but never actually
+  // exercised against production data by this driver. Fixed: real
+  // existing-production maps_query values, from the SAME single
+  // reconciliation fetch M8 already made (never re-queried here), are
+  // now threaded through. Note this checks a DIFFERENT, cruder key
+  // (normalized maps_query string) than existingInventoryReconciliation's
+  // own richer google_place_id/canonical-name/geo/website matching —
+  // genuine defense-in-depth, not a duplicate of that logic; items
+  // reconciliation already classified REUSE are dropped by M8.5 before
+  // reaching this stage at all, so this mainly catches anything that
+  // slipped past reconciliation (e.g. no real region search term was
+  // available for this run) via the older, coarser mechanism.
+  const existingProductionMapsQueries = (state.existingProductionInventorySnapshot ?? []).map((i) => i.mapsQuery).filter((q): q is string => !!q && q.trim().length > 0)
+  const duplicates = checkForDuplicates(intakeRecords, existingProductionMapsQueries)
+  const catalogGate = evaluateCatalogGate({ expectedCanonicalCount: intakeRecords.length, stagedRecords: intakeRecords, intakeFailures: [], duplicates })
   const locationGate = evaluateLocationGate({ records: intakeRecords })
   const presentationGate = evaluatePresentationGate({ records: intakeRecords })
   const editorialGate = evaluateEditorialQualityGate({ records: intakeRecords })
@@ -2158,8 +2396,10 @@ const TERMINAL_STAGE = 'LAUNCH_READINESS_BOUNDARY_DONE'
 
 export interface DriveMetroLaunchOptions {
   categoryPlan: CategoryCoveragePlan
-  /** Configurable "meaningful depth" floors for specific named areas (e.g. Carlsbad/Oceanside) — see GeographicDepthTarget doc in metroLaunch.ts. Defaults to none (plain zero-check only). */
+  /** Configurable "meaningful depth" floors for specific named areas (e.g. Carlsbad/Oceanside) — see GeographicDepthTarget doc in metroLaunch.ts. Defaults to none (plain zero-check only), UNLESS autoDeriveDepthTargetsFromGeography is also set. */
   depthTargets?: GeographicDepthTarget[]
+  /** Chief Phase 2AH (Green Bay incident, 2026-09-10) — when true AND depthTargets is omitted, stepM2 derives generic per-neighborhood floors from THIS run's own real M1 geography instead of the plain `[]` default. Set by cli.ts's bare `run metro_launch` command whenever no explicit --geo-depth-plan was given and the metro isn't the frozen San Diego project — never set by a direct driveMetroLaunch() caller/test that doesn't explicitly opt in, so existing depthTargets-omitting callers keep their exact prior `[]` behavior. */
+  autoDeriveDepthTargetsFromGeography?: boolean
   /** Bounds how many stage-steps ONE call will perform — prevents an unbounded synchronous loop even with guardrails misconfigured. */
   maxSteps?: number
   /** ENSURE_METRO_PROJECT: overrides the derived agent.projects.name for this metro. Defaults to a humanized form of projectId (e.g. "vienna_austria" -> "Vienna Austria Metro"). */
@@ -2248,7 +2488,7 @@ export async function driveMetroLaunch(deps: MetroDriverDeps, projectId: string,
         run = await stepM1(deps, run)
         break
       case 'M2_CATEGORY_COVERAGE_PLAN':
-        run = await stepM2(deps, run, options.categoryPlan, options.depthTargets ?? [])
+        run = await stepM2(deps, run, options.categoryPlan, options.depthTargets, options.autoDeriveDepthTargetsFromGeography)
         break
       case 'M3_BROAD_DISCOVERY':
         run = await stepM3(deps, run)

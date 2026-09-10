@@ -174,6 +174,17 @@ export type ItemCertificationOutcome =
    * its specific reason in rejectionReasons.
    */
   | 'REJECTED_NOT_LAUNCH_QUALITY'
+  /**
+   * Chief Phase 2AH (2026-09-10 instruction, Green Bay contamination
+   * incident) — OUT_OF_MARKET_CONTAMINATION_GATE dropped this candidate
+   * because its venue/address genuinely belongs to a DIFFERENT metro's
+   * known geography (e.g. a Carlsbad/Chula Vista venue surfacing inside a
+   * Green Bay build after a targeted-gap-research call literally asked
+   * for candidates in a wrong-metro neighborhood name). Never repaired —
+   * there is no legitimate way to turn a wrong-city venue into a right-
+   * city one, so this is always a drop, never a retry.
+   */
+  | 'REJECTED_OUT_OF_MARKET'
 
 export interface ItemCertificationRecord {
   venueName: string

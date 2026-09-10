@@ -16,7 +16,19 @@
 // Phase 2F — the HIGH-LEVEL commands (spec section 4). Jerry does not
 // manage individual execution ids for normal operation; these drive a
 // whole playbook run to completion/NEEDS_JERRY/BLOCKED in one command:
-//   tsx agent-service/cli.ts run metro_launch <projectKey> [--category-plan file.json] [--m0 decisions.json] [--metro-area-facts facts.json] [--official-list-creator-id uuid] [--flagship-list-title "Fall 2026 — Vienna Metro"]
+//   tsx agent-service/cli.ts run metro_launch <projectKey> [--category-plan file.json] [--geo-depth-plan file.json] [--m0 decisions.json] [--metro-area-facts facts.json] [--metro-slug slug] [--existing-inventory-search-term "term"] [--official-list-creator-id uuid] [--flagship-list-title "Fall 2026 — Vienna Metro"]
+//     --category-plan/--geo-depth-plan: omit to get a metro-agnostic
+//       default (DEFAULT_CATEGORY_COVERAGE_PLAN; geo depth targets
+//       auto-derived from this run's own real M1 neighborhoods) — NEVER
+//       San Diego's frozen manifest, unless projectId is literally
+//       "san_diego"/"san-diego" (see defaultMetroManifest.ts's doc comment
+//       for the 2026-09-10 incident this fixed).
+//     --metro-slug: the real production metro_areas.slug (e.g.
+//       "green-bay") — distinct from projectId, defaults to projectId for
+//       backward compatibility.
+//     --existing-inventory-search-term: overrides the region name used to
+//       search for already-live production items this metro's build
+//       should reuse rather than duplicate — defaults to metroAreaFacts.name.
 //   tsx agent-service/cli.ts run destination_hub_lifecycle <projectKey> --candidate candidate.json
 //   tsx agent-service/cli.ts status <playbookKey> <projectKey>
 //   tsx agent-service/cli.ts pause <playbookKey> <projectKey>
@@ -51,6 +63,7 @@ import { RemoteAiExecutor } from './specialists/remoteAiExecutor'
 import { AnthropicMessagesAdapter } from './specialists/remoteAiExecutor'
 import { OpenAiAdapter } from './specialists/openAiAdapter'
 import { SAN_DIEGO_CATEGORY_PLAN, SAN_DIEGO_GEOGRAPHIC_DEPTH_TARGETS } from './playbooks/sanDiegoManifest'
+import { DEFAULT_CATEGORY_COVERAGE_PLAN } from './playbooks/defaultMetroManifest'
 import type { CategoryCoveragePlan, GeographicDepthTarget } from './playbooks/metroLaunch'
 import type { DiscoveryCandidate } from './playbooks/destinationHubLifecycle'
 
@@ -146,10 +159,50 @@ async function main() {
       // here too is deliberate belt-and-suspenders, never wasted work.
       await ensureMetroProject({}, projectId, { projectName, projectSummary })
 
+      // Chief Phase 2AH root-cause fix (Green Bay contamination incident,
+      // 2026-09-10): SAN_DIEGO_CATEGORY_PLAN/SAN_DIEGO_GEOGRAPHIC_DEPTH_TARGETS
+      // are San Diego's own FROZEN historical manifest (Jerry's explicit
+      // instruction: preserve that exact behavior, but ONLY when the
+      // metro actually being built IS San Diego). They must never again
+      // be the implicit default for any other metro — that silent
+      // fallback is exactly what fed real San Diego neighborhood names
+      // (Carlsbad/Oceanside/Chula Vista/Coronado) into a live Green Bay
+      // web-research call. `projectId` is checked, never `--metro-slug`,
+      // since this decision has to be made before `--metro-slug` (below)
+      // is even parsed, and San Diego's real historical project key IS
+      // its own slug convention ("san_diego"/"san-diego" — both accepted).
+      const isFrozenSanDiegoProject = projectId === 'san_diego' || projectId === 'san-diego'
       const planFlagIdx = flags.indexOf('--category-plan')
-      const categoryPlan: CategoryCoveragePlan = planFlagIdx >= 0 ? readJson(flags[planFlagIdx + 1]) : SAN_DIEGO_CATEGORY_PLAN
+      const categoryPlan: CategoryCoveragePlan = planFlagIdx >= 0 ? readJson(flags[planFlagIdx + 1]) : isFrozenSanDiegoProject ? SAN_DIEGO_CATEGORY_PLAN : DEFAULT_CATEGORY_COVERAGE_PLAN
       const geoDepthFlagIdx = flags.indexOf('--geo-depth-plan')
-      const depthTargets: GeographicDepthTarget[] = geoDepthFlagIdx >= 0 ? readJson(flags[geoDepthFlagIdx + 1]) : SAN_DIEGO_GEOGRAPHIC_DEPTH_TARGETS
+      // No metro-agnostic default here at all (requirement 2/3): when no
+      // explicit --geo-depth-plan is given and this isn't the frozen San
+      // Diego project, `depthTargets` stays undefined — metroLaunchDriver.ts's
+      // stepM2 then derives generic floors from THIS run's own real M1
+      // neighborhoods (deriveDefaultDepthTargets), which can never
+      // reference another metro's geography by construction. This
+      // satisfies "generate the metro-specific geo plan automatically
+      // from the normal planning methodology" rather than "fail clearly" —
+      // M1 always runs before M2 needs this, so there is no chicken-and-egg
+      // problem requiring a hard failure instead.
+      const depthTargets: GeographicDepthTarget[] | undefined = geoDepthFlagIdx >= 0 ? readJson(flags[geoDepthFlagIdx + 1]) : isFrozenSanDiegoProject ? SAN_DIEGO_GEOGRAPHIC_DEPTH_TARGETS : undefined
+      // Only the bare-command path (no explicit --geo-depth-plan, not the
+      // frozen San Diego project) opts into deriving depth targets from
+      // this run's own real M1 geography — see DriveMetroLaunchOptions's
+      // doc. A direct driveMetroLaunch() caller that never sets this stays
+      // on the old, safe `depthTargets ?? []` default.
+      const autoDeriveDepthTargetsFromGeography = geoDepthFlagIdx < 0 && !isFrozenSanDiegoProject
+      const metroSlugFlagIdx = flags.indexOf('--metro-slug')
+      // Chief Phase 2AH: the real, established production slug (e.g.
+      // "green-bay") is a distinct decision from `projectId` (the CLI/
+      // task-tracking key, e.g. "green_bay_wisconsin") — previously
+      // conflated, which shipped `metro_areas.slug = 'green_bay_wisconsin'`
+      // instead of the kebab-case convention every other metro uses.
+      // Defaults to `projectId` only for backward compatibility with
+      // existing runs that never distinguished the two.
+      const metroSlug: string | undefined = metroSlugFlagIdx >= 0 ? flags[metroSlugFlagIdx + 1] : undefined
+      const existingInventorySearchTermFlagIdx = flags.indexOf('--existing-inventory-search-term')
+      const existingInventorySearchTerm: string | undefined = existingInventorySearchTermFlagIdx >= 0 ? flags[existingInventorySearchTermFlagIdx + 1] : undefined
       const m0FlagIdx = flags.indexOf('--m0')
       if (m0FlagIdx >= 0) {
         const m0: MetroM0Decisions = readJson(flags[m0FlagIdx + 1])
@@ -183,7 +236,7 @@ async function main() {
       const officialListCreatorId: string | undefined = officialListCreatorIdFlagIdx >= 0 ? flags[officialListCreatorIdFlagIdx + 1] : undefined
       const flagshipListTitleFlagIdx = flags.indexOf('--flagship-list-title')
       const flagshipListTitle: string | undefined = flagshipListTitleFlagIdx >= 0 ? flags[flagshipListTitleFlagIdx + 1] : undefined
-      const run = await driveMetroLaunch({ runStore, execStore: store, executors, metroAreaFacts, officialListCreatorId, flagshipListTitle }, projectId, { categoryPlan, depthTargets })
+      const run = await driveMetroLaunch({ runStore, execStore: store, executors, metroAreaFacts, officialListCreatorId, flagshipListTitle, metroAreaSlug: metroSlug, existingInventorySearchTerm }, projectId, { categoryPlan, depthTargets, autoDeriveDepthTargetsFromGeography })
       console.log(JSON.stringify(run, null, 2))
       return
     }
@@ -339,6 +392,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error(err instanceof Error ? err.message : err)
+  console.error(err instanceof Error ? (err.stack || err.message) : err)
   process.exitCode = 1
 })

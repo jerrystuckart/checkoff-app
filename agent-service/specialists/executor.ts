@@ -291,7 +291,22 @@ export async function retryExecution(store: ExecutionStore, executionId: string,
 export async function markExecutorUnavailable(store: ExecutionStore, executionId: string, reason: string): Promise<ExecutionRecord> {
   const record = await store.get(executionId)
   if (!record) throw new Error(`No execution registered with id "${executionId}".`)
-  if (record.status === 'COMPLETE') throw new Error(`Execution "${executionId}" is already COMPLETE — cannot mark EXECUTOR_UNAVAILABLE.`)
+  // Idempotent no-op, not a thrown error, when the record is already
+  // COMPLETE (found during the real Green Bay metro launch run: a stage
+  // resumed across CLI invocations can re-issue the SAME deterministic
+  // executionId for a candidate whose earlier attempt actually finished
+  // executing — including successfully completing in the background —
+  // after the driver process had already exited/crashed for an unrelated
+  // reason without persisting that success into run.state. The execution
+  // record itself is the source of truth and is genuinely COMPLETE; the
+  // caller (runStepWithRetry) already knows how to treat a bare COMPLETE
+  // ExecutionRecord as an accepted result (see the "idempotent-replay"
+  // handling there), so surfacing this as a thrown crash — rather than
+  // just returning the completed record unmodified, same discipline as
+  // registerExecution's own idempotent-replay path — would destroy a
+  // real completed result over what is actually a race, not a bug in the
+  // completed data itself.
+  if (record.status === 'COMPLETE') return record
   record.status = 'EXECUTOR_UNAVAILABLE'
   record.errorReason = reason
   await store.put(record)

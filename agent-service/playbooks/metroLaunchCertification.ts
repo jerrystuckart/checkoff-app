@@ -37,7 +37,11 @@ export type MetroLaunchVerdict = 'READY_TO_ACTIVATE' | 'BLOCKED'
  * (never run) is treated the same as a FAIL, never silently skipped.
  */
 export const REQUIRED_GATE_CATEGORIES: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  Catalog: ['CATALOG_GATE', 'LOCATION_GATE'],
+  // OUT_OF_MARKET_CONTAMINATION_GATE (Chief Phase 2AH, 2026-09-10, Green
+  // Bay incident) — a catalog containing venues that genuinely belong to
+  // a different, already-known metro (or resolve to the wrong state) must
+  // never reach READY_TO_ACTIVATE. See outOfMarketContamination.ts.
+  Catalog: ['CATALOG_GATE', 'LOCATION_GATE', 'OUT_OF_MARKET_CONTAMINATION_GATE'],
   // ITEM_CERTIFICATION_GATE (itemCertificationLoop.ts) is listed FIRST in
   // Editorial deliberately: every item must individually certify via the
   // bounded ITEM_CERTIFICATION_LOOP (own research, own critique) BEFORE

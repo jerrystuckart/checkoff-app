@@ -182,6 +182,11 @@ export class DbExecutionStore implements ExecutionStore {
     }
 
     if (existing.status !== targetStatus) {
+      if (existing.status === 'DONE' || existing.status === 'CANCELED') {
+        console.error(
+          `[DIAGNOSTIC] Refusing to transition ${existing.status} -> ${targetStatus} for executionId=${executionId} idempotencyKey=${record.request.idempotencyKey} existingTaskId=${existing.id} recordStatus=${record.status} attempts=${record.attempts}`
+        )
+      }
       await this.deps.transitionTask({
         taskId: existing.id,
         toStatus: targetStatus,
