@@ -14,6 +14,7 @@ import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { isItemInSeason } from '../lib/seasonFilter'
 import { isWithinNearbyRadius, distLabel, rankNearbyItems, hasUsableCoordinates } from '../lib/nearbyRanking'
 import { mergeSearchMatchCounts } from '../lib/searchMatch'
+import { applySelectTag, applyRemoveTag } from '../lib/tagSelection'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
@@ -341,24 +342,26 @@ export default function DiscoverScreen({ navigation, route }) {
   }
 
   // ── Tag chip selection ───────────────────────────────────────────────────
+  // State-shape logic lives in lib/tagSelection.js (pure, no setState calls)
+  // — see that file's docstring for why: a stray reference to a since-
+  // removed setter here previously crashed the app on every tag-chip tap.
   function selectTag(tag) {
-    if (activeTags.some(t => t.id === tag.id)) return
-    const next = [...activeTags, tag]
-    setActiveTags(next)
-    setSuggestions([])
-    setSearchText('')
-    setBodyMatchIds(null)
-    fetchTagResultItems(next.map(t => t.id))
+    const result = applySelectTag(activeTags, tag)
+    if (!result.changed) return
+    setActiveTags(result.activeTags)
+    if (result.clearSuggestions) setSuggestions([])
+    if (result.clearSearchText) setSearchText('')
+    fetchTagResultItems(result.activeTags.map(t => t.id))
   }
 
   function removeTag(tagId) {
-    const next = activeTags.filter(t => t.id !== tagId)
-    setActiveTags(next)
-    if (next.length === 0) {
+    const result = applyRemoveTag(activeTags, tagId)
+    setActiveTags(result.activeTags)
+    if (result.shouldClearResults) {
       setTagResultItems(null)
       setTagMatchData({ counts: {} })
     } else {
-      fetchTagResultItems(next.map(t => t.id))
+      fetchTagResultItems(result.activeTags.map(t => t.id))
     }
   }
 
