@@ -60,6 +60,27 @@ export const GREEN_BAY_CANONICAL_NEIGHBORHOODS: readonly string[] = [
 
 import type { NeighborhoodMunicipalityRegistry } from './geographicConsistencyAudit'
 
+/**
+ * Chief Phase 2AJ (2026-09-10) — Jerry's explicit instruction: all 13
+ * canonical neighborhoods must exist as real `neighborhoods` rows in
+ * production even before any item is assigned to them (Hobart and Allouez
+ * currently have zero retained items — that's an accepted, reported fact,
+ * not something to fabricate an item to fix). A neighborhood row needs SOME
+ * centroid to be created at all; for the 11 neighborhoods with real items
+ * this cycle, that centroid is derived from those items' own verified
+ * coordinates (see build-master-sql.ts). For Hobart and Allouez specifically,
+ * this is their real, publicly-known village-center coordinate (Brown
+ * County, WI municipal record — public geographic fact, not business data,
+ * not fabricated) — used ONLY as a placeholder centroid until real items
+ * exist there, at which point a future enrichment pass should recompute it
+ * from real item coordinates the same way every other neighborhood's
+ * centroid already is.
+ */
+export const GREEN_BAY_EMPTY_NEIGHBORHOOD_FALLBACK_CENTROIDS: Readonly<Record<string, { lat: number; lng: number }>> = Object.freeze({
+  Hobart: { lat: 44.4636, lng: -88.1439 },
+  Allouez: { lat: 44.4794, lng: -88.0431 },
+})
+
 export const GREEN_BAY_NEIGHBORHOOD_MUNICIPALITY_REGISTRY: NeighborhoodMunicipalityRegistry = {
   'East Side Green Bay': { municipalityAliases: ['Green Bay'] },
   'West Side Green Bay': { municipalityAliases: ['Green Bay'] },
