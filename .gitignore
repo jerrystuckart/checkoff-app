@@ -121,3 +121,8 @@ assets/dev-preview/
 # never committed.
 .chief-gmail-checkpoint.json
 .chief-contacts.json
+
+# Local build artifacts and pipeline scratch output — never source, never committed
+*.aab
+*.log
+scripts/tmp-vienna/
