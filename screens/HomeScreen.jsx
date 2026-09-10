@@ -26,7 +26,6 @@ import { useWhatsGood } from '../lib/useWhatsGood'
 import { useCurrentLocation } from '../lib/currentLocation'
 import { attachActiveCoverImages, attachDisplayEligibleImagePools } from '../lib/coverCandidates'
 import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
-import WhatsGoodDebugPanel from '../components/WhatsGoodDebugPanel'
 import { deriveHomeHeroLayout } from '../lib/homeHeroLayout'
 import { selectNearYouCompactRows } from '../lib/nearYouCompact'
 import CompactHomeHeader from '../components/home/CompactHomeHeader'
@@ -1388,11 +1387,6 @@ async function loadNearbyRail(userId) {
             )}
 
             <WhatsGoodDiscovery items={whatsGood.items} navigation={navigation} colors={colors} userId={user?.id ?? null} />
-
-            {/* Tester-only field-test instrumentation — today that means
-                Jerry only (the sole whats_good_v1 feature_flag_overrides
-                row); see WhatsGoodDebugPanel.jsx's own module doc. */}
-            <WhatsGoodDebugPanel debug={whatsGood.debug} colors={colors} />
           </View>
         )
       })()}
