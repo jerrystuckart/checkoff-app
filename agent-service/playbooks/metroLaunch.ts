@@ -235,15 +235,25 @@ export interface CoverageAuditEvidence {
 }
 
 export interface CoverageGap {
-  kind: 'CATEGORY_BELOW_MINIMUM' | 'CATEGORY_BELOW_TARGET' | 'GEOGRAPHIC_HOLE' | 'GEOGRAPHIC_BELOW_MINIMUM' | 'CATEGORY_OVERREPRESENTED'
+  kind: 'CATEGORY_BELOW_MINIMUM' | 'CATEGORY_BELOW_TARGET' | 'GEOGRAPHIC_HOLE' | 'GEOGRAPHIC_BELOW_MINIMUM' | 'CATEGORY_OVERREPRESENTED' | 'CATEGORY_APPROACHING_DOMINANCE'
   name: string
   detail: string
 }
 
 /**
- * The M4 checkpoint. Never mutates anything — pure evidence-in,
- * gaps-out. An overrepresented category is flagged (not itself a
- * blocker) so a future deep-dive pass can be redirected away from it.
+ * The M4 checkpoint (Vienna post-mortem item 1's CATEGORY_BALANCE_
+ * CHECKPOINT: catch imbalance early, while research is still cheap, not
+ * after hundreds of items are written). Never mutates anything — pure
+ * evidence-in, gaps-out. Neither CATEGORY_APPROACHING_DOMINANCE nor
+ * CATEGORY_OVERREPRESENTED is itself a blocker (see
+ * deriveMetroLoopAction's blockingKinds) — these are SOFT dominance
+ * warnings, never rigid equal quotas. A metro genuinely can launch at
+ * 40-50% one category when the destination warrants it; the point of
+ * these two tiers is that Winston sees the warning while a targeted
+ * pass into an underserved category is still cheap, rather than
+ * discovering the skew only after hundreds of items are already
+ * written (Vienna's initial 177-item catalog: 55/177 = 31% Arts &
+ * Culture, found only in a later manual review).
  */
 export function auditCoverage(evidence: CoverageAuditEvidence): CoverageGap[] {
   const gaps: CoverageGap[] = []
@@ -257,6 +267,8 @@ export function auditCoverage(evidence: CoverageAuditEvidence): CoverageGap[] {
       gaps.push({ kind: 'CATEGORY_BELOW_TARGET', name: target.categoryName, detail: `${count}/${target.healthyTarget} healthy target` })
     } else if (count > target.healthyTarget * 2) {
       gaps.push({ kind: 'CATEGORY_OVERREPRESENTED', name: target.categoryName, detail: `${count} vs. healthy target ${target.healthyTarget}` })
+    } else if (count > target.healthyTarget * 1.5) {
+      gaps.push({ kind: 'CATEGORY_APPROACHING_DOMINANCE', name: target.categoryName, detail: `${count} is ${(count / target.healthyTarget).toFixed(1)}x healthy target ${target.healthyTarget} — not yet overrepresented, but worth watching before more research goes into this category` })
     }
   }
 

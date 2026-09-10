@@ -71,6 +71,12 @@ import {
   type PlanRelaxationRecord,
 } from '../playbooks/coveragePlanRelaxation'
 import { extractCanonicalVenueOptions, resolveDefaultCanonicalVenueName, resolveConfirmedCanonicalVenueName } from '../playbooks/canonicalVenueName'
+import { evaluatePartnerPotential, type PartnerPotentialEvaluation } from '../playbooks/partnerPotential'
+import { clusterByPlaceId, buildVenueClusterReviewNotes, type VenueCluster } from '../playbooks/venueDuplicateDetection'
+import { analyzeCatalogVoice, type VoiceCatalogEntry } from '../playbooks/catalogVoiceDiagnostics'
+import { buildCostReport } from '../playbooks/metroCostReport'
+import { buildStrategicCoverageReport, type StrategicCoverageReport } from '../playbooks/metroStrategicReport'
+import { buildStageArtifactFiles } from './metroStageArtifacts'
 
 export const METRO_LAUNCH_DRIVER_PLAYBOOK_KEY = 'metro_launch'
 
@@ -156,6 +162,16 @@ interface MetroDriverState {
   catalogPruningDrops?: Array<{ candidateName: string; reason: 'REJECTED_GEO_UNRESOLVED' | 'REJECTED_INSUFFICIENT_TAG_CONTEXT' | 'REJECTED_UNCLASSIFIABLE_METADATA'; detail: string }>
   /** Every item M8.5 successfully repaired (currently only tag repair has a real second attempt) rather than dropping — reportable alongside catalogPruningDrops. */
   catalogPruningRepairs?: Array<{ candidateName: string; repaired: 'TAGS' }>
+  /** Chief Phase 3B (Vienna post-mortem item 3) — certified items whose GEO_ENRICHMENT result shares a Google Place ID with another certified item. Reporting-only, never an automatic drop (see venueDuplicateDetection.ts's own doc — same venue is not automatically a duplicate). Recomputed fresh every M8 pass. */
+  venueDuplicateClusters?: VenueCluster[]
+  /** Chief Phase 3B (item 6) — names already given their ONE bounded CATALOG_VOICE_PASS rewrite-or-keep decision, across the WHOLE run (same never-re-spend-a-second-call discipline as catalogPruningAttempted). */
+  catalogVoicePassAttempted?: string[]
+  /** Every item CATALOG_VOICE_PASS actually rewrote (never every item it considered — most flagged items may legitimately come back unchanged when a rewrite would weaken specificity). */
+  catalogVoiceRewrites?: Array<{ candidateName: string; dominantOpeningWord: string }>
+  /** Chief Phase 3B (item 10) — the final "what is still weak?" strategic coverage report, computed once at M10 from the frozen retained catalog. */
+  strategicReport?: StrategicCoverageReport
+  /** Chief Phase 3B (item 7) — filenames actually handed to deps.writeStageArtifact at M10 (empty when no writer was configured — this driver never assumes disk access it wasn't given). */
+  stageArtifactManifest?: string[]
 }
 
 /**
@@ -195,6 +211,14 @@ export interface DriverItemCertificationRecord {
    * uncensored — see stepM8_5CatalogPruning's REJECTED_UNCLASSIFIABLE_METADATA).
    */
   dbCategory?: RealDbCategory
+  /**
+   * Chief Phase 3B (Vienna post-mortem item 2) — an ADVISORY-ONLY signal
+   * (see partnerPotential.ts's own doc for the explicit non-goal: this
+   * never determines editorial inclusion). Resolved once, alongside
+   * dbCategory, by stepM8BatchCertification's METADATA_COMPLETENESS_GATE
+   * pass.
+   */
+  partnerPotential?: PartnerPotentialEvaluation
 }
 
 export interface HomeListPlanEntry {
@@ -288,6 +312,8 @@ export interface MetroDriverDeps {
   ensureProject?: (input: EnsureProjectInput) => Promise<EnsureProjectResult>
   /** runStepWithInfraRetry's backoff delay — a real setTimeout-based sleep by default, instant in tests. */
   sleepImpl?: (ms: number) => Promise<void>
+  /** Chief Phase 3B (Vienna post-mortem item 7): persists one durable stage artifact (see metroStageArtifacts.ts). Defaults to a no-op — this driver never assumes filesystem access it wasn't explicitly given; a real production caller wires this to a file write under the metro's own temp/output directory. */
+  writeStageArtifact?: (name: string, content: string) => Promise<void>
 }
 
 export function executionId(runId: string, stage: string, label: string): string {
@@ -1396,8 +1422,12 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
       continue
     }
     metadataResults.push(evaluateItemMetadata({ candidateName: r.candidateName, body: r.finalBody, dbCategory }))
-    if (itemCertificationsWithDbCategory[r.candidateName]?.dbCategory !== dbCategory) {
-      itemCertificationsWithDbCategory[r.candidateName] = { ...itemCertificationsWithDbCategory[r.candidateName], dbCategory }
+    // partnerPotential (Chief Phase 3B item 2) — advisory only, resolved
+    // in the same pass as dbCategory since both are pure functions of
+    // (dbCategory, body, tags) that only need computing once per item.
+    const partnerPotential = evaluatePartnerPotential({ dbCategory, body: r.finalBody, tags: r.finalTags })
+    if (itemCertificationsWithDbCategory[r.candidateName]?.dbCategory !== dbCategory || itemCertificationsWithDbCategory[r.candidateName]?.partnerPotential?.score !== partnerPotential.score) {
+      itemCertificationsWithDbCategory[r.candidateName] = { ...itemCertificationsWithDbCategory[r.candidateName], dbCategory, partnerPotential }
       dbCategoryChanged = true
     }
   }
@@ -1453,6 +1483,12 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
   state.geoEnrichmentResults = geoRun.records.map((r) => ({ candidateName: r.candidateName, classification: r.classification, reason: r.reason, placeId: r.placeId, formattedAddress: r.formattedAddress, lat: r.lat, lng: r.lng, websiteUrl: r.websiteUrl, geoRadiusM: r.geoRadiusM }))
   const geoGate = evaluateGeoEnrichmentCertificationGate(geoRun.records.map((r): GeoEnrichmentItemResult => ({ candidateName: r.candidateName, classification: r.classification, reason: r.reason })))
 
+  // Chief Phase 3B (item 3) — canonical venue clustering by Google Place
+  // ID, reporting-only (see venueDuplicateDetection.ts). Recomputed fresh
+  // every M8 pass, never accumulated, so a later-dropped item's cluster
+  // membership never lingers stale.
+  state.venueDuplicateClusters = clusterByPlaceId(certified.map((r) => ({ candidateName: r.candidateName, placeId: geoRun.records.find((g) => g.candidateName === r.candidateName)?.placeId ?? null, finalBody: r.finalBody })))
+
   const gates: StagingGateResult[] = [...distinctivenessGates, itemCertificationGate, tagGate, metadataGate, geoGate]
   state.batchCertificationGates = gates
 
@@ -1468,7 +1504,7 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
   const needsPruning = [...new Set([...tagFailingNames, ...unclassifiedForMetadata, ...geoFailingNames])].filter((n) => !alreadyPruned.has(n))
 
   run.state = state
-  run.currentStage = needsPruning.length > 0 ? 'M8_5_CATALOG_PRUNING' : 'M9_HOME_LIST_MIRROR'
+  run.currentStage = needsPruning.length > 0 ? 'M8_5_CATALOG_PRUNING' : 'M8_75_CATALOG_VOICE_PASS'
   return run
 }
 
@@ -1609,6 +1645,109 @@ async function stepM8_5CatalogPruning(deps: MetroDriverDeps, run: PlaybookRunRec
   state.catalogPruningRepairs = repairs
   run.state = state
   run.currentStage = 'M8_BATCH_CERTIFICATION'
+  return run
+}
+
+// ---------------------------------------------------------------------------
+// M8.75 — CATALOG_VOICE_PASS (Chief Phase 3B, Vienna post-mortem item 6).
+// Runs once the retained catalog is stable (after M8.5 pruning has
+// nothing left to do). Diagnostic-driven, never blocking: identifies
+// items contributing to a repeated opening word/phrase across the batch
+// (catalogVoiceDiagnostics.ts) and gives each ONE bounded rewrite
+// attempt, same discipline as every other per-item repair stage in this
+// driver. A rewrite that fails to validate (drops the quoted venue name,
+// or the model declines) simply KEEPS the original body — this stage
+// never regresses or blocks a certified item over a voice preference.
+// ---------------------------------------------------------------------------
+
+export const MAX_VOICE_REWRITE_ATTEMPTS = 2
+
+async function rewriteOneItemVoice(deps: MetroDriverDeps, run: PlaybookRunRecord, candidateName: string, body: string, venueName: string, dominantOpeningWord: string): Promise<string | null> {
+  const safeName = candidateName.replace(/[^a-zA-Z0-9_-]/g, '_')
+
+  for (let attempt = 1; attempt <= MAX_VOICE_REWRITE_ATTEMPTS; attempt++) {
+    const label = `voice-${safeName}-attempt${attempt}`
+    const request: SpecialistExecutionRequest = {
+      specialist: 'checkoff_editor',
+      playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
+      stage: 'M8_75_CATALOG_VOICE_PASS',
+      objective: `${run.projectId}: vary the opening of ${candidateName} away from the overused "${dominantOpeningWord}" opener`,
+      inputs: { mode: 'VOICE_REWRITE', body, venueName, dominantOpeningWord },
+      requiredEvidenceKeys: ['body'],
+      methodologyId: 'checkoff_editor',
+      methodologyVersion: 'v1',
+      executionId: executionId(run.runId, 'VOICE', label),
+      projectId: run.projectId,
+      destinationId: null,
+      metroId: run.projectId,
+      allowedCapabilities: ['content_editorial'],
+      authorityOperations: ['metro_launch.build_internal_artifact'],
+      idempotencyKey: executionId(run.runId, 'VOICE', label),
+    }
+    const outcome = await runStepWithInfraRetry(deps, run, request)
+    if (outcome.kind !== 'ACCEPTED') continue
+    const newBody = outcome.envelope?.evidence.body
+    if (typeof newBody !== 'string' || !newBody.trim()) continue
+    // Never accept a rewrite that dropped the quoted venue name, or one
+    // that changed length so drastically it likely dropped/invented
+    // facts — same "never regress" discipline as every other repair
+    // pass. A rewrite that fails these checks is not retried further
+    // within this attempt; the outer loop still gets one more try.
+    if (!checkVenueQuoted(newBody, venueName).pass) continue
+    const lengthRatio = newBody.length / body.length
+    if (lengthRatio < 0.5 || lengthRatio > 2) continue
+    return newBody
+  }
+  return null
+}
+
+async function stepCatalogVoicePass(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const certifications = state.itemCertifications ?? {}
+  const certified = Object.values(certifications).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
+
+  if (certified.length === 0) {
+    run.currentStage = 'M9_HOME_LIST_MIRROR'
+    return run
+  }
+
+  const entries: VoiceCatalogEntry[] = certified.map((r) => ({ candidateName: r.candidateName, body: r.finalBody }))
+  const diagnostics = analyzeCatalogVoice(entries)
+  const alreadyAttempted = new Set(state.catalogVoicePassAttempted ?? [])
+  const toProcess = diagnostics.flaggedCandidateNames.filter((n) => !alreadyAttempted.has(n))
+
+  if (toProcess.length === 0) {
+    run.currentStage = 'M9_HOME_LIST_MIRROR'
+    return run
+  }
+
+  const batch = toProcess.slice(0, (deps.guardrails ?? DEFAULT_DRIVER_GUARDRAILS).maxConcurrentExecutions)
+  const itemCertifications = { ...certifications }
+  const attempted = new Set(alreadyAttempted)
+  const rewrites = [...(state.catalogVoiceRewrites ?? [])]
+  const certifiedByName = new Map(certified.map((r) => [r.candidateName, r]))
+
+  for (const candidateName of batch) {
+    const record = certifiedByName.get(candidateName)
+    attempted.add(candidateName)
+    if (!record) continue
+    const dominantOpeningWord = diagnostics.dominantOpeningWords.find((w) => record.finalBody.trim().toLowerCase().startsWith(w)) ?? diagnostics.dominantOpeningWords[0] ?? ''
+    const newBody = await rewriteOneItemVoice(deps, run, candidateName, record.finalBody, record.venueName, dominantOpeningWord)
+    if (newBody && newBody !== record.finalBody) {
+      itemCertifications[candidateName] = { ...itemCertifications[candidateName], finalBody: newBody }
+      rewrites.push({ candidateName, dominantOpeningWord })
+    }
+  }
+
+  state.itemCertifications = itemCertifications
+  state.catalogVoicePassAttempted = [...attempted]
+  state.catalogVoiceRewrites = rewrites
+  run.state = state
+  // Stays on this stage until every flagged item has had its one
+  // attempt (mirrors M8.5's own batching-across-resumes pattern) —
+  // never blocks on the diagnostic itself, so a resumed run always
+  // makes forward progress even if some rewrites keep their original body.
+  run.currentStage = toProcess.length <= batch.length ? 'M9_HOME_LIST_MIRROR' : 'M8_75_CATALOG_VOICE_PASS'
   return run
 }
 
@@ -1892,6 +2031,49 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
   const report = certifyMetroLaunch({ metroName: run.projectId, gates: [...existingGates, imageGate, catalogGate, locationGate, presentationGate, editorialGate, activationKitGate], summary })
   state.finalCertificationReport = report
   state.rejectedItemCount = rejected.length + (state.editorRejectedCandidates ?? []).length
+
+  // Chief Phase 3B (items 7, 8, 10) — the strategic close-out report +
+  // durable stage artifacts, computed once against the frozen retained
+  // catalog. Reuses buildAuditEvidence (the same category/neighborhood
+  // counting + coverage-gap logic M4/stepLaunchBoundary already use) so
+  // this report never re-derives a second, parallel notion of coverage.
+  const { evidence: auditEvidence } = buildAuditEvidence(state)
+  const coverageGaps = auditCoverage(auditEvidence)
+  const importantNeighborhoodNames = (state.neighborhoods ?? []).filter((n) => n.kind === 'core_urban' || n.kind === 'important_neighborhood').map((n) => n.name)
+  const duplicateClusters = state.venueDuplicateClusters ?? []
+  const costReport = buildCostReport(state.usageByStage ?? {}, state.geoEnrichmentPaidCalls ?? 0, state.geoEnrichmentCacheHits ?? 0, certified.length)
+  state.strategicReport = buildStrategicCoverageReport({
+    finalItemCount: certified.length,
+    categoryCounts: auditEvidence.categoryCounts,
+    neighborhoodCounts: auditEvidence.neighborhoodCounts,
+    allImportantNeighborhoodNames: importantNeighborhoodNames,
+    partnerPotentialInventoryCount: certified.filter((r) => (r.partnerPotential?.score ?? 0) > 0).length,
+    duplicateClustersFound: duplicateClusters.length,
+    duplicateCandidateNamesInClusters: duplicateClusters.reduce((sum, c) => sum + c.members.length, 0),
+    weakCandidatesRejected: rejected.length,
+    coverageGaps,
+    costReport,
+  })
+
+  // Durable stage artifacts (item 7) — a real write only happens when a
+  // caller has configured deps.writeStageArtifact; this driver never
+  // assumes filesystem access it wasn't explicitly given.
+  if (deps.writeStageArtifact) {
+    const files = buildStageArtifactFiles({
+      candidates: state.candidates ?? [],
+      itemCertifications: state.itemCertifications ?? {},
+      catalogPruningDrops: state.catalogPruningDrops ?? [],
+      homeListPlan: plan,
+      categoryCounts: auditEvidence.categoryCounts,
+      neighborhoodCounts: auditEvidence.neighborhoodCounts,
+      homeListSqlPatch: state.homeListSqlPatch ?? null,
+      venueDuplicateClusters: duplicateClusters,
+      finalReportJson: report,
+    })
+    for (const [name, content] of Object.entries(files)) await deps.writeStageArtifact(name, content)
+    state.stageArtifactManifest = Object.keys(files)
+  }
+
   run.state = state
   run.currentStage = 'LAUNCH_READINESS_BOUNDARY'
   return run
@@ -1955,6 +2137,14 @@ async function stepLaunchBoundary(run: PlaybookRunRecord): Promise<PlaybookRunRe
         : 'Some gates show synthetic placeholder data only in this driver phase — a real build would need real M9/M13 evidence before this recommendation carries weight.',
     evidence: { candidateCount: (state.candidates ?? []).length, checkoffizedCount: (state.checkoffizedItems ?? []).length, gates },
     metroLaunchCertification: finalReport ?? null,
+    // Chief Phase 3B — the Vienna post-mortem close-out additions.
+    // strategicCoverageReport is the "what is still weak?" report
+    // (item 10, computed at M10). venueClusterReviewNotes are
+    // reporting-only duplicate-venue prompts (item 3) — never an
+    // automatic drop; Jerry (or a future bounded editorial pass)
+    // decides same-experience vs. distinct-experience per cluster.
+    strategicCoverageReport: state.strategicReport ?? null,
+    venueClusterReviewNotes: buildVenueClusterReviewNotes(state.venueDuplicateClusters ?? []),
     impact: 'No PROMOTION/ANNOUNCEMENT happens until Jerry explicitly approves that business decision — this boundary is inert by itself. The metro row, catalog, and lists become live (is_active=true, the normal production default) as soon as the generated SQL is applied; that is a mechanical step, not the thing this approval gates.',
     options: ['Approve public launch (announce/promote)', 'Hold for more research', 'Request changes to the candidate/editorial set'],
   })
@@ -2089,6 +2279,9 @@ export async function driveMetroLaunch(deps: MetroDriverDeps, projectId: string,
         break
       case 'M8_5_CATALOG_PRUNING':
         run = await stepM8_5CatalogPruning(deps, run)
+        break
+      case 'M8_75_CATALOG_VOICE_PASS':
+        run = await stepCatalogVoicePass(deps, run)
         break
       case 'M9_HOME_LIST_MIRROR':
         run = await stepM9HomeListMirror(deps, run)

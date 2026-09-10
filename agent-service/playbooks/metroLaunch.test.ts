@@ -60,6 +60,20 @@ test('auditCoverage: overrepresented category flagged, not treated as a blocker'
   assert.ok(gaps.some((g) => g.kind === 'CATEGORY_OVERREPRESENTED' && g.name === 'Food & drink'))
 })
 
+test('auditCoverage: a category between 1.5x and 2x healthy target is a soft CATEGORY_APPROACHING_DOMINANCE warning, not blocking', () => {
+  const evidence: CoverageAuditEvidence = {
+    categoryCounts: [{ categoryName: 'Food & drink', count: 50 }, { categoryName: 'Sports', count: 8 }], // 50/30 = 1.67x
+    neighborhoodCounts: [{ neighborhoodName: 'Downtown', count: 5 }],
+    plan: PLAN,
+    allNeighborhoods: NEIGHBORHOODS,
+  }
+  const gaps = auditCoverage(evidence)
+  const gap = gaps.find((g) => g.name === 'Food & drink')
+  assert.equal(gap?.kind, 'CATEGORY_APPROACHING_DOMINANCE')
+  const { blockingGaps } = deriveMetroLoopAction(gaps)
+  assert.ok(!blockingGaps.some((g) => g.kind === 'CATEGORY_APPROACHING_DOMINANCE'))
+})
+
 test('auditCoverage: an empty core_urban/important_neighborhood is a GEOGRAPHIC_HOLE', () => {
   const evidence: CoverageAuditEvidence = {
     categoryCounts: [{ categoryName: 'Food & drink', count: 40 }, { categoryName: 'Sports', count: 8 }],

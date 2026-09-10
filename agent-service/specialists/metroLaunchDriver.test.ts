@@ -60,6 +60,22 @@ function scriptTagSelection(executor: TestExecutor) {
       return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { tags: shortlist.slice(0, 6) }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
     }
   )
+  // M8.75 CATALOG_VOICE_PASS fake: echoes the body back unchanged — a
+  // real "declined to rewrite" outcome (see rewriteOneItemVoice's own
+  // "keep the original" discipline), which is exactly what most fixture
+  // batches here should do since they're not testing voice diversity. A
+  // test that DOES want to exercise a real rewrite must call its own
+  // executor.script(executionId, ...) directly (an exact-id match always
+  // wins over any scriptWhen resolver — see TestExecutor.execute) rather
+  // than relying on a later scriptWhen, since resolvers here are checked
+  // in registration order and this one is registered first.
+  executor.scriptWhen(
+    (r) => (r.inputs as { mode?: string }).mode === 'VOICE_REWRITE',
+    (r) => {
+      const body = (r.inputs as { body?: string }).body ?? ''
+      return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { body }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
+    }
+  )
 }
 
 /** Scripts a full, deterministic TestExecutor for the synthetic scenario described above. */
@@ -376,7 +392,7 @@ test('driveMetroLaunch: a plateaued district-depth gap (Carlsbad 4/5) self-relax
   const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, {
     categoryPlan: smallPlan,
     depthTargets: [{ neighborhoodName: 'Carlsbad', minimumItems: 5 }],
-    maxSteps: 30,
+    maxSteps: 35,
   })
 
   // With only 4 Carlsbad candidates and every M5 pass re-discovering the
@@ -456,7 +472,7 @@ test('driveMetroLaunch: launch-boundary GEOGRAPHY_GATE genuinely PASSES once a d
   const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, {
     categoryPlan: smallPlan,
     depthTargets: [{ neighborhoodName: 'Carlsbad', minimumItems: 5 }],
-    maxSteps: 30,
+    maxSteps: 35,
   })
 
   assert.equal(run.currentStage, 'LAUNCH_READINESS_BOUNDARY')
@@ -2297,6 +2313,97 @@ test('driveMetroLaunch: dbCategory is resolved and persisted from the real, norm
   // fixed visitor-facing title, never "Museum"/"museum"/"restaurant" verbatim.
   const themed = state.homeListPlan.filter((p) => p.kind === 'THEMED')
   assert.ok(!themed.some((p) => p.label === 'Themed list: Museum' || p.label === 'Themed list: museum' || p.label === 'Themed list: restaurant'), 'a raw, un-normalized category label must never appear as a list title')
+})
+
+// ---------------------------------------------------------------------------
+// Chief Phase 3B (Vienna post-mortem regression tests) — partnerPotential,
+// venue duplicate clustering (reporting-only), M8.75 CATALOG_VOICE_PASS
+// sequencing, and the M10 strategic report + stage artifacts.
+// ---------------------------------------------------------------------------
+
+test('driveMetroLaunch: partnerPotential is advisory-only and never blocks certification, venue duplicate clusters are reported (never auto-dropped), and the M10 strategic report + stage artifacts are populated', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  scriptTagSelection(executor)
+
+  const validTags = ['coffee', 'historic', 'family friendly', 'live music', 'outdoor', 'art']
+  const candidates = [
+    { name: 'DupVenueA', category: 'Food & drink', neighborhood: 'Innere Stadt', claimSupported: 'DupVenueA serves a specific dish.', source: 'https://example.com/DupVenueA', needsVerification: false },
+    { name: 'DupVenueB', category: 'Food & drink', neighborhood: 'Innere Stadt', claimSupported: 'DupVenueB serves a specific dish.', source: 'https://example.com/DupVenueB', needsVerification: false },
+    { name: 'SoloCafe', category: 'Food & drink', neighborhood: 'Innere Stadt', claimSupported: 'SoloCafe serves a specific dish.', source: 'https://example.com/SoloCafe', needsVerification: false },
+  ]
+  const certs: Record<string, DriverItemCertificationRecord> = {
+    DupVenueA: { candidateName: 'DupVenueA', venueName: 'DupVenueA', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the signature dish at 'DupVenueA'.", finalTags: validTags, supportingFact: 'DupVenueA serves a specific dish.', verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] },
+    DupVenueB: { candidateName: 'DupVenueB', venueName: 'DupVenueB', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Ask the bartender for a tasting flight at 'DupVenueB'.", finalTags: validTags, supportingFact: 'DupVenueB serves a specific dish.', verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] },
+    SoloCafe: { candidateName: 'SoloCafe', venueName: 'SoloCafe', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Eat a meal at 'SoloCafe'.", finalTags: validTags, supportingFact: 'SoloCafe serves a specific dish.', verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] },
+  }
+
+  const projectId = 'vienna-m10-strategic-report'
+  await seedForBatchCertification(runStore, projectId, candidates, certs)
+
+  const writtenArtifacts: Record<string, string> = {}
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      verifiedTagSnapshot: TEST_TAG_VOCAB,
+      // DupVenueA and DupVenueB deliberately resolve to the SAME Google
+      // Place ID (simulating two discovery-time labels for one real
+      // venue) — SoloCafe gets its own, distinct placeId.
+      placesLookup: async (q: string) => ({
+        topResult: { placeId: q.includes('DupVenueA') || q.includes('DupVenueB') ? 'shared-place-id' : `p-${q}`, name: q, formattedAddress: q, lat: 48.2, lng: 16.37, websiteUri: null, country: 'AT', viewportRadiusM: null },
+        apiError: null,
+      }),
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      writeStageArtifact: async (name, content) => {
+        writtenArtifacts[name] = content
+      },
+    },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 20 }
+  )
+
+  const state = run.state as {
+    itemCertifications: Record<string, DriverItemCertificationRecord>
+    venueDuplicateClusters?: Array<{ placeId: string; members: Array<{ candidateName: string }> }>
+    strategicReport?: { finalItemCount: number; partnerPotentialInventoryCount: number; duplicateClustersFound: number }
+    stageArtifactManifest?: string[]
+  }
+
+  // 1. Every certified item still reaches ITEM_CERTIFIED — nothing about
+  // partnerPotential or duplicate-cluster detection blocks certification.
+  for (const name of ['DupVenueA', 'DupVenueB', 'SoloCafe']) {
+    assert.equal(state.itemCertifications[name].outcome, 'ITEM_CERTIFIED')
+  }
+
+  // 2. partnerPotential resolved, advisory-only, never 0 for a genuinely
+  // signaled item.
+  assert.ok((state.itemCertifications.DupVenueA.partnerPotential?.score ?? 0) > 0)
+  assert.ok((state.itemCertifications.DupVenueB.partnerPotential?.score ?? 0) > 0)
+
+  // 3. Duplicate venue clustering: DupVenueA/DupVenueB reported together,
+  // SoloCafe never included, and BOTH duplicates remain ITEM_CERTIFIED
+  // (reporting-only — never an automatic drop).
+  const cluster = state.venueDuplicateClusters?.find((c) => c.placeId === 'shared-place-id')
+  assert.ok(cluster, 'expected a reported cluster for the shared Place ID')
+  assert.deepEqual(new Set(cluster!.members.map((m) => m.candidateName)), new Set(['DupVenueA', 'DupVenueB']))
+
+  // 4. The M10 strategic report reflects the same facts.
+  assert.equal(state.strategicReport?.finalItemCount, 3)
+  assert.equal(state.strategicReport?.duplicateClustersFound, 1)
+  assert.ok((state.strategicReport?.partnerPotentialInventoryCount ?? 0) >= 2)
+
+  // 5. Durable stage artifacts were actually written via the injected hook.
+  assert.ok(state.stageArtifactManifest?.includes('05-final-retained-catalog.json'))
+  assert.ok('05-final-retained-catalog.json' in writtenArtifacts)
+  assert.equal(JSON.parse(writtenArtifacts['05-final-retained-catalog.json']).length, 3)
+
+  assert.equal(run.currentStage, 'LAUNCH_READINESS_BOUNDARY')
 })
 
 test('driveMetroLaunch: the flagship Home list is capped at ~30 balanced items (never all certified items), and editorial themed lists cross real production category lines — never a bare per-category dump', async () => {

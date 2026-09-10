@@ -83,7 +83,15 @@ const RESEARCH_EXECUTION_TYPE_INSTRUCTIONS: Record<ResearchExecutionType, string
   BROAD_DISCOVERY:
     'BROAD DISCOVERY: optimize for high recall, local originality, and diversity — not a generic business directory. ' +
     'Some questionable/stale candidates are acceptable at this stage; verification happens later. Every candidate must still ' +
-    'carry a real source and must be marked needsVerification=true.',
+    'carry a real source and must be marked needsVerification=true. ' +
+    'BUSINESS-FIRST EXPERIENCE DISCOVERY (Vienna post-mortem): generic destination research over-indexes on attractions, museums, ' +
+    'parks, and cultural venues. Run dedicated searches for the kinds of experiences that research tends to miss — search for the ' +
+    'THING TO DO/ORDER/FIND, not merely the business: signature food or a specific dish, unusual coffee/café experiences, hidden ' +
+    'bars, specialty cocktails, breweries, wine bars/tasting rooms, local markets and specific vendors, unusual retail, ' +
+    'vintage/maker/specialty shops, participatory sports, social/game venues, distinctive wellness experiences, and neighborhood ' +
+    'institutions. The strongest candidates here name a specific, ownable hook (a hidden entry through a vending machine, a ' +
+    'bartender-built bespoke cocktail, a tasting flight, a signature dish, coffee chosen by flavor preference, billiards in an ' +
+    'old-school café) — not just "this business exists and is well-reviewed."',
   CATEGORY_GAP:
     'CATEGORY GAP RESEARCH: the objective names a specific category and how many more viable candidates are needed (e.g. ' +
     '"Need 8 more viable Sports items"). Stay scoped to that category — do not return unrelated candidates.',
@@ -208,8 +216,46 @@ function buildTagSelectionPrompt(request: SpecialistExecutionRequest, now: strin
   return { systemPrompt, userPrompt }
 }
 
+/**
+ * CATALOG_VOICE_PASS (Vienna post-mortem item 6) — a dedicated,
+ * narrowly-scoped rewrite call for an item ALREADY flagged by
+ * catalogVoiceDiagnostics.ts as contributing to a repeated
+ * opening-word/phrase pattern across the batch. Unlike the main
+ * write/rewrite prompt, this call's only job is varying the OPENING —
+ * every fact, the quoted canonical venue name, and the category/tags
+ * must survive unchanged. This is deliberately a much narrower prompt
+ * than a full rewrite: "rewrite for variety" alone invites drift away
+ * from already-verified facts, which this pass must never do.
+ */
+function buildVoiceRewritePrompt(request: SpecialistExecutionRequest, now: string): { systemPrompt: string; userPrompt: string } {
+  const body = typeof request.inputs.body === 'string' ? request.inputs.body : ''
+  const venueName = typeof request.inputs.venueName === 'string' ? request.inputs.venueName : ''
+  const dominantOpeningWord = typeof request.inputs.dominantOpeningWord === 'string' ? request.inputs.dominantOpeningWord : ''
+
+  const systemPrompt = [
+    methodologyPreamble(request),
+    runtimeDateContextLine(now),
+    'You are given ONE already-certified, already-fact-checked CheckOff item body. The catalog it belongs to has too many items ' +
+      `opening with the same word or phrase ("${dominantOpeningWord}") — your ONLY job is to rewrite the OPENING of this one sentence ` +
+      'so it no longer starts that way, while preserving every fact, the exact quoted venue name, and the overall meaning. This is a ' +
+      'voice-variety pass, not a content rewrite: do not add, remove, or change any factual claim; do not shorten or lengthen the ' +
+      'body materially; do not rephrase the parts of the sentence that are already specific and fine.',
+    `The exact string '${venueName}' (wrapped in single quotes, straight or curly) must still appear in the rewritten body, exactly as it did before.`,
+    'If the body genuinely cannot be varied without weakening its specificity or changing a fact, return it completely unchanged — ' +
+      'do not force an awkward or vaguer rewrite just to avoid the flagged opening.',
+    `Original body: ${body}`,
+    'evidence must include: body (the rewritten — or, if unchanged, the identical — final text).',
+    envelopeInstructions(request),
+  ].join('\n\n')
+
+  const userPrompt = [`Objective: ${request.objective}`, `Item to revise: ${JSON.stringify({ body, venueName, dominantOpeningWord })}`].join('\n')
+
+  return { systemPrompt, userPrompt }
+}
+
 export function buildCheckoffEditorPrompt(request: SpecialistExecutionRequest, now: string = new Date().toISOString()): { systemPrompt: string; userPrompt: string } {
   if (request.inputs.mode === 'TAG_SELECTION') return buildTagSelectionPrompt(request, now)
+  if (request.inputs.mode === 'VOICE_REWRITE') return buildVoiceRewritePrompt(request, now)
   const quotingInstruction = canonicalVenueQuotingInstruction(request)
   const systemPrompt = [
     methodologyPreamble(request),
