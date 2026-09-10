@@ -1,59 +1,70 @@
-// HomeScreen 2026 Redesign — What's Good as the premium visual discovery
-// centerpiece. Ranking/rotation/momentum/exclusion logic is completely
-// untouched — this only changes how the same already-selected 3 items are
-// laid out and styled (see lib/whatsGoodDisplayLayout.js's
-// splitWhatsGoodDisplayLayout, pure).
+// HomeScreen 2026 Redesign — What's Good as a compact horizontal rail of 3
+// equal cards, replacing the earlier "1 large primary + 2 stacked rows"
+// layout. That layout looked weak whenever the lead item had no photo (a
+// mostly-empty large card above two small rows); a rail of equal-size
+// cards means every item gets the same fully-designed treatment — photo-
+// forward when available, an intentional branded no-photo composition
+// (see EditorialCard.jsx's RailCard) when not — with no single slot
+// carrying disproportionate empty space.
 //
-// VISUAL POLISH PASS 2 layout: a moderately-sized primary editorial card
-// plus 2 compact full-width rows stacked underneath — not side-by-side
-// secondary cards (that truncated real content on real iPhone
-// screenshots), and not a giant primary card (wasted vertical space). All
-// 3 always visible without horizontal scrolling. Card rendering itself —
-// image-capable/not-image-dependent, venue/thing separation, secret-item
-// purple treatment — lives in the shared components/home/EditorialCard.jsx
-// so Near You can reuse the exact same visual language.
+// Selection/ranking/rotation/momentum is completely untouched — this only
+// changes layout. Items render in the exact order useWhatsGood() already
+// returned them (no display-order reshuffling to chase an image into a
+// "primary" slot, since a rail has no single hero slot to fill).
 //
-// No subtitle (already-approved "What's Good" stands on its own) and, per
-// this pass, no decorative accent line above the heading either.
-//
-// Save (❤) remains deliberately NOT rendered — see git history /
-// tester-build report (2026-09-02): a visible non-functional heart reads
-// as broken during tester review. Re-add once Save is actually built.
+// Card width is ~80% of the section's content width so the rail reads as
+// obviously swipeable: one full card plus a clear peek of the next one.
+// Height is intentionally compact — a major reason for this change is
+// giving Seasonal Lists more room higher on the page — but still large
+// enough that content never feels cramped.
 
 import React from 'react'
-import { View, Text, StyleSheet } from 'react-native'
-import { splitWhatsGoodDisplayLayout } from '../../lib/whatsGoodDisplayLayout'
+import { View, Text, ScrollView, StyleSheet, useWindowDimensions } from 'react-native'
 import EditorialCard from './EditorialCard'
+import { computeRailCardWidth } from '../../lib/whatsGoodRailLayout'
+
+const SECTION_HORIZONTAL_PADDING = 16
+const RAIL_CARD_HEIGHT = 190
+const RAIL_CARD_GAP = 12
 
 export default function WhatsGoodDiscovery({ items, navigation, colors, userId = null }) {
   if (!items || items.length === 0) return null
   const { TEXT } = colors
-  const { primary, secondary } = splitWhatsGoodDisplayLayout(items)
-  if (!primary) return null
+  const { width: windowWidth } = useWindowDimensions()
+  const cardWidth = computeRailCardWidth(windowWidth, SECTION_HORIZONTAL_PADDING)
 
   return (
     <View style={styles.wrapper}>
       <Text style={[styles.heading, { color: TEXT }]}>What's Good</Text>
 
-      <EditorialCard item={primary} variant="primary" colors={colors} userId={userId} onPress={() => navigation.navigate('ItemDetail', { item: primary })} />
-
-      {secondary.length > 0 && (
-        <View style={styles.secondaryStack}>
-          {secondary.map(item => (
-            <EditorialCard key={item.id} item={item} variant="row" colors={colors} userId={userId} onPress={() => navigation.navigate('ItemDetail', { item })} />
-          ))}
-        </View>
-      )}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        decelerationRate="fast"
+        snapToInterval={cardWidth + RAIL_CARD_GAP}
+        snapToAlignment="start"
+        contentContainerStyle={styles.railContent}
+      >
+        {items.map((item, index) => (
+          <EditorialCard
+            key={item.id}
+            item={item}
+            index={index}
+            variant="rail"
+            colors={colors}
+            userId={userId}
+            cardWidth={cardWidth}
+            cardHeight={RAIL_CARD_HEIGHT}
+            onPress={() => navigation.navigate('ItemDetail', { item })}
+          />
+        ))}
+      </ScrollView>
     </View>
   )
 }
 
 const styles = StyleSheet.create({
-  // DEFAULT HOME "WOW" PASS (2026-09-03): tightened from 24 — What's Good
-  // should read as the next thing on the page, not a separate section a
-  // full screen down. Near You stays utility-sized; this is what pulls
-  // What's Good up to visually dominate sooner.
-  wrapper: { marginTop: 16, paddingHorizontal: 16 },
-  heading: { fontSize: 20, fontWeight: '900', marginBottom: 12 },
-  secondaryStack: { marginTop: 12, gap: 12 },
+  wrapper: { marginTop: 16 },
+  heading: { fontSize: 20, fontWeight: '900', marginBottom: 12, paddingHorizontal: SECTION_HORIZONTAL_PADDING },
+  railContent: { paddingHorizontal: SECTION_HORIZONTAL_PADDING, gap: RAIL_CARD_GAP },
 })

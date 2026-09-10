@@ -36,6 +36,7 @@ import { isSpecialItemPresentation } from '../../lib/whatsGoodDisplayLayout'
 import { formatDistanceLabel } from '../../lib/proximity'
 import { extractQuotedVenueFromBody } from '../../lib/itemDetailHeaderTitle'
 import { currentRotationContext } from '../../lib/rotationContext'
+import { railAccentForIndex } from '../../lib/whatsGoodRailLayout'
 
 // FINAL CLEANUP BEFORE BUILD 144 — item 1: category was competing
 // visually with venue/thing on the primary card ("Bar & drinks" reads as
@@ -182,7 +183,98 @@ function SecondaryRow({ item, colors, onPress, userId }) {
   )
 }
 
-export default function EditorialCard({ item, onPress, colors, variant = 'primary', userId = null }) {
+// What's Good horizontal rail — 3 equal-size cards instead of 1 large +
+// 2 stacked rows (see components/home/WhatsGoodDiscovery.jsx for why: the
+// large-card layout looked weak whenever the lead item had no photo — a
+// mostly-empty card followed by two small rows). Each rail card is
+// individually image-capable/not-image-dependent, same as the old primary
+// card, just at rail proportions. Deterministic no-photo accent by card
+// index (not item id — index is stable across re-renders and re-fetches,
+// an id-based hash would also work but index is simpler and the 3 slots
+// are always exactly 3), so three no-photo cards in the same rail don't
+// look like clones — cycling amber / green / purple, the same three
+// accent hues already used elsewhere in this app (e.g. the ring-dot
+// palette in DiscoverScreen.jsx), not a new color system. A secret item
+// always gets the purple "special" treatment regardless of index — that
+// signal takes priority over the position-based cycle.
+function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight }) {
+  const { TEXT, MUTED, CARD_ELEVATED, ENDED_BG, SHADOW_COLOR } = colors
+  const isSpecial = isSpecialItemPresentation(item)
+  const { venueName, thing } = deriveVenueAndThing(item)
+  const meta = metaLine(item)
+  const image = resolvedItemImage(item, currentRotationContext(userId))
+  const accent = railAccentForIndex(index, colors, isSpecial)
+  const dims = { width: cardWidth, height: cardHeight }
+
+  if (image) {
+    return (
+      <PressableTactile
+        intensity="hero"
+        onPress={onPress}
+        style={[styles.railCard, dims, { shadowColor: SHADOW_COLOR ?? 'rgba(0,0,0,0.3)' }]}
+      >
+        <Image source={{ uri: image.url }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+        <LinearGradient
+          colors={['transparent', 'rgba(6,6,14,0.35)', 'rgba(6,6,14,0.92)']}
+          locations={[0, 0.45, 1]}
+          style={StyleSheet.absoluteFillObject}
+        />
+        {isSpecial && (
+          <View style={[styles.railSpecialBadge, { backgroundColor: 'rgba(122,77,179,0.9)' }]}>
+            <Text style={styles.railSpecialBadgeText}>✦ SECRET</Text>
+          </View>
+        )}
+        <View style={styles.railOverlayText}>
+          {venueName ? <Text style={styles.railOverlayVenue} numberOfLines={1}>{venueName}</Text> : null}
+          <Text style={styles.railOverlayThing} numberOfLines={2}>{thing}</Text>
+          <View style={styles.railFooter}>
+            {meta ? <Text style={styles.railOverlayMeta} numberOfLines={1}>{meta}</Text> : <View />}
+            <Text style={[styles.railChevron, { color: accent }]}>→</Text>
+          </View>
+        </View>
+      </PressableTactile>
+    )
+  }
+
+  const surface = isSpecial ? ENDED_BG : CARD_ELEVATED
+  return (
+    <PressableTactile
+      intensity="hero"
+      onPress={onPress}
+      style={[styles.railCard, styles.railCardBordered, dims, { borderColor: `${accent}33`, shadowColor: SHADOW_COLOR ?? 'rgba(0,0,0,0.3)' }]}
+    >
+      <LinearGradient
+        colors={[surface, `${accent}18`]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFillObject}
+      />
+      <View style={styles.railWashOuter(accent)} pointerEvents="none" />
+      <View style={styles.railWashInner(accent)} pointerEvents="none" />
+      <View style={styles.railAccentBar(accent)} pointerEvents="none" />
+      <View style={styles.railTextBlock}>
+        {isSpecial && (
+          <View style={[styles.railSpecialInline, { borderColor: accent }]}>
+            <Text style={[styles.railSpecialInlineText, { color: accent }]}>✦ SECRET</Text>
+          </View>
+        )}
+        {venueName ? (
+          <>
+            <Text style={[styles.railNoImageVenue, { color: accent }]} numberOfLines={1}>{venueName}</Text>
+            <View style={[styles.railVenueRule, { backgroundColor: accent }]} />
+          </>
+        ) : null}
+        <Text style={[styles.railNoImageThing, { color: TEXT }]} numberOfLines={3}>{thing}</Text>
+        <View style={styles.railFooter}>
+          {meta ? <Text style={[styles.railNoImageMeta, { color: MUTED }]} numberOfLines={1}>{meta}</Text> : <View />}
+          <Text style={[styles.railChevron, { color: accent }]}>→</Text>
+        </View>
+      </View>
+    </PressableTactile>
+  )
+}
+
+export default function EditorialCard({ item, onPress, colors, variant = 'primary', userId = null, index = 0, cardWidth, cardHeight }) {
   if (!item) return null
 
   const isSpecial = isSpecialItemPresentation(item)
@@ -192,6 +284,10 @@ export default function EditorialCard({ item, onPress, colors, variant = 'primar
 
   if (variant === 'row') {
     return <SecondaryRow item={item} colors={colors} onPress={onPress} userId={userId} />
+  }
+
+  if (variant === 'rail') {
+    return <RailCard item={item} index={index} colors={colors} onPress={onPress} userId={userId} cardWidth={cardWidth} cardHeight={cardHeight} />
   }
 
   if (image) {
@@ -280,5 +376,67 @@ styles.noImageAccentBar = (accentColor) => ({
   borderRadius: 5,
   backgroundColor: accentColor,
   opacity: 0.1,
+  transform: [{ rotate: '-18deg' }],
+})
+
+// ── What's Good horizontal rail card ────────────────────────────────────────
+// Compact version of the primary card's two visual languages (photo-forward
+// overlay / designed no-photo composition), sized for a fixed width/height
+// in a horizontal ScrollView rather than filling the section's full width.
+Object.assign(styles, StyleSheet.create({
+  railCard: { borderRadius: 20, overflow: 'hidden', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.25, shadowRadius: 12 },
+  railCardBordered: { borderWidth: 1 },
+
+  railOverlayText: { position: 'absolute', left: 0, right: 0, bottom: 0, padding: 14 },
+  railOverlayVenue: { color: 'rgba(255,255,255,0.8)', fontSize: 10, fontWeight: '800', letterSpacing: 0.5, marginBottom: 3, textTransform: 'uppercase' },
+  railOverlayThing: { color: '#fff', fontSize: 15, fontWeight: '900', lineHeight: 19, marginBottom: 6 },
+  railOverlayMeta: { color: 'rgba(255,255,255,0.82)', fontSize: 11, fontWeight: '700', flexShrink: 1 },
+
+  railSpecialBadge: { position: 'absolute', top: 10, left: 10, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 7 },
+  railSpecialBadgeText: { color: '#fff', fontSize: 9, fontWeight: '900', letterSpacing: 0.4 },
+
+  railTextBlock: { flex: 1, padding: 16, justifyContent: 'center' },
+  railNoImageVenue: { fontSize: 10, fontWeight: '900', letterSpacing: 0.5, marginBottom: 5, textTransform: 'uppercase' },
+  railVenueRule: { width: 20, height: 3, borderRadius: 2, marginBottom: 9, marginTop: -3 },
+  railNoImageThing: { fontSize: 16, fontWeight: '900', lineHeight: 20, marginBottom: 6, letterSpacing: -0.2 },
+  railNoImageMeta: { fontSize: 11, fontWeight: '700', flexShrink: 1 },
+  railSpecialInline: { alignSelf: 'flex-start', borderWidth: 1, borderRadius: 7, paddingHorizontal: 7, paddingVertical: 3, marginBottom: 8 },
+  railSpecialInlineText: { fontSize: 9, fontWeight: '900', letterSpacing: 0.4 },
+
+  railFooter: { marginTop: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  railChevron: { fontSize: 14, fontWeight: '900', marginLeft: 8 },
+}))
+
+// Same layered-shape idea as the primary no-image hero (styles.noImageWash*
+// above), scaled down for the smaller rail card footprint.
+styles.railWashOuter = (accentColor) => ({
+  position: 'absolute',
+  top: -36,
+  right: -36,
+  width: 130,
+  height: 130,
+  borderRadius: 65,
+  backgroundColor: accentColor,
+  opacity: 0.12,
+})
+styles.railWashInner = (accentColor) => ({
+  position: 'absolute',
+  bottom: -22,
+  left: -22,
+  width: 80,
+  height: 80,
+  borderRadius: 40,
+  backgroundColor: accentColor,
+  opacity: 0.08,
+})
+styles.railAccentBar = (accentColor) => ({
+  position: 'absolute',
+  bottom: 14,
+  right: -46,
+  width: 120,
+  height: 8,
+  borderRadius: 4,
+  backgroundColor: accentColor,
+  opacity: 0.12,
   transform: [{ rotate: '-18deg' }],
 })
