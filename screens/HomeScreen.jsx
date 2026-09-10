@@ -30,6 +30,7 @@ import { deriveHomeHeroLayout } from '../lib/homeHeroLayout'
 import { selectNearYouCompactRows } from '../lib/nearYouCompact'
 import CompactHomeHeader from '../components/home/CompactHomeHeader'
 import DestinationHero from '../components/home/DestinationHero'
+import CityPickerModal from '../components/home/CityPickerModal'
 import NearYouCompact from '../components/home/NearYouCompact'
 import WhatsTheThingHero from '../components/home/WhatsTheThingHero'
 import WhatsGoodDiscovery from '../components/home/WhatsGoodDiscovery'
@@ -81,6 +82,7 @@ export default function HomeScreen({ navigation }) {
        SUCCESS_BG, SUCCESS_BORDER, ENDED_BG, ENDED_BORDER, ENDED_TEXT, CARD_URGENT])
 
   const [metros, setMetros] = useState([])
+  const [metroPickerVisible, setMetroPickerVisible] = useState(false)
   const [selectedMetro, setSelectedMetro] = useState(null)
   const [season, setSeason] = useState(null)
   // Resolved inside loadForMetro (keyed on the metroId param directly, NOT
@@ -1184,14 +1186,7 @@ async function loadNearbyRail(userId) {
 
         function openMetroPicker() {
           if (!multiMetro) return
-          Alert.alert(
-            'Switch City',
-            'Choose your city',
-            metros.map(m => ({
-              text: m.name.replace(' Metro', ''),
-              onPress: () => switchMetro(m),
-            })).concat([{ text: 'Cancel', style: 'cancel' }])
-          )
+          setMetroPickerVisible(true)
         }
 
         return (
@@ -1327,12 +1322,7 @@ async function loadNearbyRail(userId) {
 
         function openMetroPicker2() {
           if (!multiMetro2) return
-          Alert.alert(
-            'Switch City',
-            'Choose your city',
-            metros.map(m => ({ text: m.name.replace(' Metro', ''), onPress: () => switchMetro(m) }))
-              .concat([{ text: 'Cancel', style: 'cancel' }])
-          )
+          setMetroPickerVisible(true)
         }
 
         const heroLayout = deriveHomeHeroLayout({
@@ -1831,6 +1821,14 @@ async function loadNearbyRail(userId) {
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
+
+      <CityPickerModal
+        visible={metroPickerVisible}
+        metros={metros}
+        colors={colors}
+        onSelect={(metro) => { setMetroPickerVisible(false); switchMetro(metro) }}
+        onClose={() => setMetroPickerVisible(false)}
+      />
 
     </ScrollView>
   )
