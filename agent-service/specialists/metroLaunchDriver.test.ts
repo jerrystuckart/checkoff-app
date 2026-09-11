@@ -1306,6 +1306,46 @@ test('driveMetroLaunch: a US metro (metroCountry "US") resolves geo enrichment a
   assert.equal(result?.classification, 'EXACT', `expected EXACT, got ${JSON.stringify(state.geoEnrichmentResults)}`)
 })
 
+test('driveMetroLaunch: M10 summary.geoCoveragePercent/geoExceptionsCount are really derived from geoEnrichmentResults, not the old hardcoded 0/certified.length', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  scriptTagSelection(executor)
+  scriptThroughM8(executor, 'DowntownDiner', 'Downtown')
+
+  const projectId = 'geo-coverage-percent-test'
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  seeded!.state = { m0Decisions: RESOLVED_M0 } // metroCountry: 'US', metroCenter: San Diego
+  await runStore.put(seeded!)
+
+  const smallPlan: CategoryCoveragePlan = { targets: [{ categoryName: 'Food & drink', minimumViable: 1, healthyTarget: 1, qualityNotes: [] }] }
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      // A confidently-matched EXACT result — the single certified item
+      // here must be reflected as 100% geo coverage, zero exceptions,
+      // never the old hardcoded 0%/1 (certified.length).
+      placesLookup: async (q: string) => ({ topResult: { placeId: 'p-us', name: 'DowntownDiner', formattedAddress: q, lat: 32.7, lng: -117.1, websiteUri: 'https://example.com', country: 'US', viewportRadiusM: null }, apiError: null }),
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Downtown'], emptyNeighborhoodFallbackCentroids: { Downtown: { lat: 32.7, lng: -117.1 } },
+    },
+    projectId,
+    { categoryPlan: smallPlan, maxSteps: 30 }
+  )
+
+  const state = run.state as { finalCertificationReport?: { summary: { catalogCount: number; geoCoveragePercent: number; geoExceptionsCount: number } } }
+  const summary = state.finalCertificationReport?.summary
+  assert.ok(summary, `expected M10 to have produced a finalCertificationReport, got run.status=${run.status} jerryReason=${run.jerryReason}`)
+  assert.equal(summary!.catalogCount, 1)
+  assert.equal(summary!.geoCoveragePercent, 100, `expected 100% coverage for a single EXACT-classified certified item, got ${JSON.stringify(summary)}`)
+  assert.equal(summary!.geoExceptionsCount, 0, `expected zero NO_CANONICAL_VENUE exceptions, got ${JSON.stringify(summary)}`)
+})
+
 test('driveMetroLaunch: a non-US metro (Vienna, metroCountry "AT") resolves geo enrichment against an AT Places result as EXACT — no US default leaks into international matching', async () => {
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()

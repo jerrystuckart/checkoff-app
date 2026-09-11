@@ -2486,10 +2486,23 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
   const presentationGate = evaluatePresentationGate({ records: intakeRecords })
   const editorialGate = evaluateEditorialQualityGate({ records: intakeRecords })
 
+  // geoCoveragePercent/geoExceptionsCount were previously hardcoded (0 /
+  // certified.length) — never actually derived from state.geoEnrichmentResults,
+  // so the reportText's "Geo coverage: 0%" line was always wrong regardless of
+  // real GEO_ENRICHMENT_GATE outcome. Fixed: computed the same way the gate
+  // itself classifies items (CONFIDENT_TIERS = confidently enriched,
+  // ACCEPTABLE_EXCEPTION_TIERS = the explicit NO_CANONICAL_VENUE exception),
+  // scoped to the certified catalog actually being reported on here.
+  const certifiedNamesForGeo = new Set(certified.map((r) => r.candidateName))
+  const geoResultsForCertified = (state.geoEnrichmentResults ?? []).filter((r) => certifiedNamesForGeo.has(r.candidateName))
+  const geoConfidentCount = geoResultsForCertified.filter((r) => CONFIDENT_TIERS.includes(r.classification as PlacesMatchClassification)).length
+  const geoExceptionCount = geoResultsForCertified.filter((r) => ACCEPTABLE_EXCEPTION_TIERS.includes(r.classification as PlacesMatchClassification)).length
+  const geoCoveragePercent = certified.length > 0 ? Math.round((geoConfidentCount / certified.length) * 100) : 0
+
   const summary: MetroLaunchCertificationSummary = {
     catalogCount: certified.length,
-    geoCoveragePercent: 0,
-    geoExceptionsCount: certified.length,
+    geoCoveragePercent,
+    geoExceptionsCount: geoExceptionCount,
     tagsComplete: existingGates.some((g) => g.key === 'TAG_CERTIFICATION_GATE' && g.verdict === 'PASS'),
     metadataComplete: existingGates.some((g) => g.key === 'METADATA_COMPLETENESS_GATE' && g.verdict === 'PASS'),
     officialListsCount: plan.filter((p) => p.kind === 'PRIMARY_SEASONAL' || p.kind === 'THEMED').length,

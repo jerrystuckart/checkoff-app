@@ -236,7 +236,22 @@ async function main() {
       const officialListCreatorId: string | undefined = officialListCreatorIdFlagIdx >= 0 ? flags[officialListCreatorIdFlagIdx + 1] : undefined
       const flagshipListTitleFlagIdx = flags.indexOf('--flagship-list-title')
       const flagshipListTitle: string | undefined = flagshipListTitleFlagIdx >= 0 ? flags[flagshipListTitleFlagIdx + 1] : undefined
-      const run = await driveMetroLaunch({ runStore, execStore: store, executors, metroAreaFacts, officialListCreatorId, flagshipListTitle, metroAreaSlug: metroSlug, existingInventorySearchTerm }, projectId, { categoryPlan, depthTargets, autoDeriveDepthTargetsFromGeography })
+      // --canonical-neighborhoods: the real, approved, FROZEN canonical
+      // neighborhood model (MetroDriverDeps.canonicalNeighborhoods, Chief
+      // Phase 2AL) — a JSON file containing a plain string array. Required
+      // for NEIGHBORHOOD_COMPLETENESS_GATE / M9 SQL packaging to pass;
+      // there was previously no CLI plumbing for this driver-level input.
+      const canonicalNeighborhoodsFlagIdx = flags.indexOf('--canonical-neighborhoods')
+      const canonicalNeighborhoods: readonly string[] | undefined = canonicalNeighborhoodsFlagIdx >= 0 ? readJson(flags[canonicalNeighborhoodsFlagIdx + 1]) : undefined
+      // --empty-neighborhood-fallback-centroids: MetroDriverDeps.emptyNeighborhoodFallbackCentroids
+      // — a JSON file of { [neighborhoodName]: { lat, lng } } real, public
+      // locality-centroid fallbacks for canonical neighborhoods with zero
+      // retained items (see greenBayNeighborhoodModel.ts's documented
+      // convention). Optional.
+      const emptyNeighborhoodFallbackCentroidsFlagIdx = flags.indexOf('--empty-neighborhood-fallback-centroids')
+      const emptyNeighborhoodFallbackCentroids: Readonly<Record<string, { lat: number; lng: number }>> | undefined =
+        emptyNeighborhoodFallbackCentroidsFlagIdx >= 0 ? readJson(flags[emptyNeighborhoodFallbackCentroidsFlagIdx + 1]) : undefined
+      const run = await driveMetroLaunch({ runStore, execStore: store, executors, metroAreaFacts, officialListCreatorId, flagshipListTitle, metroAreaSlug: metroSlug, existingInventorySearchTerm, canonicalNeighborhoods, emptyNeighborhoodFallbackCentroids }, projectId, { categoryPlan, depthTargets, autoDeriveDepthTargetsFromGeography })
       console.log(JSON.stringify(run, null, 2))
       return
     }
