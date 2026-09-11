@@ -55,6 +55,22 @@ const DEFAULT_DEEP_ANALYSIS_MODEL = 'gpt-4.1'
 // checkoff_editor's constrained editorial transformation, not open-ended
 // research, so it gets the same ECONOMY-tier cheap model by default.
 const DEFAULT_RELATIONSHIP_MODEL = 'gpt-4.1-mini'
+// Chief Phase 3C — metro_finisher's Deep Research role. This is a
+// DISTINCT role from research_verifier (candidate discovery/verification
+// against a not-yet-built catalog) — it runs once, late, against an
+// already-largely-built catalog, synthesizing a wide "negative space"
+// research pass (five separate missions — see metroFinisherReport.ts)
+// that needs the strongest currently-configured web-capable OpenAI
+// reasoning model available, not the same STANDARD-tier default used for
+// per-candidate research/verification calls. Given its own routing slot
+// (CHIEF_OPENAI_FINISHER_MODEL) rather than reusing CHIEF_OPENAI_RESEARCH_MODEL,
+// per Jerry's instruction that a distinct role gets its own explicit,
+// deliberately-pinned default and override point — never silently
+// upgraded because a newer model exists. Defaults to the SAME gpt-4.1
+// confirmed working with live web_search in this environment (see
+// DEFAULT_RESEARCH_MODEL's own doc) until a stronger verified-working
+// model is confirmed and this default is deliberately bumped.
+const DEFAULT_METRO_FINISHER_MODEL = 'gpt-4.1'
 
 function fromEnvOrDefault(envVar: string, fallback: string): { value: string; source: 'default' | 'env' } {
   const raw = process.env[envVar]
@@ -92,6 +108,10 @@ export function resolveOpenAiModel(specialist: string, methodologyId: string): M
     const { value, source } = fromEnvOrDefault('CHIEF_OPENAI_RELATIONSHIP_MODEL', DEFAULT_RELATIONSHIP_MODEL)
     return { model: value, costTier: 'ECONOMY', source }
   }
+  if (specialist === 'metro_finisher') {
+    const { value, source } = fromEnvOrDefault('CHIEF_OPENAI_FINISHER_MODEL', DEFAULT_METRO_FINISHER_MODEL)
+    return { model: value, costTier: 'STANDARD', source }
+  }
   if (specialist === 'destination_strategist') {
     if (methodologyId === 'destination/dva1') {
       const { value, source } = fromEnvOrDefault('CHIEF_OPENAI_DVA1_MODEL', DEFAULT_DVA1_MODEL)
@@ -119,4 +139,5 @@ export const MODEL_ROUTING_ENV_VARS = Object.freeze({
   CHIEF_OPENAI_DVA1_MODEL: DEFAULT_DVA1_MODEL,
   CHIEF_OPENAI_DEEP_ANALYSIS_MODEL: `<unset by default — falls back to ${DEFAULT_DEEP_ANALYSIS_MODEL} at STANDARD tier; set explicitly to opt into PREMIUM>`,
   CHIEF_OPENAI_RELATIONSHIP_MODEL: DEFAULT_RELATIONSHIP_MODEL,
+  CHIEF_OPENAI_FINISHER_MODEL: DEFAULT_METRO_FINISHER_MODEL,
 })

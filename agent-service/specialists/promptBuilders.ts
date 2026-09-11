@@ -440,6 +440,74 @@ const RELATIONSHIP_DRAFT_ENVELOPE_SHAPE = `{
   }
 }`
 
+// ---------------------------------------------------------------------------
+// metro_finisher — Chief Phase 3C, METRO_FINISHER_DEEP_RESEARCH. Runs the
+// versioned metro_finisher/v1 methodology VERBATIM (same pattern as
+// destination_strategist above) — the actual research missions live in
+// that doc, never re-derived or paraphrased here. This call gets live web
+// research (see remoteAiExecutor.ts's LIVE_WEB_RESEARCH_METHODOLOGY_IDS /
+// methodologyRequiresLiveWebResearch). Output is validated/truncated by
+// metroFinisherReport.ts's validateMetroFinisherReport — this prompt only
+// asks for the shape, it never trusts the model's output as-is.
+// ---------------------------------------------------------------------------
+
+const METRO_FINISHER_REPORT_SHAPE = `evidence.report must be exactly a MetroFinisherReport:
+{
+  "metro": "<echo the metro identity you were given>",
+  "generatedAt": "<ISO timestamp, matching the runtime date you were given>",
+  "catalogAssessment": {
+    "currentItemCount": <number>,
+    "strengths": ["..."],
+    "weaknesses": ["..."],
+    "categoryGaps": [{ "area": "<category or category-cluster>", "evidence": "<what you found>", "severity": "LOW"|"MEDIUM"|"HIGH", "recommendation": "<what to do>" }],
+    "neighborhoodGaps": [{ "area": "<neighborhood>", "evidence": "<what you found>", "severity": "LOW"|"MEDIUM"|"HIGH", "recommendation": "<what to do>" }]
+  },
+  "cityIdentity": {
+    "signatureFoodAndDrink": [{ "title": "...", "description": "...", "sourceNote": "..." }],
+    "ritualsAndTraditions": [{ "title": "...", "description": "...", "sourceNote": "..." }],
+    "artisanAndMakerCulture": [{ "title": "...", "description": "...", "sourceNote": "..." }],
+    "localOnlyExperiences": [{ "title": "...", "description": "...", "sourceNote": "..." }],
+    "unusualOrHidden": [{ "title": "...", "description": "...", "sourceNote": "..." }],
+    "sportsAndCivicCulture": [{ "title": "...", "description": "...", "sourceNote": "..." }]
+  },
+  "mustHaveMissingExperiences": [{ "candidateName": "...", "venueName": "...", "category": "...", "neighborhoodName": "..." | null, "rationale": "...", "distinctivenessNote": "..." }],
+  "enrichmentCandidates": [{ "candidateName": "...", "venueName": "...", "category": "...", "neighborhoodName": "..." | null, "rationale": "...", "distinctivenessNote": "..." }],
+  "neighborhoodRecommendations": {
+    "keep": ["<neighborhood name>", ...],
+    "split": [{ "parentNeighborhood": "...", "proposedChildren": ["..."], "rationale": "...", "affectedExistingItemIds": ["<must be non-empty>"] }],
+    "add": [{ "name": "...", "rationale": "..." }],
+    "reject": [{ "name": "...", "reason": "..." }]
+  },
+  "themedListOpportunities": [{ "title": "<a novel, city-specific title — never pick from a generic template list>", "rationale": "...", "existingItemIds": ["..."], "missingExperiences": [/* CandidateFinding, same shape as above */], "strengthScore": <0-100>, "recommendation": "CREATE_NOW"|"ENRICH_THEN_CREATE"|"DO_NOT_CREATE" }],
+  "duplicateOrIdentityConcerns": [{ "venueName": "...", "placeId": "..." | null, "itemIds": ["..."], "verdict": "DISTINCT"|"MERGE_RECOMMENDED"|"NEEDS_HUMAN_REVIEW", "rationale": "..." }],
+  "finalAssessment": {
+    "readyToFinish": <boolean — must be justified by real explored-gap findings above, never a bare item-count target>,
+    "recommendedAdditionalItemRange": { "min": <number>, "max": <number> },
+    "highestPriorityNextActions": ["..."]
+  }
+}`
+
+export function buildMetroFinisherPrompt(request: SpecialistExecutionRequest, now: string = new Date().toISOString()): { systemPrompt: string; userPrompt: string } {
+  const methodologyText = readMethodologyFileVerbatim(request.methodologyId, request.methodologyVersion)
+  const systemPrompt = [
+    `You are executing CheckOff's "metro_finisher" specialist role — deep research and synthesis ONLY, never item-writing or production creation. Below is the EXACT, VERBATIM methodology governing this run.`,
+    runtimeDateContextLine(now),
+    `--- BEGIN METHODOLOGY (${request.methodologyId}/${request.methodologyVersion}) ---\n${methodologyText}\n--- END METHODOLOGY ---`,
+    'You have live web search available and must use it for the city-identity research missions — do not rely on training-data memory for what currently exists, is open, or is a real local tradition. Research in English AND the primary local language where one applies; preserve any local-language name or alias exactly as found, never transliterate or "clean up" it.',
+    'RESEARCH THE NEGATIVE SPACE AROUND THIS CATALOG: your job is to find what is missing, thin, misclassified, or duplicated in the catalog you are given — not to re-verify what is already there.',
+    'Nothing you produce is a certified item. Every candidate you name is a research lead that must still pass the real certification pipeline (duplicate/reconciliation review, Places verification, canonical neighborhood assignment, category/tag/metadata certification, distinctiveness and venue-quoting gates) before it can ever become production data.',
+    METRO_FINISHER_REPORT_SHAPE,
+    envelopeInstructions(request),
+  ].join('\n\n')
+
+  const userPrompt = [
+    `Objective: ${request.objective}`,
+    `Metro identity, retained catalog (id/body/category/neighborhood), category/neighborhood distributions, existing lists, reconciliation results, duplicate clusters, rejected-candidate summaries, Places completeness, and partner-potential signals: ${JSON.stringify(request.inputs)}`,
+  ].join('\n')
+
+  return { systemPrompt, userPrompt }
+}
+
 export function buildDestinationRelationshipManagerPrompt(request: SpecialistExecutionRequest, now: string = new Date().toISOString()): { systemPrompt: string; userPrompt: string } {
   const methodologyText = readMethodologyFileVerbatim(request.methodologyId, request.methodologyVersion)
   const systemPrompt = [

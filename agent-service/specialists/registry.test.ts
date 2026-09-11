@@ -2,10 +2,10 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { SPECIALIST_REGISTRY, listSpecialists, getSpecialist } from './registry'
 
-test('the revised first-generation team is exactly seven specialists (Phase 2D adds checkoff_editor)', () => {
+test('the revised team is exactly eight specialists (Phase 2D adds checkoff_editor; Chief Phase 3C adds metro_finisher)', () => {
   assert.deepEqual(
     Object.keys(SPECIALIST_REGISTRY).sort(),
-    ['business_outreach', 'checkoff_editor', 'destination_activation', 'destination_relationship_manager', 'destination_strategist', 'metro_builder', 'research_verifier'].sort()
+    ['business_outreach', 'checkoff_editor', 'destination_activation', 'destination_relationship_manager', 'destination_strategist', 'metro_builder', 'metro_finisher', 'research_verifier'].sort()
   )
 })
 

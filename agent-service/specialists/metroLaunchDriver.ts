@@ -105,6 +105,8 @@ import { evaluateFinalReadyToApplyAudit, type FinalReadyToApplyResult } from '..
 import { buildCostReport } from '../playbooks/metroCostReport'
 import { buildStrategicCoverageReport, type StrategicCoverageReport } from '../playbooks/metroStrategicReport'
 import { buildStageArtifactFiles } from './metroStageArtifacts'
+import { validateMetroFinisherReport, checkReadinessNotGatedOnCountAlone, type MetroFinisherReport } from '../playbooks/metroFinisherReport'
+import { buildMetroFinisherWorkPackets, type MetroFinisherWorkPackets } from '../playbooks/metroFinisherIntegration'
 
 export const METRO_LAUNCH_DRIVER_PLAYBOOK_KEY = 'metro_launch'
 
@@ -223,6 +225,22 @@ interface MetroDriverState {
   outOfMarketGateAtM8?: StagingGateResult
   /** Chief Phase 2AK — the real per-neighborhood item counts (including zero-item canonical neighborhoods) computed by NEIGHBORHOOD_COMPLETENESS_GATE, kept for the final report. */
   neighborhoodCompletenessReport?: { emptyNeighborhoods: string[]; perNeighborhoodCounts: Array<{ neighborhoodName: string; count: number }> }
+
+  // ---------------------------------------------------------------------
+  // Chief Phase 3C — METRO_FINISHER_DEEP_RESEARCH / METRO_FINISHER_INTEGRATION.
+  // Positioned after M8.75 (catalog voice pass), before M9 (Home-list
+  // generation). The AI report is research/recommendation only; the
+  // integration packets it produces are bounded follow-up work, never
+  // production items — see metroFinisherReport.ts/metroFinisherIntegration.ts.
+  // ---------------------------------------------------------------------
+  /** The validated, accepted report from the most recent METRO_FINISHER_DEEP_RESEARCH call. Overwritten by a follow-up run (never accumulated) — the packets/status derived from it always reflect the LATEST accepted report. */
+  metroFinisherReport?: MetroFinisherReport
+  /** METRO_FINISHER_INTEGRATION's deterministic (no-AI) synthesis of metroFinisherReport into bounded work packets. */
+  metroFinisherPackets?: MetroFinisherWorkPackets
+  /** The Finisher pass's own certification outcome, fed into finalReadyToApplyAudit.ts's metroFinisherStatus field. */
+  metroFinisherStatus?: { verdict: 'PASS' | 'FAIL' | 'WAIVED'; waiverReason?: string }
+  /** How many real METRO_FINISHER_DEEP_RESEARCH calls this run has made — bounds the stage to 1 primary run, plus at most 1 caller-requested focused follow-up (see driveMetroLaunch's requestMetroFinisherFollowUp option). Never auto-loops past 2. */
+  metroFinisherRunsCompleted?: number
 }
 
 /**
@@ -1984,7 +2002,7 @@ async function stepCatalogVoicePass(deps: MetroDriverDeps, run: PlaybookRunRecor
   const certified = Object.values(certifications).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
 
   if (certified.length === 0) {
-    run.currentStage = 'M9_HOME_LIST_MIRROR'
+    run.currentStage = 'METRO_FINISHER_DEEP_RESEARCH'
     return run
   }
 
@@ -1994,7 +2012,7 @@ async function stepCatalogVoicePass(deps: MetroDriverDeps, run: PlaybookRunRecor
   const toProcess = diagnostics.flaggedCandidateNames.filter((n) => !alreadyAttempted.has(n))
 
   if (toProcess.length === 0) {
-    run.currentStage = 'M9_HOME_LIST_MIRROR'
+    run.currentStage = 'METRO_FINISHER_DEEP_RESEARCH'
     return run
   }
 
@@ -2410,6 +2428,134 @@ function sqlQuote(s: string): string {
   return `'${s.replace(/'/g, "''")}'`
 }
 
+// ---------------------------------------------------------------------------
+// METRO_FINISHER_DEEP_RESEARCH / METRO_FINISHER_INTEGRATION (Chief Phase
+// 3C). Positioned after M8.75's catalog voice pass (the retained catalog
+// is stable by now) and before M9's Home-list generation. The AI call is
+// research/recommendation only — see metroFinisherReport.ts's own doc for
+// why nothing here ever creates a production item directly. Integration
+// is a second, separate, deterministic (no-AI) stage that turns the
+// accepted report into bounded work packets.
+// ---------------------------------------------------------------------------
+
+/** 1 primary run, plus at most 1 caller-requested focused follow-up — never an automatic loop (Chief Phase 3C budget rule). */
+export const MAX_METRO_FINISHER_RUNS = 2
+
+async function stepMetroFinisherDeepResearch(deps: MetroDriverDeps, run: PlaybookRunRecord, requestFollowUp: boolean | undefined): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const runsCompleted = state.metroFinisherRunsCompleted ?? 0
+
+  if (runsCompleted >= 1) {
+    const priorNotReady = state.metroFinisherReport ? !state.metroFinisherReport.finalAssessment.readyToFinish : false
+    // Budget/stopping rule: a second run only happens when the FIRST
+    // report explicitly said not-ready AND the caller explicitly asked
+    // for a follow-up this call — never an implicit/automatic re-run.
+    if (runsCompleted >= MAX_METRO_FINISHER_RUNS || !priorNotReady || !requestFollowUp) {
+      run.currentStage = 'METRO_FINISHER_INTEGRATION'
+      return run
+    }
+  }
+
+  const certifications = state.itemCertifications ?? {}
+  const certified = Object.values(certifications).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
+  const rejected = Object.values(certifications).filter((r) => r.outcome !== 'ITEM_CERTIFIED')
+  const candidatesByName = new Map((state.candidates ?? []).map((c) => [c.name, c]))
+
+  const label = `finisher-run${runsCompleted + 1}`
+  const request: SpecialistExecutionRequest = {
+    specialist: 'metro_finisher',
+    playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
+    stage: 'METRO_FINISHER_DEEP_RESEARCH',
+    objective: `${run.projectId}: Metro Finisher deep-research pass on catalog negative space (run ${runsCompleted + 1} of ${MAX_METRO_FINISHER_RUNS})`,
+    inputs: {
+      metro: run.projectId,
+      currentItemCount: certified.length,
+      retainedItems: certified.map((r) => ({
+        candidateName: r.candidateName,
+        body: r.finalBody,
+        category: r.dbCategory ?? candidatesByName.get(r.candidateName)?.category ?? null,
+        neighborhood: candidatesByName.get(r.candidateName)?.neighborhood ?? null,
+        placeId: (state.geoEnrichmentResults ?? []).find((g) => g.candidateName === r.candidateName)?.placeId ?? null,
+      })),
+      categoryDistribution: countByCanonicalCategory(certified.map((r) => candidatesByName.get(r.candidateName)?.category ?? null)).counts,
+      neighborhoodDistribution: state.neighborhoodCompletenessReport?.perNeighborhoodCounts ?? [],
+      canonicalNeighborhoods: deps.canonicalNeighborhoods ?? [],
+      existingLists: (state.homeListPlan ?? []).map((p) => ({ title: p.title, kind: p.kind, itemCount: p.itemCandidateNames.length })),
+      existingInventoryReconciliation: state.existingInventoryReconciliation ?? null,
+      venueDuplicateClusters: state.venueDuplicateClusters ?? [],
+      rejectedCandidateSummaries: rejected.map((r) => ({ candidateName: r.candidateName, reasons: r.rejectionReasons })),
+      placesCompletenessGeoResults: state.geoEnrichmentResults ?? [],
+      partnerPotentialSignals: certified.map((r) => ({ candidateName: r.candidateName, partnerPotential: r.partnerPotential ?? null })),
+      priorReport: runsCompleted >= 1 ? (state.metroFinisherReport ?? null) : null,
+    },
+    requiredEvidenceKeys: ['report'],
+    methodologyId: 'metro_finisher',
+    methodologyVersion: 'v1',
+    executionId: executionId(run.runId, 'METRO_FINISHER', label),
+    projectId: run.projectId,
+    destinationId: null,
+    metroId: run.projectId,
+    allowedCapabilities: ['content_editorial', 'web_research'],
+    authorityOperations: ['metro_launch.build_internal_artifact'],
+    idempotencyKey: executionId(run.runId, 'METRO_FINISHER', label),
+  }
+
+  const outcome = await runStepWithInfraRetry(deps, run, request)
+  const freshState = readState(run)
+  if (outcome.kind === 'BLOCKED') {
+    // Provider genuinely unavailable — this is not a content problem, so
+    // it escalates exactly like every other infra-exhausted stage rather
+    // than silently proceeding without a report.
+    return block(run, `METRO_FINISHER_DEEP_RESEARCH: ${outcome.reason ?? 'executor unavailable'}`)
+  }
+  if (outcome.kind === 'NEEDS_JERRY') {
+    return escalate(run, `METRO_FINISHER_DEEP_RESEARCH failed evidence validation: ${outcome.reason ?? 'unknown'}`, { stage: 'METRO_FINISHER_DEEP_RESEARCH' })
+  }
+
+  const rawReport: unknown = outcome.envelope?.evidence.report
+  const validation = validateMetroFinisherReport(rawReport)
+  freshState.metroFinisherRunsCompleted = runsCompleted + 1
+  if (validation.ok && validation.report) {
+    freshState.metroFinisherReport = validation.report
+  } else {
+    // A structurally invalid report is never silently accepted as if it
+    // were empty/clean — recorded as a real FAIL so
+    // METRO_FINISHER_INTEGRATION (and ultimately finalReadyToApplyAudit)
+    // honestly reflects that this run's Finisher pass did not certify,
+    // never fabricating a passing report.
+    freshState.metroFinisherStatus = { verdict: 'FAIL' }
+  }
+  run.state = freshState
+  run.currentStage = 'METRO_FINISHER_INTEGRATION'
+  return run
+}
+
+async function stepMetroFinisherIntegration(run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const report = state.metroFinisherReport
+
+  if (!report) {
+    // No accepted report exists (validation failed upstream, or this
+    // driver was never given a metro_finisher-capable executor — see
+    // canExecute()/EXECUTOR_UNAVAILABLE). Never fabricate packets from
+    // nothing; status stays whatever METRO_FINISHER_DEEP_RESEARCH already
+    // recorded, defaulting to FAIL if somehow unset.
+    state.metroFinisherStatus = state.metroFinisherStatus ?? { verdict: 'FAIL' }
+    run.state = state
+    run.currentStage = 'M9_HOME_LIST_MIRROR'
+    return run
+  }
+
+  state.metroFinisherPackets = buildMetroFinisherWorkPackets(report)
+
+  const countOnlyCheck = checkReadinessNotGatedOnCountAlone(report)
+  state.metroFinisherStatus = countOnlyCheck.flaggedAsCountOnly ? { verdict: 'FAIL' } : { verdict: 'PASS' }
+
+  run.state = state
+  run.currentStage = 'M9_HOME_LIST_MIRROR'
+  return run
+}
+
 async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
   const state = readState(run)
   const certifiedForRecheck = Object.values(state.itemCertifications ?? {}).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
@@ -2766,6 +2912,12 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
     // never APPLIED/VERIFIED, unless a caller explicitly overrides this
     // with real, confirmed execution evidence (no such path exists today).
     executionState: 'GENERATED',
+    // Chief Phase 3C — the METRO_FINISHER_DEEP_RESEARCH/INTEGRATION
+    // stages' own outcome, computed once earlier in this run (before M9).
+    // Missing (a run that somehow never reached those stages) is treated
+    // as a failure by finalReadyToApplyAudit itself, same discipline as
+    // every other check there.
+    metroFinisherStatus: state.metroFinisherStatus,
   })
 
   // Chief Phase 3B (items 7, 8, 10) — the strategic close-out report +
@@ -2805,6 +2957,8 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
       homeListSqlPatch: state.homeListSqlPatch ?? null,
       venueDuplicateClusters: duplicateClusters,
       finalReportJson: report,
+      metroFinisherReport: state.metroFinisherReport ?? null,
+      metroFinisherPackets: state.metroFinisherPackets ?? null,
     })
     for (const [name, content] of Object.entries(files)) await deps.writeStageArtifact(name, content)
     state.stageArtifactManifest = Object.keys(files)
@@ -2912,6 +3066,8 @@ export interface DriveMetroLaunchOptions {
   projectName?: string
   /** ENSURE_METRO_PROJECT: overrides the derived agent.projects.summary for this metro. */
   projectSummary?: string
+  /** Chief Phase 3C — explicitly requests ONE additional, focused METRO_FINISHER_DEEP_RESEARCH follow-up run. Only takes effect when the first (or a prior) run's report said `finalAssessment.readyToFinish: false` — never causes an automatic loop, and never exceeds MAX_METRO_FINISHER_RUNS regardless of how many times this is set to true. */
+  requestMetroFinisherFollowUp?: boolean
 }
 
 export const METRO_BUILDER_OWNER_KEY = 'metro_builder'
@@ -3028,6 +3184,12 @@ export async function driveMetroLaunch(deps: MetroDriverDeps, projectId: string,
         break
       case 'M8_75_CATALOG_VOICE_PASS':
         run = await stepCatalogVoicePass(deps, run)
+        break
+      case 'METRO_FINISHER_DEEP_RESEARCH':
+        run = await stepMetroFinisherDeepResearch(deps, run, options.requestMetroFinisherFollowUp)
+        break
+      case 'METRO_FINISHER_INTEGRATION':
+        run = await stepMetroFinisherIntegration(run)
         break
       case 'M9_HOME_LIST_MIRROR':
         run = await stepM9HomeListMirror(deps, run)

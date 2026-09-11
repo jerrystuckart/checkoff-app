@@ -19,6 +19,7 @@ import { driveMetroLaunch } from './metroLaunchDriver'
 import { InMemoryPlaybookRunStore, getOrCreateRun, playbookRunId } from './playbookRun'
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
+import { scriptPassingMetroFinisher } from './testMetroFinisherFixture'
 import type { CategoryCoveragePlan } from '../playbooks/metroLaunch'
 import type { HomeListRow } from '../playbooks/homeListCertification'
 import type { ImageReadinessCard } from '../playbooks/imageReadiness'
@@ -53,6 +54,7 @@ const VALID_TAGS = ['coffee', 'historic', 'family friendly', 'live music', 'outd
 
 function buildExecutor(): TestExecutor {
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   // M7.5 TAG_ASSIGNMENT fake: echoes the first 6 entries of the REAL
   // shortlist the driver computed (always a real-vocabulary subset).
   executor.scriptWhen(

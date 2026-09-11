@@ -25,6 +25,7 @@ import type { VerifiedTagSnapshot } from './tagVocabularyProvider'
 import { InMemoryPlaybookRunStore, getOrCreateRun, playbookRunId } from './playbookRun'
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
+import { scriptPassingMetroFinisher } from './testMetroFinisherFixture'
 import { auditCoverage, type CategoryCoveragePlan } from '../playbooks/metroLaunch'
 import { InMemoryGeoEnrichmentCacheStore } from './metroGeoEnrichmentDriver'
 
@@ -214,6 +215,7 @@ test('driveMetroLaunch: with NO M0 decisions recorded, stops at NEEDS_JERRY befo
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, 'san-diego-no-decisions', { categoryPlan: PLAN })
   assert.equal(run.status, 'NEEDS_JERRY')
@@ -225,6 +227,7 @@ test('San Diego FULL SYNTHETIC driver run: sequences M0 through the launch-readi
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   scriptSynthetic(executor)
 
@@ -280,6 +283,7 @@ test('driveMetroLaunch: QUALITY_GATE genuinely FAILS the launch boundary when a 
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   scriptSynthetic(executor)
 
@@ -326,6 +330,7 @@ test('driveMetroLaunch: a plateaued district-depth gap (Carlsbad 4/5) self-relax
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
 
   executor.scriptWhen(
@@ -414,6 +419,7 @@ test('driveMetroLaunch: launch-boundary GEOGRAPHY_GATE genuinely PASSES once a d
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
 
   executor.scriptWhen(
@@ -485,6 +491,7 @@ test('driveMetroLaunch: a category with genuinely zero real-world inventory (Spo
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
 
   executor.scriptWhen(
@@ -545,6 +552,7 @@ test('driveMetroLaunch: launch-boundary CATEGORY_GATE evaluates NORMALIZED categ
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
 
   executor.scriptWhen(
@@ -612,6 +620,7 @@ test('driveMetroLaunch: RESUME — a second call against the same run store cont
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   scriptSynthetic(executor)
   const projectId = 'san-diego-resume-test'
@@ -648,6 +657,7 @@ test('driveMetroLaunch: a coverage gap that plateaus rather than closing self-re
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const shoplessPlan: CategoryCoveragePlan = { targets: [{ categoryName: 'Shopping', minimumViable: 4, healthyTarget: 8, qualityNotes: [] }] }
 
@@ -713,6 +723,7 @@ test('driveMetroLaunch: a TRULY unsatisfiable metro (relaxation-round budget alr
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const shoplessPlan: CategoryCoveragePlan = { targets: [{ categoryName: 'Shopping', minimumViable: 4, healthyTarget: 8, qualityNotes: [] }] }
 
@@ -763,6 +774,7 @@ test('driveMetroLaunch: EXECUTOR_UNAVAILABLE blocks the run rather than NEEDS_JE
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   executor.makeSpecialistUnavailable('research_verifier')
 
@@ -781,6 +793,7 @@ test('driveMetroLaunch: a rejected evidence result retries up to the guardrail, 
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   // Every M1 attempt returns an envelope MISSING the required evidence key.
   executor.scriptWhen(
@@ -813,6 +826,7 @@ test('driveMetroLaunch: M1 request inputs carry the M0 geographicScope decision,
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   let capturedGeographicScope: unknown = 'NEVER_CALLED'
 
@@ -901,6 +915,7 @@ test('driveMetroLaunch: a configured depth target with only token coverage trigg
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const gapDepthRequests: unknown[] = []
 
@@ -985,6 +1000,7 @@ test('driveMetroLaunch: M1 output missing a valid neighborhood "kind" fails evid
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   let m1Attempts = 0
 
@@ -1025,6 +1041,7 @@ test('driveMetroLaunch: re-entering a stage whose execution is already COMPLETE 
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   let m1CallCount = 0
 
@@ -1275,6 +1292,7 @@ test('driveMetroLaunch: a US metro (metroCountry "US") resolves geo enrichment a
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   scriptThroughM8(executor, 'DowntownDiner', 'Downtown')
 
@@ -1310,6 +1328,7 @@ test('driveMetroLaunch: M10 summary.geoCoveragePercent/geoExceptionsCount are re
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   scriptThroughM8(executor, 'DowntownDiner', 'Downtown')
 
@@ -1350,6 +1369,7 @@ test('driveMetroLaunch: a non-US metro (Vienna, metroCountry "AT") resolves geo 
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   scriptThroughM8(executor, 'CafeWien', 'Innere Stadt')
 
@@ -1428,6 +1448,7 @@ test('driveMetroLaunch: a bundled discovery label certifies when the body quotes
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const candidate = bundledCandidate()
   const item = { name: candidate.name, checkoffizedItem: "Watch the Lipizzaner stallions train at 'Spanish Riding School'.", tags: ['t1', 't2', 't3', 't4', 't5', 't6'], canonicalVenueName: 'Spanish Riding School' }
@@ -1465,6 +1486,7 @@ test('driveMetroLaunch: the SAME bundled item fails venue quoting when the body 
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const candidate = bundledCandidate()
   // Body never wraps ANY canonical option in single quotes.
@@ -1505,6 +1527,7 @@ test('driveMetroLaunch: 429/infra failures during critique are retried and do NO
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl serves a real, specific Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
   const item = { name: candidate.name, checkoffizedItem: "Order the 'Sperl Torte' at 'Cafe Sperl'.", tags: ['t1', 't2', 't3', 't4', 't5', 't6'], canonicalVenueName: 'Cafe Sperl' }
@@ -1559,6 +1582,7 @@ test('driveMetroLaunch: three genuine bad editorial bodies still exhaust the con
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl serves a real, specific Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
   const item = { name: candidate.name, checkoffizedItem: 'Visit Cafe Sperl, a nice coffeehouse.', tags: ['t1', 't2', 't3', 't4', 't5', 't6'], canonicalVenueName: 'Cafe Sperl' }
@@ -1603,6 +1627,7 @@ test('driveMetroLaunch: a single candidate that genuinely exhausts M6.5 write-ev
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const goodCandidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl serves a real, specific Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
   const badCandidate = { name: 'Thin Source Museum', category: 'Arts & Culture', neighborhood: 'Innere Stadt', claimSupported: 'Exists.', source: 'https://example.com/thin', needsVerification: false }
@@ -1685,6 +1710,7 @@ test('driveMetroLaunch: TAG_ASSIGNMENT replaces finalTags on an already-certifie
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl is a historic Vienna coffeehouse serving a real Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
   const cert: DriverItemCertificationRecord = {
     candidateName: 'Cafe Sperl',
@@ -1738,6 +1764,7 @@ test('driveMetroLaunch: TAG_ASSIGNMENT rejects a tag outside the supplied shortl
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl is a historic Vienna coffeehouse.', source: 'https://example.com/sperl', needsVerification: false }
   const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: [], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
 
@@ -1775,6 +1802,7 @@ test('driveMetroLaunch: TAG_ASSIGNMENT exhausts its own bounded retry budget on 
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl is a historic Vienna coffeehouse.', source: 'https://example.com/sperl', needsVerification: false }
   const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: [], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
 
@@ -1813,6 +1841,7 @@ test('driveMetroLaunch: TAG_ASSIGNMENT infra failures (429) are retried and do N
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl is a historic Vienna coffeehouse.', source: 'https://example.com/sperl', needsVerification: false }
   const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: [], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
 
@@ -1851,6 +1880,7 @@ test('driveMetroLaunch: real provider usage is accumulated per stage, and infra 
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl serves a real, specific Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
   const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: [], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
 
@@ -1897,6 +1927,7 @@ test('driveMetroLaunch: an idempotent-replay acceptance (already COMPLETE) never
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl serves a real, specific Sperl Torte.', source: 'https://example.com/sperl', needsVerification: false }
   const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: [], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
   executor.scriptWhen(
@@ -1967,6 +1998,7 @@ test('driveMetroLaunch: M8.5 drops a TAG_CERTIFICATION_GATE failure only after a
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   executor.scriptWhen(
     (r) => (r.inputs as { mode?: string }).mode === 'TAG_SELECTION',
     (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { tags: ['coffee', 'historic'] }, methodologyId: 'checkoff_editor', methodologyVersion: 'v1' })
@@ -2002,6 +2034,7 @@ test('driveMetroLaunch: M8.5 repairs a TAG_CERTIFICATION_GATE failure when the w
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const candidate = { name: 'Cafe Sperl', category: 'Food & drink', neighborhood: 'Mariahilf', claimSupported: 'Cafe Sperl is a historic Vienna coffeehouse.', source: 'https://example.com/sperl', needsVerification: false }
   const originalBody = "Order the 'Sperl Torte' at 'Cafe Sperl'."
@@ -2038,6 +2071,7 @@ test('driveMetroLaunch: M8.5 drops a GEO_ENRICHMENT_GATE failure only when a REA
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   // Three candidates: one whose Places lookup returns a real but
   // genuinely unmatched result (should DROP), one whose search genuinely
@@ -2089,6 +2123,7 @@ test('driveMetroLaunch: M8.5 drops a METADATA_COMPLETENESS_GATE failure when nei
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const candidate = { name: 'Local District Initiative', category: 'District', neighborhood: 'Ottakring', claimSupported: 'A real neighborhood civic initiative.', source: 'https://example.com/district', needsVerification: false }
   const cert: DriverItemCertificationRecord = { candidateName: candidate.name, venueName: candidate.name, attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Join the 'Local District Initiative' meeting.", finalTags: ['hidden gem', 'art'], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
@@ -2121,6 +2156,7 @@ test('driveMetroLaunch: M8.5 pruning is idempotent — a resumed run never re-sp
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   let tagRepairCalls = 0
   executor.scriptWhen(
     (r) => (r.inputs as { mode?: string }).mode === 'TAG_SELECTION',
@@ -2205,6 +2241,7 @@ test('driveMetroLaunch: M9 Home-list SQL keeps the old fail-closed metro_areas c
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   const candidate = food('Cafe Sperl', 'Mariahilf')
   const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: ['coffee', 'historic'], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [] }
 
@@ -2226,6 +2263,7 @@ test('driveMetroLaunch: M9 Home-list SQL creates metro_areas, reuses lists idemp
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   const candidate = food('Cafe Sperl', 'Mariahilf')
   const body = "Order the 'Sperl Torte' at 'Cafe Sperl'."
   const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: body, finalTags: ['coffee', 'historic'], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [], dbCategory: 'Food & drink' }
@@ -2268,6 +2306,7 @@ test('driveMetroLaunch: the launch-readiness decisionPacket never frames the hum
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   const candidate = food('Cafe Sperl', 'Mariahilf')
   const cert: DriverItemCertificationRecord = { candidateName: 'Cafe Sperl', venueName: 'Cafe Sperl', attempts: 1, outcome: 'ITEM_CERTIFIED', finalBody: "Order the 'Sperl Torte' at 'Cafe Sperl'.", finalTags: ['coffee', 'historic'], supportingFact: candidate.claimSupported, verifiedAt: '2026-09-09T00:00:00.000Z', rejectionReasons: [], dbCategory: 'Food & drink' }
 
@@ -2311,6 +2350,7 @@ test('driveMetroLaunch: dbCategory is resolved and persisted from the real, norm
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
 
   const validTags = ['coffee', 'historic', 'family friendly', 'live music', 'outdoor', 'art']
@@ -2384,6 +2424,7 @@ test('driveMetroLaunch: partnerPotential is advisory-only and never blocks certi
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
 
   const validTags = ['coffee', 'historic', 'family friendly', 'live music', 'outdoor', 'art']
@@ -2469,6 +2510,7 @@ test('driveMetroLaunch: the flagship Home list is capped at ~30 balanced items (
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
 
   const validTags = ['coffee', 'historic', 'family friendly', 'live music', 'outdoor', 'art']

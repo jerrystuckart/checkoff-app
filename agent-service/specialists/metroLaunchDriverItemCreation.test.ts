@@ -23,6 +23,7 @@ import { driveMetroLaunch, type MetroM0Decisions, type DriverItemCertificationRe
 import { InMemoryPlaybookRunStore, getOrCreateRun, playbookRunId } from './playbookRun'
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
+import { scriptPassingMetroFinisher } from './testMetroFinisherFixture'
 import type { CategoryCoveragePlan } from '../playbooks/metroLaunch'
 import { InMemoryGeoEnrichmentCacheStore } from './metroGeoEnrichmentDriver'
 import type { VerifiedTagSnapshot } from './tagVocabularyProvider'
@@ -96,6 +97,7 @@ async function runFullDriver(overrides: Partial<Parameters<typeof driveMetroLaun
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const { candidates, certs } = twoCleanCandidates()
   await seed(runStore, projectId, candidates, certs)
@@ -179,6 +181,7 @@ test('driveMetroLaunch (Chief Phase 2AN): an item reconciled to existing product
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const projectId = 'item-creation-reuse-test'
   const alphaCert: DriverItemCertificationRecord = {

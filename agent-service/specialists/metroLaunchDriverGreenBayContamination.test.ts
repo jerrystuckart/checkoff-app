@@ -19,6 +19,7 @@ import { driveMetroLaunch, type MetroM0Decisions, type DriverItemCertificationRe
 import { InMemoryPlaybookRunStore, getOrCreateRun, playbookRunId } from './playbookRun'
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
+import { scriptPassingMetroFinisher } from './testMetroFinisherFixture'
 import type { CategoryCoveragePlan } from '../playbooks/metroLaunch'
 import { InMemoryGeoEnrichmentCacheStore } from './metroGeoEnrichmentDriver'
 import type { VerifiedTagSnapshot } from './tagVocabularyProvider'
@@ -71,6 +72,7 @@ test('driveMetroLaunch (Green Bay contamination regression): a real San Diego ve
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
 
   const clean = { name: "Titletown Brewing Co", category: 'Food & drink', neighborhood: 'Downtown Green Bay', claimSupported: 'Titletown Brewing Co has an outdoor beer garden.', source: 'https://example.com/titletown', needsVerification: false }
@@ -134,6 +136,7 @@ test('driveMetroLaunch (Green Bay contamination regression): a same-venue/same-e
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
 
   const rediscovered = { name: '1919 Kitchen & Tap (rediscovered)', category: 'Food & drink', neighborhood: 'Downtown Green Bay', claimSupported: 'Real restaurant inside Lambeau Field.', source: 'https://example.com/1919', needsVerification: false }
@@ -223,6 +226,7 @@ test('driveMetroLaunch (Green Bay contamination regression): autoDeriveDepthTarg
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
 
   const projectId = 'green-bay-auto-depth-targets'
   await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
@@ -256,6 +260,7 @@ test('driveMetroLaunch: omitting autoDeriveDepthTargetsFromGeography (the defaul
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
 
   const projectId = 'green-bay-no-auto-depth-targets'
   await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')

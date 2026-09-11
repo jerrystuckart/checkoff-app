@@ -65,6 +65,10 @@ function goodInputExcept(overrides: Record<string, unknown> = {}) {
     reusedItemsAdditiveOnly: true,
     sqlSafetyVerdict: 'PASS' as const,
     executionState: 'GENERATED' as const,
+    // Chief Phase 3C — Metro Finisher status is now a required check too;
+    // PASS keeps this fixture's "everything but the thing under test"
+    // baseline meaning intact.
+    metroFinisherStatus: { verdict: 'PASS' as const },
     ...overrides,
   }
 }

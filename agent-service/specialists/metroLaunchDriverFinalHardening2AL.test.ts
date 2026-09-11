@@ -17,6 +17,7 @@ import { driveMetroLaunch, type MetroM0Decisions, type DriverItemCertificationRe
 import { InMemoryPlaybookRunStore, getOrCreateRun, playbookRunId } from './playbookRun'
 import { InMemoryExecutionStore } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
+import { scriptPassingMetroFinisher } from './testMetroFinisherFixture'
 import type { CategoryCoveragePlan } from '../playbooks/metroLaunch'
 import { InMemoryGeoEnrichmentCacheStore } from './metroGeoEnrichmentDriver'
 import type { VerifiedTagSnapshot } from './tagVocabularyProvider'
@@ -90,6 +91,7 @@ test('driveMetroLaunch (Chief Phase 2AL): a metro with NO canonical neighborhood
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const { candidates, certs } = twoCleanCandidates()
   const projectId = 'no-canonical-model-test'
@@ -128,6 +130,7 @@ test('driveMetroLaunch (Chief Phase 2AL): generic SQL creates every canonical ne
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const { candidates, certs } = twoCleanCandidates()
   const projectId = 'generic-neighborhood-sql-test'
@@ -169,6 +172,7 @@ test('driveMetroLaunch (Chief Phase 2AL): a canonical neighborhood with zero ite
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const { candidates, certs } = twoCleanCandidates()
   const projectId = 'missing-fallback-centroid-test'
@@ -207,6 +211,7 @@ test('driveMetroLaunch (Chief Phase 2AL): finalReadyToApplyAudit is invoked AUTO
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const { candidates, certs } = twoCleanCandidates()
   const projectId = 'auto-final-audit-test'
@@ -249,6 +254,7 @@ test('driveMetroLaunch (Chief Phase 2AM): a brand-new metro reaches READY_TO_APP
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const { candidates, certs } = twoCleanCandidates()
   const projectId = 'pre-apply-no-rows-test'
@@ -297,6 +303,7 @@ test('driveMetroLaunch (Chief Phase 2AL): a failed final audit prevents READY fr
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   scriptTagSelection(executor)
   const { candidates, certs } = twoCleanCandidates()
   const projectId = 'final-audit-blocks-ready-test'

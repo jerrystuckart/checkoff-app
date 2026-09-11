@@ -23,6 +23,8 @@
 import type { RawCandidate } from './candidateMerge'
 import type { DriverItemCertificationRecord, HomeListPlanEntry } from './metroLaunchDriver'
 import type { VenueCluster } from '../playbooks/venueDuplicateDetection'
+import type { MetroFinisherReport } from '../playbooks/metroFinisherReport'
+import type { MetroFinisherWorkPackets } from '../playbooks/metroFinisherIntegration'
 
 export interface StageArtifactInput {
   candidates: readonly (RawCandidate & { needsVerification: boolean })[]
@@ -34,6 +36,10 @@ export interface StageArtifactInput {
   homeListSqlPatch: string | null
   venueDuplicateClusters: readonly VenueCluster[]
   finalReportJson: unknown
+  /** Chief Phase 3C — METRO_FINISHER_DEEP_RESEARCH's report, when this run has one. Never fabricated: absent (null/undefined) is reflected as an honest "not yet available" file, same discipline as every other not-yet-run stage here. */
+  metroFinisherReport?: MetroFinisherReport | null
+  /** Chief Phase 3C — METRO_FINISHER_INTEGRATION's deterministic work packets, when this run has computed them. */
+  metroFinisherPackets?: MetroFinisherWorkPackets | null
 }
 
 function certifiedOnly(itemCertifications: Readonly<Record<string, DriverItemCertificationRecord>>) {
@@ -100,6 +106,10 @@ export function buildStageArtifactFiles(input: StageArtifactInput): Record<strin
   files['06-category-coverage.json'] = JSON.stringify(input.categoryCounts, null, 2)
 
   files['07-geographic-coverage.json'] = JSON.stringify(input.neighborhoodCounts, null, 2)
+
+  files['07a-metro-finisher-report.json'] = JSON.stringify(input.metroFinisherReport ?? null, null, 2)
+
+  files['07b-metro-finisher-packets.json'] = JSON.stringify(input.metroFinisherPackets ?? null, null, 2)
 
   files['08-home-list-package.json'] = JSON.stringify(input.homeListPlan, null, 2)
 

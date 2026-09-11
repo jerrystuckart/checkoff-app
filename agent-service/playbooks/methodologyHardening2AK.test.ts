@@ -189,6 +189,11 @@ function goodFinalAuditInput() {
     reusedItemsAdditiveOnly: true,
     sqlSafetyVerdict: 'PASS' as const,
     executionState: 'GENERATED' as const,
+    // Chief Phase 3C — the Metro Finisher deep-research pass is now a
+    // required check too; a PASS here keeps this fixture's baseline
+    // "every check passes" meaning intact for every test that doesn't
+    // specifically exercise this new field.
+    metroFinisherStatus: { verdict: 'PASS' as const },
   }
 }
 

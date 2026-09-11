@@ -118,6 +118,24 @@ export const SPECIALIST_REGISTRY: Readonly<Record<SpecialistKey, SpecialistDefin
     capabilities: ['documents_presentation_assets', 'checkoff_operational_state'],
     canChangeStrategicScope: false,
   },
+  /**
+   * Chief Phase 3C — Metro Finisher Deep Research. Runs once late in a
+   * metro build (after the main catalog/geo/reconciliation work, before
+   * Home-list generation) to research the catalog's own "negative
+   * space" — gaps, thin neighborhoods, city-identity research, themed-
+   * list opportunities, duplicate/identity concerns. Research and
+   * recommendation ONLY: never writes final CheckOff item wording (that
+   * stays checkoff_editor's job) and never creates a production item,
+   * list, or neighborhood itself — see metroFinisherReport.ts's own doc.
+   */
+  metro_finisher: {
+    key: 'metro_finisher',
+    ownerKey: 'metro_finisher',
+    name: 'Metro Finisher',
+    owns: ['catalog negative-space gap analysis', 'city-identity deep research', 'themed-list opportunity discovery', 'duplicate/identity concern surfacing', 'metro launch-readiness recommendation'],
+    capabilities: ['live_web_research'],
+    canChangeStrategicScope: false,
+  },
 })
 
 export function getSpecialist(key: SpecialistKey): SpecialistDefinition {

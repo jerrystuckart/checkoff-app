@@ -8,7 +8,7 @@
 
 import type { SpecialistExecutor, SpecialistExecutionRequest } from './executor'
 import type { SpecialistResultEnvelope, SpecialistKey, ProviderUsageInfo } from './types'
-import { buildResearchVerifierPrompt, buildCheckoffEditorPrompt, buildDestinationStrategistPrompt, buildDestinationRelationshipManagerPrompt } from './promptBuilders'
+import { buildResearchVerifierPrompt, buildCheckoffEditorPrompt, buildDestinationStrategistPrompt, buildDestinationRelationshipManagerPrompt, buildMetroFinisherPrompt } from './promptBuilders'
 import { getMethodology, methodologyExists } from './methodologyRegistry'
 import { estimateCostUsd, type TokenUsage } from './usagePricing'
 
@@ -27,6 +27,12 @@ export const SPECIALIST_PROVIDER_PREFERENCE: Readonly<Partial<Record<SpecialistK
   checkoff_editor: ['openai'],
   destination_strategist: ['anthropic', 'openai'],
   destination_relationship_manager: ['anthropic', 'openai'],
+  // Chief Phase 3C — prefers OpenAI (its Responses API web_search path is
+  // the mechanism this role is designed around), allows an Anthropic
+  // fallback exactly like research_verifier — NOT hard-locked the way
+  // checkoff_editor is, since this role is research/synthesis, not final
+  // user-facing CheckOff wording.
+  metro_finisher: ['openai', 'anthropic'],
 })
 
 /**
@@ -239,7 +245,7 @@ export function parseModelEnvelope(text: string): EnvelopeParseResult {
 // knows how to BUILD a prompt for the specialist at all; a specific
 // methodology (e.g. a not-yet-ingested v3) still correctly reports
 // EXECUTOR_UNAVAILABLE via that completeness check.
-const WIRED_SPECIALISTS = new Set(['research_verifier', 'checkoff_editor', 'destination_strategist', 'destination_relationship_manager'])
+const WIRED_SPECIALISTS = new Set(['research_verifier', 'checkoff_editor', 'destination_strategist', 'destination_relationship_manager', 'metro_finisher'])
 
 // ---------------------------------------------------------------------------
 // Which (specialist, methodology) combinations actually require LIVE web
@@ -264,11 +270,17 @@ const WIRED_SPECIALISTS = new Set(['research_verifier', 'checkoff_editor', 'dest
 // process it was never actually given tools to perform.
 // ---------------------------------------------------------------------------
 
-const LIVE_WEB_RESEARCH_METHODOLOGY_IDS: ReadonlySet<string> = new Set(['metro_launch', 'destination/dva1', 'destination/dva2'])
+const LIVE_WEB_RESEARCH_METHODOLOGY_IDS: ReadonlySet<string> = new Set(['metro_launch', 'destination/dva1', 'destination/dva2', 'metro_finisher'])
 
 function methodologyRequiresLiveWebResearch(request: SpecialistExecutionRequest): boolean {
   if (request.specialist === 'research_verifier') return true
   if (request.specialist === 'destination_strategist') return LIVE_WEB_RESEARCH_METHODOLOGY_IDS.has(request.methodologyId)
+  // Chief Phase 3C — metro_finisher's whole point is live-grounded city
+  // identity research (see metro_finisher/v1.md's five research
+  // missions) — always requires the web_search tool, same as
+  // research_verifier, regardless of which metro_launch-family
+  // methodologyId happens to be attached to the call.
+  if (request.specialist === 'metro_finisher') return true
   return false
 }
 
@@ -348,7 +360,9 @@ export class RemoteAiExecutor implements SpecialistExecutor {
           ? buildCheckoffEditorPrompt(request, nowIso)
           : request.specialist === 'destination_relationship_manager'
             ? buildDestinationRelationshipManagerPrompt(request, nowIso)
-            : buildDestinationStrategistPrompt(request, nowIso)
+            : request.specialist === 'metro_finisher'
+              ? buildMetroFinisherPrompt(request, nowIso)
+              : buildDestinationStrategistPrompt(request, nowIso)
     const requiresLiveWebResearch = methodologyRequiresLiveWebResearch(request)
 
     const failures: string[] = []

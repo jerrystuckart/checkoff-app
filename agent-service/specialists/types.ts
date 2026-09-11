@@ -20,6 +20,7 @@ export type SpecialistKey =
   | 'destination_strategist'
   | 'destination_relationship_manager'
   | 'destination_activation'
+  | 'metro_finisher'
 
 export interface SpecialistDefinition {
   key: SpecialistKey

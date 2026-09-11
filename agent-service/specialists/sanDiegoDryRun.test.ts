@@ -16,6 +16,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { InMemoryExecutionStore, runExecution, type SpecialistExecutionRequest } from './executor'
 import { TestExecutor, fakeEnvelope } from './testExecutor'
+import { scriptPassingMetroFinisher } from './testMetroFinisherFixture'
 import { auditCoverage, deriveMetroLoopAction, type CoverageAuditEvidence, type CategoryCoveragePlan, type NeighborhoodDefinition } from '../playbooks/metroLaunch'
 
 const PROJECT_ID = 'project-san-diego-dry-run'
@@ -57,6 +58,7 @@ function baseReq(overrides: Partial<SpecialistExecutionRequest>): SpecialistExec
 test('San Diego dry run: M1 geography delegation is accepted end-to-end through the real executor runtime', async () => {
   const store = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   const request = baseReq({ executionId: 'sd-m1', idempotencyKey: 'sd-m1-idem', requiredEvidenceKeys: ['neighborhoods'] })
   executor.script(request.executionId, fakeEnvelope({ taskId: request.executionId, objective: request.objective, evidence: { neighborhoods: NEIGHBORHOODS }, methodologyId: 'metro_launch', methodologyVersion: 'v1' }))
 
@@ -68,6 +70,7 @@ test('San Diego dry run: M1 geography delegation is accepted end-to-end through 
 test('San Diego dry run: M4 first pass fails on Shopping-below-minimum AND a geographic hole -> loop demands TARGETED_RESEARCH', async () => {
   const store = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   const request = baseReq({
     stage: 'M4_COVERAGE_AUDIT',
     executionId: 'sd-m4-pass1',
@@ -109,6 +112,7 @@ test('San Diego dry run: M4 first pass fails on Shopping-below-minimum AND a geo
 test('San Diego dry run: M5 targeted Shopping + La Jolla research -> M4 recount -> gates pass -> loop says PROCEED_TO_VERIFICATION', async () => {
   const store = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
 
   const m5 = baseReq({
     stage: 'M5_TARGETED_DEEP_DIVES',
@@ -166,6 +170,7 @@ test('San Diego dry run: M5 targeted Shopping + La Jolla research -> M4 recount 
 test('San Diego dry run: M6 verification fails one Shopping candidate -> replacement research re-enters M5 -> re-audit passes again', async () => {
   const store = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
 
   const m6 = baseReq({
     stage: 'M6_QUALITY_VERIFICATION',
@@ -215,6 +220,7 @@ test('San Diego dry run: M6 verification fails one Shopping candidate -> replace
 test('San Diego dry run: checkoff_editor handoff only runs AFTER verification, and requires both factualSource and checkoffizedItem', async () => {
   const store = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   const request = baseReq({
     stage: 'M6_5_CHECKOFF_EDITOR',
     specialist: 'checkoff_editor',
@@ -248,6 +254,7 @@ test('San Diego dry run: checkoff_editor handoff only runs AFTER verification, a
 test('San Diego dry run: full execution/run record trail is inspectable and every stage is distinctly identified', async () => {
   const store = new InMemoryExecutionStore()
   const executor = new TestExecutor()
+  scriptPassingMetroFinisher(executor)
   const stages = ['M1_GEOGRAPHY_MAP', 'M2_CATEGORY_COVERAGE_PLAN', 'M3_BROAD_DISCOVERY'] as const
   for (const stage of stages) {
     const request = baseReq({ stage, executionId: `sd-trail-${stage}`, idempotencyKey: `sd-trail-${stage}-idem`, requiredEvidenceKeys: ['note'] })

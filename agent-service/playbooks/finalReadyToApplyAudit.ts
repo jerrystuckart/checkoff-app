@@ -93,6 +93,18 @@ export interface FinalReadyToApplyInput {
   sqlSafetyIssues?: readonly string[]
   /** The real, current state of this package — GENERATED unless execution has actually been confirmed. Never assumed APPLIED/VERIFIED without an explicit, separate confirmation. */
   executionState: ExecutionState
+  /**
+   * Chief Phase 3C — the METRO_FINISHER_DEEP_RESEARCH / METRO_FINISHER_INTEGRATION
+   * stages' outcome. Missing is treated as a failure, same discipline as
+   * every other check here — the Finisher pass is a required part of
+   * calling a metro ready, not an optional bonus. 'WAIVED' requires a
+   * real, named `waiverReason` — an empty/missing one is itself treated
+   * as a failure, mirroring the explicit-named-exception pattern
+   * `approvedCategoryExceptions` uses in metroLaunch.ts's evaluateMetroGates
+   * (the ONLY way a gap can pass despite a real gate is a named,
+   * Jerry-approved exception, never an implicit pass).
+   */
+  metroFinisherStatus?: { verdict: 'PASS' | 'FAIL' | 'WAIVED'; waiverReason?: string }
 }
 
 export interface FinalReadyToApplyResult {
@@ -161,6 +173,20 @@ export function evaluateFinalReadyToApplyAudit(input: FinalReadyToApplyInput): F
 
   if (input.sqlSafetyVerdict === undefined) reasons.push(missing('SQL safety check'))
   else if (input.sqlSafetyVerdict === 'FAIL') reasons.push(`SQL safety check failed: ${(input.sqlSafetyIssues ?? []).join('; ') || 'see detail'}.`)
+
+  if (input.metroFinisherStatus === undefined) {
+    reasons.push(missing('Metro Finisher deep-research pass'))
+  } else if (input.metroFinisherStatus.verdict === 'FAIL') {
+    reasons.push('Metro Finisher deep-research pass failed — the negative-space research/integration stage did not certify as complete.')
+  } else if (input.metroFinisherStatus.verdict === 'WAIVED') {
+    if (!input.metroFinisherStatus.waiverReason || !input.metroFinisherStatus.waiverReason.trim()) {
+      reasons.push('Metro Finisher deep-research pass was marked WAIVED without a named waiverReason — an unexplained waiver is treated the same as a failure, never an implicit pass.')
+    }
+    // A non-empty waiverReason is the explicit, named, Jerry-approved
+    // exception this codebase requires (see approvedCategoryExceptions in
+    // metroLaunch.ts) — contributes no failure.
+  }
+  // 'PASS' contributes no failure.
 
   const verdict: 'READY_TO_APPLY' | 'BLOCKED' = reasons.length === 0 ? 'READY_TO_APPLY' : 'BLOCKED'
   return {

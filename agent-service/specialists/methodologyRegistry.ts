@@ -63,6 +63,14 @@ export const METHODOLOGY_REGISTRY: readonly MethodologyDefinition[] = Object.fre
     contentHash: null,
   },
   {
+    methodologyId: 'metro_finisher',
+    version: 'v1',
+    allowedSpecialists: ['metro_finisher'],
+    docPath: 'agent-service/specialists/methodologies/metro_finisher/v1.md',
+    complete: true,
+    contentHash: null,
+  },
+  {
     methodologyId: 'destination_commercial',
     version: 'v1',
     allowedSpecialists: ['destination_relationship_manager', 'destination_activation'],
