@@ -64,7 +64,7 @@ import { evaluateItemMetadata, evaluateMetadataCompletenessGate, type MetadataEn
 import { evaluateGeoEnrichmentCertificationGate, CONFIDENT_TIERS, ACCEPTABLE_EXCEPTION_TIERS, type GeoEnrichmentItemResult, type PlacesMatchClassification } from '../playbooks/metroGeoEnrichment'
 import { enrichMetroCatalogGeo, buildRealPlacesLookup, FileGeoEnrichmentCacheStore, type GeoEnrichmentCacheStore, type PlacesLookupFn, type GeoEnrichmentCandidate } from './metroGeoEnrichmentDriver'
 import { readRealHomeListRows, type HomeListReadPathFailure } from './homeListReadPath'
-import { fetchExistingProductionItemsForRegion } from './existingInventoryReadPath'
+import { fetchExistingProductionInventoryForReconciliation, type FetchExistingProductionInventoryInput } from './existingInventoryReadPath'
 import { evaluateOutOfMarketContaminationGate } from '../playbooks/outOfMarketContamination'
 import { reconcileAgainstExistingInventory, type ExistingProductionItem, type ReconciliationResult } from '../playbooks/existingInventoryReconciliation'
 import { deriveDefaultDepthTargets } from '../playbooks/defaultMetroManifest'
@@ -369,21 +369,31 @@ export interface MetroDriverDeps {
   /** Chief Phase 3B (Vienna post-mortem item 7): persists one durable stage artifact (see metroStageArtifacts.ts). Defaults to a no-op — this driver never assumes filesystem access it wasn't explicitly given; a real production caller wires this to a file write under the metro's own temp/output directory. */
   writeStageArtifact?: (name: string, content: string) => Promise<void>
   /**
-   * M8 (Chief Phase 2AH, Green Bay incident): fetches real, live
-   * production items that may already represent this metro's region
-   * under a DIFFERENT metro's ownership (see
-   * existingInventoryReadPath.ts's real query — the Green Bay/Milwaukee
-   * situation). Defaults to the real DB read, scoped by
-   * deps.metroAreaFacts.name (with " Metro" stripped) — a caller may
-   * override the search term via existingInventorySearchTerm, or inject
-   * a fake in tests. Never fabricated: if metroAreaFacts is absent and no
-   * override is supplied, reconciliation is skipped entirely (reported
-   * honestly in state.existingInventoryReconciliation as
-   * `skippedReason`, never silently treated as "nothing existing found").
+   * M8 (Chief Phase 2AH, Green Bay incident; corrected 2026-09-11, Chief
+   * Phase 2AO, the real Florence/Firenze reconciliation gap): fetches
+   * real, live production items relevant to this metro — BOTH this
+   * metro's own already-owned inventory (metro_id ownership, when
+   * deps.metroAreaSlug names an already-launched metro — zero address-
+   * language dependency, the fix for the Florence/Firenze bug) AND items
+   * that may already represent this region under a DIFFERENT metro's
+   * ownership (see existingInventoryReadPath.ts's real query — the Green
+   * Bay/Milwaukee situation, still a string-matching fallback by
+   * necessity). Defaults to the real combined DB read
+   * (fetchExistingProductionInventoryForReconciliation) — a caller may
+   * override the region terms via existingInventorySearchTerms (plural —
+   * real alias terms, e.g. ["Florence", "Firenze"] for an international
+   * metro; existingInventorySearchTerm, singular, is kept as a one-term
+   * shorthand) or inject a fake in tests. Never fabricated: if neither
+   * metroAreaSlug nor any real search term is available, reconciliation
+   * is skipped entirely (reported honestly in
+   * state.existingInventoryReconciliation as `skippedReason`, never
+   * silently treated as "nothing existing found").
    */
-  fetchExistingProductionInventory?: (regionSearchTerm: string) => Promise<ExistingProductionItem[]>
-  /** Overrides the region search term used by fetchExistingProductionInventory's default real query — omit to derive it from deps.metroAreaFacts.name. */
+  fetchExistingProductionInventory?: (input: FetchExistingProductionInventoryInput) => Promise<ExistingProductionItem[]>
+  /** Overrides the region search term (singular shorthand for existingInventorySearchTerms) used by fetchExistingProductionInventory's default real query — omit to derive it from deps.metroAreaFacts.name. */
   existingInventorySearchTerm?: string
+  /** Real, specific place-name aliases for the cross-metro discovery fallback (e.g. ["Florence", "Firenze"]) — plural form of existingInventorySearchTerm, for an international metro whose own address text is in the local language. Merged with existingInventorySearchTerm (and deps.metroAreaFacts.name) when supplied, never replaces the metro-scoped ownership fetch, which needs no alias at all. */
+  existingInventorySearchTerms?: readonly string[]
   /**
    * M9 (Chief Phase 2AH): the metro's REAL, established production slug
    * convention (e.g. "green-bay", kebab-case, matching san-diego/
@@ -1639,17 +1649,23 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
   const contaminationFailingNames = new Set(contaminationResult.violations.map((v) => v.candidateName))
 
   // Existing-production-inventory reconciliation (Chief Phase 2AH, Green
-  // Bay incident — second systemic gap) — computed ONCE per run and
-  // cached in state; a resumed run must never re-query production or
-  // re-judge an already-classified candidate. Real region search term is
-  // always derived from deps.metroAreaFacts.name (or an explicit
-  // override) — never guessed, never a generic/empty term (see
-  // existingInventoryReadPath.ts's own guard).
+  // Bay incident — second systemic gap; corrected 2026-09-11, Chief Phase
+  // 2AO — see fetchExistingProductionInventory's own doc for the real
+  // Florence/Firenze bug this closed) — computed ONCE per run and cached
+  // in state; a resumed run must never re-query production or re-judge an
+  // already-classified candidate. Metro-scoped ownership (deps.metroAreaSlug,
+  // when this metro already exists) is now the PRIMARY signal — zero
+  // address-language dependency. Region search terms (real, specific alias
+  // terms only — never guessed, never generic) remain the cross-metro
+  // discovery fallback, derived from existingInventorySearchTerms/
+  // existingInventorySearchTerm/deps.metroAreaFacts.name, in that order.
   if (!state.existingInventoryReconciliation) {
-    const regionSearchTerm = deps.existingInventorySearchTerm ?? deps.metroAreaFacts?.name?.replace(/\s+metro\s*$/i, '').trim()
-    if (regionSearchTerm && regionSearchTerm.length >= 3) {
-      const fetchInventory = deps.fetchExistingProductionInventory ?? fetchExistingProductionItemsForRegion
-      const existingItems = await fetchInventory(regionSearchTerm)
+    const derivedTerm = deps.existingInventorySearchTerm ?? deps.metroAreaFacts?.name?.replace(/\s+metro\s*$/i, '').trim()
+    const regionSearchTerms = [...(deps.existingInventorySearchTerms ?? []), ...(derivedTerm ? [derivedTerm] : [])].filter((t) => t.length >= 3)
+    const metroSlugForReconciliation = deps.metroAreaSlug
+    if (metroSlugForReconciliation || regionSearchTerms.length > 0) {
+      const fetchInventory = deps.fetchExistingProductionInventory ?? ((input) => fetchExistingProductionInventoryForReconciliation(input))
+      const existingItems = await fetchInventory({ metroSlug: metroSlugForReconciliation, regionSearchTerms })
       state.existingProductionInventorySnapshot = existingItems
       const reconciliationCandidates = certified.map((r) => {
         const geo = geoResultsByNameForContamination.get(r.candidateName)
@@ -1669,7 +1685,7 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
         reused: [],
         distinctSameVenue: [],
         unmatched: [],
-        skippedReason: 'no metroAreaFacts.name/existingInventorySearchTerm available to derive a real, specific region search term — reconciliation not attempted rather than guessed at.',
+        skippedReason: 'neither deps.metroAreaSlug nor any real, specific region search term (existingInventorySearchTerms/existingInventorySearchTerm/metroAreaFacts.name) is available — reconciliation not attempted rather than guessed at.',
       }
     }
   }
