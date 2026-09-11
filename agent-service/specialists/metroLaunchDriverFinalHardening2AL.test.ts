@@ -243,6 +243,56 @@ test('driveMetroLaunch (Chief Phase 2AL): finalReadyToApplyAudit is invoked AUTO
   assert.match(String(run.decisionPacket?.chiefRecommendation ?? ''), /FINAL_READY_TO_APPLY_AUDIT also passed/)
 })
 
+// --- Chief Phase 2AM: PRE_APPLY vs POST_APPLY, wired at the real driver level ---
+
+test('driveMetroLaunch (Chief Phase 2AM): a brand-new metro reaches READY_TO_APPLY on the auto-wired final audit even though NO production public.lists rows exist yet — PRE_APPLY package validation must never require rows the package itself is about to create', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  scriptTagSelection(executor)
+  const { candidates, certs } = twoCleanCandidates()
+  const projectId = 'pre-apply-no-rows-test'
+  await seed(runStore, projectId, candidates, certs)
+
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      verifiedTagSnapshot: TEST_TAG_VOCAB,
+      metroAreaFacts: { name: 'Test Metro', state: 'WI', timezone: 'America/Chicago' },
+      metroAreaSlug: 'test-metro',
+      canonicalNeighborhoods: ['Downtown'],
+      fetchExistingProductionInventory: async () => [],
+      placesLookup: basePlacesLookup(),
+      geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
+      // The real pre-apply state (and exactly Florence's real situation):
+      // no public.lists rows exist yet for a metro that has never been
+      // applied — HOME_LIST_CERTIFICATION_GATE (the live POST_APPLY read)
+      // genuinely FAILs here, on purpose.
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: true })),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      flagshipListTitle: 'Fall 2026 — Test Metro',
+    },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 30 }
+  )
+
+  const state = run.state as { finalReadyToApplyAudit?: { verdict: string; reasons: string[] }; finalCertificationReport?: { failingGates?: { key: string }[] } }
+  assert.ok(
+    state.finalCertificationReport?.failingGates?.some((g) => g.key === 'HOME_LIST_CERTIFICATION_GATE'),
+    'sanity check: the live POST_APPLY gate must genuinely be failing here (no rows exist) — otherwise this test would not be proving anything'
+  )
+  assert.ok(state.finalReadyToApplyAudit, 'finalReadyToApplyAudit must still have run automatically')
+  assert.equal(
+    state.finalReadyToApplyAudit!.verdict,
+    'READY_TO_APPLY',
+    `a well-formed, not-yet-applied package must reach READY_TO_APPLY on PRE_APPLY validation alone: ${JSON.stringify(state.finalReadyToApplyAudit)}`
+  )
+})
+
 test('driveMetroLaunch (Chief Phase 2AL): a failed final audit prevents READY framing even when every individual gate already passed', async () => {
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()

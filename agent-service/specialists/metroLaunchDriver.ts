@@ -68,7 +68,7 @@ import { fetchExistingProductionItemsForRegion } from './existingInventoryReadPa
 import { evaluateOutOfMarketContaminationGate } from '../playbooks/outOfMarketContamination'
 import { reconcileAgainstExistingInventory, type ExistingProductionItem, type ReconciliationResult } from '../playbooks/existingInventoryReconciliation'
 import { deriveDefaultDepthTargets } from '../playbooks/defaultMetroManifest'
-import { certifyHomeListRow, evaluateHomeListCertificationGate, certifyCuratedListRow, evaluateCuratedListLayerGate, type HomeListRow, type CuratedListRow } from '../playbooks/homeListCertification'
+import { certifyHomeListRow, evaluateHomeListCertificationGate, certifyCuratedListRow, evaluateCuratedListLayerGate, evaluateHomeListPackageValidationGate, derivePackageValidationFromSql, type HomeListRow, type CuratedListRow } from '../playbooks/homeListCertification'
 import { evaluateImageReadinessGate, type ImageReadinessCard } from '../playbooks/imageReadiness'
 import { certifyMetroLaunch, type MetroLaunchCertificationReport, type MetroLaunchCertificationSummary } from '../playbooks/metroLaunchCertification'
 import {
@@ -2544,8 +2544,26 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
     emptyNeighborhoods: state.neighborhoodCompletenessReport?.emptyNeighborhoods,
     placesCompletenessVerdict: gateVerdict('PLACES_COMPLETENESS_GATE'),
     listTitlesWithInternalPrefix,
-    homeListCountsReconcile: gateVerdict('HOME_LIST_CERTIFICATION_GATE') === 'PASS',
-    homeListCountMismatches: gateVerdict('HOME_LIST_CERTIFICATION_GATE') === 'PASS' ? [] : [allGatesForFinalAudit.find((g) => g.key === 'HOME_LIST_CERTIFICATION_GATE')?.reason ?? 'see HOME_LIST_CERTIFICATION_GATE'],
+    // Chief Phase 2AM (2026-09-11) — PRE_APPLY (packageValid, always
+    // required) is derived from the generated SQL text itself via
+    // derivePackageValidationFromSql, never from HOME_LIST_CERTIFICATION_GATE
+    // (a live production read that can only pass post-apply — see
+    // finalReadyToApplyAudit.ts's own doc for the bug this replaced).
+    // POST_APPLY (liveVerificationValid) still carries that same live-gate
+    // result, but is only CHECKED when executionState below is no longer
+    // 'GENERATED' — which, today, it never is (Winston never applies SQL).
+    homeList: (() => {
+      const metroSlugForValidation = deps.metroAreaSlug ?? run.projectId
+      const packageEntries = state.homeListSqlPatch ? derivePackageValidationFromSql(plan, state.homeListSqlPatch, metroSlugForValidation) : []
+      const packageResult = state.homeListSqlPatch ? evaluateHomeListPackageValidationGate(packageEntries) : undefined
+      const liveGate = allGatesForFinalAudit.find((g) => g.key === 'HOME_LIST_CERTIFICATION_GATE')
+      return {
+        packageValid: packageResult?.gate.verdict === 'PASS',
+        packageIssues: packageResult ? [packageResult.gate.reason] : ['No generated SQL package to validate yet.'],
+        liveVerificationValid: liveGate ? liveGate.verdict === 'PASS' : undefined,
+        liveVerificationIssues: liveGate && liveGate.verdict !== 'PASS' ? [liveGate.reason] : undefined,
+      }
+    })(),
     // Structurally guaranteed by buildHomeListSqlPatch, which only ever
     // emits INSERT ... ON CONFLICT DO NOTHING for a reused existing item's
     // list_items row — never an UPDATE to the item or to another metro's
