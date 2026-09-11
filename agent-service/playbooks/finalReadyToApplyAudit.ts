@@ -64,6 +64,19 @@ export interface FinalReadyToApplyInput {
     packageValid: boolean
     packageIssues?: readonly string[]
     /**
+     * PRE_APPLY — Chief Phase 2AN (2026-09-11), the real Florence apply
+     * failure: a brand-new metro's package referenced certified items it
+     * never created and never reconciled. From
+     * homeListCertification.ts's ITEM_PROVENANCE_GATE
+     * (evaluateItemProvenanceGate) — never a live DB read. Always
+     * required, regardless of executionState; distinct from packageValid
+     * (which validates the Home LISTS themselves) because this validates
+     * that every certified ITEM the lists reference actually has a real
+     * creation-or-reconciliation path in the SQL.
+     */
+    itemProvenanceValid: boolean
+    itemProvenanceIssues?: readonly string[]
+    /**
      * POST_APPLY — from HOME_LIST_CERTIFICATION_GATE's real
      * public.lists/public.list_items read. Only REQUIRED (its own absence
      * only counts as a failure) once `executionState` is no longer
@@ -122,6 +135,13 @@ export function evaluateFinalReadyToApplyAudit(input: FinalReadyToApplyInput): F
     // production rows yet can still pass this.
     if (!input.homeList.packageValid) {
       reasons.push(`Home list PRE_APPLY package validation failed: ${(input.homeList.packageIssues ?? []).join('; ') || 'see detail'}.`)
+    }
+    // PRE_APPLY — also always required. A package can plan its Home lists
+    // correctly (packageValid) while still referencing certified items it
+    // never actually creates or reconciles — exactly the real Florence
+    // apply failure this catches.
+    if (!input.homeList.itemProvenanceValid) {
+      reasons.push(`Home list PRE_APPLY item provenance check failed — this package references certified item(s) it does not create or reconcile: ${(input.homeList.itemProvenanceIssues ?? []).join('; ') || 'see detail'}.`)
     }
     // POST_APPLY — only required once the package has actually been
     // executed (executionState !== 'GENERATED'). Before that, the real

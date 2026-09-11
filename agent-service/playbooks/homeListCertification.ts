@@ -255,6 +255,76 @@ export function derivePackageValidationFromSql(
 }
 
 // ---------------------------------------------------------------------------
+// ITEM_PROVENANCE_GATE — Chief Phase 2AN (2026-09-11), the real Florence
+// apply failure: `expected exactly 1 public.items row with the certified
+// body for "Basilica and complex of San Lorenzo", found 0`. A brand-new
+// metro's generated package referenced 48 certified public.items rows it
+// never created and never explicitly reconciled to an existing production
+// item — the package matched them by body text against a table it had
+// never written to. This is the permanent, deterministic regression check
+// for exactly that failure mode: every certified item this package's
+// Home lists reference must be traceable, in the SQL itself, to either a
+// real INSERT INTO public.items for its exact body, or an explicit
+// existing-production reconciliation by id — never a bare, unguarded
+// assumption that the row already exists somewhere else.
+// ---------------------------------------------------------------------------
+
+export interface ItemProvenanceFinding {
+  candidateName: string
+  issue: string
+}
+
+export interface ItemProvenanceResult {
+  gate: StagingGateResult
+  findings: ItemProvenanceFinding[]
+}
+
+/** Every `INSERT INTO public.items (...) ... RETURNING id INTO v_item_id;` block's own quoted body value — the exact shape buildHomeListSqlPatch() emits for a newly created item. */
+function extractInsertedItemBodies(sql: string): Set<string> {
+  const bodies = new Set<string>()
+  const blockRegex = /INSERT INTO public\.items \([\s\S]*?RETURNING id INTO v_item_id;/g
+  let block: RegExpExecArray | null
+  while ((block = blockRegex.exec(sql)) !== null) {
+    const bodyMatch = block[0].match(/VALUES \(\s*\n?\s*'((?:[^']|'')*)'/)
+    if (bodyMatch) bodies.add(bodyMatch[1].replace(/''/g, "'"))
+  }
+  return bodies
+}
+
+export interface ItemProvenanceCheckInput {
+  /** Every certified NEW item this package's Home lists reference (candidateName + exact certified body). Reused-from-production items are never included here — they're excluded from the certified catalog entirely before this point (see M8.5's reuseMatchedNames pruning) and are checked separately via reusedExistingItemIds. */
+  certifiedNewItems: readonly { candidateName: string; body: string }[]
+  /** The real generated SQL text — never trusted in isolation from what it actually contains. */
+  sql: string
+}
+
+export function evaluateItemProvenanceGate(input: ItemProvenanceCheckInput): ItemProvenanceResult {
+  const insertedBodies = extractInsertedItemBodies(input.sql)
+  const findings: ItemProvenanceFinding[] = input.certifiedNewItems
+    .filter((item) => !insertedBodies.has(item.body))
+    .map((item) => ({ candidateName: item.candidateName, issue: 'this package neither creates a public.items row for this certified item nor explicitly reconciles it to an existing production item — it would reference a row that does not exist' }))
+
+  if (findings.length > 0) {
+    return {
+      gate: {
+        key: 'ITEM_PROVENANCE_GATE',
+        verdict: 'FAIL',
+        reason: `${findings.length}/${input.certifiedNewItems.length} certified new item(s) are referenced by this package without being created or reconciled: ${findings.map((f) => f.candidateName).join(', ')}.`,
+      },
+      findings,
+    }
+  }
+  return {
+    gate: {
+      key: 'ITEM_PROVENANCE_GATE',
+      verdict: 'PASS',
+      reason: `All ${input.certifiedNewItems.length} certified new item(s) referenced by this package are either created (a real INSERT INTO public.items for the exact certified body) or explicitly reconciled to an existing production item.`,
+    },
+    findings: [],
+  }
+}
+
+// ---------------------------------------------------------------------------
 // curated_lists / curated_list_items / curated_list_metros — the
 // separate legacy/curated-definition layer, when the current app
 // architecture still requires it (see docs/metro-launch-playbook.md

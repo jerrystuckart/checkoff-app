@@ -90,7 +90,7 @@ test('evaluateFinalReadyToApplyAudit: a brand-new metro reaches READY_TO_APPLY o
       // liveVerificationValid is deliberately OMITTED — simulating the
       // real pre-apply state where public.lists has zero rows for this
       // brand-new metro. This must NOT block.
-      homeList: { packageValid: packageResult.gate.verdict === 'PASS' },
+      homeList: { packageValid: packageResult.gate.verdict === 'PASS', itemProvenanceValid: true },
     })
   )
   assert.equal(result.verdict, 'READY_TO_APPLY', JSON.stringify(result.reasons))
@@ -141,7 +141,7 @@ test('derivePackageValidationFromSql: FAILs when a list is inserted with is_offi
 test('evaluateFinalReadyToApplyAudit: a malformed package (missing list creation) is BLOCKED, never waved through as READY_TO_APPLY', () => {
   const result = evaluateFinalReadyToApplyAudit(
     goodInputExcept({
-      homeList: { packageValid: false, packageIssues: ['1/2 planned Home-visible list(s) failed PRE_APPLY package validation: Themed list: After Dark [...]'] },
+      homeList: { packageValid: false, packageIssues: ['1/2 planned Home-visible list(s) failed PRE_APPLY package validation: Themed list: After Dark [...]'], itemProvenanceValid: true },
     })
   )
   assert.equal(result.verdict, 'BLOCKED')
@@ -160,7 +160,7 @@ test('evaluateFinalReadyToApplyAudit: PRE_APPLY passing is NOT enough once execu
   const result = evaluateFinalReadyToApplyAudit(
     goodInputExcept({
       executionState: 'APPLIED' as const, // Jerry has run the SQL
-      homeList: { packageValid: true, liveVerificationValid: false, liveVerificationIssues: ['no row exists in public.lists at all'] },
+      homeList: { packageValid: true, itemProvenanceValid: true, liveVerificationValid: false, liveVerificationIssues: ['no row exists in public.lists at all'] },
     })
   )
   assert.equal(result.verdict, 'BLOCKED')
@@ -171,7 +171,7 @@ test('evaluateFinalReadyToApplyAudit: POST_APPLY is required (missing is a failu
   const result = evaluateFinalReadyToApplyAudit(
     goodInputExcept({
       executionState: 'APPLIED' as const,
-      homeList: { packageValid: true }, // liveVerificationValid omitted entirely
+      homeList: { packageValid: true, itemProvenanceValid: true }, // liveVerificationValid omitted entirely
     })
   )
   assert.equal(result.verdict, 'BLOCKED')
@@ -182,7 +182,7 @@ test('evaluateFinalReadyToApplyAudit: once POST_APPLY verification genuinely pas
   const result = evaluateFinalReadyToApplyAudit(
     goodInputExcept({
       executionState: 'APPLIED' as const,
-      homeList: { packageValid: true, liveVerificationValid: true },
+      homeList: { packageValid: true, itemProvenanceValid: true, liveVerificationValid: true },
     })
   )
   assert.equal(result.verdict, 'READY_TO_APPLY', JSON.stringify(result.reasons))
@@ -196,7 +196,7 @@ test('evaluateFinalReadyToApplyAudit: PRE_APPLY (executionState GENERATED) never
   const result = evaluateFinalReadyToApplyAudit(
     goodInputExcept({
       executionState: 'GENERATED' as const,
-      homeList: { packageValid: true, liveVerificationValid: false, liveVerificationIssues: ['not applied yet'] },
+      homeList: { packageValid: true, itemProvenanceValid: true, liveVerificationValid: false, liveVerificationIssues: ['not applied yet'] },
     })
   )
   assert.equal(result.verdict, 'READY_TO_APPLY', JSON.stringify(result.reasons))

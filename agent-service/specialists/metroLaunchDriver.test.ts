@@ -2177,7 +2177,26 @@ test('driveMetroLaunch: M8.5 pruning is idempotent — a resumed run never re-sp
 async function seedForHomeListMirror(runStore: InstanceType<typeof InMemoryPlaybookRunStore>, projectId: string, candidates: Array<{ name: string; category: string; neighborhood: string; claimSupported: string; source: string; needsVerification: boolean }>, certs: Record<string, DriverItemCertificationRecord>) {
   await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
   const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
-  seeded!.state = { m0Decisions: RESOLVED_M0, candidates, neighborhoods: [], plan: PLAN, hasRunM6: true, itemCertifications: certs, batchCertificationGates: [] }
+  // Chief Phase 2AN (2026-09-11): a real M9 entry always follows a real M8
+  // pass, which always resolves dbCategory + persists metadataEnrichmentResults
+  // for every certified item (buildHomeListSqlPatch's new item-creation
+  // section fails closed without them). These tests seed directly at M9,
+  // bypassing M8 — synthesize the same minimal-but-real state M8 would have
+  // left behind so these still-relevant list/metro_areas/decision-packet
+  // assertions keep exercising a realistic M9 entry, not a state M8 could
+  // never actually produce.
+  const certsWithCategory: Record<string, DriverItemCertificationRecord> = Object.fromEntries(Object.entries(certs).map(([name, c]) => [name, { ...c, dbCategory: c.dbCategory ?? 'Food & drink' }]))
+  const metadataEnrichmentResults = Object.keys(certsWithCategory).map((candidateName) => ({
+    candidateName,
+    hasAlcohol: { evaluated: true as const, value: false, confidence: 'HIGH' as const, reason: 'test fixture' },
+    photoRequired: { evaluated: true as const, value: false, confidence: 'HIGH' as const, reason: 'test fixture' },
+    checkinType: { evaluated: true as const, value: 'tap' as const, confidence: 'HIGH' as const, reason: 'test fixture' },
+    isSecret: { evaluated: true as const, value: false, confidence: 'HIGH' as const, reason: 'test fixture' },
+    difficulty: { evaluated: true as const, value: 1 as const, confidence: 'HIGH' as const, reason: 'test fixture' },
+    visitProfileKey: { evaluated: true as const, value: null, confidence: 'HIGH' as const, reason: 'test fixture' },
+    websiteUrl: { evaluated: false as const, reason: 'test fixture' },
+  }))
+  seeded!.state = { m0Decisions: RESOLVED_M0, candidates, neighborhoods: [], plan: PLAN, hasRunM6: true, itemCertifications: certsWithCategory, batchCertificationGates: [], metadataEnrichmentResults }
   seeded!.currentStage = 'M9_HOME_LIST_MIRROR'
   await runStore.put(seeded!)
 }

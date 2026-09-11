@@ -68,7 +68,7 @@ import { fetchExistingProductionItemsForRegion } from './existingInventoryReadPa
 import { evaluateOutOfMarketContaminationGate } from '../playbooks/outOfMarketContamination'
 import { reconcileAgainstExistingInventory, type ExistingProductionItem, type ReconciliationResult } from '../playbooks/existingInventoryReconciliation'
 import { deriveDefaultDepthTargets } from '../playbooks/defaultMetroManifest'
-import { certifyHomeListRow, evaluateHomeListCertificationGate, certifyCuratedListRow, evaluateCuratedListLayerGate, evaluateHomeListPackageValidationGate, derivePackageValidationFromSql, type HomeListRow, type CuratedListRow } from '../playbooks/homeListCertification'
+import { certifyHomeListRow, evaluateHomeListCertificationGate, certifyCuratedListRow, evaluateCuratedListLayerGate, evaluateHomeListPackageValidationGate, derivePackageValidationFromSql, evaluateItemProvenanceGate, type HomeListRow, type CuratedListRow } from '../playbooks/homeListCertification'
 import { evaluateImageReadinessGate, type ImageReadinessCard } from '../playbooks/imageReadiness'
 import { certifyMetroLaunch, type MetroLaunchCertificationReport, type MetroLaunchCertificationSummary } from '../playbooks/metroLaunchCertification'
 import {
@@ -183,6 +183,19 @@ interface MetroDriverState {
   geoEnrichmentPaidCalls?: number
   geoEnrichmentCacheHits?: number
   geoEnrichmentResults?: Array<{ candidateName: string; classification: string; reason: string; placeId: string | null; formattedAddress: string | null; lat: number | null; lng: number | null; websiteUrl: string | null; geoRadiusM: number | null }>
+  /**
+   * Chief Phase 2AN (2026-09-11) — the real per-item METADATA_COMPLETENESS_GATE
+   * results (has_alcohol/checkin_type/difficulty/photo_required/is_secret/
+   * visit_profile_key), computed fresh every M8 pass but previously discarded
+   * as a LOCAL variable (`metadataResults`) once the gate's PASS/FAIL verdict
+   * was recorded — nothing downstream could ever read the actual evaluated
+   * field values. This is the real root cause of a brand-new metro's
+   * generated SQL package never creating its own `public.items` rows: M9's
+   * SQL builder had no metadata to build an INSERT from, only a gate that
+   * said the fields WOULD be evaluable. Now persisted so M9 can build a
+   * genuinely self-contained item-creation package from it.
+   */
+  metadataEnrichmentResults?: MetadataEnrichmentResult[]
   activationKitCheckDetail?: string
   /** Certified items excluded from CATALOG_GATE's intakeRecords because classifyCategoryWithFallback (raw category AND finalBody) still found no canonical category — tracked explicitly, mirrors METADATA_COMPLETENESS_GATE's unclassifiedForMetadata list so this is never a silent drop. Recomputed fresh every M10 pass. */
   unclassifiedForIntake?: string[]
@@ -1550,6 +1563,8 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
     }
   }
   if (dbCategoryChanged) state.itemCertifications = itemCertificationsWithDbCategory
+  // Persist the real, computed per-item metadata — see MetroDriverState.metadataEnrichmentResults's own doc for why this used to be silently discarded.
+  state.metadataEnrichmentResults = metadataResults
   const metadataGate: StagingGateResult =
     unclassifiedForMetadata.length > 0
       ? { key: 'METADATA_COMPLETENESS_GATE', verdict: 'FAIL', reason: `${unclassifiedForMetadata.length} certified item(s) have no classifiable category, so metadata could not be evaluated: ${unclassifiedForMetadata.join(', ')}.` }
@@ -2071,24 +2086,68 @@ function buildHomeListPlan(state: MetroDriverState, flagshipListTitle: string): 
 export const DEFAULT_OFFICIAL_LIST_CREATOR_ID = '11275026-65be-4421-80a4-46c57195408b'
 
 /**
- * Chief Phase 2AD (2026-09-09 instruction) — a single atomic, fail-closed
- * SQL package: ensures the metro_areas row (creating it when real
- * metroAreaFacts are supplied — never guessed), creates/reuses each
- * planned Home list (idempotent — an existing row with the same
- * metro_id+title is reused, never duplicated), and links each certified
- * item into its list(s) via public.list_items.
+ * Chief Phase 2AD (2026-09-09), corrected 2026-09-11 (Chief Phase 2AN,
+ * the real Florence apply failure) — a single atomic, fail-closed,
+ * SELF-CONTAINED SQL package: ensures the metro_areas row (creating it
+ * when real metroAreaFacts are supplied — never guessed), creates every
+ * canonical neighborhood row, creates a real `public.items` row (with
+ * `public.item_tags`) for every NEWLY certified candidate — using ONLY
+ * already-certified/already-computed state (the exact certified body,
+ * the resolved dbCategory, the METADATA_COMPLETENESS_GATE-evaluated
+ * has_alcohol/checkin_type/difficulty/photo_required/is_secret/
+ * visit_profile_key, the cached GEO_ENRICHMENT_GATE google_place_id/
+ * formatted_address/maps_lat/maps_lng/geo_radius_m/website_url, and the
+ * certified 6-8 canonical tags — never re-researched, never re-written),
+ * creates/reuses each planned Home list (idempotent — an existing row
+ * with the same metro_id+title is reused, never duplicated), and links
+ * every item (newly created OR reused from existing production
+ * inventory via existingInventoryReconciliation) into its list(s) via
+ * public.list_items.
  *
- * One real prerequisite this package deliberately does NOT create: the
- * public.items rows themselves. Winston/Chief's metro-launch pipeline
- * never collects checkin_type/difficulty/photo_required/has_alcohol/
- * is_recurring for a certified candidate — those are genuine product
- * decisions, never inferred — so each item must already exist (created
- * via the existing per-item Item Intake SQL pattern, itemIntake.ts's
- * buildItemIntakeSql, body text matching EXACTLY). This package matches
- * against that real body text and RAISE EXCEPTIONs, by name, for any
- * item not yet created — surfaced honestly, never silently skipped or
- * worked around with a placeholder items row.
+ * The prior version of this function deliberately did NOT create
+ * `public.items` rows — its own doc comment claimed "Winston/Chief's
+ * metro-launch pipeline never collects checkin_type/difficulty/
+ * photo_required/has_alcohol/is_recurring for a certified candidate,"
+ * which was WRONG: METADATA_COMPLETENESS_GATE (stepM8BatchCertification)
+ * computes every one of those fields for every certified item already —
+ * the real bug was that its result (`metadataResults`) was a local
+ * variable, discarded the moment the gate's PASS/FAIL verdict was
+ * recorded, never persisted to state, so M9 had no metadata to build an
+ * INSERT from even though the pipeline had already done the work. Fixed
+ * by persisting it (see MetroDriverState.metadataEnrichmentResults) and
+ * threading it, plus the already-persisted geoEnrichmentResults and each
+ * item's certified finalTags, into `newItems` below. This is exactly the
+ * failure Jerry hit applying the real Florence package: `expected exactly
+ * 1 public.items row with the certified body ..., found 0` — a
+ * brand-new metro's package referenced items it never created and that
+ * had no other path to exist. `is_recurring` remains a genuine field this
+ * pipeline has never had a determination rule for (a one-time visitable
+ * place vs. a recurring/scheduled event is a real editorial fact, not
+ * something METADATA_COMPLETENESS_GATE evaluates) — it is set `false`
+ * (the schema default, and correct for the overwhelming majority of
+ * retained items) and flagged in a SQL comment, never guessed per-item.
  */
+export interface NewItemSqlInput {
+  candidateName: string
+  body: string
+  dbCategory: RealDbCategory
+  neighborhoodName: string
+  mapsQuery: string
+  hasAlcohol: boolean
+  checkinType: 'tap' | 'photo'
+  difficulty: 1 | 5 | 10 | 25
+  photoRequired: boolean
+  isSecret: boolean
+  visitProfileKey: string | null
+  /** Certified 6-8 canonical tags (TAG_CERTIFICATION_GATE) — written verbatim, never invented/singularized/pluralized. */
+  tags: readonly string[]
+  googlePlaceId: string | null
+  formattedAddress: string | null
+  lat: number | null
+  lng: number | null
+  geoRadiusM: number | null
+  websiteUrl: string | null
+}
 /** Real, per-item facts buildHomeListSqlPatch needs to generate neighborhood-creation SQL — never a raw discovery-stage label; the caller is responsible for having already resolved this to one of the canonical names. */
 export interface NeighborhoodSqlAssignment {
   neighborhoodName: string
@@ -2128,17 +2187,18 @@ function buildHomeListSqlPatch(
   /** Chief Phase 2AH (Green Bay incident) — real ids of already-live production items existing-inventory reconciliation classified REUSE (same venue + same experience as a candidate this run discovered independently). Linked directly by id into the flagship list — never re-created, never matched by body text, since the row already exists. */
   reusedExistingItemIds: readonly string[] = [],
   /** Chief Phase 2AL (2026-09-11) — when supplied, this package also creates every approved canonical public.neighborhoods row itself (generic, no per-metro one-off script required). Omit only when neighborhoods are known to already exist in production for this metro. */
-  neighborhoodPlan?: NeighborhoodSqlPlan
+  neighborhoodPlan?: NeighborhoodSqlPlan,
+  /** Chief Phase 2AN (2026-09-11) — every NEWLY certified candidate (never a reused-from-production item — those are excluded from the certified catalog entirely by M8.5's reuseMatchedNames pruning, before this function ever sees them) gets its own real public.items + public.item_tags rows created HERE, from already-certified/already-computed state only. See this function's own doc for why the package used to NOT do this, and why that was the real Florence apply bug. */
+  newItems: readonly NewItemSqlInput[] = []
 ): { sql: string; neighborhoodsMissingCentroid: string[] } {
   const lines: string[] = []
   lines.push(`-- Generated by Winston metro_launch driver (M9_HOME_LIST_MIRROR) for metro "${metroSlug}".`)
   lines.push('-- One atomic, self-certifying transaction — no cross-statement TEMP-table dependence, no MIN(uuid).')
-  lines.push('--')
-  lines.push('-- PREREQUISITE this package does NOT create: each certified item below must already')
-  lines.push('-- have a real public.items row (checkin_type/difficulty/photo_required/has_alcohol/')
-  lines.push('-- is_recurring are genuine product decisions Chief never guesses — create each item first')
-  lines.push('-- via the existing per-item Item Intake SQL, itemIntake.ts buildItemIntakeSql, body text')
-  lines.push('-- matching EXACTLY). This block RAISE EXCEPTIONs, by name, for any item not yet created.')
+  lines.push('-- Self-contained: creates the metro row, canonical neighborhoods, every newly certified')
+  lines.push('-- public.items row (+ item_tags) from already-certified/already-cached state, Home lists,')
+  lines.push('-- and public.list_items — safe to apply to an EMPTY production inventory for this metro.')
+  lines.push('-- Reused existing-production items (existingInventoryReconciliation) are linked by their')
+  lines.push('-- real existing id, additively, never recreated.')
   lines.push('BEGIN;')
   lines.push('DO $$')
   lines.push('DECLARE')
@@ -2146,6 +2206,7 @@ function buildHomeListSqlPatch(
   lines.push('  v_list_id uuid;')
   lines.push('  v_item_id uuid;')
   lines.push('  v_neighborhood_id uuid;')
+  lines.push('  v_category_id uuid;')
   lines.push('  v_match_count int;')
   lines.push('BEGIN')
   if (metroAreaFacts) {
@@ -2210,6 +2271,63 @@ function buildHomeListSqlPatch(
       lines.push('  END IF;')
     }
     lines.push('')
+  }
+
+  // Chief Phase 2AN (2026-09-11) — new public.items + public.item_tags rows,
+  // one per newly certified candidate, using ONLY the certified/cached state
+  // already computed by M6.5-M8 (body, dbCategory, neighborhood, the real
+  // METADATA_COMPLETENESS_GATE-evaluated fields, the real cached Google
+  // Places geo fields, the certified 6-8 canonical tags) — never a fresh
+  // research/editorial call. A pre-existing row with the exact same body is
+  // a genuine "this package was already (partially) applied, or the
+  // catalog drifted" condition — fails closed rather than silently
+  // creating a duplicate or silently reusing an unrelated row.
+  if (newItems.length > 0) {
+    lines.push(`  -- New public.items rows (${newItems.length}) — this metro's own certified catalog, never re-researched.`)
+    lines.push('  -- is_recurring: no determination rule exists anywhere in this pipeline for "one-time visitable place" vs.')
+    lines.push('  -- "recurring/scheduled event" — set false (schema default, correct for the overwhelming majority of items),')
+    lines.push('  -- flagged here rather than guessed per-item. A genuinely recurring item needs a real, separate human review.')
+    for (const item of newItems) {
+      lines.push(`  IF EXISTS (SELECT 1 FROM public.items WHERE body = ${sqlQuote(item.body)}) THEN`)
+      lines.push(
+        `    RAISE EXCEPTION 'a public.items row with the certified body for "%" already exists — this package must only be applied once, to an inventory that does not already contain it (re-run reconciliation if this catalog has drifted)', ${sqlQuote(item.candidateName)};`
+      )
+      lines.push('  END IF;')
+      lines.push(`  SELECT id INTO v_category_id FROM public.categories WHERE name = ${sqlQuote(item.dbCategory)};`)
+      lines.push(`  IF v_category_id IS NULL THEN RAISE EXCEPTION 'category not found for "%": %', ${sqlQuote(item.candidateName)}, ${sqlQuote(item.dbCategory)}; END IF;`)
+      lines.push(`  SELECT id INTO v_neighborhood_id FROM public.neighborhoods WHERE metro_id = v_metro_id AND name = ${sqlQuote(item.neighborhoodName)};`)
+      lines.push(`  IF v_neighborhood_id IS NULL THEN RAISE EXCEPTION 'neighborhood not found for "%": %', ${sqlQuote(item.candidateName)}, ${sqlQuote(item.neighborhoodName)}; END IF;`)
+      if (item.visitProfileKey !== null) {
+        lines.push(`  IF NOT EXISTS (SELECT 1 FROM public.visit_detection_profiles WHERE key = ${sqlQuote(item.visitProfileKey)}) THEN`)
+        lines.push(`    RAISE EXCEPTION 'visit_profile_key "%" for "%" does not exist in visit_detection_profiles', ${sqlQuote(item.visitProfileKey)}, ${sqlQuote(item.candidateName)};`)
+        lines.push('  END IF;')
+      }
+      const hasGeo = typeof item.lat === 'number' && typeof item.lng === 'number'
+      lines.push('  INSERT INTO public.items (')
+      lines.push('    body, category_id, neighborhood_id, checkin_type, maps_query,')
+      lines.push('    is_universal, is_active, is_approved, is_recurring, difficulty,')
+      lines.push('    photo_required, has_alcohol, is_secret, visit_profile_key,')
+      lines.push('    google_place_id, formatted_address, maps_lat, maps_lng, geo_location, geo_radius_m, website_url')
+      lines.push('  ) VALUES (')
+      lines.push(`    ${sqlQuote(item.body)}, v_category_id, v_neighborhood_id, ${sqlQuote(item.checkinType)}, ${sqlQuote(item.mapsQuery)},`)
+      lines.push(`    false, true, true, false, ${item.difficulty},`)
+      lines.push(`    ${item.photoRequired}, ${item.hasAlcohol}, ${item.isSecret}, ${item.visitProfileKey === null ? 'NULL' : sqlQuote(item.visitProfileKey)},`)
+      lines.push(
+        `    ${item.googlePlaceId === null ? 'NULL' : sqlQuote(item.googlePlaceId)}, ${item.formattedAddress === null ? 'NULL' : sqlQuote(item.formattedAddress)}, ${item.lat ?? 'NULL'}, ${item.lng ?? 'NULL'}, ${hasGeo ? `ST_SetSRID(ST_MakePoint(${item.lng}, ${item.lat}), 4326)` : 'NULL'}, ${item.geoRadiusM ?? 'NULL'}, ${item.websiteUrl === null ? 'NULL' : sqlQuote(item.websiteUrl)}`
+      )
+      lines.push('  )')
+      lines.push('  RETURNING id INTO v_item_id;')
+      lines.push('')
+      lines.push('  INSERT INTO public.item_tags (item_id, tag_id, source, confidence)')
+      lines.push('  SELECT v_item_id, t.id, \'auto\', 1.0')
+      lines.push('  FROM public.tags t')
+      lines.push(`  WHERE t.name IN (${item.tags.map((t) => sqlQuote(t)).join(', ')});`)
+      lines.push(`  SELECT count(*) INTO v_match_count FROM public.item_tags WHERE item_id = v_item_id;`)
+      lines.push(
+        `  IF v_match_count <> ${item.tags.length} THEN RAISE EXCEPTION 'expected % certified tag(s) for "%", found % — one or more tag names do not exist in production', ${item.tags.length}, ${sqlQuote(item.candidateName)}, v_match_count; END IF;`
+      )
+      lines.push('')
+    }
   }
 
   const primaryEntry = plan.find((p) => p.kind === 'PRIMARY_SEASONAL')
@@ -2345,6 +2463,57 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
     emptyNeighborhoodFallbackCentroids: deps.emptyNeighborhoodFallbackCentroids,
   }
 
+  // Chief Phase 2AN (2026-09-11) — the real, self-contained item-creation
+  // package: every certified item at this point is guaranteed NEW (a
+  // reused-from-production match is pruned out of the certified catalog
+  // entirely by M8.5's reuseMatchedNames, long before M9 ever runs) — so
+  // every one of certifiedForRecheck needs its own public.items row built
+  // from already-certified/already-cached state only, never re-researched.
+  const metadataByName = new Map((state.metadataEnrichmentResults ?? []).map((m) => [m.candidateName, m]))
+  const missingMetadataFor: string[] = []
+  const newItems: NewItemSqlInput[] = []
+  for (const r of certifiedForRecheck) {
+    const candidate = candidatesByNameForNeighborhoods.get(r.candidateName)
+    const neighborhoodName = candidate?.neighborhood
+    const metadata = metadataByName.get(r.candidateName)
+    if (!r.dbCategory || !neighborhoodName || !metadata) {
+      missingMetadataFor.push(r.candidateName)
+      continue
+    }
+    const geo = geoResultsByNameForNeighborhoods.get(r.candidateName)
+    const mapsQuery = geo?.formattedAddress?.trim() || candidate?.address?.trim() || `${r.candidateName}, ${neighborhoodName}`
+    newItems.push({
+      candidateName: r.candidateName,
+      body: r.finalBody,
+      dbCategory: r.dbCategory,
+      neighborhoodName,
+      mapsQuery,
+      hasAlcohol: metadata.hasAlcohol.value,
+      checkinType: metadata.checkinType.value,
+      difficulty: metadata.difficulty.value,
+      photoRequired: metadata.photoRequired.value,
+      isSecret: metadata.isSecret.value,
+      visitProfileKey: metadata.visitProfileKey.value,
+      tags: r.finalTags,
+      googlePlaceId: geo?.placeId ?? null,
+      formattedAddress: geo?.formattedAddress ?? null,
+      lat: geo?.lat ?? null,
+      lng: geo?.lng ?? null,
+      geoRadiusM: geo?.geoRadiusM ?? null,
+      websiteUrl: geo?.websiteUrl ?? null,
+    })
+  }
+  // Fail-closed, never a silent partial package: if a certified item is
+  // somehow missing the metadata/category/neighborhood M8 should always
+  // have already resolved for it, the whole package refuses rather than
+  // shipping some items with no way to create them.
+  if (missingMetadataFor.length > 0) {
+    return block(
+      run,
+      `Cannot build a self-contained item-creation package: ${missingMetadataFor.length} certified item(s) are missing dbCategory/neighborhood/metadata that M8 should already have resolved — this is a real driver bug, not a data issue: ${missingMetadataFor.join(', ')}.`
+    )
+  }
+
   const { sql: homeListSql, neighborhoodsMissingCentroid } = buildHomeListSqlPatch(
     metroSlug,
     plan,
@@ -2353,7 +2522,8 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
     deps.metroAreaFacts,
     deps.officialListCreatorId ?? DEFAULT_OFFICIAL_LIST_CREATOR_ID,
     reusedExistingItemIds,
-    neighborhoodPlan
+    neighborhoodPlan,
+    newItems
   )
   // Fail-closed (Chief Phase 2AL): a canonical neighborhood with zero real
   // items AND no documented real-locality fallback centroid is a genuine
@@ -2556,10 +2726,13 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
       const metroSlugForValidation = deps.metroAreaSlug ?? run.projectId
       const packageEntries = state.homeListSqlPatch ? derivePackageValidationFromSql(plan, state.homeListSqlPatch, metroSlugForValidation) : []
       const packageResult = state.homeListSqlPatch ? evaluateHomeListPackageValidationGate(packageEntries) : undefined
+      const provenanceResult = state.homeListSqlPatch ? evaluateItemProvenanceGate({ certifiedNewItems: certified.map((r) => ({ candidateName: r.candidateName, body: r.finalBody })), sql: state.homeListSqlPatch }) : undefined
       const liveGate = allGatesForFinalAudit.find((g) => g.key === 'HOME_LIST_CERTIFICATION_GATE')
       return {
         packageValid: packageResult?.gate.verdict === 'PASS',
         packageIssues: packageResult ? [packageResult.gate.reason] : ['No generated SQL package to validate yet.'],
+        itemProvenanceValid: provenanceResult?.gate.verdict === 'PASS',
+        itemProvenanceIssues: provenanceResult ? [provenanceResult.gate.reason] : ['No generated SQL package to validate yet.'],
         liveVerificationValid: liveGate ? liveGate.verdict === 'PASS' : undefined,
         liveVerificationIssues: liveGate && liveGate.verdict !== 'PASS' ? [liveGate.reason] : undefined,
       }

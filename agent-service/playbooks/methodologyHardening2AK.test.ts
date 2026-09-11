@@ -185,7 +185,7 @@ function goodFinalAuditInput() {
     emptyNeighborhoods: [] as string[],
     placesCompletenessVerdict: 'PASS' as const,
     listTitlesWithInternalPrefix: [] as string[],
-    homeList: { packageValid: true } as { packageValid: boolean; liveVerificationValid?: boolean },
+    homeList: { packageValid: true, itemProvenanceValid: true } as { packageValid: boolean; itemProvenanceValid: boolean; liveVerificationValid?: boolean },
     reusedItemsAdditiveOnly: true,
     sqlSafetyVerdict: 'PASS' as const,
     executionState: 'GENERATED' as const,
