@@ -70,7 +70,7 @@ export async function readRealHomeListRows(metroSlug: string, plan: readonly Hom
       WHERE m.slug = $1 AND l.title = ANY($2::text[])
       GROUP BY l.id, l.title, l.is_official, l.is_public, l.metro_id, l.starts_at, l.ends_at, l.is_featured_eligible, l.hero_image_url
       `,
-      [metroSlug, planned.map((p) => p.label)]
+      [metroSlug, planned.map((p) => p.title)]
     )
   } catch (err) {
     return { failed: true, reason: `Live read of public.lists/public.list_items failed (${err instanceof Error ? err.message : String(err)}) — grant SELECT on both tables to the agent_service role before HOME_LIST_CERTIFICATION_GATE can certify against real runtime state. The generated SQL patch may still be correct; this failure means it could not be VERIFIED, not that it is wrong.` }
@@ -78,7 +78,7 @@ export async function readRealHomeListRows(metroSlug: string, plan: readonly Hom
 
   const byTitle = new Map(rows.map((r) => [r.title, r]))
   return planned.map((entry) => {
-    const real = byTitle.get(entry.label)
+    const real = byTitle.get(entry.title)
     return {
       label: entry.label,
       exists: !!real,

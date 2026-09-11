@@ -20,7 +20,7 @@ test('buildStageArtifactFiles: produces all 10 named artifacts', () => {
     candidates: [{ name: 'Cafe A', category: 'cafe', neighborhood: 'Innere Stadt', claimSupported: 'x', source: 'y', needsVerification: false }],
     itemCertifications: { 'Cafe A': certified },
     catalogPruningDrops: [{ candidateName: 'Dropped Item', reason: 'REJECTED_GEO_UNRESOLVED', detail: 'no match' }],
-    homeListPlan: [{ label: 'Flagship', kind: 'PRIMARY_SEASONAL', itemCandidateNames: ['Cafe A'], requiresImage: true }],
+    homeListPlan: [{ label: 'Flagship', title: 'Flagship', kind: 'PRIMARY_SEASONAL', itemCandidateNames: ['Cafe A'], requiresImage: true }],
     categoryCounts: [{ categoryName: 'Food & drink', count: 1 }],
     neighborhoodCounts: [{ neighborhoodName: 'Innere Stadt', count: 1 }],
     homeListSqlPatch: 'BEGIN; COMMIT;',

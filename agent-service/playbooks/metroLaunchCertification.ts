@@ -49,11 +49,23 @@ export const REQUIRED_GATE_CATEGORIES: Readonly<Record<string, readonly string[]
   // substitutes for per-item certification (Jerry, 2026-09-07, after
   // manually rewriting ~15-20 San Diego items that survived every batch
   // gate but were still generic/venue-level).
-  Editorial: ['ITEM_CERTIFICATION_GATE', 'PRESENTATION_GATE', 'EDITORIAL_GATE', 'DISTINCTIVE_EXPERIENCE_GATE', 'VENUE_QUOTING_GATE', 'OPENING_DISTRIBUTION_GATE'],
+  // OPENING_VERB_CONCENTRATION_AUDIT (Chief Phase 2AK, 2026-09-10) — a
+  // second, combined-watchlist check distinct from OPENING_DISTRIBUTION_GATE's
+  // single-word 15% threshold; see catalogVoiceDiagnostics.ts.
+  Editorial: ['ITEM_CERTIFICATION_GATE', 'PRESENTATION_GATE', 'EDITORIAL_GATE', 'DISTINCTIVE_EXPERIENCE_GATE', 'VENUE_QUOTING_GATE', 'OPENING_DISTRIBUTION_GATE', 'OPENING_VERB_CONCENTRATION_AUDIT'],
   Tags: ['TAG_CERTIFICATION_GATE'],
   Metadata: ['METADATA_COMPLETENESS_GATE'],
-  Geo: ['GEO_ENRICHMENT_GATE'],
+  // PLACES_COMPLETENESS_GATE (Chief Phase 2AK) — distinct from GEO_ENRICHMENT_GATE's
+  // match-quality classification; see placesCompletenessGate.ts.
+  Geo: ['GEO_ENRICHMENT_GATE', 'PLACES_COMPLETENESS_GATE'],
   Lists: ['HOME_LIST_CERTIFICATION_GATE'],
+  // SameVenue/Neighborhoods (Chief Phase 2AK, 2026-09-10 methodology
+  // hardening postmortem) — both gates always PASS by their own design
+  // (same-venue clustering and empty-neighborhood reporting are never
+  // themselves build blockers) but are REQUIRED so their findings can
+  // never be silently missing from a final certification report.
+  SameVenue: ['SAME_VENUE_CLUSTER_REVIEW_GATE'],
+  Neighborhoods: ['NEIGHBORHOOD_COMPLETENESS_GATE'],
   // Images: intentionally its own category, evaluated LAST alongside
   // everything else, never used to stop the pipeline early — see
   // imageReadiness.ts. Winston cannot autonomously select images; that

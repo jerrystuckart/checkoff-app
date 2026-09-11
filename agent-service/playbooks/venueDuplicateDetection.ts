@@ -81,3 +81,35 @@ export function buildVenueClusterReviewNotes(clusters: readonly VenueCluster[]):
     reviewPrompt: `${c.members.length} certified candidates resolved to the same Google Place ID (${c.placeId}). Compare their CheckOff bodies: if they describe the same experience, keep the stronger one and drop the rest; if each describes a genuinely distinct, worthwhile experience at this venue, keep them all.`,
   }))
 }
+
+// ---------------------------------------------------------------------------
+// Chief Phase 2AK (2026-09-10, methodology hardening postmortem) — makes
+// same-Place-ID cluster review a REQUIRED, always-present certification
+// gate (wired into REQUIRED_GATE_CATEGORIES in metroLaunchCertification.ts)
+// rather than something that only surfaced in the final LAUNCH_READINESS_BOUNDARY
+// report text. Computed at M8 (the same place clusterByPlaceId already
+// runs), i.e. genuinely BEFORE M9 generates the production SQL — not just
+// before the human reads the final report. This gate never hard-blocks on
+// its own (same-venue is legitimate; see this module's own doc) — its job
+// is to make cluster review structurally impossible to skip or silently
+// omit, never to auto-resolve keep/drop itself.
+// ---------------------------------------------------------------------------
+
+export interface SameVenueClusterReviewResult {
+  key: 'SAME_VENUE_CLUSTER_REVIEW_GATE'
+  verdict: 'PASS'
+  reason: string
+  clusterCount: number
+}
+
+export function evaluateSameVenueClusterReviewGate(clusters: readonly VenueCluster[]): SameVenueClusterReviewResult {
+  return {
+    key: 'SAME_VENUE_CLUSTER_REVIEW_GATE',
+    verdict: 'PASS',
+    clusterCount: clusters.length,
+    reason:
+      clusters.length === 0
+        ? 'No certified candidates share a Google Place ID — nothing to review.'
+        : `${clusters.length} same-Google-Place-ID cluster(s) surfaced for explicit review before production SQL: ${clusters.map((c) => `${c.placeId} (${c.members.map((m) => m.candidateName).join(', ')})`).join(' | ')}. Never auto-resolved — see buildVenueClusterReviewNotes for the human-facing prompt.`,
+  }
+}

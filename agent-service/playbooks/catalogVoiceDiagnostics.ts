@@ -78,3 +78,68 @@ export function analyzeCatalogVoice(entries: readonly VoiceCatalogEntry[], opts?
 
   return { totalItems: entries.length, openingWordCounts: Object.fromEntries(wordCounts), dominantOpeningWords, repeatedOpeningPhrases, flaggedCandidateNames }
 }
+
+// ---------------------------------------------------------------------------
+// Chief Phase 2AK (2026-09-10, methodology hardening postmortem) — a final,
+// deterministic, hard-failing audit distinct from both OPENING_DISTRIBUTION_GATE
+// (single-word, 15% threshold) and analyzeCatalogVoice (diagnostic-only,
+// picks rewrite TARGETS for the bounded M8.75 voice pass). This catches a
+// different failure mode: no SINGLE opener exceeds 15%, but a cluster of
+// interchangeable generic openers (Try/Sample/Sip/Ask for.../Sit at.../
+// Take a.../Attend/Find/Walk/Visit/Explore/Order) COLLECTIVELY dominates
+// the catalog — exactly the shape a real editorial cleanup pass produces
+// when it "fixes" one overused word by scattering the fix across several
+// near-synonyms instead of finding a genuinely different hook per venue.
+// Explicitly NOT a thesaurus-swap detector to route around by rotating
+// words further — the gate's own failure message says so, and repair
+// requires a real, different hook, not another opener choice.
+// ---------------------------------------------------------------------------
+
+/** Common generic CheckOff-item openers — verbs that describe an action but carry no venue-specific information on their own. Watchlist, not exhaustive; a future metro may need to extend it if a new generic opener pattern emerges. */
+export const DEFAULT_WEAK_OPENER_WATCHLIST: readonly string[] = ['try', 'attend', 'take', 'sit', 'find', 'walk', 'visit', 'explore', 'order', 'sample', 'sip', 'ask']
+
+/** Above this COMBINED share of the batch opening with any watchlist word, the catalog is judged to have a real generic-opener concentration problem — distinct from, and in addition to, the single-word 15% OPENING_DISTRIBUTION_GATE threshold. */
+export const DEFAULT_MAX_COMBINED_WEAK_OPENER_SHARE = 0.45
+
+export interface OpeningVerbConcentrationResult {
+  key: 'OPENING_VERB_CONCENTRATION_AUDIT'
+  verdict: 'PASS' | 'FAIL'
+  reason: string
+  combinedSharePercent: number
+  breakdown: Array<{ word: string; count: number }>
+}
+
+export function evaluateOpeningVerbConcentrationAudit(
+  bodies: readonly string[],
+  opts?: { watchlist?: readonly string[]; maxCombinedShare?: number }
+): OpeningVerbConcentrationResult {
+  const watchlist = new Set((opts?.watchlist ?? DEFAULT_WEAK_OPENER_WATCHLIST).map((w) => w.toLowerCase()))
+  const maxCombinedShare = opts?.maxCombinedShare ?? DEFAULT_MAX_COMBINED_WEAK_OPENER_SHARE
+
+  if (bodies.length < MIN_BATCH_SIZE_FOR_DIAGNOSTICS) {
+    return { key: 'OPENING_VERB_CONCENTRATION_AUDIT', verdict: 'PASS', reason: `Batch of ${bodies.length} is below the ${MIN_BATCH_SIZE_FOR_DIAGNOSTICS}-item minimum for a meaningful concentration check.`, combinedSharePercent: 0, breakdown: [] }
+  }
+
+  const counts = new Map<string, number>()
+  let combinedCount = 0
+  for (const body of bodies) {
+    const w = firstWordOf(body)
+    if (!watchlist.has(w)) continue
+    counts.set(w, (counts.get(w) ?? 0) + 1)
+    combinedCount += 1
+  }
+  const combinedSharePercent = (combinedCount / bodies.length) * 100
+  const breakdown = [...counts.entries()].map(([word, count]) => ({ word, count })).sort((a, b) => b.count - a.count)
+
+  const verdict: 'PASS' | 'FAIL' = combinedCount / bodies.length > maxCombinedShare ? 'FAIL' : 'PASS'
+  return {
+    key: 'OPENING_VERB_CONCENTRATION_AUDIT',
+    verdict,
+    combinedSharePercent,
+    breakdown,
+    reason:
+      verdict === 'PASS'
+        ? `Generic watchlist openers (${[...watchlist].join('/')}) combine for ${combinedSharePercent.toFixed(0)}% of ${bodies.length} items — under the ${(maxCombinedShare * 100).toFixed(0)}% combined-concentration threshold.`
+        : `Generic watchlist openers combine for ${combinedSharePercent.toFixed(0)}% of ${bodies.length} items (over the ${(maxCombinedShare * 100).toFixed(0)}% threshold): ${breakdown.map((b) => `"${b.word}"×${b.count}`).join(', ')}. This is a real repetition problem even though no single word may exceed OPENING_DISTRIBUTION_GATE's own 15% threshold — fix by finding a genuinely different, venue-specific hook per flagged item, never by rotating to another word on this same watchlist.`,
+  }
+}

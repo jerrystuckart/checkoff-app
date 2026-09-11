@@ -35,14 +35,21 @@ Item-level overlay is a nullable `city_slug` column on both `curated_list_items`
 read (the RLS double-policy gap that used to make it a no-op is fixed) — this is the correct,
 now-working mechanism for staging curated-list content hidden before it's ready.
 
-**Staging mechanism — proven, not just theoretical.** `metro_areas.is_active=false` is the
-confirmed way to build a metro fully in production before launch. Verified directly against live
-code, not assumed: the city selector, `HomeScreen.jsx`'s GPS-nearest-metro resolution, and the
-shared `lib/resolveDefaultMetro.js` helper all filter `metro_areas` on `is_active=true` — so a
-staged metro's neighborhoods, audience groups, curated lists, and official-list shell are
-unreachable by any real user, including someone physically standing in that metro's coverage area
-with GPS on. Build the whole foundation with the metro inactive, verify it thoroughly, then flip
-`is_active=true` as the actual, deliberate launch trigger.
+**`is_active` semantics (corrected 2026-09-10, superseding the framing this section carried
+through the Denver cycle).** `metro_areas.is_active=true` is what makes a metro technically
+selectable — verified directly against live code: the city selector, `HomeScreen.jsx`'s
+GPS-nearest-metro resolution, and the shared `lib/resolveDefaultMetro.js` helper all filter
+`metro_areas` on `is_active=true`. That is the entire fact. It is a normal, mechanical field, not a
+staging convention, not a launch gate, and not "the deliberate launch trigger" — treating it as any
+of those three things is exactly the framing this section previously carried, and it caused a real
+metro build to hand-inject `is_active=false` with elaborate "staged" commentary that the driver's
+own generated SQL (`metroLaunchDriver.ts`'s `buildHomeListSqlPatch`) does not do — it inserts a new
+`metro_areas` row with `is_active=true` from the moment it's created, same as any other field.
+**The human launch/promotion/announcement decision (WHEN to tell the world about a market) is a
+separate business action, entirely independent of this boolean's value** — `LAUNCH_READINESS_BOUNDARY`
+(see `stepLaunchBoundary`) is where that real decision is escalated to Jerry, never a flag flip. Do
+not build new automation, comments, or reports around "staging inactive then flipping active as the
+launch moment" — that pattern is retired.
 
 **Known, accepted limitation — not fixed, and not worth blocking a launch over:**
 `get_never_checkin_users()` (14-day re-engagement email targeting) can't do true per-user metro
@@ -124,9 +131,12 @@ hunt for the timezone/RLS/never-checkin/BrowseLists bugs — those are resolved 
 > Generate (do not apply) the **{METRO_NAME}** foundation, based on the audit and the 5 resolved
 > decisions above. No invented UUIDs — `gen_random_uuid()` in the SQL itself. Neighborhood
 > coordinates via a live Google Places API call, same pattern as `scripts/geocode-items.js` —
-> never estimated from memory — with raw results saved for the audit trail. Stage the new
-> `metro_areas` row `is_active=false`; new `curated_lists` rows `is_active=false` (this now
-> actually hides them, since the RLS fix is already live). Flag every judgment call (ring radii,
+> never estimated from memory — with raw results saved for the audit trail. The new `metro_areas`
+> row is created `is_active=true` like any other field (see Part 1's corrected `is_active`
+> semantics — it is not a staging flag); new `curated_lists` rows `is_active=false` until their
+> content is genuinely ready (this now actually hides them, since the RLS fix is already live;
+> `curated_lists.is_active` is a separate, still-valid per-list readiness mechanism, unrelated to
+> `metro_areas.is_active`). Flag every judgment call (ring radii,
 > audience-group names, display name) explicitly as something to react to, separate from anything
 > that's a direct application of an already-decided fact. Present everything as new/unstaged
 > files and diffs — nothing applied, committed, or pushed.
@@ -155,9 +165,10 @@ re-running the whole generation pass.
 >   migrations aren't tracked through the CLI's normal history — don't use a blanket
 >   `db push`), verifying against a specific query after each one. Stop on any unexpected result
 >   rather than continuing past it.
-> - Absolute boundary: do not flip `metro_areas.is_active=true` as part of this prompt. That's
->   the actual launch trigger — a separate, deliberate action once items/assets/dates are ready,
->   not a side effect of applying the foundation.
+> - `metro_areas.is_active` is not a launch trigger and needs no special handling here — it's set
+>   `true` at row-creation time like any other field (Part 1). The absolute boundary that DOES
+>   apply: do not announce/promote the market as part of this prompt. That real business decision
+>   is separate and deliberate, made whenever Jerry is ready, independent of this field's value.
 > - After DB changes verify clean, apply any accompanying app-code diffs, run whatever
 >   lint/typecheck the repo has configured (none, as of Denver — a Babel syntax parse was used as
 >   a substitute; check if that's changed), then commit and push with the same
@@ -167,9 +178,8 @@ re-running the whole generation pass.
 
 ### Incremental additions to an already-staged metro
 
-For a single small addition after the foundation is already staged (a neighborhood, in Denver's
-case — Nederland/Eldora, added while `is_active` stayed `false` throughout) — don't re-run the
-full generate/apply cycle. Use a narrowly-scoped single-purpose prompt: verify the target metro's
+For a single small addition after the foundation is already built (a neighborhood, in Denver's
+case — Nederland/Eldora) — don't re-run the full generate/apply cycle. Use a narrowly-scoped single-purpose prompt: verify the target metro's
 current record live rather than trusting a hardcoded id in the prompt, get coordinates the same
 Google-Places way as everything else, hold the same ring-radius invariants against the *full*
 now-larger set, use `gen_random_uuid()` + an explicit `NOT EXISTS` idempotency guard rather than
@@ -187,7 +197,7 @@ key-shaped strings (`eyJ`, `AIza`, `sk-`, `service_role`, `BEGIN PRIVATE KEY`,
 caught a real hardcoded Supabase anon key in a new `scripts/` directory during the Denver cycle
 that no existing `.gitignore` rule covered.
 
-## Part 3 — Launch-day checklist (once a metro's foundation is staged and verified)
+## Part 3 — Launch-day checklist (once a metro's foundation is built and verified)
 
 1. Real item intake — a dedicated session against the authoritative item-intake contract, not
    fabricated during a generation pass.
@@ -207,8 +217,9 @@ that no existing `.gitignore` rule covered.
    another metro's content; a new zero-activity test account in this metro gets sane (even if not
    perfectly personalized, per the known `get_never_checkin_users()` limitation) re-engagement
    behavior.
-6. Coordinated flip: `metro_areas.is_active=true`. This is the actual launch moment — sequence
-   timing/announcement around it deliberately, it's not a side effect of any prior step.
+6. The real launch moment is the human decision to announce/promote the market — sequence that
+   deliberately. `metro_areas.is_active` needs no coordinated action; it has been `true` since the
+   row was created (Part 1) and was never itself gating anything but technical selectability.
 
 ## Part 4 — Default scope for a full autonomous metro build (required enhancement, recorded 2026-09-06)
 
@@ -250,9 +261,10 @@ The default autonomous metro build should produce all of the following, not cata
    native to that metro — not manufactured filler.
 10. **Featured/hero configuration** — metro hero images and any `featured_experiences` bridge
     cards the destination's structure calls for (e.g. cross-border, multi-neighborhood hub).
-11. **Launch-readiness validation** — the existing Part 3 launch-day checklist (device QA,
-    coordinated `metro_areas.is_active=true` flip, etc.) AND both gates in Part 5 passing
-    before declaring the build complete.
+11. **Launch-readiness validation** — the existing Part 3 launch-day checklist (device QA, the
+    human decision on WHEN to announce/promote, etc. — `metro_areas.is_active` itself needs no
+    special handling, see Part 1) AND both gates in Part 5 passing before declaring the build
+    complete.
 
 A build that stops at item 1 (catalog only) should be labeled a **partial** build in its own
 status report, not presented as a finished metro launch, unless Jerry explicitly asked only

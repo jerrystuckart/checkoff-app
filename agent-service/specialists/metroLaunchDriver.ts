@@ -96,8 +96,10 @@ import {
 } from '../playbooks/coveragePlanRelaxation'
 import { extractCanonicalVenueOptions, resolveDefaultCanonicalVenueName, resolveConfirmedCanonicalVenueName } from '../playbooks/canonicalVenueName'
 import { evaluatePartnerPotential, type PartnerPotentialEvaluation } from '../playbooks/partnerPotential'
-import { clusterByPlaceId, buildVenueClusterReviewNotes, type VenueCluster } from '../playbooks/venueDuplicateDetection'
-import { analyzeCatalogVoice, type VoiceCatalogEntry } from '../playbooks/catalogVoiceDiagnostics'
+import { clusterByPlaceId, buildVenueClusterReviewNotes, evaluateSameVenueClusterReviewGate, type VenueCluster } from '../playbooks/venueDuplicateDetection'
+import { analyzeCatalogVoice, evaluateOpeningVerbConcentrationAudit, type VoiceCatalogEntry } from '../playbooks/catalogVoiceDiagnostics'
+import { evaluatePlacesCompletenessGate, type PlacesCompletenessItemInput } from '../playbooks/placesCompletenessGate'
+import { evaluateNeighborhoodCompletenessGate } from '../playbooks/neighborhoodCompletenessGate'
 import { buildCostReport } from '../playbooks/metroCostReport'
 import { buildStrategicCoverageReport, type StrategicCoverageReport } from '../playbooks/metroStrategicReport'
 import { buildStageArtifactFiles } from './metroStageArtifacts'
@@ -202,6 +204,8 @@ interface MetroDriverState {
   existingProductionInventorySnapshot?: ExistingProductionItem[]
   /** Chief Phase 2AH — real OUT_OF_MARKET_CONTAMINATION_GATE result from the M8 pass (before catalog certification), kept separately from batchCertificationGates' copy so M9's second, pre-SQL-generation pass can log exactly what changed between the two evaluations. */
   outOfMarketGateAtM8?: StagingGateResult
+  /** Chief Phase 2AK — the real per-neighborhood item counts (including zero-item canonical neighborhoods) computed by NEIGHBORHOOD_COMPLETENESS_GATE, kept for the final report. */
+  neighborhoodCompletenessReport?: { emptyNeighborhoods: string[]; perNeighborhoodCounts: Array<{ neighborhoodName: string; count: number }> }
 }
 
 /**
@@ -252,7 +256,10 @@ export interface DriverItemCertificationRecord {
 }
 
 export interface HomeListPlanEntry {
+  /** Internal, human-readable report/log label ONLY — may carry a descriptive prefix like "Themed list: X" for clarity in reports/image-readiness cards. NEVER written to public.lists.title (Chief Phase 2AK, 2026-09-10) — use `title` for that. */
   label: string
+  /** The REAL, exact user-facing list title — written verbatim to public.lists.title and used for every DB lookup/match against it. Never carries an internal prefix. */
+  title: string
   kind: 'PRIMARY_SEASONAL' | 'THEMED' | 'CURATED_MIRROR'
   itemCandidateNames: string[]
   requiresImage: boolean
@@ -370,6 +377,17 @@ export interface MetroDriverDeps {
    * runs/tests that never distinguished the two.
    */
   metroAreaSlug?: string
+  /**
+   * M8 (Chief Phase 2AK, 2026-09-10 methodology hardening postmortem):
+   * the metro's REAL, approved canonical neighborhood model (see e.g.
+   * greenBayNeighborhoodModel.ts's 13-neighborhood list for one metro) —
+   * used by NEIGHBORHOOD_COMPLETENESS_GATE to report per-neighborhood
+   * item counts, INCLUDING any canonical neighborhood with zero items
+   * (an accepted, reported fact, never fabricated or misassigned around).
+   * Defaults to this run's own real M1-confirmed neighborhood list when
+   * omitted — never another metro's names, never a hardcoded default.
+   */
+  canonicalNeighborhoods?: readonly string[]
 }
 
 export function executionId(runId: string, stage: string, label: string): string {
@@ -1620,7 +1638,50 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
   }
   const reuseMatchedNames = new Set((state.existingInventoryReconciliation && !('skippedReason' in state.existingInventoryReconciliation) ? state.existingInventoryReconciliation.reused : []).map((m) => m.candidateName))
 
-  const gates: StagingGateResult[] = [...distinctivenessGates, itemCertificationGate, tagGate, metadataGate, geoGate, outOfMarketGate]
+  // PLACES_COMPLETENESS_GATE (Chief Phase 2AK, 2026-09-10) — distinct from
+  // GEO_ENRICHMENT_GATE's match-QUALITY classification: this asserts every
+  // required SQL field is actually populated for every item that resolved
+  // to a real venue. Late-added items get zero exemption — this gate is
+  // recomputed fresh from the SAME geoRun.records every M8 pass, so an
+  // item added after the main build still has to pass it before packaging.
+  const mapsQueryByName = new Map(geoCandidates.map((c) => [c.candidateName, c.mapsQuery]))
+  const placesCompletenessInputs: PlacesCompletenessItemInput[] = certified.map((r) => {
+    const g = geoResultsByNameForContamination.get(r.candidateName)
+    return { candidateName: r.candidateName, classification: (g?.classification as PlacesCompletenessItemInput['classification']) ?? 'UNRESOLVED', googlePlaceId: g?.placeId ?? null, formattedAddress: g?.formattedAddress ?? null, mapsQuery: mapsQueryByName.get(r.candidateName) ?? null, lat: g?.lat ?? null, lng: g?.lng ?? null }
+  })
+  const placesCompletenessResult = evaluatePlacesCompletenessGate(placesCompletenessInputs)
+  const placesCompletenessGate: StagingGateResult = { key: placesCompletenessResult.key, verdict: placesCompletenessResult.verdict, reason: placesCompletenessResult.reason }
+
+  // OPENING_VERB_CONCENTRATION_AUDIT (Chief Phase 2AK) — a combined-
+  // watchlist check distinct from OPENING_DISTRIBUTION_GATE's single-word
+  // threshold; catches a repetition problem spread across several
+  // near-synonym generic openers instead of one dominant word.
+  const openingVerbResult = evaluateOpeningVerbConcentrationAudit(certified.map((r) => r.finalBody))
+  const openingVerbGate: StagingGateResult = { key: openingVerbResult.key, verdict: openingVerbResult.verdict, reason: openingVerbResult.reason }
+
+  // SAME_VENUE_CLUSTER_REVIEW_GATE (Chief Phase 2AK) — always PASS by
+  // design (see venueDuplicateDetection.ts), required so cluster findings
+  // can never be silently absent from the final certification report.
+  const sameVenueClusterResult = evaluateSameVenueClusterReviewGate(state.venueDuplicateClusters ?? [])
+  const sameVenueClusterGate: StagingGateResult = { key: sameVenueClusterResult.key, verdict: sameVenueClusterResult.verdict, reason: sameVenueClusterResult.reason }
+
+  // NEIGHBORHOOD_COMPLETENESS_GATE (Chief Phase 2AK) — always PASS by
+  // design (an empty canonical neighborhood is an accepted fact, never a
+  // blocker); required so it can never be silently absent. Defaults to
+  // this run's own real M1-confirmed neighborhoods as the canonical set
+  // when the caller doesn't supply a separate approved model — never a
+  // hardcoded or other-metro list.
+  const neighborhoodItemCounts = new Map<string, number>()
+  for (const r of certified) {
+    const n = candidatesByName.get(r.candidateName)?.neighborhood
+    if (n) neighborhoodItemCounts.set(n, (neighborhoodItemCounts.get(n) ?? 0) + 1)
+  }
+  const canonicalNeighborhoodNames = deps.canonicalNeighborhoods ?? (state.neighborhoods ?? []).map((n) => n.name)
+  const neighborhoodCompletenessResult = evaluateNeighborhoodCompletenessGate(canonicalNeighborhoodNames, neighborhoodItemCounts)
+  const neighborhoodCompletenessGate: StagingGateResult = { key: neighborhoodCompletenessResult.key, verdict: neighborhoodCompletenessResult.verdict, reason: neighborhoodCompletenessResult.reason }
+  state.neighborhoodCompletenessReport = { emptyNeighborhoods: neighborhoodCompletenessResult.emptyNeighborhoods, perNeighborhoodCounts: neighborhoodCompletenessResult.perNeighborhoodCounts }
+
+  const gates: StagingGateResult[] = [...distinctivenessGates, itemCertificationGate, tagGate, metadataGate, geoGate, outOfMarketGate, placesCompletenessGate, openingVerbGate, sameVenueClusterGate, neighborhoodCompletenessGate]
   state.batchCertificationGates = gates
 
   // M8.5 routing (Chief Phase 2AD, 2026-09-09 instruction): a catalog-wide
@@ -1966,13 +2027,19 @@ function buildHomeListPlan(state: MetroDriverState, flagshipListTitle: string): 
   const themeable: ThemeableItem[] = certified.filter((r) => r.dbCategory).map((r) => ({ candidateName: r.candidateName, venueName: r.venueName, finalBody: r.finalBody, finalTags: r.finalTags, dbCategory: r.dbCategory!, attempts: r.attempts }))
 
   const flagshipNames = selectFlagshipList(themeable, FLAGSHIP_LIST_TARGET_SIZE)
-  const plan: HomeListPlanEntry[] = [{ label: flagshipListTitle, kind: 'PRIMARY_SEASONAL', itemCandidateNames: flagshipNames, requiresImage: true }]
+  // Chief Phase 2AK (2026-09-10, list-title hygiene fix): `title` is the
+  // REAL, exact public.lists.title value — never carries the "Themed
+  // list:" (or any other internal) prefix. `label` keeps that prefix for
+  // human-readable reports/image-readiness cards only. A prior version of
+  // this function used `label` (with the prefix) directly as the DB title,
+  // which shipped literal "Themed list: X" titles into production.
+  const plan: HomeListPlanEntry[] = [{ label: flagshipListTitle, title: flagshipListTitle, kind: 'PRIMARY_SEASONAL', itemCandidateNames: flagshipNames, requiresImage: true }]
 
   for (const theme of buildEditorialThemedLists(themeable, THEMED_LIST_DEFINITIONS, THEMED_LIST_MIN_ITEMS)) {
-    plan.push({ label: `Themed list: ${theme.title}`, kind: 'THEMED', itemCandidateNames: theme.candidateNames, requiresImage: true })
+    plan.push({ label: `Themed list: ${theme.title}`, title: theme.title, kind: 'THEMED', itemCandidateNames: theme.candidateNames, requiresImage: true })
   }
 
-  plan.push({ label: 'Curated-layer mirror', kind: 'CURATED_MIRROR', itemCandidateNames: names, requiresImage: false })
+  plan.push({ label: 'Curated-layer mirror', title: 'Curated-layer mirror', kind: 'CURATED_MIRROR', itemCandidateNames: names, requiresImage: false })
   return plan
 }
 
@@ -2046,10 +2113,10 @@ function buildHomeListSqlPatch(
   const primaryEntry = plan.find((p) => p.kind === 'PRIMARY_SEASONAL')
   if (reusedExistingItemIds.length > 0 && primaryEntry) {
     lines.push(`  -- Existing-inventory reconciliation: ${reusedExistingItemIds.length} already-live production item(s) reused (same venue + same experience) rather than duplicated.`)
-    lines.push(`  SELECT id INTO v_list_id FROM public.lists WHERE metro_id = v_metro_id AND title = ${sqlQuote(primaryEntry.label)} AND is_official = true;`)
+    lines.push(`  SELECT id INTO v_list_id FROM public.lists WHERE metro_id = v_metro_id AND title = ${sqlQuote(primaryEntry.title)} AND is_official = true;`)
     lines.push('  IF v_list_id IS NULL THEN')
     lines.push(`    INSERT INTO public.lists (metro_id, title, is_official, is_public, creator_id, is_featured_eligible)`)
-    lines.push(`    VALUES (v_metro_id, ${sqlQuote(primaryEntry.label)}, true, true, ${sqlQuote(officialListCreatorId)}, true)`)
+    lines.push(`    VALUES (v_metro_id, ${sqlQuote(primaryEntry.title)}, true, true, ${sqlQuote(officialListCreatorId)}, true)`)
     lines.push('    RETURNING id INTO v_list_id;')
     lines.push('  END IF;')
     for (const existingId of reusedExistingItemIds) {
@@ -2063,11 +2130,11 @@ function buildHomeListSqlPatch(
   for (const entry of plan) {
     if (entry.kind === 'CURATED_MIRROR') continue // curated_lists layer is a separate, existing patch pattern (see itemIntake.ts) — not duplicated here
     lines.push(`  -- ${entry.label} (${entry.itemCandidateNames.length} item(s))`)
-    lines.push(`  SELECT id INTO v_list_id FROM public.lists WHERE metro_id = v_metro_id AND title = ${sqlQuote(entry.label)} AND is_official = true;`)
+    lines.push(`  SELECT id INTO v_list_id FROM public.lists WHERE metro_id = v_metro_id AND title = ${sqlQuote(entry.title)} AND is_official = true;`)
     lines.push('  IF v_list_id IS NULL THEN')
     lines.push(`    INSERT INTO public.lists (metro_id, title, is_official, is_public, creator_id${entry.kind === 'PRIMARY_SEASONAL' ? ', is_featured_eligible' : ''})`)
     lines.push(
-      `    VALUES (v_metro_id, ${sqlQuote(entry.label)}, true, true, ${sqlQuote(officialListCreatorId)}${entry.kind === 'PRIMARY_SEASONAL' ? ', true' : ''})`
+      `    VALUES (v_metro_id, ${sqlQuote(entry.title)}, true, true, ${sqlQuote(officialListCreatorId)}${entry.kind === 'PRIMARY_SEASONAL' ? ', true' : ''})`
     )
     lines.push('    RETURNING id INTO v_list_id;')
     lines.push('  END IF;')
