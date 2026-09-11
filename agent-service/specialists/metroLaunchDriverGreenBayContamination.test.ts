@@ -89,6 +89,7 @@ test('driveMetroLaunch (Green Bay contamination regression): a real San Diego ve
       verifiedTagSnapshot: TEST_TAG_VOCAB,
       metroAreaFacts: { name: 'Green Bay Metro', state: 'WI', timezone: 'America/Chicago' },
       metroAreaSlug: 'green-bay',
+      canonicalNeighborhoods: ['Downtown Green Bay'],
       // Hermetic: an explicit empty fake, never the real DB-backed default
       // (this candidate's own name is a real, live production venue —
       // exercising the real default here would make this test's outcome
@@ -189,6 +190,7 @@ test('driveMetroLaunch (Green Bay contamination regression): a same-venue/same-e
       verifiedTagSnapshot: TEST_TAG_VOCAB,
       metroAreaFacts: { name: 'Green Bay Metro', state: 'WI', timezone: 'America/Chicago' },
       metroAreaSlug: 'green-bay',
+      canonicalNeighborhoods: ['Downtown Green Bay'],
       fetchExistingProductionInventory: async () => existingInventory,
       placesLookup: async (q: string) => {
         if (q.includes('1919')) return { topResult: { placeId: 'ChIJVX4b_VH6AogRjL1TW2opsU8', name: '1919 Kitchen & Tap', formattedAddress: '1265 Lombardi Ave, Green Bay, WI 54304, USA', lat: 44.5015057, lng: -88.0602601, websiteUri: null, country: 'US', viewportRadiusM: null }, apiError: null }

@@ -20,16 +20,37 @@
 // It only guarantees the fact of "zero items here" is surfaced, every
 // time, for every canonical neighborhood, never silently omitted from a
 // report that only lists neighborhoods with content.
+//
+// Chief Phase 2AL (2026-09-11) — a required, FAIL-CLOSED precondition:
+// `canonicalNeighborhoods` must be an explicit, real, frozen list a caller
+// deliberately supplied (see MetroDriverDeps.canonicalNeighborhoods).
+// Passing `null` (no canonical model available yet) is now a hard FAIL,
+// not silently treated as "no neighborhoods to check" or backfilled from
+// whatever M1 happened to discover — that silent fallback is exactly what
+// let an incomplete/wrong model reach production packaging undetected.
+// The canonical model may be produced earlier in the methodology (M0/
+// coverage-planning), but by the time this gate runs (M8, before M9's SQL
+// generation) it must be explicit and frozen.
 
 export interface NeighborhoodCompletenessResult {
   key: 'NEIGHBORHOOD_COMPLETENESS_GATE'
-  verdict: 'PASS'
+  verdict: 'PASS' | 'FAIL'
   reason: string
   perNeighborhoodCounts: Array<{ neighborhoodName: string; count: number }>
   emptyNeighborhoods: string[]
 }
 
-export function evaluateNeighborhoodCompletenessGate(canonicalNeighborhoods: readonly string[], itemNeighborhoodCounts: ReadonlyMap<string, number> | Record<string, number>): NeighborhoodCompletenessResult {
+export function evaluateNeighborhoodCompletenessGate(canonicalNeighborhoods: readonly string[] | null, itemNeighborhoodCounts: ReadonlyMap<string, number> | Record<string, number>): NeighborhoodCompletenessResult {
+  if (canonicalNeighborhoods === null) {
+    return {
+      key: 'NEIGHBORHOOD_COMPLETENESS_GATE',
+      verdict: 'FAIL',
+      perNeighborhoodCounts: [],
+      emptyNeighborhoods: [],
+      reason:
+        'No explicit, frozen canonical neighborhood model was supplied for this metro — refusing to silently treat whatever M1 happened to discover as the final canonical model. Supply the real, approved neighborhood list (MetroDriverDeps.canonicalNeighborhoods) before this metro can reach production-ready status.',
+    }
+  }
   const getCount = (name: string): number => {
     if (itemNeighborhoodCounts instanceof Map) return itemNeighborhoodCounts.get(name) ?? 0
     return (itemNeighborhoodCounts as Record<string, number>)[name] ?? 0

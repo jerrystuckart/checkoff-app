@@ -86,6 +86,7 @@ test('driveMetroLaunch (list-title hygiene): a themed list\'s real public.lists.
       verifiedTagSnapshot: TEST_TAG_VOCAB,
       metroAreaFacts: { name: 'Test Metro', state: 'WI', timezone: 'America/Chicago' },
       metroAreaSlug: 'test-metro',
+      canonicalNeighborhoods: ['Downtown'],
       fetchExistingProductionInventory: async () => [],
       placesLookup: async (q: string) => ({ topResult: { placeId: `p-${q}`, name: q, formattedAddress: `${q}, Green Bay, WI 54301, USA`, lat: 44.51, lng: -88.01, websiteUri: null, country: 'US', viewportRadiusM: null }, apiError: null }),
       geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),

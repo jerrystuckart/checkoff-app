@@ -100,6 +100,8 @@ import { clusterByPlaceId, buildVenueClusterReviewNotes, evaluateSameVenueCluste
 import { analyzeCatalogVoice, evaluateOpeningVerbConcentrationAudit, type VoiceCatalogEntry } from '../playbooks/catalogVoiceDiagnostics'
 import { evaluatePlacesCompletenessGate, type PlacesCompletenessItemInput } from '../playbooks/placesCompletenessGate'
 import { evaluateNeighborhoodCompletenessGate } from '../playbooks/neighborhoodCompletenessGate'
+import { checkSqlPatchSafety } from '../playbooks/sqlPatchSafety'
+import { evaluateFinalReadyToApplyAudit, type FinalReadyToApplyResult } from '../playbooks/finalReadyToApplyAudit'
 import { buildCostReport } from '../playbooks/metroCostReport'
 import { buildStrategicCoverageReport, type StrategicCoverageReport } from '../playbooks/metroStrategicReport'
 import { buildStageArtifactFiles } from './metroStageArtifacts'
@@ -170,6 +172,8 @@ interface MetroDriverState {
   itemCertifications?: Record<string, DriverItemCertificationRecord>
   /** Real, computed certification report from M8/M9/M10 — what stepLaunchBoundary reports to Jerry, replacing the old hardcoded synthetic gateEvidence. */
   finalCertificationReport?: MetroLaunchCertificationReport
+  /** Chief Phase 2AL (2026-09-11) — the auto-wired, always-computed final ready-to-apply audit (finalReadyToApplyAudit.ts). Never optional in the sense of "may not run" — it runs every time M10 does; this is just its stored result. */
+  finalReadyToApplyAudit?: FinalReadyToApplyResult
   homeListPlan?: HomeListPlanEntry[]
   /** The one atomic, self-certifying SQL patch text for Jerry to run — this driver never writes public.lists/public.list_items directly (standing write-boundary rule, unchanged). */
   homeListSqlPatch?: string
@@ -378,16 +382,34 @@ export interface MetroDriverDeps {
    */
   metroAreaSlug?: string
   /**
-   * M8 (Chief Phase 2AK, 2026-09-10 methodology hardening postmortem):
-   * the metro's REAL, approved canonical neighborhood model (see e.g.
-   * greenBayNeighborhoodModel.ts's 13-neighborhood list for one metro) —
-   * used by NEIGHBORHOOD_COMPLETENESS_GATE to report per-neighborhood
-   * item counts, INCLUDING any canonical neighborhood with zero items
-   * (an accepted, reported fact, never fabricated or misassigned around).
-   * Defaults to this run's own real M1-confirmed neighborhood list when
-   * omitted — never another metro's names, never a hardcoded default.
+   * M8 (Chief Phase 2AK/2AL, 2026-09-10/11 methodology hardening
+   * postmortem): the metro's REAL, approved, FROZEN canonical
+   * neighborhood model (see e.g. greenBayNeighborhoodModel.ts's
+   * 13-neighborhood list for one metro) — used by
+   * NEIGHBORHOOD_COMPLETENESS_GATE to report per-neighborhood item
+   * counts, INCLUDING any canonical neighborhood with zero items (an
+   * accepted, reported fact, never fabricated or misassigned around).
+   *
+   * REQUIRED for production-ready status as of Chief Phase 2AL: omitting
+   * this is now a hard NEIGHBORHOOD_COMPLETENESS_GATE FAIL, not a silent
+   * fallback to whatever M1 happened to discover — a metro cannot reach
+   * READY_TO_ACTIVATE without an explicit canonical model, surfaced as a
+   * real, named blocker rather than proceeding on unverified geography.
+   * The canonical model may be produced earlier in the methodology
+   * (M0/coverage-planning); it just must be explicit and frozen by the
+   * time this gate runs (M8, before M9 generates production SQL).
    */
   canonicalNeighborhoods?: readonly string[]
+  /**
+   * M9 (Chief Phase 2AL, 2026-09-11): real, documented locality centroids
+   * (a village/district's own public center coordinate — e.g. greenBayNeighborhoodModel.ts's
+   * GREEN_BAY_EMPTY_NEIGHBORHOOD_FALLBACK_CENTROIDS) for a canonical
+   * neighborhood that currently has zero retained items. NEVER a
+   * fabricated business location. A canonical neighborhood with neither
+   * real items nor an entry here fails the package closed rather than
+   * being silently skipped or given an invented coordinate.
+   */
+  emptyNeighborhoodFallbackCentroids?: Readonly<Record<string, { lat: number; lng: number }>>
 }
 
 export function executionId(runId: string, stage: string, label: string): string {
@@ -1667,16 +1689,18 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
 
   // NEIGHBORHOOD_COMPLETENESS_GATE (Chief Phase 2AK) — always PASS by
   // design (an empty canonical neighborhood is an accepted fact, never a
-  // blocker); required so it can never be silently absent. Defaults to
-  // this run's own real M1-confirmed neighborhoods as the canonical set
-  // when the caller doesn't supply a separate approved model — never a
-  // hardcoded or other-metro list.
+  // blocker); required so it can never be silently absent. Chief Phase
+  // 2AL (2026-09-11): NO LONGER defaults to this run's own M1-discovered
+  // neighborhoods when the caller omits deps.canonicalNeighborhoods — that
+  // silent fallback is exactly the gap this hardening pass closes. Only an
+  // explicit, real, frozen canonical model supplied by the caller is
+  // accepted; omitting it is now a real FAIL (see neighborhoodCompletenessGate.ts).
   const neighborhoodItemCounts = new Map<string, number>()
   for (const r of certified) {
     const n = candidatesByName.get(r.candidateName)?.neighborhood
     if (n) neighborhoodItemCounts.set(n, (neighborhoodItemCounts.get(n) ?? 0) + 1)
   }
-  const canonicalNeighborhoodNames = deps.canonicalNeighborhoods ?? (state.neighborhoods ?? []).map((n) => n.name)
+  const canonicalNeighborhoodNames = deps.canonicalNeighborhoods ?? null
   const neighborhoodCompletenessResult = evaluateNeighborhoodCompletenessGate(canonicalNeighborhoodNames, neighborhoodItemCounts)
   const neighborhoodCompletenessGate: StagingGateResult = { key: neighborhoodCompletenessResult.key, verdict: neighborhoodCompletenessResult.verdict, reason: neighborhoodCompletenessResult.reason }
   state.neighborhoodCompletenessReport = { emptyNeighborhoods: neighborhoodCompletenessResult.emptyNeighborhoods, perNeighborhoodCounts: neighborhoodCompletenessResult.perNeighborhoodCounts }
@@ -2065,6 +2089,35 @@ export const DEFAULT_OFFICIAL_LIST_CREATOR_ID = '11275026-65be-4421-80a4-46c5719
  * item not yet created — surfaced honestly, never silently skipped or
  * worked around with a placeholder items row.
  */
+/** Real, per-item facts buildHomeListSqlPatch needs to generate neighborhood-creation SQL — never a raw discovery-stage label; the caller is responsible for having already resolved this to one of the canonical names. */
+export interface NeighborhoodSqlAssignment {
+  neighborhoodName: string
+  lat: number | null
+  lng: number | null
+}
+
+export interface NeighborhoodSqlPlan {
+  /** The metro's explicit, approved, frozen canonical neighborhood list — same list NEIGHBORHOOD_COMPLETENESS_GATE was evaluated against (Chief Phase 2AL). */
+  canonicalNeighborhoods: readonly string[]
+  /** Every certified item's resolved canonical neighborhood + real geocoded coordinates (when available) — used to derive each neighborhood's centroid purely from its own real items. */
+  itemAssignments: ReadonlyMap<string, NeighborhoodSqlAssignment>
+  /** Real, documented locality centroids (a village/district's own public center coordinate — never a fabricated business location) for a canonical neighborhood that currently has zero retained items. Omitting an entry here for a zero-item neighborhood is not an error by itself — see neighborhoodsMissingCentroid on the return value. */
+  emptyNeighborhoodFallbackCentroids?: Readonly<Record<string, { lat: number; lng: number }>>
+}
+
+const NEIGHBORHOOD_RING_0_RADIUS_M = 12875
+const NEIGHBORHOOD_RING_1_RADIUS_M = 32187
+const NEIGHBORHOOD_RING_2_RADIUS_M = 64374
+
+function slugifyNeighborhoodName(name: string): string {
+  return name
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
+
 function buildHomeListSqlPatch(
   metroSlug: string,
   plan: readonly HomeListPlanEntry[],
@@ -2073,8 +2126,10 @@ function buildHomeListSqlPatch(
   metroAreaFacts: { name: string; state: string; timezone: string } | undefined,
   officialListCreatorId: string,
   /** Chief Phase 2AH (Green Bay incident) — real ids of already-live production items existing-inventory reconciliation classified REUSE (same venue + same experience as a candidate this run discovered independently). Linked directly by id into the flagship list — never re-created, never matched by body text, since the row already exists. */
-  reusedExistingItemIds: readonly string[] = []
-): string {
+  reusedExistingItemIds: readonly string[] = [],
+  /** Chief Phase 2AL (2026-09-11) — when supplied, this package also creates every approved canonical public.neighborhoods row itself (generic, no per-metro one-off script required). Omit only when neighborhoods are known to already exist in production for this metro. */
+  neighborhoodPlan?: NeighborhoodSqlPlan
+): { sql: string; neighborhoodsMissingCentroid: string[] } {
   const lines: string[] = []
   lines.push(`-- Generated by Winston metro_launch driver (M9_HOME_LIST_MIRROR) for metro "${metroSlug}".`)
   lines.push('-- One atomic, self-certifying transaction — no cross-statement TEMP-table dependence, no MIN(uuid).')
@@ -2090,6 +2145,7 @@ function buildHomeListSqlPatch(
   lines.push('  v_metro_id uuid;')
   lines.push('  v_list_id uuid;')
   lines.push('  v_item_id uuid;')
+  lines.push('  v_neighborhood_id uuid;')
   lines.push('  v_match_count int;')
   lines.push('BEGIN')
   if (metroAreaFacts) {
@@ -2109,6 +2165,52 @@ function buildHomeListSqlPatch(
   lines.push(`  SELECT id INTO v_metro_id FROM public.metro_areas WHERE slug = ${sqlQuote(metroSlug)};`)
   lines.push(`  IF v_metro_id IS NULL THEN RAISE EXCEPTION 'metro_areas row for slug % could not be found or created', ${sqlQuote(metroSlug)}; END IF;`)
   lines.push('')
+
+  // Chief Phase 2AL (2026-09-11) — generic canonical-neighborhood creation,
+  // moved out of the one-off Green Bay script into the reusable driver
+  // itself. Every approved canonical neighborhood gets a real row: a
+  // centroid derived purely from THIS metro's own real, geocoded item
+  // coordinates when it has any retained items, or the caller's
+  // documented real-locality fallback centroid when it has none (never a
+  // fabricated business location — see NeighborhoodSqlPlan's doc). A
+  // canonical neighborhood with neither real items nor a supplied
+  // fallback is a genuine fail-closed condition: its row is NOT created,
+  // and its name is returned in neighborhoodsMissingCentroid for the
+  // caller (stepM9HomeListMirror) to treat as a real blocker — never
+  // silently skipped, never given an invented coordinate.
+  const neighborhoodsMissingCentroid: string[] = []
+  if (neighborhoodPlan) {
+    const byNeighborhood = new Map<string, { lats: number[]; lngs: number[] }>()
+    for (const assignment of neighborhoodPlan.itemAssignments.values()) {
+      if (!byNeighborhood.has(assignment.neighborhoodName)) byNeighborhood.set(assignment.neighborhoodName, { lats: [], lngs: [] })
+      const agg = byNeighborhood.get(assignment.neighborhoodName)!
+      if (typeof assignment.lat === 'number' && typeof assignment.lng === 'number') {
+        agg.lats.push(assignment.lat)
+        agg.lngs.push(assignment.lng)
+      }
+    }
+    lines.push('  -- Canonical neighborhoods (all approved, including any with zero retained items).')
+    for (const name of neighborhoodPlan.canonicalNeighborhoods) {
+      const agg = byNeighborhood.get(name)
+      const hasRealItems = !!agg && agg.lats.length > 0
+      const fallback = neighborhoodPlan.emptyNeighborhoodFallbackCentroids?.[name]
+      if (!hasRealItems && !fallback) {
+        neighborhoodsMissingCentroid.push(name)
+        lines.push(`  -- SKIPPED (fail-closed): "${name}" has zero retained items and no documented fallback centroid was supplied — see neighborhoodsMissingCentroid.`)
+        continue
+      }
+      const lat = hasRealItems ? agg!.lats.reduce((a, b) => a + b, 0) / agg!.lats.length : fallback!.lat
+      const lng = hasRealItems ? agg!.lngs.reduce((a, b) => a + b, 0) / agg!.lngs.length : fallback!.lng
+      const slug = slugifyNeighborhoodName(name)
+      if (!hasRealItems) lines.push(`  -- "${name}": 0 items today — using the documented real-locality fallback centroid, not item-derived.`)
+      lines.push(`  IF NOT EXISTS (SELECT 1 FROM public.neighborhoods WHERE metro_id = v_metro_id AND name = ${sqlQuote(name)}) THEN`)
+      lines.push(
+        `    INSERT INTO public.neighborhoods (metro_id, name, slug, state, center_geo, ring_0_radius_m, ring_1_radius_m, ring_2_radius_m, is_active) VALUES (v_metro_id, ${sqlQuote(name)}, ${sqlQuote(slug)}, ${metroAreaFacts ? sqlQuote(metroAreaFacts.state) : 'NULL'}, ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography, ${NEIGHBORHOOD_RING_0_RADIUS_M}, ${NEIGHBORHOOD_RING_1_RADIUS_M}, ${NEIGHBORHOOD_RING_2_RADIUS_M}, true);`
+      )
+      lines.push('  END IF;')
+    }
+    lines.push('')
+  }
 
   const primaryEntry = plan.find((p) => p.kind === 'PRIMARY_SEASONAL')
   if (reusedExistingItemIds.length > 0 && primaryEntry) {
@@ -2158,9 +2260,16 @@ function buildHomeListSqlPatch(
   lines.push(
     `  IF v_match_count < ${nonMirrorCount} THEN RAISE EXCEPTION 'postflight: expected at least % official list(s) for metro %, found %', ${nonMirrorCount}, ${sqlQuote(metroSlug)}, v_match_count; END IF;`
   )
+  if (neighborhoodPlan) {
+    const expectedNeighborhoodCount = neighborhoodPlan.canonicalNeighborhoods.length - neighborhoodsMissingCentroid.length
+    lines.push(`  SELECT count(*) INTO v_match_count FROM public.neighborhoods WHERE metro_id = v_metro_id;`)
+    lines.push(
+      `  IF v_match_count < ${expectedNeighborhoodCount} THEN RAISE EXCEPTION 'postflight: expected at least % canonical neighborhood(s) for metro %, found %', ${expectedNeighborhoodCount}, ${sqlQuote(metroSlug)}, v_match_count; END IF;`
+    )
+  }
   lines.push('END $$;')
   lines.push('COMMIT;')
-  return lines.join('\n')
+  return { sql: lines.join('\n'), neighborhoodsMissingCentroid }
 }
 
 function sqlQuote(s: string): string {
@@ -2193,6 +2302,20 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
     )
   }
 
+  // Chief Phase 2AL (2026-09-11) — SQL packaging refuses to proceed
+  // without an explicit, frozen canonical neighborhood model, exactly
+  // like NEIGHBORHOOD_COMPLETENESS_GATE already refuses at M8. This is
+  // the SECOND, independent enforcement point (same discipline as the
+  // contamination re-check above): by the time SQL packaging begins, the
+  // canonical model must be explicit — never silently backfilled from
+  // whatever M1 happened to discover.
+  if (!deps.canonicalNeighborhoods) {
+    return block(
+      run,
+      'No explicit, frozen canonical neighborhood model was supplied (deps.canonicalNeighborhoods) — refusing to generate production SQL without one. Supply the real, approved neighborhood list before this metro can be packaged.'
+    )
+  }
+
   const plan = buildHomeListPlan(state, deps.flagshipListTitle ?? 'Primary seasonal list')
   state.homeListPlan = plan
   const itemBodyByCandidateName = new Map(
@@ -2201,7 +2324,49 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
   const reconciliation = state.existingInventoryReconciliation
   const reusedExistingItemIds = (reconciliation && !('skippedReason' in reconciliation) ? reconciliation.reused : []).map((m) => m.existingItemId)
   const metroSlug = deps.metroAreaSlug ?? run.projectId
-  state.homeListSqlPatch = buildHomeListSqlPatch(metroSlug, plan, itemBodyByCandidateName, state.m0Decisions?.metroCenter, deps.metroAreaFacts, deps.officialListCreatorId ?? DEFAULT_OFFICIAL_LIST_CREATOR_ID, reusedExistingItemIds)
+
+  // Generic canonical-neighborhood SQL (Chief Phase 2AL) — every certified
+  // item's already-resolved neighborhood + real geocoded coordinates,
+  // keyed for buildHomeListSqlPatch to derive real per-neighborhood
+  // centroids (or use a caller-supplied real-locality fallback for a
+  // zero-item canonical neighborhood).
+  const geoResultsByNameForNeighborhoods = new Map((state.geoEnrichmentResults ?? []).map((r) => [r.candidateName, r]))
+  const candidatesByNameForNeighborhoods = new Map((state.candidates ?? []).map((c) => [c.name, c]))
+  const itemAssignments = new Map<string, NeighborhoodSqlAssignment>()
+  for (const r of certifiedForRecheck) {
+    const neighborhoodName = candidatesByNameForNeighborhoods.get(r.candidateName)?.neighborhood
+    if (!neighborhoodName) continue
+    const geo = geoResultsByNameForNeighborhoods.get(r.candidateName)
+    itemAssignments.set(r.candidateName, { neighborhoodName, lat: geo?.lat ?? null, lng: geo?.lng ?? null })
+  }
+  const neighborhoodPlan: NeighborhoodSqlPlan = {
+    canonicalNeighborhoods: deps.canonicalNeighborhoods,
+    itemAssignments,
+    emptyNeighborhoodFallbackCentroids: deps.emptyNeighborhoodFallbackCentroids,
+  }
+
+  const { sql: homeListSql, neighborhoodsMissingCentroid } = buildHomeListSqlPatch(
+    metroSlug,
+    plan,
+    itemBodyByCandidateName,
+    state.m0Decisions?.metroCenter,
+    deps.metroAreaFacts,
+    deps.officialListCreatorId ?? DEFAULT_OFFICIAL_LIST_CREATOR_ID,
+    reusedExistingItemIds,
+    neighborhoodPlan
+  )
+  // Fail-closed (Chief Phase 2AL): a canonical neighborhood with zero real
+  // items AND no documented real-locality fallback centroid is a genuine
+  // human-decision blocker, never silently skipped or given an invented
+  // coordinate — refuse the whole package rather than ship an incomplete
+  // neighborhood model.
+  if (neighborhoodsMissingCentroid.length > 0) {
+    return block(
+      run,
+      `${neighborhoodsMissingCentroid.length} canonical neighborhood(s) have zero retained items AND no documented real-locality fallback centroid was supplied (deps.emptyNeighborhoodFallbackCentroids): ${neighborhoodsMissingCentroid.join(', ')}. Supply a real, documented locality centroid for each, or accept the metro without them — never fabricate one.`
+    )
+  }
+  state.homeListSqlPatch = homeListSql
 
   // Real read path by default (readRealHomeListRows — an actual
   // public.lists/public.list_items query) — tests/production callers may
@@ -2337,6 +2502,52 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
   state.finalCertificationReport = report
   state.rejectedItemCount = rejected.length + (state.editorRejectedCandidates ?? []).length
 
+  // Chief Phase 2AL (2026-09-11) — finalReadyToApplyAudit.ts is now
+  // AUTOMATICALLY invoked at the end of every real drive, never something
+  // a caller has to remember to run separately. Its verdict is stored
+  // alongside finalCertificationReport; stepLaunchBoundary's own
+  // chiefRecommendation text refuses to call the package "ready" unless
+  // THIS audit also passes, even when every individual required gate
+  // already did — see evaluateFinalReadyToApplyAudit's own doc for why a
+  // gate-by-gate PASS is not automatically the same claim as "ready to
+  // apply" (e.g. same-Place-ID clusters can all individually PASS their
+  // own gate while still being unresolved).
+  const allGatesForFinalAudit = [...existingGates, imageGate, catalogGate, locationGate, presentationGate, editorialGate, activationKitGate]
+  const gateVerdict = (key: string): 'PASS' | 'FAIL' | undefined => allGatesForFinalAudit.find((g) => g.key === key)?.verdict as 'PASS' | 'FAIL' | undefined
+  const listTitlesWithInternalPrefix = plan.filter((p) => /themed list:/i.test(p.title)).map((p) => p.title)
+  const sqlSafety = state.homeListSqlPatch ? checkSqlPatchSafety(state.homeListSqlPatch) : undefined
+  const duplicateClustersForFinalAudit = state.venueDuplicateClusters ?? []
+  state.finalReadyToApplyAudit = evaluateFinalReadyToApplyAudit({
+    outOfMarketContaminationVerdict: gateVerdict('OUT_OF_MARKET_CONTAMINATION_GATE'),
+    // No cluster-resolution-tracking mechanism exists yet (out of scope
+    // for this hardening pass — see lateAddItemCertification.ts's own
+    // doc) — fails closed: any cluster that exists is treated as
+    // unresolved until a real "mark resolved" signal exists, never
+    // silently assumed reviewed just because it was reported.
+    allDuplicateClustersResolved: duplicateClustersForFinalAudit.length === 0,
+    unresolvedDuplicateClusterCount: duplicateClustersForFinalAudit.length,
+    allItemsCertified: gateVerdict('ITEM_CERTIFICATION_GATE') === 'PASS',
+    uncertifiedItemCount: rejected.length,
+    emptyNeighborhoods: state.neighborhoodCompletenessReport?.emptyNeighborhoods,
+    placesCompletenessVerdict: gateVerdict('PLACES_COMPLETENESS_GATE'),
+    listTitlesWithInternalPrefix,
+    homeListCountsReconcile: gateVerdict('HOME_LIST_CERTIFICATION_GATE') === 'PASS',
+    homeListCountMismatches: gateVerdict('HOME_LIST_CERTIFICATION_GATE') === 'PASS' ? [] : [allGatesForFinalAudit.find((g) => g.key === 'HOME_LIST_CERTIFICATION_GATE')?.reason ?? 'see HOME_LIST_CERTIFICATION_GATE'],
+    // Structurally guaranteed by buildHomeListSqlPatch, which only ever
+    // emits INSERT ... ON CONFLICT DO NOTHING for a reused existing item's
+    // list_items row — never an UPDATE to the item or to another metro's
+    // own list. True by construction of the current code, not a
+    // per-run computed fact.
+    reusedItemsAdditiveOnly: true,
+    sqlSafetyVerdict: sqlSafety ? (sqlSafety.safe ? 'PASS' : 'FAIL') : undefined,
+    sqlSafetyIssues: sqlSafety?.issues.map((i) => `${i.rule}: ${i.detail}`),
+    // Winston/Chief never executes production SQL itself (standing write
+    // boundary) — every package this driver produces is GENERATED only,
+    // never APPLIED/VERIFIED, unless a caller explicitly overrides this
+    // with real, confirmed execution evidence (no such path exists today).
+    executionState: 'GENERATED',
+  })
+
   // Chief Phase 3B (items 7, 8, 10) — the strategic close-out report +
   // durable stage artifacts, computed once against the frozen retained
   // catalog. Reuses buildAuditEvidence (the same category/neighborhood
@@ -2433,15 +2644,23 @@ async function stepLaunchBoundary(run: PlaybookRunRecord): Promise<PlaybookRunRe
     why: 'metro_launch.public_launch is APPROVAL_REQUIRED with no exception path — deciding WHEN to publicly announce/promote a market is always a human business call, never a database flag Chief flips.',
     chiefRecommendation: finalReport
       ? finalReport.verdict === 'READY_TO_ACTIVATE'
-        ? finalReport.pendingHumanStepsOnly
-          ? `METRO_LAUNCH_CERTIFICATION: READY TO ACTIVATE — every required gate that measures real catalog/content quality passed. Only known, already-generated pending human steps remain (see the reportText below: applying the SQL patch and/or adding Home-card images) — never a build blocker.`
-          : `METRO_LAUNCH_CERTIFICATION: READY_TO_ACTIVATE — every required gate passed. Recommend approving public launch (announce/promote) whenever the business is ready.`
+        ? state.finalReadyToApplyAudit?.verdict === 'READY_TO_APPLY'
+          ? finalReport.pendingHumanStepsOnly
+            ? `METRO_LAUNCH_CERTIFICATION: READY TO ACTIVATE — every required gate that measures real catalog/content quality passed, AND the auto-wired FINAL_READY_TO_APPLY_AUDIT also passed. Only known, already-generated pending human steps remain (see the reportText below: applying the SQL patch and/or adding Home-card images) — never a build blocker.`
+            : `METRO_LAUNCH_CERTIFICATION: READY_TO_ACTIVATE — every required gate passed, AND the auto-wired FINAL_READY_TO_APPLY_AUDIT also passed. Recommend approving public launch (announce/promote) whenever the business is ready.`
+          : // Chief Phase 2AL — gate-by-gate PASS is NOT the same claim as
+            // "ready to apply." Winston must not report this package as
+            // production-ready while the final audit itself is
+            // BLOCKED/incomplete, even when every individual gate already
+            // passed (e.g. unresolved same-Place-ID clusters).
+            `METRO_LAUNCH_CERTIFICATION gates all passed, but the auto-wired FINAL_READY_TO_APPLY_AUDIT has NOT passed: ${(state.finalReadyToApplyAudit?.reasons ?? ['audit result missing — treated as not ready']).join('; ')}. Winston must not call this package production-ready until that audit passes.`
         : `METRO_LAUNCH_CERTIFICATION: BLOCKED — ${finalReport.failingGates.length} failing / ${finalReport.missingGates.length} missing required gate(s). See metroLaunchCertification below for the exact list.`
       : gates.every((g) => g.verdict === 'PASS')
         ? 'All computed gates pass — recommend proceeding to real M7-M13 build once Jerry approves.'
         : 'Some gates show synthetic placeholder data only in this driver phase — a real build would need real M9/M13 evidence before this recommendation carries weight.',
     evidence: { candidateCount: (state.candidates ?? []).length, checkoffizedCount: (state.checkoffizedItems ?? []).length, gates },
     metroLaunchCertification: finalReport ?? null,
+    finalReadyToApplyAudit: state.finalReadyToApplyAudit ?? null,
     // Chief Phase 3B — the Vienna post-mortem close-out additions.
     // strategicCoverageReport is the "what is still weak?" report
     // (item 10, computed at M10). venueClusterReviewNotes are

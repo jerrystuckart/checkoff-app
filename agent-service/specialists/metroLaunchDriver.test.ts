@@ -215,7 +215,7 @@ test('driveMetroLaunch: with NO M0 decisions recorded, stops at NEEDS_JERRY befo
   const execStore = new InMemoryExecutionStore()
   const executor = new TestExecutor()
   scriptTagSelection(executor)
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, 'san-diego-no-decisions', { categoryPlan: PLAN })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, 'san-diego-no-decisions', { categoryPlan: PLAN })
   assert.equal(run.status, 'NEEDS_JERRY')
   assert.equal(run.currentStage, 'M0_METRO_DEFINITION')
   assert.ok(run.decisionPacket)
@@ -234,7 +234,7 @@ test('San Diego FULL SYNTHETIC driver run: sequences M0 through the launch-readi
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: PLAN })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: PLAN })
 
   assert.equal(run.status, 'NEEDS_JERRY')
   assert.equal(run.currentStage, 'LAUNCH_READINESS_BOUNDARY')
@@ -289,7 +289,7 @@ test('driveMetroLaunch: QUALITY_GATE genuinely FAILS the launch boundary when a 
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: PLAN })
+  await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: PLAN })
 
   // Simulate a duplicate slipping past dedupe (e.g. added by a process
   // that bypassed dedupeCandidates) directly into the persisted state,
@@ -302,7 +302,7 @@ test('driveMetroLaunch: QUALITY_GATE genuinely FAILS the launch boundary when a 
   afterFirstPass!.status = 'RUNNING'
   await runStore.put(afterFirstPass!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: PLAN })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: PLAN })
   const qualityGate = run.decisionPacket?.evidence as { gates: Array<{ key: string; verdict: string; reason: string }> } | undefined
   const result = qualityGate?.gates.find((g) => g.key === 'QUALITY_GATE')
   assert.equal(result?.verdict, 'FAIL')
@@ -389,7 +389,7 @@ test('driveMetroLaunch: a plateaued district-depth gap (Carlsbad 4/5) self-relax
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, {
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, {
     categoryPlan: smallPlan,
     depthTargets: [{ neighborhoodName: 'Carlsbad', minimumItems: 5 }],
     maxSteps: 35,
@@ -469,7 +469,7 @@ test('driveMetroLaunch: launch-boundary GEOGRAPHY_GATE genuinely PASSES once a d
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, {
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, {
     categoryPlan: smallPlan,
     depthTargets: [{ neighborhoodName: 'Carlsbad', minimumItems: 5 }],
     maxSteps: 35,
@@ -531,7 +531,7 @@ test('driveMetroLaunch: a category with genuinely zero real-world inventory (Spo
   // escalating; Sports effectively drops out of the plan rather than
   // blocking the whole build or being backfilled with a fake Sports item.
   const impossiblePlan: CategoryCoveragePlan = { targets: [{ categoryName: 'Sports', minimumViable: 5, healthyTarget: 5, qualityNotes: [] }] }
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: impossiblePlan, maxSteps: 30 })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: impossiblePlan, maxSteps: 30 })
 
   assert.equal(run.currentStage, 'LAUNCH_READINESS_BOUNDARY')
   assert.match(run.jerryReason ?? '', /launch-readiness boundary/)
@@ -596,7 +596,7 @@ test('driveMetroLaunch: launch-boundary CATEGORY_GATE evaluates NORMALIZED categ
   await runStore.put(seeded!)
 
   const plan: CategoryCoveragePlan = { targets: [{ categoryName: 'Food & drink', minimumViable: 3, healthyTarget: 3, qualityNotes: [] }] }
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: plan, maxSteps: 30 })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: plan, maxSteps: 30 })
 
   assert.equal(run.currentStage, 'LAUNCH_READINESS_BOUNDARY')
   const packet = run.decisionPacket?.evidence as { gates: Array<{ key: string; verdict: string }> } | undefined
@@ -623,7 +623,7 @@ test('driveMetroLaunch: RESUME — a second call against the same run store cont
 
   // First call: bounded to a handful of steps, simulating a process that
   // dies partway through (e.g. after M1 and M3, before M4 finishes).
-  const partial = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: PLAN, maxSteps: 3 })
+  const partial = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: PLAN, maxSteps: 3 })
   assert.equal(partial.status, 'RUNNING')
   assert.notEqual(partial.currentStage, 'LAUNCH_READINESS_BOUNDARY')
   const m1ExecutionIdUsed = executionId(playbookRunId('metro_launch', projectId), 'M1', m1GeographyExecutionLabel())
@@ -631,7 +631,7 @@ test('driveMetroLaunch: RESUME — a second call against the same run store cont
 
   // Second call — a BRAND NEW driveMetroLaunch invocation, same stores,
   // simulating a process restart. Must resume, not restart from M1.
-  const resumed = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: PLAN })
+  const resumed = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: PLAN })
   assert.equal(resumed.status, 'NEEDS_JERRY')
   assert.equal(resumed.currentStage, 'LAUNCH_READINESS_BOUNDARY')
 
@@ -699,7 +699,7 @@ test('driveMetroLaunch: a coverage gap that plateaus rather than closing self-re
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: shoplessPlan, maxSteps: 500 })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: shoplessPlan, maxSteps: 500 })
 
   assert.equal(run.currentStage, 'LAUNCH_READINESS_BOUNDARY')
   assert.match(run.jerryReason ?? '', /launch-readiness boundary/)
@@ -746,7 +746,7 @@ test('driveMetroLaunch: a TRULY unsatisfiable metro (relaxation-round budget alr
   seeded!.loopIteration = 5 // already at the per-round bound
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: shoplessPlan, maxSteps: 30 })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: shoplessPlan, maxSteps: 30 })
 
   assert.equal(run.status, 'NEEDS_JERRY')
   assert.equal(run.currentStage, 'M4_COVERAGE_AUDIT')
@@ -772,7 +772,7 @@ test('driveMetroLaunch: EXECUTOR_UNAVAILABLE blocks the run rather than NEEDS_JE
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: PLAN })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: PLAN })
   assert.equal(run.status, 'BLOCKED')
   assert.equal(run.currentStage, 'M1_GEOGRAPHY_MAP')
 })
@@ -794,7 +794,7 @@ test('driveMetroLaunch: a rejected evidence result retries up to the guardrail, 
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: PLAN })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: PLAN })
   assert.equal(run.status, 'NEEDS_JERRY')
   assert.match(run.jerryReason ?? '', /evidence validation/)
   assert.ok(run.totalRetries > 0 && run.totalRetries <= 3, 'retries must be bounded, not infinite')
@@ -830,7 +830,7 @@ test('driveMetroLaunch: M1 request inputs carry the M0 geographicScope decision,
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: PLAN, maxSteps: 2 })
+  await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: PLAN, maxSteps: 2 })
   assert.equal(capturedGeographicScope, RESOLVED_M0.geographicScope)
 })
 
@@ -972,7 +972,7 @@ test('driveMetroLaunch: a configured depth target with only token coverage trigg
 
   const plan: CategoryCoveragePlan = { targets: [{ categoryName: 'Food & drink', minimumViable: 1, healthyTarget: 1, qualityNotes: [] }, { categoryName: 'Shopping', minimumViable: 1, healthyTarget: 1, qualityNotes: [] }] }
   const run = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } },
     projectId,
     { categoryPlan: plan, depthTargets: [{ neighborhoodName: 'Carlsbad', minimumItems: 2 }], maxSteps: 30 }
   )
@@ -1009,7 +1009,7 @@ test('driveMetroLaunch: M1 output missing a valid neighborhood "kind" fails evid
   seeded!.state = { m0Decisions: RESOLVED_M0 }
   await runStore.put(seeded!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: PLAN, maxSteps: 30 })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: PLAN, maxSteps: 30 })
 
   assert.ok(m1Attempts > 1, 'a malformed neighborhood must trigger at least one real retry, not be accepted on the first attempt')
   assert.equal(run.status, 'NEEDS_JERRY')
@@ -1081,7 +1081,7 @@ test('driveMetroLaunch: re-entering a stage whose execution is already COMPLETE 
   await runStore.put(seeded!)
 
   // First pass: drives all the way through M1 for real (COMPLETE recorded).
-  await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: smallPlan, maxSteps: 2 })
+  await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: smallPlan, maxSteps: 2 })
   assert.equal(m1CallCount, 1)
 
   // Simulate the manual reset: back to M1, same executionId will be reused.
@@ -1090,7 +1090,7 @@ test('driveMetroLaunch: re-entering a stage whose execution is already COMPLETE 
   afterM1!.status = 'RUNNING'
   await runStore.put(afterM1!)
 
-  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }, projectId, { categoryPlan: smallPlan, maxSteps: 30 })
+  const run = await driveMetroLaunch({ runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }, projectId, { categoryPlan: smallPlan, maxSteps: 30 })
 
   assert.equal(m1CallCount, 1, 'the idempotent-COMPLETE execution must never be re-invoked — same executionId, same accepted result')
   // NEEDS_JERRY here is expected (the launch-readiness boundary always
@@ -1295,7 +1295,7 @@ test('driveMetroLaunch: a US metro (metroCountry "US") resolves geo enrichment a
       geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
       verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
-      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } },
     },
     projectId,
     { categoryPlan: smallPlan, maxSteps: 30 }
@@ -1332,7 +1332,7 @@ test('driveMetroLaunch: a non-US metro (Vienna, metroCountry "AT") resolves geo 
       geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
       verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
-      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } },
     },
     projectId,
     { categoryPlan: smallPlan, maxSteps: 30 }
@@ -1408,7 +1408,7 @@ test('driveMetroLaunch: a bundled discovery label certifies when the body quotes
   await seedForM7(runStore, projectId, candidate, item)
 
   const run = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } },
     projectId,
     { categoryPlan: PLAN, maxSteps: 5 }
   )
@@ -1450,7 +1450,7 @@ test('driveMetroLaunch: the SAME bundled item fails venue quoting when the body 
   await seedForM7(runStore, projectId, candidate, item)
 
   const run = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } },
     projectId,
     { categoryPlan: PLAN, maxSteps: 5 }
   )
@@ -1501,7 +1501,7 @@ test('driveMetroLaunch: 429/infra failures during critique are retried and do NO
       geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
       verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
-      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } },
       sleepImpl: async () => {}, // instant — the retry COUNT is under test, not real backoff timing
     },
     projectId,
@@ -1547,7 +1547,7 @@ test('driveMetroLaunch: three genuine bad editorial bodies still exhaust the con
   await seedForM7(runStore, projectId, candidate, item)
 
   const run = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), sleepImpl: async () => {} },
+    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } }, sleepImpl: async () => {} },
     projectId,
     { categoryPlan: PLAN, maxSteps: 5 }
   )
@@ -1598,7 +1598,7 @@ test('driveMetroLaunch: a single candidate that genuinely exhausts M6.5 write-ev
   await runStore.put(seeded!)
 
   const run = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    { runStore, execStore, executors: [executor], placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } },
     projectId,
     { categoryPlan: PLAN, maxSteps: 10 }
   )
@@ -1678,7 +1678,7 @@ test('driveMetroLaunch: TAG_ASSIGNMENT replaces finalTags on an already-certifie
   await seedForTagAssignment(runStore, projectId, candidate, cert)
 
   const run = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } },
     projectId,
     { categoryPlan: PLAN, maxSteps: 10 }
   )
@@ -1719,7 +1719,7 @@ test('driveMetroLaunch: TAG_ASSIGNMENT rejects a tag outside the supplied shortl
   await seedForTagAssignment(runStore, projectId, candidate, cert)
 
   const run = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } },
     projectId,
     { categoryPlan: PLAN, maxSteps: 10 }
   )
@@ -1752,7 +1752,7 @@ test('driveMetroLaunch: TAG_ASSIGNMENT exhausts its own bounded retry budget on 
   await seedForTagAssignment(runStore, projectId, candidate, cert)
 
   const run = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } },
     projectId,
     { categoryPlan: PLAN, maxSteps: 10 }
   )
@@ -1791,7 +1791,7 @@ test('driveMetroLaunch: TAG_ASSIGNMENT infra failures (429) are retried and do N
   await seedForTagAssignment(runStore, projectId, candidate, cert)
 
   const run = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), sleepImpl: async () => {} },
+    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } }, sleepImpl: async () => {} },
     projectId,
     { categoryPlan: PLAN, maxSteps: 10 }
   )
@@ -1836,7 +1836,7 @@ test('driveMetroLaunch: real provider usage is accumulated per stage, and infra 
   await seedForTagAssignment(runStore, projectId, candidate, cert)
 
   const run = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), sleepImpl: async () => {} },
+    { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } }, sleepImpl: async () => {} },
     projectId,
     { categoryPlan: PLAN, maxSteps: 10 }
   )
@@ -1876,7 +1876,7 @@ test('driveMetroLaunch: an idempotent-replay acceptance (already COMPLETE) never
 
   const projectId = 'vienna-usage-no-double-count'
   await seedForTagAssignment(runStore, projectId, candidate, cert)
-  const deps = { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) }
+  const deps = { runStore, execStore, executors: [executor], verifiedTagSnapshot: TEST_TAG_VOCAB, placesLookup: async () => ({ topResult: null, apiError: 'no network access in tests' }), geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(), verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } }
 
   await driveMetroLaunch(deps, projectId, { categoryPlan: PLAN, maxSteps: 10 })
 
@@ -1947,7 +1947,7 @@ test('driveMetroLaunch: M8.5 drops a TAG_CERTIFICATION_GATE failure only after a
       geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
       verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
-      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } },
     },
     projectId,
     { categoryPlan: PLAN, maxSteps: 15 }
@@ -1980,7 +1980,7 @@ test('driveMetroLaunch: M8.5 repairs a TAG_CERTIFICATION_GATE failure when the w
       geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
       verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
-      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } },
     },
     projectId,
     { categoryPlan: PLAN, maxSteps: 15 }
@@ -2030,7 +2030,7 @@ test('driveMetroLaunch: M8.5 drops a GEO_ENRICHMENT_GATE failure only when a REA
       geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
       verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
-      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } },
     },
     projectId,
     { categoryPlan: PLAN, maxSteps: 15 }
@@ -2066,7 +2066,7 @@ test('driveMetroLaunch: M8.5 drops a METADATA_COMPLETENESS_GATE failure when nei
       geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
       verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
-      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } },
     },
     projectId,
     { categoryPlan: PLAN, maxSteps: 15 }
@@ -2104,7 +2104,7 @@ test('driveMetroLaunch: M8.5 pruning is idempotent — a resumed run never re-sp
     geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
     verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
     checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
-    ensureProject: async () => ({ projectId: 'test-project', created: false }),
+    ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } },
   }
 
   const first = await driveMetroLaunch(deps, projectId, { categoryPlan: PLAN, maxSteps: 15 })
@@ -2153,7 +2153,7 @@ test('driveMetroLaunch: M9 Home-list SQL keeps the old fail-closed metro_areas c
   await seedForHomeListMirror(runStore, projectId, [candidate], { [cert.candidateName]: cert })
 
   const run = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor], verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }) },
+    { runStore, execStore, executors: [executor], verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } } },
     projectId,
     { categoryPlan: PLAN, maxSteps: 3 }
   )
@@ -2181,7 +2181,7 @@ test('driveMetroLaunch: M9 Home-list SQL creates metro_areas, reuses lists idemp
       executors: [executor],
       verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
-      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } },
       metroAreaFacts: { name: 'Vienna Metro', state: 'Vienna', timezone: 'Europe/Vienna' },
       officialListCreatorId: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
     },
@@ -2222,7 +2222,7 @@ test('driveMetroLaunch: the launch-readiness decisionPacket never frames the hum
       executors: [executor],
       verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
-      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } },
     },
     projectId,
     { categoryPlan: PLAN, maxSteps: 3 }
@@ -2287,7 +2287,7 @@ test('driveMetroLaunch: dbCategory is resolved and persisted from the real, norm
       geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
       verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
-      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } },
     },
     projectId,
     { categoryPlan: PLAN, maxSteps: 20 }
@@ -2359,7 +2359,7 @@ test('driveMetroLaunch: partnerPotential is advisory-only and never blocks certi
       geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
       verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
-      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } },
       writeStageArtifact: async (name, content) => {
         writtenArtifacts[name] = content
       },
@@ -2450,7 +2450,7 @@ test('driveMetroLaunch: the flagship Home list is capped at ~30 balanced items (
       geoEnrichmentCache: new InMemoryGeoEnrichmentCacheStore(),
       verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
-      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }), canonicalNeighborhoods: ['Innere Stadt'], emptyNeighborhoodFallbackCentroids: { 'Innere Stadt': { lat: 48.2, lng: 16.37 } },
     },
     projectId,
     { categoryPlan: PLAN, maxSteps: 20 }

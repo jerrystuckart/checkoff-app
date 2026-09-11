@@ -197,6 +197,12 @@ async function driveToBoundary(executor: TestExecutor, checkImageReadiness: (pla
       verifyHomeListRows,
       checkImageReadiness,
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      // Chief Phase 2AL (2026-09-11): NEIGHBORHOOD_COMPLETENESS_GATE now
+      // requires an explicit, frozen canonical neighborhood model — it no
+      // longer silently falls back to whatever M1 happened to discover.
+      // This dry run's own scripted M1 response only ever produces
+      // 'Innere Stadt' (see buildExecutor()'s M1_GEOGRAPHY_MAP script).
+      canonicalNeighborhoods: ['Innere Stadt'],
       // No real DB in this dry run — a fake standing in for agent.projects bootstrap, exactly like every other real side effect this driver injects.
       ensureProject: async () => ({ projectId: 'dry-run-project-id', created: false }),
     },
@@ -310,6 +316,12 @@ test('Vienna DRY RUN: once the missing images are resolved, METRO_LAUNCH_CERTIFI
       verifyHomeListRows,
       checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: true })),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      // Chief Phase 2AL (2026-09-11): NEIGHBORHOOD_COMPLETENESS_GATE now
+      // requires an explicit, frozen canonical neighborhood model — it no
+      // longer silently falls back to whatever M1 happened to discover.
+      // This dry run's own scripted M1 response only ever produces
+      // 'Innere Stadt' (see buildExecutor()'s M1_GEOGRAPHY_MAP script).
+      canonicalNeighborhoods: ['Innere Stadt'],
       ensureProject: async () => ({ projectId: 'dry-run-project-id', created: false }),
     },
     PROJECT_ID,
@@ -347,7 +359,7 @@ test('Vienna DRY RUN: re-running M8_BATCH_CERTIFICATION (a resumed run re-evalua
   await runStore.put(seeded!)
 
   const firstPass = await driveMetroLaunch(
-    { runStore, execStore, executors: [executor], verifiedTagSnapshot: SNAPSHOT, placesLookup, geoEnrichmentCache, verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }) },
+    { runStore, execStore, executors: [executor], verifiedTagSnapshot: SNAPSHOT, placesLookup, geoEnrichmentCache, verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), canonicalNeighborhoods: ['Innere Stadt'] },
     PROJECT_ID,
     { categoryPlan: PLAN }
   )
@@ -364,7 +376,7 @@ test('Vienna DRY RUN: re-running M8_BATCH_CERTIFICATION (a resumed run re-evalua
   await runStore.put(stored!)
 
   const secondPass = await driveMetroLaunch(
-    { runStore, execStore: new InMemoryExecutionStore(), executors: [executor], verifiedTagSnapshot: SNAPSHOT, placesLookup, geoEnrichmentCache, verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }) },
+    { runStore, execStore: new InMemoryExecutionStore(), executors: [executor], verifiedTagSnapshot: SNAPSHOT, placesLookup, geoEnrichmentCache, verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }), checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: false })), checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }), canonicalNeighborhoods: ['Innere Stadt'] },
     PROJECT_ID,
     { categoryPlan: PLAN }
   )
@@ -407,6 +419,12 @@ test('Vienna DRY RUN: BUSINESS_ACTIVATION_KIT_GATE is invoked by the real driver
       verifyHomeListRows,
       checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: true })),
       checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      // Chief Phase 2AL (2026-09-11): NEIGHBORHOOD_COMPLETENESS_GATE now
+      // requires an explicit, frozen canonical neighborhood model — it no
+      // longer silently falls back to whatever M1 happened to discover.
+      // This dry run's own scripted M1 response only ever produces
+      // 'Innere Stadt' (see buildExecutor()'s M1_GEOGRAPHY_MAP script).
+      canonicalNeighborhoods: ['Innere Stadt'],
       // The regression: outreach copy wrongly references a metro-specific kit instead of the universal URL.
       outreachCopy: 'Download your free checkoff-featured-kit-vienna.zip for table stands and signage.',
     },

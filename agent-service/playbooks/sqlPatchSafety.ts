@@ -28,6 +28,28 @@ export interface SqlPatchSafetyResult {
   issues: SqlPatchSafetyIssue[]
 }
 
+/**
+ * Chief Phase 2AL (2026-09-11, found auto-wiring finalReadyToApplyAudit
+ * into the real driver): every one of this module's checks below is a
+ * pure text-pattern match, which means a SQL comment EXPLAINING one of
+ * these rules (e.g. this very file's own generated header comment, "no
+ * cross-statement TEMP-table dependence, no MIN(uuid)") was a guaranteed
+ * false positive the moment any real generator's SQL got run through
+ * `checkSqlPatchSafety()` for real — found only once this pass was
+ * actually auto-invoked against real driver output, not before. Every
+ * pattern check strips `--`-to-end-of-line comments first so documenting
+ * a rule in the SQL's own header never trips the rule it's documenting.
+ */
+function stripSqlLineComments(sql: string): string {
+  return sql
+    .split('\n')
+    .map((line) => {
+      const idx = line.indexOf('--')
+      return idx === -1 ? line : line.slice(0, idx)
+    })
+    .join('\n')
+}
+
 const TEMP_TABLE_PATTERN = /\bCREATE\s+(?:TEMP|TEMPORARY)\s+TABLE\b/i
 const MIN_UUID_PATTERN = /\bMIN\s*\(\s*[a-zA-Z_][a-zA-Z0-9_.]*\s*\)/g
 // A conservative allow-list of column-name fragments MIN() is legitimately used on (dates, numbers, ordering) — anything NOT matching one of these, when the surrounding query context also mentions "uuid" or "_id", is flagged for a human to confirm it isn't a uuid column.
@@ -44,7 +66,7 @@ const LIKELY_UUID_COLUMN_PATTERN = /\b(id|uuid|item_id|tag_id|category_id|neighb
  * which is exactly the atomic, self-contained pattern this module wants.
  */
 export function checkNoTempTableDependency(sql: string): SqlPatchSafetyIssue | null {
-  const match = sql.match(TEMP_TABLE_PATTERN)
+  const match = stripSqlLineComments(sql).match(TEMP_TABLE_PATTERN)
   if (!match) return null
   return {
     rule: 'NO_TEMP_TABLE',
@@ -62,7 +84,7 @@ export function checkNoTempTableDependency(sql: string): SqlPatchSafetyIssue | n
  */
 export function checkNoMinUuid(sql: string): SqlPatchSafetyIssue[] {
   const issues: SqlPatchSafetyIssue[] = []
-  const matches = sql.matchAll(MIN_UUID_PATTERN)
+  const matches = stripSqlLineComments(sql).matchAll(MIN_UUID_PATTERN)
   for (const m of matches) {
     const column = m[0].replace(/^MIN\s*\(\s*/i, '').replace(/\s*\)$/, '')
     if (LIKELY_UUID_COLUMN_PATTERN.test(column)) {
