@@ -71,6 +71,7 @@ import type { SpecialistResultEnvelope } from './specialists/types'
 import type { PlaybookRunStore, PlaybookRunRecord } from './specialists/playbookRun'
 import { playbookRunId, pauseRun, resumeRun, unblockRun, reopenStage, recordJerryDecision, getOrCreateRun } from './specialists/playbookRun'
 import { DbPlaybookRunStore } from './specialists/dbPlaybookRunStore'
+import { applyM0Flag } from './specialists/m0Flag'
 import { driveMetroLaunch, ensureMetroProject, type MetroM0Decisions } from './specialists/metroLaunchDriver'
 import { driveDestinationHub } from './specialists/destinationHubDriver'
 import { RemoteAiExecutor } from './specialists/remoteAiExecutor'
@@ -220,25 +221,7 @@ async function main() {
       const m0FlagIdx = flags.indexOf('--m0')
       if (m0FlagIdx >= 0) {
         const m0: MetroM0Decisions = readJson(flags[m0FlagIdx + 1])
-        const runId = playbookRunId(playbookKey, projectId)
-        const existing = await runStore.get(runId)
-        if (existing && existing.status === 'NEEDS_JERRY') {
-          await recordJerryDecision(runStore, runId, { m0Decisions: m0 })
-        } else if (!existing) {
-          // Seed the M0 decisions before the run's very first step —
-          // getOrCreateRun (also called inside driveMetroLaunch) is idempotent.
-          const seeded = await getOrCreateRun(runStore, playbookKey, projectId, 'M0_METRO_DEFINITION')
-          seeded.state = { ...seeded.state, m0Decisions: m0 }
-          // DbPlaybookRunStore's recordPlaybookStage is idempotency-keyed on
-          // (status, currentStage, loopIteration, totalRetries, updatedAt) —
-          // getOrCreateRun's own put() and this one would otherwise share
-          // the exact same updatedAt (and thus idempotency key), so this
-          // second put (the one actually carrying m0Decisions) would be
-          // silently deduped as a no-op replay of the first, empty-state
-          // snapshot. Bumping updatedAt makes it a distinct snapshot.
-          seeded.updatedAt = new Date().toISOString()
-          await runStore.put(seeded)
-        }
+        await applyM0Flag(runStore, playbookKey, projectId, m0)
       }
       // --metro-area-facts: the real, known metro_areas identity (name/
       // state/timezone) for THIS metro — never guessed inside the driver
