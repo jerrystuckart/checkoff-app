@@ -324,3 +324,105 @@ test('evaluateMetroFinisherReportGate FAILs closed when the raw report is struct
   assert.equal(gate.verdict, 'FAIL')
   assert.equal(gate.key, 'METRO_FINISHER_REPORT_GATE')
 })
+
+// ---------------------------------------------------------------------------
+// Chief Phase 3D — venueName nullability regression (Munich, 2026-09-11).
+// A real METRO_FINISHER_DEEP_RESEARCH report was previously rejected in its
+// ENTIRETY because a handful of legitimate non-venue-specific findings (a
+// pub crawl, a seasonal civic phenomenon, a plural "iconic bars" themed-list
+// category) had venueName: null, which validateCandidateFinding used to
+// treat as a hard failure. venueName is now nullable, exactly like
+// neighborhoodName already was — these tests pin that down.
+// ---------------------------------------------------------------------------
+
+test('a venue-specific CandidateFinding with a string venueName validates successfully', () => {
+  const report = goodReport({ enrichmentCandidates: [goodCandidate({ venueName: 'Forno Firenze' })] })
+  const validation = validateMetroFinisherReport(report)
+  assert.equal(validation.ok, true, JSON.stringify(validation.errors))
+  assert.equal(validation.report?.enrichmentCandidates[0].venueName, 'Forno Firenze')
+})
+
+test('a legitimate non-venue-specific research finding (venueName: null) validates successfully and is not rejected', () => {
+  const report = goodReport({
+    mustHaveMissingExperiences: [
+      goodCandidate({
+        candidateName: 'Off-Wiesn — the anti-Oktoberfest counter-programming season',
+        venueName: null,
+        category: 'Rituals & traditions',
+        neighborhoodName: null,
+        rationale: 'A real, city-defining seasonal civic phenomenon with no single venue — it happens across many bars and beer gardens at once.',
+        distinctivenessNote: 'A citywide seasonal behavior, not a venue-mention.',
+      }),
+    ],
+  })
+  const validation = validateMetroFinisherReport(report)
+  assert.equal(validation.ok, true, JSON.stringify(validation.errors))
+  assert.equal(validation.report?.mustHaveMissingExperiences[0].venueName, null)
+})
+
+test('a multi-venue themed-list concept with venueName: null validates successfully as part of a full report', () => {
+  const report = goodReport({
+    themedListOpportunities: [
+      {
+        title: 'Boazn-Hopping: A Munich Pub Crawl',
+        rationale: 'A real, named local tradition spanning many small Boazn (neighborhood pubs), not any single venue.',
+        existingItemIds: ['item-1'],
+        missingExperiences: [
+          goodCandidate({
+            candidateName: 'Boazn-Hopping crawl through Haidhausen',
+            venueName: null,
+            category: 'Nightlife',
+            neighborhoodName: 'Haidhausen',
+            rationale: 'A multi-venue pub-crawl concept, deliberately not tied to one bar.',
+            distinctivenessNote: 'The crawl itself is the experience, not any one Boazn.',
+          }),
+        ],
+        strengthScore: 70,
+        recommendation: 'ENRICH_THEN_CREATE',
+      },
+    ],
+  })
+  const validation = validateMetroFinisherReport(report)
+  assert.equal(validation.ok, true, JSON.stringify(validation.errors))
+  assert.equal(validation.report?.themedListOpportunities[0].missingExperiences[0].venueName, null)
+})
+
+test('an invalid, genuinely-malformed field elsewhere (a bogus duplicate-concern verdict) still fails validation on its own terms, without corrupting or flagging any unrelated legitimate null-venueName finding', () => {
+  const report = goodReport({
+    mustHaveMissingExperiences: [goodCandidate({ candidateName: 'Off-Wiesn', venueName: null })],
+    duplicateOrIdentityConcerns: [{ venueName: 'Some Venue', placeId: null, itemIds: ['item-x'], verdict: 'BOGUS_VERDICT' as unknown as 'DISTINCT', rationale: 'r' }],
+  })
+  const validation = validateMetroFinisherReport(report)
+  assert.equal(validation.ok, false)
+  assert.ok(validation.errors.some((e) => e.includes('verdict')))
+  // The unrelated, legitimate null-venueName finding must never itself be named as an error.
+  assert.ok(!validation.errors.some((e) => e.includes('mustHaveMissingExperiences[0]') && e.includes('venueName')))
+})
+
+test('a report where SEVERAL findings legitimately have venueName: null does not get its entire otherwise-valid report discarded (the actual Munich bug)', () => {
+  const report = goodReport({
+    mustHaveMissingExperiences: [
+      goodCandidate({ candidateName: 'Off-Wiesn', venueName: null }),
+      goodCandidate({ candidateName: 'Boazn-Hopping pub crawl', venueName: null }),
+    ],
+    enrichmentCandidates: [
+      goodCandidate({ candidateName: 'A maker-boutique crawl through Glockenbachviertel', venueName: null }),
+      goodCandidate({ candidateName: 'LGBTQ+ Iconic Bars (as a category)', venueName: null }),
+    ],
+    themedListOpportunities: [
+      {
+        title: 'LGBTQ+ Iconic Bars',
+        rationale: 'A real themed-list research concept, not one venue.',
+        existingItemIds: [],
+        missingExperiences: [goodCandidate({ candidateName: 'A missing LGBTQ+ nightlife experience', venueName: null })],
+        strengthScore: 60,
+        recommendation: 'ENRICH_THEN_CREATE',
+      },
+    ],
+  })
+  const validation = validateMetroFinisherReport(report)
+  assert.equal(validation.ok, true, JSON.stringify(validation.errors))
+  assert.equal(validation.report?.mustHaveMissingExperiences.length, 2)
+  assert.equal(validation.report?.enrichmentCandidates.length, 2)
+  assert.equal(validation.report?.themedListOpportunities.length, 1)
+})

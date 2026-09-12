@@ -16,8 +16,27 @@ import type { CandidateFinding, DuplicateConcern, MetroFinisherReport, Neighborh
 
 export interface EnrichmentPacket {
   kind: 'ENRICHMENT_PACKET'
-  /** Every enrichment lead the report surfaced, still just a candidate — none of these are certified items. */
+  /** Every enrichment lead the report surfaced, still just a candidate — none of these are certified items. Superset of venueResolvedCandidates + researchOnlyCandidates. */
   candidates: CandidateFinding[]
+  /**
+   * Subset of `candidates` with a real, named venue (`venueName` is a
+   * non-empty string). These are the only candidates that may ever be
+   * carried forward toward certifyLateAddItem()/LateAddItemInput, which
+   * still requires a real, resolvable venue — this partition is what a
+   * caller should check before ever building a LateAddItemInput from a
+   * Finisher candidate.
+   */
+  venueResolvedCandidates: (CandidateFinding & { venueName: string })[]
+  /**
+   * Subset of `candidates` that are legitimate research findings with no
+   * single resolvable venue (a civic/seasonal phenomenon, a multi-venue
+   * crawl, a neighborhood ritual, a themed-list research concept, etc.).
+   * Real information worth surfacing to Jerry/downstream research, but
+   * MUST NOT be passed toward certifyLateAddItem() as-is — a human or a
+   * later research pass would need to first identify a real venue, if one
+   * even exists, before any of these could become a LateAddItemInput.
+   */
+  researchOnlyCandidates: CandidateFinding[]
 }
 
 export type NeighborhoodWorkItem =
@@ -78,7 +97,10 @@ export interface MetroFinisherWorkPackets {
 // ---------------------------------------------------------------------------
 
 function buildEnrichmentPacket(report: MetroFinisherReport): EnrichmentPacket {
-  return { kind: 'ENRICHMENT_PACKET', candidates: [...report.mustHaveMissingExperiences, ...report.enrichmentCandidates] }
+  const candidates = [...report.mustHaveMissingExperiences, ...report.enrichmentCandidates]
+  const venueResolvedCandidates = candidates.filter((c): c is CandidateFinding & { venueName: string } => c.venueName !== null)
+  const researchOnlyCandidates = candidates.filter((c) => c.venueName === null)
+  return { kind: 'ENRICHMENT_PACKET', candidates, venueResolvedCandidates, researchOnlyCandidates }
 }
 
 function splitToWorkItem(split: NeighborhoodSplitProposal): NeighborhoodWorkItem {

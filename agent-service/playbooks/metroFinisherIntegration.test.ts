@@ -2,6 +2,35 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { buildMetroFinisherWorkPackets } from './metroFinisherIntegration'
 import { validateMetroFinisherReport, type MetroFinisherReport, type CandidateFinding } from './metroFinisherReport'
+import { certifyLateAddItem, type LateAddItemInput } from './lateAddItemCertification'
+import type { PlacesCompletenessItemInput } from './placesCompletenessGate'
+
+function goodPlaces(overrides: Partial<PlacesCompletenessItemInput> = {}): PlacesCompletenessItemInput {
+  return {
+    candidateName: 'Forno Firenze schiacciata',
+    classification: 'EXACT',
+    googlePlaceId: 'place-forno-firenze',
+    formattedAddress: 'Via del Fake 1, 50125 Firenze FI, Italy',
+    mapsQuery: 'Forno Firenze, Via del Fake 1, Firenze',
+    lat: 43.766,
+    lng: 11.245,
+    ...overrides,
+  }
+}
+
+function goodLateAddInput(overrides: Partial<LateAddItemInput> = {}): LateAddItemInput {
+  return {
+    candidateName: 'Forno Firenze schiacciata',
+    venueName: 'Forno Firenze',
+    body: "Try the 'schiacciata' sandwich at 'Forno Firenze'.",
+    dbCategory: 'Food & drink',
+    tags: ['bakery', 'sandwich', 'local favorite', 'historic', 'casual', 'walkable'],
+    neighborhoodName: 'Santo Spirito',
+    places: goodPlaces(),
+    existingProductionItems: [],
+    ...overrides,
+  }
+}
 
 function goodCandidate(overrides: Partial<CandidateFinding> = {}): CandidateFinding {
   return {
@@ -228,6 +257,57 @@ test('the enrichment packet combines mustHaveMissingExperiences and enrichmentCa
     packets.enrichment.candidates.map((c) => c.candidateName),
     ['A', 'B']
   )
+})
+
+// ---------------------------------------------------------------------------
+// Chief Phase 3D — venueName nullability regression (Munich, 2026-09-11).
+// A null-venueName research finding (civic phenomenon, pub crawl, themed-list
+// concept, etc.) is real information worth surfacing, but must never be
+// mistaken for a venue-resolved candidate ready for certifyLateAddItem() —
+// that function's LateAddItemInput.venueName is still a required string.
+// ---------------------------------------------------------------------------
+
+test('the enrichment packet partitions candidates into venueResolvedCandidates vs researchOnlyCandidates by venueName nullability', () => {
+  const report = baseReport({
+    mustHaveMissingExperiences: [goodCandidate({ candidateName: 'Off-Wiesn', venueName: null })],
+    enrichmentCandidates: [goodCandidate({ candidateName: 'Forno pick', venueName: 'Forno Firenze' })],
+  })
+  const packets = buildMetroFinisherWorkPackets(report)
+  assert.equal(packets.enrichment.candidates.length, 2)
+  assert.deepEqual(
+    packets.enrichment.venueResolvedCandidates.map((c) => c.candidateName),
+    ['Forno pick']
+  )
+  assert.deepEqual(
+    packets.enrichment.researchOnlyCandidates.map((c) => c.candidateName),
+    ['Off-Wiesn']
+  )
+})
+
+test('a null-venueName research candidate cannot reach certifyLateAddItem: only venueResolvedCandidates (never researchOnlyCandidates) can be turned into a LateAddItemInput', () => {
+  const report = baseReport({
+    enrichmentCandidates: [goodCandidate({ candidateName: 'Off-Wiesn — seasonal counter-programming', venueName: null }), goodCandidate({ candidateName: 'Forno pick', venueName: 'Forno Firenze' })],
+  })
+  const packets = buildMetroFinisherWorkPackets(report)
+
+  // The only structurally sound path toward certifyLateAddItem is building
+  // a LateAddItemInput from venueResolvedCandidates, whose venueName type is
+  // narrowed to `string` (not `string | null`) — this compiles and runs.
+  const lateAddInputs: LateAddItemInput[] = packets.enrichment.venueResolvedCandidates.map((c) =>
+    goodLateAddInput({ candidateName: c.candidateName, venueName: c.venueName, neighborhoodName: c.neighborhoodName })
+  )
+  assert.equal(lateAddInputs.length, 1)
+  assert.equal(lateAddInputs[0].venueName, 'Forno Firenze')
+  const results = lateAddInputs.map((input) => certifyLateAddItem(input))
+  assert.equal(results.length, 1)
+  assert.ok(results[0].verdict === 'CERTIFIED' || results[0].verdict === 'REJECTED')
+
+  // researchOnlyCandidates has no venueName at all (null) — there is no
+  // value to hand to LateAddItemInput.venueName (a required string), so this
+  // candidate is structurally excluded from ever reaching certifyLateAddItem
+  // without a human/researcher first identifying a real venue.
+  assert.equal(packets.enrichment.researchOnlyCandidates.length, 1)
+  assert.equal(packets.enrichment.researchOnlyCandidates[0].venueName, null)
 })
 
 // ---------------------------------------------------------------------------

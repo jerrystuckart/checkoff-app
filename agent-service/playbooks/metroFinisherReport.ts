@@ -44,7 +44,19 @@ export interface ResearchFinding {
 
 export interface CandidateFinding {
   candidateName: string
-  venueName: string
+  /**
+   * Null for a legitimate non-venue-specific research finding: a civic/
+   * seasonal phenomenon (e.g. "Off-Wiesn"), a multi-venue concept (e.g. a
+   * pub crawl), a neighborhood behavior/ritual, a crawl/tradition/
+   * subculture, or a themed-list research concept (e.g. "LGBTQ+ Iconic
+   * Bars" as a category, not one venue). This nullability is for RESEARCH
+   * FINDINGS ONLY — certifyLateAddItem()/LateAddItemInput still require a
+   * real, resolvable venue and must never receive a null-venueName
+   * candidate as if it were venue-resolved (see metroFinisherIntegration.ts,
+   * which partitions candidates into venueResolvedCandidates vs
+   * researchOnlyCandidates for exactly this reason).
+   */
+  venueName: string | null
   category: string
   neighborhoodName: string | null
   rationale: string
@@ -204,14 +216,19 @@ function validateCandidateFinding(v: unknown, path: string, errors: string[]): C
   }
   const o = v as Record<string, unknown>
   if (!isNonEmptyString(o.candidateName)) errors.push(`${path}.candidateName: required non-empty string`)
-  if (!isNonEmptyString(o.venueName)) errors.push(`${path}.venueName: required non-empty string`)
+  // Nullable: a legitimate non-venue-specific research finding (civic/
+  // seasonal phenomenon, multi-venue crawl, neighborhood ritual, themed-list
+  // research concept, etc.) has no single resolvable venue. Still must be
+  // present as a key with either a non-empty string or exactly null — never
+  // missing, empty-string, or any other falsy value.
+  if (o.venueName !== null && !isNonEmptyString(o.venueName)) errors.push(`${path}.venueName: must be a non-empty string or null`)
   if (!isNonEmptyString(o.category)) errors.push(`${path}.category: required non-empty string`)
   if (o.neighborhoodName !== null && !isNonEmptyString(o.neighborhoodName)) errors.push(`${path}.neighborhoodName: must be a non-empty string or null`)
   if (!isNonEmptyString(o.rationale)) errors.push(`${path}.rationale: required non-empty string`)
   if (!isNonEmptyString(o.distinctivenessNote)) errors.push(`${path}.distinctivenessNote: required non-empty string`)
   return {
     candidateName: isNonEmptyString(o.candidateName) ? o.candidateName : '',
-    venueName: isNonEmptyString(o.venueName) ? o.venueName : '',
+    venueName: isNonEmptyString(o.venueName) ? o.venueName : null,
     category: isNonEmptyString(o.category) ? o.category : '',
     neighborhoodName: isNonEmptyString(o.neighborhoodName) ? o.neighborhoodName : null,
     rationale: isNonEmptyString(o.rationale) ? o.rationale : '',

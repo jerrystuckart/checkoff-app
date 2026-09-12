@@ -470,8 +470,8 @@ const METRO_FINISHER_REPORT_SHAPE = `evidence.report must be exactly a MetroFini
     "unusualOrHidden": [{ "title": "...", "description": "...", "sourceNote": "..." }],
     "sportsAndCivicCulture": [{ "title": "...", "description": "...", "sourceNote": "..." }]
   },
-  "mustHaveMissingExperiences": [{ "candidateName": "...", "venueName": "...", "category": "...", "neighborhoodName": "..." | null, "rationale": "...", "distinctivenessNote": "..." }],
-  "enrichmentCandidates": [{ "candidateName": "...", "venueName": "...", "category": "...", "neighborhoodName": "..." | null, "rationale": "...", "distinctivenessNote": "..." }],
+  "mustHaveMissingExperiences": [{ "candidateName": "...", "venueName": "..." | null /* null ONLY for a legitimate non-venue-specific finding: a civic/seasonal phenomenon, a multi-venue crawl, a neighborhood ritual/tradition, or a themed-list research concept — never null merely because you didn't look up a venue */, "category": "...", "neighborhoodName": "..." | null, "rationale": "...", "distinctivenessNote": "..." }],
+  "enrichmentCandidates": [{ "candidateName": "...", "venueName": "..." | null /* same null rule as above */, "category": "...", "neighborhoodName": "..." | null, "rationale": "...", "distinctivenessNote": "..." }],
   "neighborhoodRecommendations": {
     "keep": ["<neighborhood name>", ...],
     "split": [{ "parentNeighborhood": "...", "proposedChildren": ["..."], "rationale": "...", "affectedExistingItemIds": ["<must be non-empty>"] }],
