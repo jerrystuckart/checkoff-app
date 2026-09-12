@@ -75,7 +75,15 @@ function envelopeInstructions(request: SpecialistExecutionRequest): string {
  */
 export function researchExecutionTypeFor(request: SpecialistExecutionRequest): ResearchExecutionType {
   const raw = request.inputs.executionType
-  if (raw === 'BROAD_DISCOVERY' || raw === 'CATEGORY_GAP' || raw === 'GEOGRAPHIC_GAP' || raw === 'VERIFICATION' || raw === 'REPLACEMENT') return raw
+  if (
+    raw === 'BROAD_DISCOVERY' ||
+    raw === 'CATEGORY_GAP' ||
+    raw === 'GEOGRAPHIC_GAP' ||
+    raw === 'VERIFICATION' ||
+    raw === 'REPLACEMENT' ||
+    raw === 'TARGETED_DEEP_DIVE'
+  )
+    return raw
   return 'BROAD_DISCOVERY'
 }
 
@@ -105,6 +113,15 @@ const RESEARCH_EXECUTION_TYPE_INSTRUCTIONS: Record<ResearchExecutionType, string
   REPLACEMENT:
     'REPLACEMENT RESEARCH: the objective names a specific deficit created by a verification removal. Find replacement ' +
     'candidates for exactly that deficit — same discipline as BROAD_DISCOVERY otherwise.',
+  TARGETED_DEEP_DIVE:
+    'TARGETED DEEP DIVE: this is focused, single-candidate factual research for ONE named candidate/venue given to you in ' +
+    'Context below (candidateName, venueName, category, rationale, distinctivenessNote) — never a discovery pass, never a ' +
+    'list of alternative candidates. Confirm concrete, checkable facts that support (or refute) the claimed distinctive ' +
+    'experience: current operating status, the specific experience/dish/ritual/activity described, and its accuracy. This ' +
+    'execution type does NOT use evidence.candidates[] — instead return a single evidence.claimSupported string that states ' +
+    'plainly what your sources actually support for this one candidate (or that they do not support it, if research turns ' +
+    'up nothing usable). Every claim must trace to a real source; never fabricate support for a candidate your research ' +
+    'could not confirm.',
 }
 
 export function buildResearchVerifierPrompt(request: SpecialistExecutionRequest, now: string = new Date().toISOString()): { systemPrompt: string; userPrompt: string } {
@@ -121,10 +138,14 @@ export function buildResearchVerifierPrompt(request: SpecialistExecutionRequest,
   const systemPrompt = [
     methodologyPreamble(request),
     runtimeDateContextLine(now),
-    'You have live web search available and must use it — do not rely on training-data memory for what currently exists, is open, ' +
-      'or is located where. Every evidence.candidates[] entry must include: name, category, neighborhood, source (a real URL or ' +
-      'named source), claimSupported (what that source actually supports), freshnessDate (if the source states one, else null), ' +
-      'verificationConfidence (LOW/MEDIUM/HIGH), and needsVerification (boolean).',
+    executionType === 'TARGETED_DEEP_DIVE'
+      ? 'You have live web search available and must use it — do not rely on training-data memory for what currently exists, is ' +
+        'open, or is located where. This execution researches exactly ONE named candidate (see Context below) and returns a ' +
+        'single evidence.claimSupported string, never an evidence.candidates[] array.'
+      : 'You have live web search available and must use it — do not rely on training-data memory for what currently exists, is open, ' +
+        'or is located where. Every evidence.candidates[] entry must include: name, category, neighborhood, source (a real URL or ' +
+        'named source), claimSupported (what that source actually supports), freshnessDate (if the source states one, else null), ' +
+        'verificationConfidence (LOW/MEDIUM/HIGH), and needsVerification (boolean).',
     ...(wantsNeighborhoods
       ? [
           'This execution ALSO requires evidence.neighborhoods[] — a SEPARATE array describing the metro\'s own geography ' +

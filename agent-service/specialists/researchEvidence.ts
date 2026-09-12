@@ -6,7 +6,7 @@
 // certainty but must say so explicitly rather than implying it's already
 // verified.
 
-export type ResearchExecutionType = 'BROAD_DISCOVERY' | 'CATEGORY_GAP' | 'GEOGRAPHIC_GAP' | 'VERIFICATION' | 'REPLACEMENT'
+export type ResearchExecutionType = 'BROAD_DISCOVERY' | 'CATEGORY_GAP' | 'GEOGRAPHIC_GAP' | 'VERIFICATION' | 'REPLACEMENT' | 'TARGETED_DEEP_DIVE'
 
 export type VerificationConfidence = 'LOW' | 'MEDIUM' | 'HIGH'
 

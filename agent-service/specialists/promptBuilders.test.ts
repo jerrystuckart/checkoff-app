@@ -108,6 +108,45 @@ test('buildResearchVerifierPrompt: a candidates-only request (no "neighborhoods"
   assert.equal(systemPrompt.includes('core_urban'), false)
 })
 
+// ---------------------------------------------------------------------------
+// Regression (Munich, "Schmalznudeln at Café Frischhut", 2026-09-12):
+// researchExecutionTypeFor silently fell back TARGETED_DEEP_DIVE requests
+// to BROAD_DISCOVERY, so the prompt demanded an evidence.candidates[]
+// array shape even though executeOneFinisherLateAddCandidate declares
+// requiredEvidenceKeys: ['claimSupported'] and only ever reads a single
+// evidence.claimSupported value — live output came back array-shaped
+// because the model was never told the actual single-candidate contract.
+// ---------------------------------------------------------------------------
+
+test('researchExecutionTypeFor: recognizes TARGETED_DEEP_DIVE instead of silently falling back to BROAD_DISCOVERY', () => {
+  const deepDiveReq: SpecialistExecutionRequest = {
+    ...req(),
+    specialist: 'research_verifier',
+    methodologyId: 'metro_launch',
+    methodologyVersion: 'v1',
+    stage: 'METRO_FINISHER_PACKET_EXECUTION',
+    requiredEvidenceKeys: ['claimSupported'],
+    inputs: { executionType: 'TARGETED_DEEP_DIVE', candidateName: 'Schmalznudeln', venueName: 'Café Frischhut', category: 'Food & drink' },
+  }
+  assert.equal(researchExecutionTypeFor(deepDiveReq), 'TARGETED_DEEP_DIVE')
+})
+
+test('buildResearchVerifierPrompt: TARGETED_DEEP_DIVE gets the single-candidate claimSupported contract, never the evidence.candidates[] array shape', () => {
+  const deepDiveReq: SpecialistExecutionRequest = {
+    ...req(),
+    specialist: 'research_verifier',
+    methodologyId: 'metro_launch',
+    methodologyVersion: 'v1',
+    stage: 'METRO_FINISHER_PACKET_EXECUTION',
+    requiredEvidenceKeys: ['claimSupported'],
+    inputs: { executionType: 'TARGETED_DEEP_DIVE', candidateName: 'Schmalznudeln', venueName: 'Café Frischhut', category: 'Food & drink' },
+  }
+  const { systemPrompt } = buildResearchVerifierPrompt(deepDiveReq)
+  assert.match(systemPrompt, /TARGETED DEEP DIVE/)
+  assert.match(systemPrompt, /single evidence\.claimSupported string/)
+  assert.doesNotMatch(systemPrompt, /evidence\.candidates\[\] entry must include/)
+})
+
 test('buildDestinationRelationshipManagerPrompt: embeds the destination_commercial methodology verbatim and requests only a draft object — never pricing/commitment', () => {
   const relReq: SpecialistExecutionRequest = { ...req(), specialist: 'destination_relationship_manager', methodologyId: 'destination_commercial', methodologyVersion: 'v1', stage: 'ASSETS_PREP', playbookKey: 'destination_relationship', authorityOperations: ['destination_relationship.draft_outreach'] }
   const { systemPrompt } = buildDestinationRelationshipManagerPrompt(relReq)
