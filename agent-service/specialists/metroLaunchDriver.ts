@@ -2200,7 +2200,16 @@ const FLAGSHIP_LIST_TARGET_SIZE = 30
 const THEMED_LIST_MIN_ITEMS = 8
 
 function buildHomeListPlan(state: MetroDriverState, flagshipListTitle: string): HomeListPlanEntry[] {
-  const certified = Object.values(state.itemCertifications ?? {}).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
+  // 2026-09-12 Munich duplicate-drop bug fix (see getDuplicateDroppedCandidateNames's
+  // own doc): this is the THIRD independent "certified" recomputation from
+  // state.itemCertifications (alongside stepM9HomeListMirror's certifiedForRecheck
+  // and stepM10FinalCertification's certified) — without this same filter, a
+  // DROP_DUPLICATE-resolved item still appeared in the Home list PLAN (e.g. the
+  // flagship list's itemCandidateNames) even though M9's actual SQL generation
+  // correctly excluded it from public.items, producing a PRE_APPLY mismatch
+  // ("plan intends N, SQL links N-1") instead of a clean, consistent package.
+  const duplicateDroppedForPlan = getDuplicateDroppedCandidateNames(state)
+  const certified = Object.values(state.itemCertifications ?? {}).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null && !duplicateDroppedForPlan.has(r.candidateName))
   const names = certified.map((r) => r.candidateName)
   const themeable: ThemeableItem[] = certified.filter((r) => r.dbCategory).map((r) => ({ candidateName: r.candidateName, venueName: r.venueName, finalBody: r.finalBody, finalTags: r.finalTags, dbCategory: r.dbCategory!, attempts: r.attempts }))
 

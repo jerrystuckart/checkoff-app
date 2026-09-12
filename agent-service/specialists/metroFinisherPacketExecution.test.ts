@@ -691,4 +691,15 @@ test('METRO_FINISHER_PACKET_EXECUTION: a DROP_DUPLICATE verdict actually removes
 
   // The final catalog count (M10) must also exclude the dropped duplicate.
   assert.equal(state.finalCertificationReport?.summary.catalogCount, 1, 'catalogCount must not include a DROP_DUPLICATE-resolved item')
+
+  // The Home list PLAN (buildHomeListPlan — a THIRD, independent recomputation
+  // from itemCertifications) must also exclude the dropped duplicate. Before
+  // this fix, the plan still listed it even though M9's SQL never created a
+  // public.items row for it — producing a PRE_APPLY "plan intends N, SQL
+  // links N-1" package-validation failure instead of a clean, consistent one.
+  const planState = run.state as { homeListPlan?: { kind: string; itemCandidateNames: readonly string[] }[] }
+  const flagship = planState.homeListPlan?.find((p) => p.kind === 'PRIMARY_SEASONAL')
+  assert.ok(flagship, 'a primary seasonal list plan entry must exist')
+  assert.ok(!flagship!.itemCandidateNames.includes('Museum Villa Stuck'), 'the DROP_DUPLICATE item must never appear in the Home list plan')
+  assert.ok(flagship!.itemCandidateNames.includes('Villa Stuck (art gallery)'), 'the kept item must appear in the Home list plan')
 })
