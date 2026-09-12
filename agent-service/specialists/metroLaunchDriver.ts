@@ -3095,9 +3095,33 @@ async function executeOneFinisherLateAddCandidate(deps: MetroDriverDeps, run: Pl
   return { certification: { candidateName: candidate.candidateName, verdict: finalVerdict, reasons: allReasons.length > 0 ? allReasons : certification.reasons, reuseExistingItemId: certification.reuseExistingItemId }, driverRecord }
 }
 
+/**
+ * 2026-09-12 Munich duplicate-drop bug fix: METRO_FINISHER_PACKET_EXECUTION's
+ * resolveDuplicateCluster() (and any human DROP_DUPLICATE decision recorded
+ * the same way via reopen-stage) only ever recorded a DuplicateResolutionRecord
+ * with `verdict: 'DROP_DUPLICATE'` and `dropIds` — it never actually removed
+ * the dropped candidate(s) from `state.itemCertifications`. Both
+ * stepM9HomeListMirror (SQL generation) and stepM10FinalCertification (the
+ * catalogCount/gates) independently recompute their own "certified" list
+ * straight from `state.itemCertifications`, so a cluster the audit called
+ * "resolved" (DROP_DUPLICATE) still shipped BOTH duplicate items into the
+ * SQL patch and the final catalog count. This returns the real, current set
+ * of candidateNames a decisive DROP_DUPLICATE verdict says to exclude —
+ * called from both stages so neither ever re-diverges from the other.
+ */
+function getDuplicateDroppedCandidateNames(state: MetroDriverState): Set<string> {
+  const dropped = new Set<string>()
+  for (const resolution of state.metroFinisherPacketExecution?.duplicateResolutions ?? []) {
+    if (resolution.verdict !== 'DROP_DUPLICATE') continue
+    for (const id of resolution.dropIds ?? []) dropped.add(id)
+  }
+  return dropped
+}
+
 async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
   const state = readState(run)
-  const certifiedForRecheck = Object.values(state.itemCertifications ?? {}).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
+  const duplicateDropped = getDuplicateDroppedCandidateNames(state)
+  const certifiedForRecheck = Object.values(state.itemCertifications ?? {}).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null && !duplicateDropped.has(r.candidateName))
 
   // OUT_OF_MARKET_CONTAMINATION_GATE — SECOND, independent pass,
   // immediately before SQL generation (Chief Phase 2AH — Jerry's
@@ -3291,8 +3315,9 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
   const activationKitGate = evaluateActivationKitGate({ kitUrlLive: liveCheck.live, assetsAccessible: liveCheck.live, outreachCopy })
   state.activationKitCheckDetail = liveCheck.reason
 
-  const certified = Object.values(state.itemCertifications ?? {}).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
-  const rejected = Object.values(state.itemCertifications ?? {}).filter((r) => r.outcome !== 'ITEM_CERTIFIED')
+  const duplicateDroppedForM10 = getDuplicateDroppedCandidateNames(state)
+  const certified = Object.values(state.itemCertifications ?? {}).filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null && !duplicateDroppedForM10.has(r.candidateName))
+  const rejected = Object.values(state.itemCertifications ?? {}).filter((r) => r.outcome !== 'ITEM_CERTIFIED' && !duplicateDroppedForM10.has(r.candidateName))
 
   // CATALOG_GATE / LOCATION_GATE / PRESENTATION_GATE / EDITORIAL_GATE —
   // the metroCatalog.ts (Item Intake) staging gates, built from the same

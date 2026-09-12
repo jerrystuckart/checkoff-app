@@ -562,3 +562,133 @@ test('METRO_FINISHER_PACKET_EXECUTION: finalReadyToApplyAudit stays BLOCKED with
   assert.equal(audit.verdict, 'BLOCKED')
   assert.ok(audit.reasons.some((r) => /cluster/i.test(r)))
 })
+
+// ---------------------------------------------------------------------------
+// 9. 2026-09-12 Munich duplicate-drop bug fix: a DROP_DUPLICATE verdict must
+// actually remove the dropped candidate from the final SQL package AND the
+// M10 catalog count — recording the verdict alone (what the code did before
+// this fix) is not the same as actually dropping the item.
+// ---------------------------------------------------------------------------
+
+test('METRO_FINISHER_PACKET_EXECUTION: a DROP_DUPLICATE verdict actually removes the dropped item from the generated SQL and the final catalog count, never just records the verdict', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  const projectId = 'finisher-packet-drop-duplicate-applied-test'
+
+  const keptCert: DriverItemCertificationRecord = {
+    candidateName: 'Villa Stuck (art gallery)',
+    venueName: 'Villa Stuck',
+    attempts: 1,
+    outcome: 'ITEM_CERTIFIED',
+    finalBody: `View Jugendstil architecture inside 'Villa Stuck'.`,
+    finalTags: GOOD_TAGS,
+    supportingFact: 'Villa Stuck is a real Jugendstil building.',
+    verifiedAt: '2026-09-11T00:00:00.000Z',
+    rejectionReasons: [],
+    dbCategory: 'Food & drink',
+  }
+  const droppedCert: DriverItemCertificationRecord = {
+    candidateName: 'Museum Villa Stuck',
+    venueName: 'Villa Stuck',
+    attempts: 1,
+    outcome: 'ITEM_CERTIFIED',
+    finalBody: `Tour the historic municipal museum and exhibition spaces inside 'Museum Villa Stuck'.`,
+    finalTags: GOOD_TAGS,
+    supportingFact: 'Museum Villa Stuck is a real museum.',
+    verifiedAt: '2026-09-11T00:00:00.000Z',
+    rejectionReasons: [],
+    dbCategory: 'Food & drink',
+  }
+
+  await getOrCreateRun(runStore, 'metro_launch', projectId, 'M0_METRO_DEFINITION')
+  const seeded = await runStore.get(playbookRunId('metro_launch', projectId))
+  seeded!.state = {
+    m0Decisions: M0,
+    candidates: [
+      { name: 'Villa Stuck (art gallery)', category: 'Food & drink', neighborhood: 'Downtown', claimSupported: 'x', source: 'https://example.com/villa-stuck', needsVerification: false },
+      { name: 'Museum Villa Stuck', category: 'Food & drink', neighborhood: 'Downtown', claimSupported: 'x', source: 'https://example.com/villa-stuck', needsVerification: false },
+    ],
+    neighborhoods: [],
+    plan: PLAN,
+    hasRunM6: true,
+    itemCertifications: { 'Villa Stuck (art gallery)': keptCert, 'Museum Villa Stuck': droppedCert },
+    batchCertificationGates: [],
+    // Only the KEPT item needs metadata/geo — the dropped duplicate must
+    // never even be checked for it, since it's filtered out before M9's
+    // "missing metadata" fail-closed check runs.
+    metadataEnrichmentResults: [
+      {
+        candidateName: 'Villa Stuck (art gallery)',
+        hasAlcohol: { evaluated: true, value: false, confidence: 'HIGH', reason: 'test fixture' },
+        photoRequired: { evaluated: true, value: false, confidence: 'HIGH', reason: 'test fixture' },
+        checkinType: { evaluated: true, value: 'tap', confidence: 'HIGH', reason: 'test fixture' },
+        isSecret: { evaluated: true, value: false, confidence: 'HIGH', reason: 'test fixture' },
+        difficulty: { evaluated: true, value: 1, confidence: 'HIGH', reason: 'test fixture' },
+        visitProfileKey: { evaluated: true, value: null, confidence: 'HIGH', reason: 'test fixture' },
+        websiteUrl: { evaluated: false, reason: 'test fixture' },
+      },
+    ],
+    geoEnrichmentResults: [{ candidateName: 'Villa Stuck (art gallery)', classification: 'EXACT', reason: 'test fixture', placeId: 'p-villa-stuck', formattedAddress: 'Villa Stuck, Downtown, Green Bay, WI', lat: 44.51, lng: -88.01, websiteUrl: 'https://example.com/villa-stuck-site', geoRadiusM: null }],
+    // The human/automatic duplicate-review decision this fix must actually
+    // apply: Museum Villa Stuck is the generic body, dropped in favor of
+    // the more distinctive Villa Stuck (art gallery) body.
+    metroFinisherPacketExecution: {
+      enrichmentAttempted: [],
+      enrichmentCertifiedNames: [],
+      enrichmentRejected: [],
+      budgetStoppedReason: null,
+      duplicateResolutions: [
+        {
+          venueName: 'Villa Stuck',
+          placeId: 'p-villa-stuck',
+          itemIds: ['Villa Stuck (art gallery)', 'Museum Villa Stuck'],
+          verdict: 'DROP_DUPLICATE',
+          reason: 'Same overall museum-visit experience — kept the more distinctive body.',
+          keepId: 'Villa Stuck (art gallery)',
+          dropIds: ['Museum Villa Stuck'],
+        },
+      ],
+      neighborhoodMigration: [],
+      themedListDecisions: [],
+      catalogCompleteness: null,
+    },
+  }
+  seeded!.currentStage = 'M9_HOME_LIST_MIRROR'
+  await runStore.put(seeded!)
+
+  const run = await driveMetroLaunch(
+    {
+      runStore,
+      execStore,
+      executors: [executor],
+      verifiedTagSnapshot: TEST_TAG_VOCAB,
+      metroAreaFacts: { name: 'Test Metro', state: 'WI', timezone: 'America/Chicago' },
+      metroAreaSlug: 'test-metro',
+      canonicalNeighborhoods: ['Downtown'],
+      verifyHomeListRows: async () => ({ failed: true as const, reason: 'no DB access in tests' }),
+      checkImageReadiness: async (plan) => plan.filter((p) => p.requiresImage).map((p) => ({ cardLabel: p.label, required: true, hasImage: true })),
+      checkActivationKitLive: async () => ({ live: true, reason: 'HTTP 200 (test fake)' }),
+      ensureProject: async () => ({ projectId: 'test-project', created: false }),
+      flagshipListTitle: 'Fall 2026 — Test Metro',
+    },
+    projectId,
+    { categoryPlan: PLAN, maxSteps: 30 }
+  )
+
+  const state = run.state as { homeListSqlPatch?: string; finalCertificationReport?: { summary: { catalogCount: number } } }
+  const sql = state.homeListSqlPatch ?? ''
+  assert.ok(sql.length > 0, `expected a generated SQL patch, got run.status=${run.status} jerryReason=${run.jerryReason}`)
+
+  // The kept item's body must be in the package...
+  assert.ok(sql.includes(`View Jugendstil architecture inside`), "the kept item's body must appear in the SQL package")
+  // ...and the dropped duplicate's body must NEVER appear — before this fix,
+  // BOTH bodies were written into the SQL even though the cluster was
+  // reported as "resolved" (DROP_DUPLICATE).
+  assert.ok(!sql.includes('Tour the historic municipal museum'), "the DROP_DUPLICATE item's body must never appear in the generated SQL")
+  const insertBlocks = sql.match(/INSERT INTO public\.items \(/g) ?? []
+  assert.equal(insertBlocks.length, 1, 'only the kept item should get a public.items INSERT — the dropped duplicate must not')
+
+  // The final catalog count (M10) must also exclude the dropped duplicate.
+  assert.equal(state.finalCertificationReport?.summary.catalogCount, 1, 'catalogCount must not include a DROP_DUPLICATE-resolved item')
+})
