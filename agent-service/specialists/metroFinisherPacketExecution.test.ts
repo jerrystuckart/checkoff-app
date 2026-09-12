@@ -145,6 +145,47 @@ test('METRO_FINISHER_PACKET_EXECUTION: a HIGH-priority mustHave candidate is aut
   assert.deepEqual(exec?.enrichmentRejected, [])
 })
 
+test('METRO_FINISHER_PACKET_EXECUTION: a live-style array-of-source-objects claimSupported (the real Munich/Schmalznudeln shape) still certifies via normalizeClaimSupported', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+  executor.scriptWhen(
+    (r) => r.specialist === 'research_verifier',
+    (r) =>
+      fakeEnvelope({
+        taskId: r.executionId,
+        objective: r.objective,
+        evidence: {
+          claimSupported: [
+            { name: 'Café Frischhut', source: 'https://www.frischhut.de/', category: 'Bakery/Café', neighborhood: 'Altstadt-Lehel', freshnessDate: null, claimSupported: 'Café Frischhut is renowned for its Schmalznudeln.', needsVerification: true, verificationConfidence: 'HIGH' },
+            { name: 'TasteAtlas', source: 'https://www.tasteatlas.com/cafe-frischhut', category: 'Bakery', neighborhood: 'Altstadt-Lehel', freshnessDate: null, claimSupported: 'TasteAtlas cites it as the top Schmalznudeln source in Munich.', needsVerification: true, verificationConfidence: 'HIGH' },
+          ],
+        },
+        methodologyId: r.methodologyId,
+        methodologyVersion: r.methodologyVersion,
+      })
+  )
+  executor.scriptWhen(
+    (r) => r.specialist === 'checkoff_editor',
+    (r) => {
+      const venue = (r.inputs as { businessOrPlace?: string }).businessOrPlace ?? 'Unknown Venue'
+      return fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { checkoffizedItem: `Try the house specialty at '${venue}'.`, tags: GOOD_TAGS, canonicalVenueUsed: venue }, methodologyId: r.methodologyId, methodologyVersion: r.methodologyVersion })
+    }
+  )
+  const projectId = 'finisher-packet-array-claim-support-test'
+
+  const report = emptyReport({
+    mustHaveMissingExperiences: [{ candidateName: 'Schmalznudeln at Café Frischhut', venueName: 'Café Frischhut', category: 'Food & drink', neighborhoodName: 'Altstadt-Lehel', rationale: 'Iconic Bavarian pastry, missing from the catalog.', distinctivenessNote: 'Singular specialty bakery with decades-old ritual.' }],
+  })
+  await seedAtPacketExecution(runStore, projectId, report)
+
+  const run = await driveMetroLaunch(baseDeps(runStore, execStore, executor), projectId, { categoryPlan: PLAN, maxSteps: 1 })
+  const state = run.state as { itemCertifications?: Record<string, DriverItemCertificationRecord> }
+
+  assert.equal(state.itemCertifications?.['Schmalznudeln at Café Frischhut']?.outcome, 'ITEM_CERTIFIED', 'the live array-shaped claimSupported was normalized and did not crash or block certification')
+  assert.ok(state.itemCertifications?.['Schmalznudeln at Café Frischhut']?.supportingFact.includes('Schmalznudeln'), 'the normalized supporting fact text is preserved on the certification record')
+})
+
 test('METRO_FINISHER_PACKET_EXECUTION: even a "definitely needed" candidate still goes through the full certifyLateAddItem check set and can be rejected', async () => {
   const runStore = new InMemoryPlaybookRunStore()
   const execStore = new InMemoryExecutionStore()
@@ -194,6 +235,55 @@ test('METRO_FINISHER_PACKET_EXECUTION: a candidate with unresolved Places data i
   assert.equal(state.itemCertifications?.['Ghost Venue Tour'], undefined)
   const exec = packetExecState(run)
   assert.equal(exec?.enrichmentRejected.length, 1)
+})
+
+// ---------------------------------------------------------------------------
+// Munich/Schmalznudeln regression — a research_verifier envelope whose
+// evidence.claimSupported comes back as a genuinely malformed/unrecognized
+// shape (neither the legacy plain string nor the live array-of-source-
+// objects shape normalizeClaimSupported() also handles) must cleanly
+// REJECT that one candidate via the normal certification-rejection path,
+// never crash the run (the original bug: `claimSupported.trim is not a
+// function`) and never touch any other candidate or unrelated state.
+// ---------------------------------------------------------------------------
+
+test('METRO_FINISHER_PACKET_EXECUTION: a malformed claimSupported shape from research_verifier cleanly rejects only that one candidate, without crashing the run', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const execStore = new InMemoryExecutionStore()
+  const executor = new TestExecutor()
+
+  // One candidate's research response comes back with a malformed
+  // claimSupported (neither a string nor a recognizable array of source
+  // objects) — must not throw. The other candidate gets a normal,
+  // well-formed response and must certify unaffected.
+  executor.scriptWhen(
+    (r) => r.specialist === 'research_verifier' && (r.inputs as { candidateName?: string }).candidateName === 'Malformed Research Candidate',
+    (r) => fakeEnvelope({ taskId: r.executionId, objective: r.objective, evidence: { claimSupported: { unexpected: 'shape', notAnArray: true } }, methodologyId: r.methodologyId, methodologyVersion: r.methodologyVersion })
+  )
+  scriptResearchAndEditor(executor)
+  const projectId = 'finisher-packet-malformed-claim-support-test'
+
+  const report = emptyReport({
+    mustHaveMissingExperiences: [
+      { candidateName: 'Malformed Research Candidate', venueName: 'Malformed Venue', category: 'Food & drink', neighborhoodName: 'Downtown', rationale: 'Triggers the malformed claimSupported fixture.', distinctivenessNote: 'n/a' },
+      { candidateName: 'Charlie Creamery scoop', venueName: 'Charlie Creamery', category: 'Food & drink', neighborhoodName: 'Downtown', rationale: 'A signature local creamery the catalog is missing.', distinctivenessNote: 'Only creamery in the metro making its own waffle cones.' },
+    ],
+  })
+  await seedAtPacketExecution(runStore, projectId, report)
+
+  // No exception should propagate out of driveMetroLaunch.
+  const run = await driveMetroLaunch(baseDeps(runStore, execStore, executor), projectId, { categoryPlan: PLAN, maxSteps: 1 })
+  const state = run.state as { itemCertifications?: Record<string, DriverItemCertificationRecord> }
+
+  assert.equal(run.currentStage, 'M9_HOME_LIST_MIRROR', 'the run progressed normally past packet execution, not blocked/crashed')
+  assert.equal(state.itemCertifications?.['Malformed Research Candidate'], undefined, 'the malformed candidate never entered itemCertifications')
+  assert.equal(state.itemCertifications?.['Charlie Creamery scoop']?.outcome, 'ITEM_CERTIFIED', 'the unrelated, well-formed candidate certified normally — unaffected by the other candidate\'s malformed shape')
+
+  const exec = packetExecState(run)
+  assert.deepEqual(exec?.enrichmentCertifiedNames, ['Charlie Creamery scoop'])
+  assert.equal(exec?.enrichmentRejected.length, 1)
+  assert.equal(exec?.enrichmentRejected[0]!.candidateName, 'Malformed Research Candidate')
+  assert.ok(exec?.enrichmentRejected[0]!.reasons.some((r) => /research failed|no supported claim/i.test(r)), 'rejected via the normal research-failure reason, not a thrown exception')
 })
 
 // ---------------------------------------------------------------------------

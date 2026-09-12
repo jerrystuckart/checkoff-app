@@ -83,6 +83,7 @@ import {
   type ItemIntakeRecord,
 } from '../playbooks/metroCatalog'
 import { resolveCanonicalTagVocabulary, loadGeneratedTagSnapshot, type VerifiedTagSnapshot } from './tagVocabularyProvider'
+import { normalizeClaimSupported } from './researchEvidence'
 import { evaluateActivationKitGate, validateActivationKitReference, UNIVERSAL_BUSINESS_ACTIVATION_KIT_URL } from '../playbooks/businessActivationKit'
 import { checkActivationKitUrlLive, type ActivationKitLiveCheckResult } from './businessActivationKitCheck'
 import { ensureProject as ensureProjectMutation, type EnsureProjectInput, type EnsureProjectResult } from '../mutations'
@@ -2982,10 +2983,11 @@ async function executeOneFinisherLateAddCandidate(deps: MetroDriverDeps, run: Pl
     idempotencyKey: executionId(run.runId, 'FINISHER_PACKET_RESEARCH', researchLabel),
   }
   const researchOutcome = await runStepWithInfraRetry(deps, run, researchRequest)
-  const claimSupported = researchOutcome.kind === 'ACCEPTED' ? (researchOutcome.envelope?.evidence.claimSupported as string | undefined) : undefined
-  if (!claimSupported || !claimSupported.trim()) {
+  const normalizedClaimSupport = normalizeClaimSupported(researchOutcome.kind === 'ACCEPTED' ? researchOutcome.envelope?.evidence.claimSupported : undefined)
+  if (!normalizedClaimSupport.valid) {
     return reject([`Focused research failed or returned no supported claim: ${researchOutcome.reason ?? 'no evidence returned'}`])
   }
+  const claimSupported = normalizedClaimSupport.text
 
   // 2. Google Places verification — cached, cache-first (never repays a
   // venue already looked up for this metro).

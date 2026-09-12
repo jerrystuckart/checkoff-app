@@ -55,3 +55,70 @@ export function validateResearchCandidates(candidates: ResearchCandidateEvidence
   const allReasons = candidates.flatMap((c, i) => validateResearchCandidate(c, executionType).reasons.map((r) => `candidate[${i}] (${c.name || 'unnamed'}): ${r}`))
   return { valid: allReasons.length === 0, reasons: allReasons }
 }
+
+// ---------------------------------------------------------------------------
+// evidence.claimSupported normalization — a research_verifier envelope's
+// evidence is an untyped Record<string, unknown> (SpecialistResultEnvelope),
+// and a TARGETED_DEEP_DIVE request that declares requiredEvidenceKeys:
+// ['claimSupported'] has been observed (Munich, "Schmalznudeln at Café
+// Frischhut", 2026-09-12) to come back with evidence.claimSupported as an
+// ARRAY of full source objects (each carrying its own nested name/source/
+// neighborhood/claimSupported/needsVerification/verificationConfidence),
+// not the plain string the legacy contract elsewhere in this codebase
+// expects (e.g. ResearchCandidateEvidence.claimSupported per-candidate,
+// which genuinely is always a plain string). Both shapes are real. This
+// normalizes either into one stable internal type so callers never touch
+// the raw envelope value directly.
+// ---------------------------------------------------------------------------
+
+export interface NormalizedClaimSupportSource {
+  /** Best-effort human label for this source (its name, or its URL if unnamed). */
+  label?: string
+  /** Whether this individual source actually carries usable supporting text. */
+  supported: boolean
+  /** The supporting text itself, when present. */
+  note?: string
+}
+
+export interface NormalizedClaimSupport {
+  /** False when the raw value was missing, empty, or an unrecognized shape — callers must treat this as "no usable evidence," never guess a fallback. */
+  valid: boolean
+  /** Combined supporting text usable anywhere the legacy plain-string contract is consumed (e.g. as a factual source for editorial writing, or a body for geo-matching). Empty when invalid. */
+  text: string
+  /** Per-source detail, preserved rather than collapsed — empty for the legacy plain-string shape (represented as a single implicit source). */
+  sources: NormalizedClaimSupportSource[]
+}
+
+const INVALID_CLAIM_SUPPORT: NormalizedClaimSupport = { valid: false, text: '', sources: [] }
+
+/**
+ * Normalizes a research_verifier envelope's raw `evidence.claimSupported`
+ * value. Accepts the legacy plain-string shape and the real array-of-
+ * source-objects shape observed in live output; anything else is reported
+ * as invalid (never thrown) so the caller can cleanly reject that one
+ * candidate the same way it would reject any other certification failure.
+ */
+export function normalizeClaimSupported(raw: unknown): NormalizedClaimSupport {
+  if (typeof raw === 'string') {
+    const trimmed = raw.trim()
+    if (!trimmed) return INVALID_CLAIM_SUPPORT
+    return { valid: true, text: trimmed, sources: [{ supported: true, note: trimmed }] }
+  }
+
+  if (Array.isArray(raw)) {
+    if (raw.length === 0) return INVALID_CLAIM_SUPPORT
+    const sources: NormalizedClaimSupportSource[] = raw.map((entry) => {
+      if (!entry || typeof entry !== 'object') return { supported: false }
+      const e = entry as Record<string, unknown>
+      const note = typeof e.claimSupported === 'string' ? e.claimSupported.trim() : ''
+      const hasSource = typeof e.source === 'string' && e.source.trim().length > 0
+      const label = typeof e.name === 'string' && e.name.trim() ? e.name : typeof e.source === 'string' ? e.source : undefined
+      return { label, supported: note.length > 0 && hasSource, note: note || undefined }
+    })
+    const supportedNotes = sources.filter((s) => s.supported && s.note).map((s) => s.note as string)
+    if (supportedNotes.length === 0) return { valid: false, text: '', sources }
+    return { valid: true, text: supportedNotes.join(' '), sources }
+  }
+
+  return INVALID_CLAIM_SUPPORT
+}
