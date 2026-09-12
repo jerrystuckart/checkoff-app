@@ -16,7 +16,13 @@
 // Phase 2F — the HIGH-LEVEL commands (spec section 4). Jerry does not
 // manage individual execution ids for normal operation; these drive a
 // whole playbook run to completion/NEEDS_JERRY/BLOCKED in one command:
-//   tsx agent-service/cli.ts run metro_launch <projectKey> [--category-plan file.json] [--geo-depth-plan file.json] [--m0 decisions.json] [--metro-area-facts facts.json] [--metro-slug slug] [--existing-inventory-search-term "term"] [--official-list-creator-id uuid] [--flagship-list-title "Fall 2026 — Vienna Metro"] [--request-metro-finisher-follow-up] [--packet-execution-budget budget.json] [--neighborhood-municipality-registry registry.json]
+//   tsx agent-service/cli.ts run metro_launch <projectKey> [--category-plan file.json] [--geo-depth-plan file.json] [--m0 decisions.json] [--metro-area-facts facts.json] [--metro-slug slug] [--existing-inventory-search-term "term"] [--official-list-creator-id uuid] [--flagship-list-title "Fall 2026 — Vienna Metro"] [--request-metro-finisher-follow-up] [--packet-execution-budget budget.json] [--neighborhood-municipality-registry registry.json] [--reopen-from-launch-boundary]
+//     --reopen-from-launch-boundary: an explicit, per-invocation operator
+//       override — reopens THIS project's run from NEEDS_JERRY/BLOCKED at
+//       LAUNCH_READINESS_BOUNDARY back into METRO_FINISHER_PACKET_EXECUTION.
+//       Scoped to the single projectId this command already targets; a
+//       no-op for every other stage/status (including the separate
+//       M0_METRO_DEFINITION reopen path, unaffected either way).
 //     --category-plan/--geo-depth-plan: omit to get a metro-agnostic
 //       default (DEFAULT_CATEGORY_COVERAGE_PLAN; geo depth targets
 //       auto-derived from this run's own real M1 neighborhoods) — NEVER
@@ -288,10 +294,20 @@ async function main() {
       const neighborhoodMunicipalityRegistryFlagIdx = flags.indexOf('--neighborhood-municipality-registry')
       const neighborhoodMunicipalityRegistry: Record<string, { municipalityAliases: string[] }> | undefined =
         neighborhoodMunicipalityRegistryFlagIdx >= 0 ? readJson(flags[neighborhoodMunicipalityRegistryFlagIdx + 1]) : undefined
+      // --reopen-from-launch-boundary: wires DriveMetroLaunchOptions.reopenFromLaunchBoundary
+      // (2026-09-11 Munich re-entry bug fix) — an explicit, per-invocation
+      // operator override that lets driveMetroLaunch's re-entry guard pull
+      // THIS run back from LAUNCH_READINESS_BOUNDARY into
+      // METRO_FINISHER_PACKET_EXECUTION. Scoped to the single projectId
+      // this "run" invocation already targets; never affects any other
+      // metro's parked run, and is a no-op for every stage/status other
+      // than exactly NEEDS_JERRY/BLOCKED at LAUNCH_READINESS_BOUNDARY —
+      // see driveMetroLaunch's own doc for the full scoping guarantee.
+      const reopenFromLaunchBoundary = flags.includes('--reopen-from-launch-boundary')
       const run = await driveMetroLaunch(
         { runStore, execStore: store, executors, metroAreaFacts, officialListCreatorId, flagshipListTitle, metroAreaSlug: metroSlug, existingInventorySearchTerm, canonicalNeighborhoods, emptyNeighborhoodFallbackCentroids, packetExecutionBudget, neighborhoodMunicipalityRegistry },
         projectId,
-        { categoryPlan, depthTargets, autoDeriveDepthTargetsFromGeography, requestMetroFinisherFollowUp }
+        { categoryPlan, depthTargets, autoDeriveDepthTargetsFromGeography, requestMetroFinisherFollowUp, reopenFromLaunchBoundary }
       )
       console.log(JSON.stringify(run, null, 2))
       return

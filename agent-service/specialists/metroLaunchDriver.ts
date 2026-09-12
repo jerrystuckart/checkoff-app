@@ -263,6 +263,16 @@ interface MetroDriverState {
    * own doc for exactly what each field means.
    */
   metroFinisherPacketExecution?: MetroFinisherPacketExecutionState
+  /**
+   * Chief Phase 3C follow-up (2026-09-11) — the durable audit record of
+   * every time `driveMetroLaunch`'s `reopenFromLaunchBoundary` option
+   * actually reopened THIS run from LAUNCH_READINESS_BOUNDARY back to
+   * METRO_FINISHER_PACKET_EXECUTION. Accumulated across the whole run,
+   * never cleared, same discipline as planRelaxations/catalogPruningDrops
+   * — a real approval-boundary loosening always leaves a record it
+   * happened, exactly like reopen-stage's own state-reset convention.
+   */
+  launchBoundaryReopens?: Array<{ at: string; fromStage: string; toStage: string }>
 }
 
 // ---------------------------------------------------------------------------
@@ -3602,6 +3612,32 @@ export interface DriveMetroLaunchOptions {
   projectSummary?: string
   /** Chief Phase 3C — explicitly requests ONE additional, focused METRO_FINISHER_DEEP_RESEARCH follow-up run. Only takes effect when the first (or a prior) run's report said `finalAssessment.readyToFinish: false`, OR the first attempt failed structural validation and never produced a stored report at all (metroFinisherStatus.failReason === 'VALIDATION_FAILED') — never causes an automatic loop, and never exceeds MAX_METRO_FINISHER_RUNS regardless of how many times this is set to true. */
   requestMetroFinisherFollowUp?: boolean
+  /**
+   * Chief Phase 3C, Phase A follow-up (2026-09-11 Munich re-entry bug) —
+   * an explicit, per-invocation operator override that lets a run parked
+   * at NEEDS_JERRY/LAUNCH_READINESS_BOUNDARY be pulled back to
+   * METRO_FINISHER_PACKET_EXECUTION so it can pick up the (newer than
+   * that run's original pass) packet-execution stage. Before this
+   * option existed, driveMetroLaunch's re-entry guard only knew how to
+   * reopen a run stuck at M0_METRO_DEFINITION — invoking `run` against a
+   * run parked at LAUNCH_READINESS_BOUNDARY silently returned the run
+   * unchanged (no mutation, no persist()), which looked like a no-op
+   * rather than an error.
+   *
+   * Scoping (this is a real approval-boundary loosening, so be precise):
+   * - Only takes effect for THIS invocation's own run (driveMetroLaunch
+   *   only ever fetches/mutates the single run keyed by
+   *   `${METRO_LAUNCH_DRIVER_PLAYBOOK_KEY}:${projectId}` — passing this
+   *   flag can never touch any other project's run record).
+   * - Only fires when the run is CURRENTLY at `LAUNCH_READINESS_BOUNDARY`
+   *   with status NEEDS_JERRY/BLOCKED. Any other stage/status combination
+   *   (including the M0_METRO_DEFINITION reopen path, or a run that
+   *   isn't actually parked) is completely unaffected by this flag —
+   *   it is never a general "ignore the re-entry guard" switch.
+   * - Never set by a direct driveMetroLaunch() caller/test that doesn't
+   *   explicitly opt in, and defaults to false/undefined everywhere.
+   */
+  reopenFromLaunchBoundary?: boolean
 }
 
 export const METRO_BUILDER_OWNER_KEY = 'metro_builder'
@@ -3663,10 +3699,41 @@ export async function driveMetroLaunch(deps: MetroDriverDeps, projectId: string,
   let run = await getOrCreateRun(deps.runStore, METRO_LAUNCH_DRIVER_PLAYBOOK_KEY, projectId, 'M0_METRO_DEFINITION')
   if (run.status === 'PAUSED' || run.status === 'DONE') return run
   if (run.status === 'NEEDS_JERRY' || run.status === 'BLOCKED') {
-    // Only re-enter if the caller has since resolved the M0 decisions —
-    // otherwise stay put rather than re-escalating identically every call.
-    if (run.currentStage !== 'M0_METRO_DEFINITION' || !m0DecisionsResolved(readState(run).m0Decisions)) return run
-    run.status = 'RUNNING'
+    // Chief Phase 3C follow-up (2026-09-11 Munich re-entry bug) — a
+    // SEPARATE, narrowly-scoped re-entry path from the M0 one below.
+    // Only fires when the caller explicitly passed
+    // options.reopenFromLaunchBoundary=true on THIS invocation AND the
+    // run is currently parked exactly at LAUNCH_READINESS_BOUNDARY — any
+    // other stage/status falls straight through to the unchanged
+    // M0_METRO_DEFINITION check that follows, so the flag has zero
+    // effect when it isn't the exact case it's designed for (a run not
+    // at LAUNCH_READINESS_BOUNDARY, or an invocation that omits the
+    // flag, behaves identically to before this option existed).
+    const reopenLaunchBoundary = options.reopenFromLaunchBoundary === true && run.currentStage === 'LAUNCH_READINESS_BOUNDARY'
+    if (reopenLaunchBoundary) {
+      // Pull the run back to METRO_FINISHER_PACKET_EXECUTION (the newer
+      // stage this run's original pass never had a chance to execute,
+      // since it was added after this run first reached the boundary) —
+      // same state-reset discipline reopen-stage's own CLI command uses
+      // for an operator-corrective stage rewind: clear the stale
+      // jerryReason/decisionPacket and reset the per-run loop/retry
+      // counters so packet execution starts with a clean bounded budget,
+      // never inheriting a stale retry count from the earlier pass.
+      const state = readState(run)
+      state.launchBoundaryReopens = [...(state.launchBoundaryReopens ?? []), { at: (deps.now ?? (() => new Date().toISOString()))(), fromStage: run.currentStage, toStage: 'METRO_FINISHER_PACKET_EXECUTION' }]
+      run.state = state
+      run.currentStage = 'METRO_FINISHER_PACKET_EXECUTION'
+      run.jerryReason = null
+      run.decisionPacket = null
+      run.loopIteration = 0
+      run.totalRetries = 0
+      run.status = 'RUNNING'
+    } else {
+      // Only re-enter if the caller has since resolved the M0 decisions —
+      // otherwise stay put rather than re-escalating identically every call.
+      if (run.currentStage !== 'M0_METRO_DEFINITION' || !m0DecisionsResolved(readState(run).m0Decisions)) return run
+      run.status = 'RUNNING'
+    }
   }
 
   const maxSteps = options.maxSteps ?? 200
