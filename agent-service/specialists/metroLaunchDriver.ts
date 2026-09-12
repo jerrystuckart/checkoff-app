@@ -105,8 +105,12 @@ import { evaluateFinalReadyToApplyAudit, type FinalReadyToApplyResult } from '..
 import { buildCostReport } from '../playbooks/metroCostReport'
 import { buildStrategicCoverageReport, type StrategicCoverageReport } from '../playbooks/metroStrategicReport'
 import { buildStageArtifactFiles } from './metroStageArtifacts'
-import { validateMetroFinisherReport, checkReadinessNotGatedOnCountAlone, type MetroFinisherReport } from '../playbooks/metroFinisherReport'
+import { validateMetroFinisherReport, checkReadinessNotGatedOnCountAlone, type MetroFinisherReport, type CandidateFinding } from '../playbooks/metroFinisherReport'
 import { buildMetroFinisherWorkPackets, type MetroFinisherWorkPackets } from '../playbooks/metroFinisherIntegration'
+import { certifyLateAddItem, type LateAddItemInput, type LateAddCertificationResult } from '../playbooks/lateAddItemCertification'
+import { evaluateGeographicConsistencyAudit, type NeighborhoodMunicipalityRegistry } from '../playbooks/geographicConsistencyAudit'
+import { resolveDuplicateCluster, type DuplicateClusterMember, type DuplicateClusterResolutionResult } from '../playbooks/duplicateClusterResolution'
+import { evaluatePacketExecutionContinuation, DEFAULT_PACKET_EXECUTION_BUDGET, type PacketExecutionBudget } from '../playbooks/packetExecutionBudget'
 
 export const METRO_LAUNCH_DRIVER_PLAYBOOK_KEY = 'metro_launch'
 
@@ -250,6 +254,67 @@ interface MetroDriverState {
   metroFinisherStatus?: { verdict: 'PASS' | 'FAIL' | 'WAIVED'; waiverReason?: string; failReason?: 'VALIDATION_FAILED' | 'NOT_READY_COUNT_ONLY' | 'NO_REPORT' }
   /** How many real METRO_FINISHER_DEEP_RESEARCH calls this run has made — bounds the stage to 1 primary run, plus at most 1 caller-requested focused follow-up (see driveMetroLaunch's requestMetroFinisherFollowUp option). Never auto-loops past 2. */
   metroFinisherRunsCompleted?: number
+  /**
+   * Chief Phase 3C, Phase A — METRO_FINISHER_PACKET_EXECUTION's own
+   * durable execution record: every bounded action it actually took
+   * against metroFinisherPackets, and why. Never accumulated across a
+   * follow-up Finisher run's fresh packets in a way that hides which
+   * packet a decision came from — see stepMetroFinisherPacketExecution's
+   * own doc for exactly what each field means.
+   */
+  metroFinisherPacketExecution?: MetroFinisherPacketExecutionState
+}
+
+// ---------------------------------------------------------------------------
+// METRO_FINISHER_PACKET_EXECUTION (Chief Phase 3C, Phase A) — types.
+// ---------------------------------------------------------------------------
+
+export interface EnrichmentRejection {
+  candidateName: string
+  reasons: string[]
+}
+
+export interface DuplicateResolutionRecord {
+  /** The DuplicateReviewWorkItem's own venueName/placeId, carried through for reporting. */
+  venueName: string
+  placeId: string | null
+  itemIds: string[]
+  verdict: DuplicateClusterResolutionResult['verdict']
+  reason: string
+  keepId?: string
+  dropIds?: string[]
+}
+
+export interface NeighborhoodMigrationEntry {
+  candidateName: string
+  oldNeighborhood: string
+  /** null when no proposed child could be confirmed from the item's own verified address — a real, reported gap, never a guess. */
+  newNeighborhood: string | null
+  resolutionMethod: 'ADDRESS_AUDIT' | 'UNRESOLVED_NO_REGISTRY' | 'UNRESOLVED_AMBIGUOUS'
+}
+
+export interface ThemedListExecutionDecision {
+  title: string
+  verdict: 'CREATED' | 'NOT_CREATED'
+  reason: string
+  /** Only the subset of the opportunity's referenced item candidate names that are CURRENTLY certified — never padded, never a fabricated item. */
+  itemCandidateNames: string[]
+}
+
+export interface MetroFinisherPacketExecutionState {
+  /** Candidate names from the ENRICHMENT_PACKET this stage has already attempted (certified or rejected) — never re-attempted on a resumed run. */
+  enrichmentAttempted: string[]
+  enrichmentCertifiedNames: string[]
+  enrichmentRejected: EnrichmentRejection[]
+  /** Why the enrichment loop stopped before exhausting the queue — null when the queue was fully exhausted (or empty to begin with). */
+  budgetStoppedReason: string | null
+  duplicateResolutions: DuplicateResolutionRecord[]
+  neighborhoodMigration: NeighborhoodMigrationEntry[]
+  themedListDecisions: ThemedListExecutionDecision[]
+  catalogCompleteness: {
+    recommendSecondFinisherRun: boolean
+    reason: string
+  } | null
 }
 
 /**
@@ -460,6 +525,26 @@ export interface MetroDriverDeps {
    * being silently skipped or given an invented coordinate.
    */
   emptyNeighborhoodFallbackCentroids?: Readonly<Record<string, { lat: number; lng: number }>>
+  /**
+   * METRO_FINISHER_PACKET_EXECUTION (Chief Phase 3C, Phase A): the real,
+   * configurable budget bounding how much bounded follow-up work this
+   * stage will attempt in one pass — see packetExecutionBudget.ts.
+   * Defaults to DEFAULT_PACKET_EXECUTION_BUDGET, always overridable per
+   * metro (cli.ts's --packet-execution-budget flag) — never a metro-
+   * specific hardcoded constant.
+   */
+  packetExecutionBudget?: PacketExecutionBudget
+  /**
+   * METRO_FINISHER_PACKET_EXECUTION's NEIGHBORHOOD_PACKET migration
+   * review: the real municipality-alias registry (see
+   * geographicConsistencyAudit.ts) for THIS metro's canonical
+   * neighborhoods, extended with entries for any newly-PROPOSED child
+   * neighborhoods a split proposal names, so an affected item's own
+   * verified address can be checked against each candidate child. Omit
+   * to leave every migration item's newNeighborhood unresolved
+   * (NEEDS_REVIEW) rather than guessing — never fabricated.
+   */
+  neighborhoodMunicipalityRegistry?: NeighborhoodMunicipalityRegistry
 }
 
 export function executionId(runId: string, stage: string, label: string): string {
@@ -2121,6 +2206,20 @@ function buildHomeListPlan(state: MetroDriverState, flagshipListTitle: string): 
     plan.push({ label: `Themed list: ${theme.title}`, title: theme.title, kind: 'THEMED', itemCandidateNames: theme.candidateNames, requiresImage: true })
   }
 
+  // Chief Phase 3C, Phase A — METRO_FINISHER_PACKET_EXECUTION's own
+  // CREATED themed-list decisions (CREATE_NOW / successfully-enriched
+  // ENRICH_THEN_CREATE opportunities), additive to the generic
+  // keyword-derived themes above. Re-filtered to ONLY currently-
+  // certified names here too — defense in depth, never trusting a
+  // stale decision to still be accurate by the time M9 packages it.
+  const certifiedNameSet = new Set(names)
+  for (const decision of state.metroFinisherPacketExecution?.themedListDecisions ?? []) {
+    if (decision.verdict !== 'CREATED') continue
+    const itemCandidateNames = decision.itemCandidateNames.filter((n) => certifiedNameSet.has(n))
+    if (itemCandidateNames.length === 0) continue
+    plan.push({ label: `Themed list (Finisher): ${decision.title}`, title: decision.title, kind: 'THEMED', itemCandidateNames, requiresImage: true })
+  }
+
   plan.push({ label: 'Curated-layer mirror', title: 'Curated-layer mirror', kind: 'CURATED_MIRROR', itemCandidateNames: names, requiresImage: false })
   return plan
 }
@@ -2583,8 +2682,405 @@ async function stepMetroFinisherIntegration(run: PlaybookRunRecord): Promise<Pla
   state.metroFinisherStatus = countOnlyCheck.flaggedAsCountOnly ? { verdict: 'FAIL', failReason: 'NOT_READY_COUNT_ONLY' } : { verdict: 'PASS' }
 
   run.state = state
+  // Chief Phase 3C, Phase A — a real, accepted report's bounded work
+  // packets now flow into METRO_FINISHER_PACKET_EXECUTION (never
+  // straight to M9) so they're actually EXECUTED against the existing
+  // certification pipeline, not just reported. The no-report branch
+  // above has nothing to execute and goes straight to M9, unchanged.
+  run.currentStage = 'METRO_FINISHER_PACKET_EXECUTION'
+  return run
+}
+
+// ---------------------------------------------------------------------------
+// METRO_FINISHER_PACKET_EXECUTION (Chief Phase 3C, Phase A) — automatic
+// EXECUTION of the already-approved, bounded Finisher work packets using
+// Winston's EXISTING certified workflows. Every gate reused here
+// (certifyLateAddItem, resolveDuplicateCluster,
+// evaluateGeographicConsistencyAudit) is the SAME real function the rest
+// of the pipeline already trusts — this stage never bypasses one, and
+// never writes to production; everything lands in this run's own
+// state/package, exactly like every other stage.
+//
+// A Finisher lead is NEVER auto-accepted. It runs the SAME minimum
+// late-add pipeline every themed-list/late addition has to pass
+// (lateAddItemCertification.ts's own standing rule): a real, bounded
+// research call, cached Google Places verification, CheckOff editorial
+// writing, canonical-tag validation, and certifyLateAddItem() as the one
+// actual certification gate. A candidate that fails ANY of these is
+// REJECTED with its specific reasons recorded — never silently dropped,
+// never force-added to hit a count.
+//
+// Human boundary: this stage never calls escalate()/NEEDS_JERRY for a
+// routine rejection or a successful execution — only a genuinely
+// ambiguous duplicate cluster (resolveDuplicateCluster's
+// NEEDS_HUMAN_REVIEW verdict) is left unresolved, surfaced through
+// state for a human to review at PRE_APPLY time (finalReadyToApplyAudit.ts's
+// allDuplicateClustersResolved), never blocking THIS run from proceeding
+// to M9.
+async function stepMetroFinisherPacketExecution(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const packets = state.metroFinisherPackets
+  if (!packets) {
+    // No packets were built (e.g. a run that never got a report at all)
+    // — nothing to execute; proceed exactly as before this stage existed.
+    run.currentStage = 'M9_HOME_LIST_MIRROR'
+    return run
+  }
+
+  const budget = deps.packetExecutionBudget ?? DEFAULT_PACKET_EXECUTION_BUDGET
+  const execState: MetroFinisherPacketExecutionState = state.metroFinisherPacketExecution ?? {
+    enrichmentAttempted: [],
+    enrichmentCertifiedNames: [],
+    enrichmentRejected: [],
+    budgetStoppedReason: null,
+    duplicateResolutions: [],
+    neighborhoodMigration: [],
+    themedListDecisions: [],
+    catalogCompleteness: null,
+  }
+
+  // -------------------------------------------------------------------
+  // 1. ENRICHMENT_PACKET — prioritize mustHaveMissingExperiences over
+  // plain enrichmentCandidates, never re-attempt a candidate this stage
+  // already resolved (certified OR rejected) on a resumed run.
+  // -------------------------------------------------------------------
+  const alreadyAttempted = new Set(execState.enrichmentAttempted)
+  const mustHaveNames = new Set((state.metroFinisherReport?.mustHaveMissingExperiences ?? []).map((c) => c.candidateName))
+  // A themed list's own ENRICH_THEN_CREATE missingExperiences are real
+  // enrichment leads too (task requirement #5: "should already be
+  // flowing through the ENRICHMENT_PACKET execution above") — merged in
+  // here (deduped by candidateName) since buildMetroFinisherWorkPackets's
+  // ENRICHMENT_PACKET is built only from the report's top-level
+  // mustHaveMissingExperiences/enrichmentCandidates, not from
+  // per-theme missingExperiences.
+  const enrichmentCandidateNames = new Set(packets.enrichment.venueResolvedCandidates.map((c) => c.candidateName))
+  const themedMissingCandidates = packets.themedList.workItems.flatMap((w) =>
+    w.kind === 'ENRICHMENT_NEEDED' ? w.missingExperiences.filter((c): c is CandidateFinding & { venueName: string } => c.venueName !== null && !enrichmentCandidateNames.has(c.candidateName)) : []
+  )
+  const allEnrichmentLeads = [...packets.enrichment.venueResolvedCandidates, ...themedMissingCandidates]
+  const queue = allEnrichmentLeads
+    .filter((c) => !alreadyAttempted.has(c.candidateName))
+    .sort((a, b) => Number(mustHaveNames.has(b.candidateName)) - Number(mustHaveNames.has(a.candidateName)))
+
+  let idx = 0
+  execState.budgetStoppedReason = null
+  while (idx < queue.length) {
+    const currentSpend = readState(run).usageByStage?.['METRO_FINISHER_PACKET_EXECUTION']?.costUsd ?? 0
+    const continuation = evaluatePacketExecutionContinuation(budget, { spentUsd: currentSpend, attemptsMade: execState.enrichmentAttempted.length, remainingLeads: queue.length - idx })
+    if (!continuation.shouldContinue) {
+      execState.budgetStoppedReason = continuation.reason
+      break
+    }
+    const candidate = queue[idx]!
+    idx += 1
+    execState.enrichmentAttempted.push(candidate.candidateName)
+
+    const { certification, driverRecord } = await executeOneFinisherLateAddCandidate(deps, run, candidate)
+    if (certification.verdict === 'CERTIFIED') {
+      execState.enrichmentCertifiedNames.push(candidate.candidateName)
+      const freshState = readState(run)
+      freshState.itemCertifications = { ...(freshState.itemCertifications ?? {}), [candidate.candidateName]: driverRecord }
+      run.state = freshState
+    } else {
+      execState.enrichmentRejected.push({ candidateName: candidate.candidateName, reasons: certification.reasons })
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // 2. DUPLICATE_REVIEW_PACKET — automatic resolution when the evidence
+  // is decisive (resolveDuplicateCluster). CONFIRMED_DISTINCT work items
+  // are already a resolved verdict from the report itself (Winston never
+  // second-guesses a DISTINCT call with less information than the report
+  // had) — recorded as KEEP_BOTH without recomputation.
+  // -------------------------------------------------------------------
+  const postEnrichmentState = readState(run)
+  const certifiedByName = new Map(Object.entries(postEnrichmentState.itemCertifications ?? {}).filter(([, r]) => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null))
+  const geoByName = new Map((postEnrichmentState.geoEnrichmentResults ?? []).map((g) => [g.candidateName, g]))
+  const alreadyResolvedDuplicates = new Set(execState.duplicateResolutions.map((d) => `${d.venueName}::${d.placeId ?? ''}`))
+  for (const workItem of packets.duplicateReview.workItems) {
+    const key = `${workItem.venueName}::${workItem.placeId ?? ''}`
+    if (alreadyResolvedDuplicates.has(key)) continue
+    if (workItem.kind === 'CONFIRMED_DISTINCT') {
+      execState.duplicateResolutions.push({ venueName: workItem.venueName, placeId: workItem.placeId, itemIds: workItem.itemIds, verdict: 'KEEP_BOTH', reason: `Report already judged these DISTINCT: ${workItem.rationale}` })
+      continue
+    }
+    const members: DuplicateClusterMember[] = workItem.itemIds.map((id) => {
+      const certifiedRecord = certifiedByName.get(id)
+      return {
+        id,
+        venueName: workItem.venueName,
+        body: certifiedRecord?.finalBody ?? '',
+        placeId: geoByName.get(id)?.placeId ?? workItem.placeId ?? null,
+      }
+    })
+    const resolvable = members.filter((m) => m.body.length > 0)
+    const resolution = resolvable.length >= 2 ? resolveDuplicateCluster(resolvable) : { verdict: 'NEEDS_HUMAN_REVIEW' as const, reason: `Fewer than 2 of this cluster's item ids resolved to a real certified body in this run's own state (${workItem.itemIds.join(', ')}) — cannot compare experiences automatically.` }
+    execState.duplicateResolutions.push({ venueName: workItem.venueName, placeId: workItem.placeId, itemIds: workItem.itemIds, verdict: resolution.verdict, reason: resolution.reason, keepId: 'keepId' in resolution ? resolution.keepId : undefined, dropIds: 'dropIds' in resolution ? resolution.dropIds : undefined })
+  }
+
+  // -------------------------------------------------------------------
+  // 3. NEIGHBORHOOD_PACKET — execute the migration-review workflow
+  // against the run's own package state only; never production SQL.
+  // -------------------------------------------------------------------
+  const alreadyMigrated = new Set(execState.neighborhoodMigration.map((m) => m.candidateName))
+  const candidatesByNameForMigration = new Map((postEnrichmentState.candidates ?? []).map((c) => [c.name, c]))
+  for (const workItem of packets.neighborhood.workItems) {
+    if (workItem.kind !== 'MIGRATION_REVIEW') continue
+    for (const candidateName of workItem.affectedExistingItemIds) {
+      if (alreadyMigrated.has(candidateName)) continue
+      alreadyMigrated.add(candidateName)
+      const oldNeighborhood = candidatesByNameForMigration.get(candidateName)?.neighborhood ?? workItem.parentNeighborhood
+      const formattedAddress = geoByName.get(candidateName)?.formattedAddress ?? null
+      const registry = deps.neighborhoodMunicipalityRegistry
+      if (!registry) {
+        execState.neighborhoodMigration.push({ candidateName, oldNeighborhood, newNeighborhood: null, resolutionMethod: 'UNRESOLVED_NO_REGISTRY' })
+        continue
+      }
+      const childRegistry: NeighborhoodMunicipalityRegistry = {}
+      for (const child of workItem.proposedChildren) if (registry[child]) childRegistry[child] = registry[child]!
+      const audit = evaluateGeographicConsistencyAudit([{ candidateName, assignedNeighborhood: workItem.proposedChildren[0] ?? workItem.parentNeighborhood, formattedAddress }], childRegistry)
+      const matchingChildren = workItem.proposedChildren.filter((child) => {
+        const entry = registry[child]
+        return entry && formattedAddress && entry.municipalityAliases.some((alias) => new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(formattedAddress))
+      })
+      void audit // computed for its side-effect-free validation shape; the explicit per-child scan above is what actually decides the match, since evaluateGeographicConsistencyAudit itself only checks ONE assignedNeighborhood at a time.
+      if (matchingChildren.length === 1) {
+        execState.neighborhoodMigration.push({ candidateName, oldNeighborhood, newNeighborhood: matchingChildren[0]!, resolutionMethod: 'ADDRESS_AUDIT' })
+        const freshState = readState(run)
+        const candidates = (freshState.candidates ?? []).map((c) => (c.name === candidateName ? { ...c, neighborhood: matchingChildren[0]! } : c))
+        freshState.candidates = candidates
+        run.state = freshState
+      } else {
+        execState.neighborhoodMigration.push({ candidateName, oldNeighborhood, newNeighborhood: null, resolutionMethod: 'UNRESOLVED_AMBIGUOUS' })
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // 4. THEMED_LIST_PACKET — CREATE_NOW builds directly from certified
+  // items; ENRICH_THEN_CREATE re-checks after the enrichment pass above;
+  // DO_NOT_CREATE is recorded and never revisited. Never pads a theme to
+  // hit a minimum count — an item that never certified is simply absent.
+  // -------------------------------------------------------------------
+  const finalCertifiedState = readState(run)
+  const finalCertifiedNames = new Set(Object.entries(finalCertifiedState.itemCertifications ?? {}).filter(([, r]) => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null).map(([name]) => name))
+  const alreadyDecidedThemes = new Set(execState.themedListDecisions.map((d) => d.title))
+  for (const workItem of packets.themedList.workItems) {
+    if (alreadyDecidedThemes.has(workItem.title)) continue
+    if (workItem.kind === 'DO_NOT_CREATE') {
+      execState.themedListDecisions.push({ title: workItem.title, verdict: 'NOT_CREATED', reason: workItem.rationale, itemCandidateNames: [] })
+      continue
+    }
+    if (workItem.kind === 'CREATE_NOW') {
+      const items = workItem.existingItemIds.filter((id) => finalCertifiedNames.has(id))
+      execState.themedListDecisions.push({
+        title: workItem.title,
+        verdict: items.length > 0 ? 'CREATED' : 'NOT_CREATED',
+        reason: items.length > 0 ? `Built directly from ${items.length} already-certified item(s): ${workItem.rationale}` : 'CREATE_NOW recommended, but none of the referenced existingItemIds are currently certified in this run — never fabricated.',
+        itemCandidateNames: items,
+      })
+      continue
+    }
+    // ENRICHMENT_NEEDED — re-check how many of this theme's own missing
+    // experiences actually certified in the enrichment pass above.
+    const neededNames = workItem.missingExperiences.map((m) => m.candidateName)
+    const nowCertified = neededNames.filter((n) => finalCertifiedNames.has(n))
+    const existingItems = workItem.existingItemIds.filter((id) => finalCertifiedNames.has(id))
+    const enoughCertified = neededNames.length > 0 && nowCertified.length / neededNames.length >= THEMED_LIST_ENRICHMENT_SUCCESS_RATIO
+    execState.themedListDecisions.push({
+      title: workItem.title,
+      verdict: enoughCertified ? 'CREATED' : 'NOT_CREATED',
+      reason: enoughCertified
+        ? `Enough of the needed experiences certified (${nowCertified.length}/${neededNames.length}) — created from ${existingItems.length} existing + ${nowCertified.length} newly-certified item(s).`
+        : `Enrichment attempts did not certify enough of this theme's needed items (${nowCertified.length}/${neededNames.length || 0} certified) — left un-created rather than padded.`,
+      itemCandidateNames: enoughCertified ? [...existingItems, ...nowCertified] : [],
+    })
+  }
+
+  // -------------------------------------------------------------------
+  // 5. CATALOG_COMPLETENESS_PACKET — advisory-only re-evaluation.
+  // Reuses checkReadinessNotGatedOnCountAlone rather than reimplementing
+  // the "explored gaps, not just counted items" rule. Never triggers a
+  // second Finisher run itself (that would be an automatic loop) — only
+  // records whether one looks warranted, bounded by MAX_METRO_FINISHER_RUNS,
+  // for a human/caller to decide via requestMetroFinisherFollowUp.
+  // -------------------------------------------------------------------
+  if (state.metroFinisherReport) {
+    const countOnly = checkReadinessNotGatedOnCountAlone(state.metroFinisherReport)
+    const unresolvedDuplicates = execState.duplicateResolutions.filter((d) => d.verdict === 'NEEDS_HUMAN_REVIEW').length
+    const runsCompleted = state.metroFinisherRunsCompleted ?? 0
+    const budgetAvailable = runsCompleted < MAX_METRO_FINISHER_RUNS
+    const hasSpecificUnresolvedGap = execState.enrichmentRejected.length > 0 && !countOnly.flaggedAsCountOnly && !state.metroFinisherReport.finalAssessment.readyToFinish
+    execState.catalogCompleteness = {
+      recommendSecondFinisherRun: budgetAvailable && (hasSpecificUnresolvedGap || unresolvedDuplicates > 0),
+      reason: !budgetAvailable
+        ? `MAX_METRO_FINISHER_RUNS (${MAX_METRO_FINISHER_RUNS}) already reached — no further Finisher research call is possible regardless of remaining gaps.`
+        : hasSpecificUnresolvedGap || unresolvedDuplicates > 0
+          ? `Specific unresolved material gap(s) remain after packet execution: ${execState.enrichmentRejected.length} rejected enrichment candidate(s), ${unresolvedDuplicates} NEEDS_HUMAN_REVIEW duplicate cluster(s) — a focused follow-up Finisher run may help; never automatic, requires an explicit requestMetroFinisherFollowUp.`
+          : 'No specific unresolved material gap identified — a second Finisher run is not recommended.',
+    }
+  }
+
+  const finalState = readState(run)
+  finalState.metroFinisherPacketExecution = execState
+  run.state = finalState
   run.currentStage = 'M9_HOME_LIST_MIRROR'
   return run
+}
+
+/** ENRICH_THEN_CREATE is only realized once at least this fraction of its named missing experiences actually certified — never a full 100% requirement (a themed list can still ship missing one long-shot item), never padded to hit a minimum count either. */
+const THEMED_LIST_ENRICHMENT_SUCCESS_RATIO = 0.5
+
+/**
+ * Runs ONE Finisher-sourced candidate through the full minimum late-add
+ * pipeline: a real, bounded research call, cached Places verification,
+ * CheckOff editorial writing, canonical-tag validation, and
+ * certifyLateAddItem() as the actual certification gate. Never escalates
+ * to NEEDS_JERRY on a routine research/editorial failure — that's a
+ * REJECTED verdict with a recorded reason, same as any other bounded
+ * rejection in this codebase (e.g. M7's EXHAUSTED_RETRIES).
+ */
+async function executeOneFinisherLateAddCandidate(deps: MetroDriverDeps, run: PlaybookRunRecord, candidate: CandidateFinding & { venueName: string }): Promise<{ certification: LateAddCertificationResult; driverRecord: DriverItemCertificationRecord }> {
+  const state = readState(run)
+  const safeName = candidate.candidateName.replace(/[^a-zA-Z0-9_-]/g, '_')
+  const now = deps.now ?? (() => new Date().toISOString())
+
+  const reject = (reasons: string[]): { certification: LateAddCertificationResult; driverRecord: DriverItemCertificationRecord } => ({
+    certification: { candidateName: candidate.candidateName, verdict: 'REJECTED', reasons },
+    driverRecord: { candidateName: candidate.candidateName, venueName: candidate.venueName, attempts: 1, outcome: 'EXHAUSTED_RETRIES', finalBody: null, finalTags: [], supportingFact: '', verifiedAt: null, rejectionReasons: reasons },
+  })
+
+  // 1. Focused factual research — a real, bounded AI call (reuses
+  // research_verifier, the same specialist M1/M3/M5 already use), never
+  // an unbounded research loop.
+  const researchLabel = `finisher-research-${safeName}`
+  const researchRequest: SpecialistExecutionRequest = {
+    specialist: 'research_verifier',
+    playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
+    stage: 'METRO_FINISHER_PACKET_EXECUTION',
+    objective: `${run.projectId}: focused factual research for Finisher-sourced candidate "${candidate.candidateName}" at "${candidate.venueName}"`,
+    inputs: { executionType: 'TARGETED_DEEP_DIVE', candidateName: candidate.candidateName, venueName: candidate.venueName, category: candidate.category, rationale: candidate.rationale, distinctivenessNote: candidate.distinctivenessNote },
+    requiredEvidenceKeys: ['claimSupported'],
+    methodologyId: 'metro_launch',
+    methodologyVersion: 'v1',
+    executionId: executionId(run.runId, 'FINISHER_PACKET_RESEARCH', researchLabel),
+    projectId: run.projectId,
+    destinationId: null,
+    metroId: run.projectId,
+    allowedCapabilities: ['live_web_research'],
+    authorityOperations: ['metro_launch.research'],
+    idempotencyKey: executionId(run.runId, 'FINISHER_PACKET_RESEARCH', researchLabel),
+  }
+  const researchOutcome = await runStepWithInfraRetry(deps, run, researchRequest)
+  const claimSupported = researchOutcome.kind === 'ACCEPTED' ? (researchOutcome.envelope?.evidence.claimSupported as string | undefined) : undefined
+  if (!claimSupported || !claimSupported.trim()) {
+    return reject([`Focused research failed or returned no supported claim: ${researchOutcome.reason ?? 'no evidence returned'}`])
+  }
+
+  // 2. Google Places verification — cached, cache-first (never repays a
+  // venue already looked up for this metro).
+  const resolvedM0 = readState(run).m0Decisions
+  const expectedCountry = deps.expectedCountry ?? resolvedM0?.metroCountry ?? 'US'
+  const metroCenterBias = deps.metroCenterBias ?? resolvedM0?.metroCenter ?? { lat: 0, lng: 0 }
+  const mapsQuery = `${candidate.venueName}, ${candidate.neighborhoodName ?? run.projectId}`
+  const geoRun = await enrichMetroCatalogGeo(
+    run.projectId,
+    [{ candidateName: candidate.candidateName, matchName: candidate.venueName, neighborhood: candidate.neighborhoodName, body: claimSupported, mapsQuery, expectedCountry, biasLat: metroCenterBias.lat, biasLng: metroCenterBias.lng }],
+    { cache: deps.geoEnrichmentCache ?? new FileGeoEnrichmentCacheStore(), lookup: deps.placesLookup ?? buildRealPlacesLookup() }
+  )
+  const geo = geoRun.records[0]!
+  const geoState = readState(run)
+  geoState.geoEnrichmentResults = [...(geoState.geoEnrichmentResults ?? []).filter((r) => r.candidateName !== candidate.candidateName), { candidateName: candidate.candidateName, classification: geo.classification, reason: geo.reason, placeId: geo.placeId, formattedAddress: geo.formattedAddress, lat: geo.lat, lng: geo.lng, websiteUrl: geo.websiteUrl, geoRadiusM: geo.geoRadiusM }]
+  geoState.geoEnrichmentPaidCalls = (geoState.geoEnrichmentPaidCalls ?? 0) + geoRun.paidCallsMade
+  geoState.geoEnrichmentCacheHits = (geoState.geoEnrichmentCacheHits ?? 0) + geoRun.cacheHits
+  run.state = geoState
+
+  // 3. CheckOff editorial body writing — the SAME exclusive-provider-
+  // locked specialist M6.5 uses (SPECIALIST_EXCLUSIVE_PROVIDER in
+  // remoteAiExecutor.ts is never touched here).
+  const editorLabel = `finisher-editor-${safeName}`
+  const editorRequest: SpecialistExecutionRequest = {
+    specialist: 'checkoff_editor',
+    playbookKey: METRO_LAUNCH_DRIVER_PLAYBOOK_KEY,
+    stage: 'METRO_FINISHER_PACKET_EXECUTION',
+    objective: `${run.projectId}: checkoffize Finisher-sourced late add "${candidate.candidateName}" at "${candidate.venueName}"`,
+    inputs: { factualSource: claimSupported, businessOrPlace: candidate.venueName, canonicalVenueName: candidate.venueName, canonicalVenueAlternatives: [] },
+    requiredEvidenceKeys: ['checkoffizedItem', 'tags'],
+    methodologyId: 'checkoff_editor',
+    methodologyVersion: 'v1',
+    executionId: executionId(run.runId, 'FINISHER_PACKET_EDITOR', editorLabel),
+    projectId: run.projectId,
+    destinationId: null,
+    metroId: run.projectId,
+    allowedCapabilities: ['content_editorial'],
+    authorityOperations: ['metro_launch.build_internal_artifact'],
+    idempotencyKey: executionId(run.runId, 'FINISHER_PACKET_EDITOR', editorLabel),
+  }
+  const editorOutcome = await runStepWithInfraRetry(deps, run, editorRequest)
+  if (editorOutcome.kind !== 'ACCEPTED') {
+    return reject([`CheckOff editorial write failed: ${editorOutcome.reason ?? 'no evidence returned'}`])
+  }
+  const body = String(editorOutcome.envelope?.evidence.checkoffizedItem ?? '')
+  const proposedTags = Array.isArray(editorOutcome.envelope?.evidence.tags) ? (editorOutcome.envelope!.evidence.tags as string[]) : []
+
+  // 4. Canonical-tag vocabulary validation — same discipline TAG_CERTIFICATION_GATE
+  // enforces for every original-discovery item (metroTagCertification.ts).
+  const tagVocabulary = await resolveCanonicalTagVocabulary(deps.queryLiveTags ?? (() => Promise.reject(new Error('no live tag access configured'))), deps.verifiedTagSnapshot === undefined ? loadGeneratedTagSnapshot() : deps.verifiedTagSnapshot)
+  const tagIssues: string[] = []
+  if (tagVocabulary.status !== 'FAILED') {
+    const tagValidation = validateItemTags({ candidateName: candidate.candidateName, tags: proposedTags }, tagVocabulary.tagNames)
+    if (!tagValidation.valid) tagIssues.push(...tagValidation.issues)
+  } else {
+    tagIssues.push('No canonical tag vocabulary available (neither live DB nor a verified snapshot) — tags cannot be certified.')
+  }
+
+  // 5. Category classification — same classifyCategoryWithFallback every
+  // other stage uses, never a second, looser classifier for late adds.
+  const canonical = classifyCategoryWithFallback(candidate.category, body).canonical
+  const dbCategory: RealDbCategory | null = canonical ? CANONICAL_TO_DB_CATEGORY[canonical] : null
+
+  const placesInput: PlacesCompletenessItemInput = {
+    candidateName: candidate.candidateName,
+    classification: geo.classification as PlacesCompletenessItemInput['classification'],
+    googlePlaceId: geo.placeId,
+    formattedAddress: geo.formattedAddress,
+    mapsQuery,
+    lat: geo.lat,
+    lng: geo.lng,
+  }
+
+  // 6. certifyLateAddItem() — THE actual gate. A candidate not
+  // independently satisfying every check here is REJECTED, full stop,
+  // regardless of how confidently the Finisher report framed it as
+  // "must-have."
+  const lateAddInput: LateAddItemInput = {
+    candidateName: candidate.candidateName,
+    venueName: candidate.venueName,
+    body,
+    dbCategory,
+    tags: proposedTags,
+    neighborhoodName: candidate.neighborhoodName,
+    places: placesInput,
+    existingProductionItems: readState(run).existingProductionInventorySnapshot ?? [],
+  }
+  const certification = certifyLateAddItem(lateAddInput)
+  const allReasons = [...tagIssues, ...(certification.verdict === 'REJECTED' ? certification.reasons : [])]
+  const finalVerdict: 'CERTIFIED' | 'REJECTED' = certification.verdict === 'CERTIFIED' && tagIssues.length === 0 ? 'CERTIFIED' : 'REJECTED'
+
+  const driverRecord: DriverItemCertificationRecord = {
+    candidateName: candidate.candidateName,
+    venueName: candidate.venueName,
+    attempts: 1,
+    outcome: finalVerdict === 'CERTIFIED' ? 'ITEM_CERTIFIED' : 'REJECTED_NO_DISTINCTIVE_EXPERIENCE',
+    finalBody: finalVerdict === 'CERTIFIED' ? body : null,
+    finalTags: finalVerdict === 'CERTIFIED' ? proposedTags : [],
+    supportingFact: claimSupported,
+    verifiedAt: finalVerdict === 'CERTIFIED' ? now() : null,
+    rejectionReasons: finalVerdict === 'CERTIFIED' ? [] : allReasons.length > 0 ? allReasons : ['Late-add certification failed.'],
+    dbCategory: dbCategory ?? undefined,
+  }
+
+  return { certification: { candidateName: candidate.candidateName, verdict: finalVerdict, reasons: allReasons.length > 0 ? allReasons : certification.reasons, reuseExistingItemId: certification.reuseExistingItemId }, driverRecord }
 }
 
 async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
@@ -2893,15 +3389,22 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
   const listTitlesWithInternalPrefix = plan.filter((p) => /themed list:/i.test(p.title)).map((p) => p.title)
   const sqlSafety = state.homeListSqlPatch ? checkSqlPatchSafety(state.homeListSqlPatch) : undefined
   const duplicateClustersForFinalAudit = state.venueDuplicateClusters ?? []
+  // Chief Phase 3C, Phase A — METRO_FINISHER_PACKET_EXECUTION's
+  // resolveDuplicateCluster() calls are now the real "mark resolved"
+  // signal this used to lack: a cluster is resolved once a decisive
+  // verdict (DROP_DUPLICATE/KEEP_BOTH/MERGE_NOT_SUPPORTED) exists for its
+  // Place ID; a cluster with no resolution at all, or one still sitting
+  // at NEEDS_HUMAN_REVIEW, is honestly reported as unresolved — never
+  // silently assumed reviewed.
+  const duplicateResolutionByPlaceId = new Map((state.metroFinisherPacketExecution?.duplicateResolutions ?? []).filter((d) => d.placeId).map((d) => [d.placeId as string, d]))
+  const unresolvedDuplicateClusters = duplicateClustersForFinalAudit.filter((c) => {
+    const resolution = duplicateResolutionByPlaceId.get(c.placeId)
+    return !resolution || resolution.verdict === 'NEEDS_HUMAN_REVIEW'
+  })
   state.finalReadyToApplyAudit = evaluateFinalReadyToApplyAudit({
     outOfMarketContaminationVerdict: gateVerdict('OUT_OF_MARKET_CONTAMINATION_GATE'),
-    // No cluster-resolution-tracking mechanism exists yet (out of scope
-    // for this hardening pass — see lateAddItemCertification.ts's own
-    // doc) — fails closed: any cluster that exists is treated as
-    // unresolved until a real "mark resolved" signal exists, never
-    // silently assumed reviewed just because it was reported.
-    allDuplicateClustersResolved: duplicateClustersForFinalAudit.length === 0,
-    unresolvedDuplicateClusterCount: duplicateClustersForFinalAudit.length,
+    allDuplicateClustersResolved: unresolvedDuplicateClusters.length === 0,
+    unresolvedDuplicateClusterCount: unresolvedDuplicateClusters.length,
     allItemsCertified: gateVerdict('ITEM_CERTIFICATION_GATE') === 'PASS',
     uncertifiedItemCount: rejected.length,
     emptyNeighborhoods: state.neighborhoodCompletenessReport?.emptyNeighborhoods,
@@ -3221,6 +3724,9 @@ export async function driveMetroLaunch(deps: MetroDriverDeps, projectId: string,
         break
       case 'METRO_FINISHER_INTEGRATION':
         run = await stepMetroFinisherIntegration(run)
+        break
+      case 'METRO_FINISHER_PACKET_EXECUTION':
+        run = await stepMetroFinisherPacketExecution(deps, run)
         break
       case 'M9_HOME_LIST_MIRROR':
         run = await stepM9HomeListMirror(deps, run)

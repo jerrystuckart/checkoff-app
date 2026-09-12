@@ -16,7 +16,7 @@
 // Phase 2F — the HIGH-LEVEL commands (spec section 4). Jerry does not
 // manage individual execution ids for normal operation; these drive a
 // whole playbook run to completion/NEEDS_JERRY/BLOCKED in one command:
-//   tsx agent-service/cli.ts run metro_launch <projectKey> [--category-plan file.json] [--geo-depth-plan file.json] [--m0 decisions.json] [--metro-area-facts facts.json] [--metro-slug slug] [--existing-inventory-search-term "term"] [--official-list-creator-id uuid] [--flagship-list-title "Fall 2026 — Vienna Metro"] [--request-metro-finisher-follow-up]
+//   tsx agent-service/cli.ts run metro_launch <projectKey> [--category-plan file.json] [--geo-depth-plan file.json] [--m0 decisions.json] [--metro-area-facts facts.json] [--metro-slug slug] [--existing-inventory-search-term "term"] [--official-list-creator-id uuid] [--flagship-list-title "Fall 2026 — Vienna Metro"] [--request-metro-finisher-follow-up] [--packet-execution-budget budget.json] [--neighborhood-municipality-registry registry.json]
 //     --category-plan/--geo-depth-plan: omit to get a metro-agnostic
 //       default (DEFAULT_CATEGORY_COVERAGE_PLAN; geo depth targets
 //       auto-derived from this run's own real M1 neighborhoods) — NEVER
@@ -268,7 +268,31 @@ async function main() {
       // stored a report) — never causes an automatic loop or exceeds
       // MAX_METRO_FINISHER_RUNS by itself.
       const requestMetroFinisherFollowUp = flags.includes('--request-metro-finisher-follow-up')
-      const run = await driveMetroLaunch({ runStore, execStore: store, executors, metroAreaFacts, officialListCreatorId, flagshipListTitle, metroAreaSlug: metroSlug, existingInventorySearchTerm, canonicalNeighborhoods, emptyNeighborhoodFallbackCentroids }, projectId, { categoryPlan, depthTargets, autoDeriveDepthTargetsFromGeography, requestMetroFinisherFollowUp })
+      // --packet-execution-budget: MetroDriverDeps.packetExecutionBudget
+      // (Chief Phase 3C, Phase A) — a JSON file of
+      // { maxIncrementalSpendUsd, maxCertificationAttempts } bounding
+      // METRO_FINISHER_PACKET_EXECUTION's own automatic late-add work.
+      // Omit to use packetExecutionBudget.ts's DEFAULT_PACKET_EXECUTION_BUDGET
+      // — always a real, per-metro-configurable input, never a hardcoded
+      // constant.
+      const packetExecutionBudgetFlagIdx = flags.indexOf('--packet-execution-budget')
+      const packetExecutionBudget: { maxIncrementalSpendUsd: number; maxCertificationAttempts: number } | undefined = packetExecutionBudgetFlagIdx >= 0 ? readJson(flags[packetExecutionBudgetFlagIdx + 1]) : undefined
+      // --neighborhood-municipality-registry: MetroDriverDeps.neighborhoodMunicipalityRegistry
+      // (geographicConsistencyAudit.ts) — a JSON file of
+      // { [neighborhoodName]: { municipalityAliases: string[] } } used by
+      // METRO_FINISHER_PACKET_EXECUTION's NEIGHBORHOOD_PACKET migration
+      // review to confirm a proposed child neighborhood from an affected
+      // item's own verified address. Optional — omitting it leaves every
+      // migration item honestly reported as UNRESOLVED_NO_REGISTRY rather
+      // than guessed.
+      const neighborhoodMunicipalityRegistryFlagIdx = flags.indexOf('--neighborhood-municipality-registry')
+      const neighborhoodMunicipalityRegistry: Record<string, { municipalityAliases: string[] }> | undefined =
+        neighborhoodMunicipalityRegistryFlagIdx >= 0 ? readJson(flags[neighborhoodMunicipalityRegistryFlagIdx + 1]) : undefined
+      const run = await driveMetroLaunch(
+        { runStore, execStore: store, executors, metroAreaFacts, officialListCreatorId, flagshipListTitle, metroAreaSlug: metroSlug, existingInventorySearchTerm, canonicalNeighborhoods, emptyNeighborhoodFallbackCentroids, packetExecutionBudget, neighborhoodMunicipalityRegistry },
+        projectId,
+        { categoryPlan, depthTargets, autoDeriveDepthTargetsFromGeography, requestMetroFinisherFollowUp }
+      )
       console.log(JSON.stringify(run, null, 2))
       return
     }

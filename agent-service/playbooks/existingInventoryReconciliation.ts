@@ -150,8 +150,15 @@ function extractStreetNumber(formattedAddress: string): string | null {
   return match ? match[1] : null
 }
 
-/** Word-overlap (Jaccard-style) similarity between two item bodies, EXCLUDING the venue name's own words (shared by construction — "1919 Kitchen & Tap" appears in both bodies about that venue and carries zero signal about whether the two EXPERIENCES are the same). Returns 0-1. */
-function experienceSimilarity(bodyA: string, bodyB: string, venueNameWords: ReadonlySet<string>): number {
+/**
+ * Word-overlap (Jaccard-style) similarity between two item bodies, EXCLUDING the venue name's own words (shared by construction — "1919 Kitchen & Tap" appears in both bodies about that venue and carries zero signal about whether the two EXPERIENCES are the same). Returns 0-1.
+ *
+ * Exported (Chief Phase 3C, Phase A) so duplicateClusterResolution.ts can
+ * reuse this EXACT heuristic for same-Google-Place-ID cluster resolution
+ * rather than inventing a second similarity metric — see that module's
+ * own doc.
+ */
+export function experienceSimilarity(bodyA: string, bodyB: string, venueNameWords: ReadonlySet<string>): number {
   const wordsOf = (body: string) =>
     new Set(
       normalizeText(body.replace(/'[^']+'/g, ' '))
@@ -166,8 +173,8 @@ function experienceSimilarity(bodyA: string, bodyB: string, venueNameWords: Read
   return union === 0 ? 0 : intersection / union
 }
 
-/** Above this similarity, two bodies about the same venue are judged the SAME experience (REUSE). Conservative — chosen so a real difference (e.g. "eat dinner" vs. "choose from 40 craft beers overlooking the atrium" at the same restaurant) reliably lands below it, per the actual Green Bay incident's own 5 rediscovered venues. */
-const SAME_EXPERIENCE_SIMILARITY_THRESHOLD = 0.35
+/** Above this similarity, two bodies about the same venue are judged the SAME experience (REUSE). Conservative — chosen so a real difference (e.g. "eat dinner" vs. "choose from 40 craft beers overlooking the atrium" at the same restaurant) reliably lands below it, per the actual Green Bay incident's own 5 rediscovered venues. Exported for duplicateClusterResolution.ts — see experienceSimilarity's own doc. */
+export const SAME_EXPERIENCE_SIMILARITY_THRESHOLD = 0.35
 
 function findMatch(candidate: ReconciliationCandidate, existingItems: readonly ExistingProductionItem[]): { item: ExistingProductionItem; matchedBy: ReconciliationMatchedBy } | null {
   // 1. Google Place ID — exact, most authoritative.
