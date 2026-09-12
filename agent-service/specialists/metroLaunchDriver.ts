@@ -237,8 +237,17 @@ interface MetroDriverState {
   metroFinisherReport?: MetroFinisherReport
   /** METRO_FINISHER_INTEGRATION's deterministic (no-AI) synthesis of metroFinisherReport into bounded work packets. */
   metroFinisherPackets?: MetroFinisherWorkPackets
-  /** The Finisher pass's own certification outcome, fed into finalReadyToApplyAudit.ts's metroFinisherStatus field. */
-  metroFinisherStatus?: { verdict: 'PASS' | 'FAIL' | 'WAIVED'; waiverReason?: string }
+  /**
+   * The Finisher pass's own certification outcome, fed into finalReadyToApplyAudit.ts's metroFinisherStatus field.
+   * `failReason` distinguishes WHY a FAIL happened, specifically so the retry-gate in
+   * stepMetroFinisherDeepResearch can tell "the first attempt never produced a usable report"
+   * (VALIDATION_FAILED — no report was ever stored) apart from every other FAIL cause. Only
+   * VALIDATION_FAILED makes the one permitted follow-up eligible; a FAIL for any other reason
+   * (e.g. a validly-shaped report that failed the count-only readiness check) does NOT reopen
+   * the gate — that outcome already has a report on file and is governed by the ordinary
+   * priorNotReady path instead.
+   */
+  metroFinisherStatus?: { verdict: 'PASS' | 'FAIL' | 'WAIVED'; waiverReason?: string; failReason?: 'VALIDATION_FAILED' | 'NOT_READY_COUNT_ONLY' | 'NO_REPORT' }
   /** How many real METRO_FINISHER_DEEP_RESEARCH calls this run has made — bounds the stage to 1 primary run, plus at most 1 caller-requested focused follow-up (see driveMetroLaunch's requestMetroFinisherFollowUp option). Never auto-loops past 2. */
   metroFinisherRunsCompleted?: number
 }
@@ -2447,10 +2456,24 @@ async function stepMetroFinisherDeepResearch(deps: MetroDriverDeps, run: Playboo
 
   if (runsCompleted >= 1) {
     const priorNotReady = state.metroFinisherReport ? !state.metroFinisherReport.finalAssessment.readyToFinish : false
+    // A prior attempt that never produced a stored report because it failed
+    // structural VALIDATION is treated the same as an explicit "not ready"
+    // report for follow-up purposes — the first attempt genuinely produced
+    // nothing usable, so it should get the same one legitimate retry a
+    // "reviewed and not ready" report gets. This is keyed specifically off
+    // failReason === 'VALIDATION_FAILED' (never off FAIL generally) so a
+    // validly-shaped report that failed for some other reason (e.g. the
+    // count-only readiness check) does NOT reopen the gate.
+    const priorReportRejectedForValidation =
+      !state.metroFinisherReport && state.metroFinisherStatus?.verdict === 'FAIL' && state.metroFinisherStatus?.failReason === 'VALIDATION_FAILED'
+    const eligibleForFollowUp = priorNotReady || priorReportRejectedForValidation
     // Budget/stopping rule: a second run only happens when the FIRST
-    // report explicitly said not-ready AND the caller explicitly asked
-    // for a follow-up this call — never an implicit/automatic re-run.
-    if (runsCompleted >= MAX_METRO_FINISHER_RUNS || !priorNotReady || !requestFollowUp) {
+    // attempt was eligible (either explicitly not-ready, or never produced
+    // a usable report at all) AND the caller explicitly asked for a
+    // follow-up this call — never an implicit/automatic re-run. The
+    // runsCompleted >= MAX_METRO_FINISHER_RUNS check bounds this
+    // regardless of eligibility, so this can never yield a 3rd attempt.
+    if (runsCompleted >= MAX_METRO_FINISHER_RUNS || !eligibleForFollowUp || !requestFollowUp) {
       run.currentStage = 'METRO_FINISHER_INTEGRATION'
       return run
     }
@@ -2522,8 +2545,11 @@ async function stepMetroFinisherDeepResearch(deps: MetroDriverDeps, run: Playboo
     // were empty/clean — recorded as a real FAIL so
     // METRO_FINISHER_INTEGRATION (and ultimately finalReadyToApplyAudit)
     // honestly reflects that this run's Finisher pass did not certify,
-    // never fabricating a passing report.
-    freshState.metroFinisherStatus = { verdict: 'FAIL' }
+    // never fabricating a passing report. Tagged specifically as
+    // VALIDATION_FAILED (rather than a generic FAIL) so the retry-gate
+    // above can recognize "this attempt never produced a usable report"
+    // as eligible for the one permitted follow-up.
+    freshState.metroFinisherStatus = { verdict: 'FAIL', failReason: 'VALIDATION_FAILED' }
   }
   run.state = freshState
   run.currentStage = 'METRO_FINISHER_INTEGRATION'
@@ -2539,8 +2565,9 @@ async function stepMetroFinisherIntegration(run: PlaybookRunRecord): Promise<Pla
     // driver was never given a metro_finisher-capable executor — see
     // canExecute()/EXECUTOR_UNAVAILABLE). Never fabricate packets from
     // nothing; status stays whatever METRO_FINISHER_DEEP_RESEARCH already
-    // recorded, defaulting to FAIL if somehow unset.
-    state.metroFinisherStatus = state.metroFinisherStatus ?? { verdict: 'FAIL' }
+    // recorded (including its failReason, e.g. VALIDATION_FAILED), only
+    // defaulting to a generic NO_REPORT FAIL if somehow unset.
+    state.metroFinisherStatus = state.metroFinisherStatus ?? { verdict: 'FAIL', failReason: 'NO_REPORT' }
     run.state = state
     run.currentStage = 'M9_HOME_LIST_MIRROR'
     return run
@@ -2549,7 +2576,11 @@ async function stepMetroFinisherIntegration(run: PlaybookRunRecord): Promise<Pla
   state.metroFinisherPackets = buildMetroFinisherWorkPackets(report)
 
   const countOnlyCheck = checkReadinessNotGatedOnCountAlone(report)
-  state.metroFinisherStatus = countOnlyCheck.flaggedAsCountOnly ? { verdict: 'FAIL' } : { verdict: 'PASS' }
+  // This branch only runs when a report DID validate and get stored, so this
+  // FAIL is never eligible for the validation-failure retry path above —
+  // tagged NOT_READY_COUNT_ONLY (not VALIDATION_FAILED) to keep that
+  // distinction explicit and prevent the gate from ever being reopened here.
+  state.metroFinisherStatus = countOnlyCheck.flaggedAsCountOnly ? { verdict: 'FAIL', failReason: 'NOT_READY_COUNT_ONLY' } : { verdict: 'PASS' }
 
   run.state = state
   run.currentStage = 'M9_HOME_LIST_MIRROR'
@@ -3066,7 +3097,7 @@ export interface DriveMetroLaunchOptions {
   projectName?: string
   /** ENSURE_METRO_PROJECT: overrides the derived agent.projects.summary for this metro. */
   projectSummary?: string
-  /** Chief Phase 3C — explicitly requests ONE additional, focused METRO_FINISHER_DEEP_RESEARCH follow-up run. Only takes effect when the first (or a prior) run's report said `finalAssessment.readyToFinish: false` — never causes an automatic loop, and never exceeds MAX_METRO_FINISHER_RUNS regardless of how many times this is set to true. */
+  /** Chief Phase 3C — explicitly requests ONE additional, focused METRO_FINISHER_DEEP_RESEARCH follow-up run. Only takes effect when the first (or a prior) run's report said `finalAssessment.readyToFinish: false`, OR the first attempt failed structural validation and never produced a stored report at all (metroFinisherStatus.failReason === 'VALIDATION_FAILED') — never causes an automatic loop, and never exceeds MAX_METRO_FINISHER_RUNS regardless of how many times this is set to true. */
   requestMetroFinisherFollowUp?: boolean
 }
 

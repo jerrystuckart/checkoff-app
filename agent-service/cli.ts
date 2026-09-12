@@ -16,7 +16,7 @@
 // Phase 2F — the HIGH-LEVEL commands (spec section 4). Jerry does not
 // manage individual execution ids for normal operation; these drive a
 // whole playbook run to completion/NEEDS_JERRY/BLOCKED in one command:
-//   tsx agent-service/cli.ts run metro_launch <projectKey> [--category-plan file.json] [--geo-depth-plan file.json] [--m0 decisions.json] [--metro-area-facts facts.json] [--metro-slug slug] [--existing-inventory-search-term "term"] [--official-list-creator-id uuid] [--flagship-list-title "Fall 2026 — Vienna Metro"]
+//   tsx agent-service/cli.ts run metro_launch <projectKey> [--category-plan file.json] [--geo-depth-plan file.json] [--m0 decisions.json] [--metro-area-facts facts.json] [--metro-slug slug] [--existing-inventory-search-term "term"] [--official-list-creator-id uuid] [--flagship-list-title "Fall 2026 — Vienna Metro"] [--request-metro-finisher-follow-up]
 //     --category-plan/--geo-depth-plan: omit to get a metro-agnostic
 //       default (DEFAULT_CATEGORY_COVERAGE_PLAN; geo depth targets
 //       auto-derived from this run's own real M1 neighborhoods) — NEVER
@@ -29,6 +29,14 @@
 //     --existing-inventory-search-term: overrides the region name used to
 //       search for already-live production items this metro's build
 //       should reuse rather than duplicate — defaults to metroAreaFacts.name.
+//     --request-metro-finisher-follow-up: wires
+//       DriveMetroLaunchOptions.requestMetroFinisherFollowUp (Chief Phase
+//       3C) — requests the one permitted METRO_FINISHER_DEEP_RESEARCH
+//       follow-up run. A no-op unless the driver's own retry-gate decides
+//       the prior attempt is actually eligible (a report that said
+//       not-ready, or a first attempt that failed structural validation
+//       and never stored a report at all) — never causes an automatic
+//       loop and never exceeds MAX_METRO_FINISHER_RUNS.
 //   tsx agent-service/cli.ts run destination_hub_lifecycle <projectKey> --candidate candidate.json
 //   tsx agent-service/cli.ts status <playbookKey> <projectKey>
 //   tsx agent-service/cli.ts pause <playbookKey> <projectKey>
@@ -251,7 +259,16 @@ async function main() {
       const emptyNeighborhoodFallbackCentroidsFlagIdx = flags.indexOf('--empty-neighborhood-fallback-centroids')
       const emptyNeighborhoodFallbackCentroids: Readonly<Record<string, { lat: number; lng: number }>> | undefined =
         emptyNeighborhoodFallbackCentroidsFlagIdx >= 0 ? readJson(flags[emptyNeighborhoodFallbackCentroidsFlagIdx + 1]) : undefined
-      const run = await driveMetroLaunch({ runStore, execStore: store, executors, metroAreaFacts, officialListCreatorId, flagshipListTitle, metroAreaSlug: metroSlug, existingInventorySearchTerm, canonicalNeighborhoods, emptyNeighborhoodFallbackCentroids }, projectId, { categoryPlan, depthTargets, autoDeriveDepthTargetsFromGeography })
+      // --request-metro-finisher-follow-up: wires DriveMetroLaunchOptions.requestMetroFinisherFollowUp
+      // (Chief Phase 3C) — explicitly requests the one permitted
+      // METRO_FINISHER_DEEP_RESEARCH follow-up run. A no-op unless the
+      // driver's own retry-gate in stepMetroFinisherDeepResearch decides
+      // the prior attempt is actually eligible (either a report that said
+      // not-ready, or a first attempt that failed validation and never
+      // stored a report) — never causes an automatic loop or exceeds
+      // MAX_METRO_FINISHER_RUNS by itself.
+      const requestMetroFinisherFollowUp = flags.includes('--request-metro-finisher-follow-up')
+      const run = await driveMetroLaunch({ runStore, execStore: store, executors, metroAreaFacts, officialListCreatorId, flagshipListTitle, metroAreaSlug: metroSlug, existingInventorySearchTerm, canonicalNeighborhoods, emptyNeighborhoodFallbackCentroids }, projectId, { categoryPlan, depthTargets, autoDeriveDepthTargetsFromGeography, requestMetroFinisherFollowUp })
       console.log(JSON.stringify(run, null, 2))
       return
     }
