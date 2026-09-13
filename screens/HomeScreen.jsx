@@ -28,6 +28,7 @@ import { attachActiveCoverImages, attachDisplayEligibleImagePools } from '../lib
 import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
 import { deriveHomeHeroLayout } from '../lib/homeHeroLayout'
 import { selectNearYouCompactRows } from '../lib/nearYouCompact'
+import { fetchAllRows } from '../lib/supabasePagination'
 import CompactHomeHeader from '../components/home/CompactHomeHeader'
 import DestinationHero from '../components/home/DestinationHero'
 import CityPickerModal from '../components/home/CityPickerModal'
@@ -593,21 +594,30 @@ async function loadNearbyRail(userId) {
       partners!items_partner_id_fkey(business_name, photo_url)
     `
 
+    // Paginated (see lib/supabasePagination.js) — an unbounded .select() here
+    // silently truncates at PostgREST's default 1000-row cap once the global
+    // eligible-item count crosses it (confirmed: 1465 rows for the located-
+    // items filter alone), dropping real candidates from the Near-You rail's
+    // pool before distance is ever computed — the same root cause as the
+    // Nearby "All" tab bug in lib/useNearby.js. .order('id') makes paging
+    // deterministic (required for stable .range() pagination in Postgres).
     const [{ data: universalItems }, { data: locatedItems }] = await Promise.all([
-      supabase
+      fetchAllRows(() => supabase
         .from('items')
         .select(itemCols)
         .eq('is_active', true)
         .eq('is_approved', true)
-        .eq('is_universal', true),
-      supabase
+        .eq('is_universal', true)
+        .order('id')),
+      fetchAllRows(() => supabase
         .from('items')
         .select(itemCols)
         .eq('is_active', true)
         .eq('is_approved', true)
         .eq('is_universal', false)
         .not('maps_lat', 'is', null)
-        .not('maps_lng', 'is', null),
+        .not('maps_lng', 'is', null)
+        .order('id')),
     ])
 
     const allRawItems = [...(universalItems ?? []), ...(locatedItems ?? [])]
