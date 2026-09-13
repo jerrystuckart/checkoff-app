@@ -105,6 +105,25 @@ export interface FinalReadyToApplyInput {
    * Jerry-approved exception, never an implicit pass).
    */
   metroFinisherStatus?: { verdict: 'PASS' | 'FAIL' | 'WAIVED'; waiverReason?: string }
+  /**
+   * Chief Phase 2AO (2026-09-13, Munich neighborhood-integrity postmortem)
+   * — ITEM_NEIGHBORHOOD_REFERENTIAL_INTEGRITY_GATE
+   * (itemNeighborhoodIntegrityGate.ts): every retained item's neighborhood
+   * reference must exactly match (Unicode-normalized) a member of the
+   * frozen canonical list. Missing is treated as a failure, same
+   * discipline as every other check here.
+   */
+  neighborhoodReferentialIntegrityVerdict?: 'PASS' | 'FAIL'
+  neighborhoodReferentialIntegrityIssues?: readonly string[]
+  /**
+   * Chief Phase 2AO — ITEM_GEO_METRO_CONSISTENCY_GATE
+   * (itemNeighborhoodIntegrityGate.ts): every retained item's own verified
+   * coordinates must lie within the metro's approved geographic boundary,
+   * or carry an explicit named exception. Missing is treated as a
+   * failure, same discipline as every other check here.
+   */
+  geoMetroConsistencyVerdict?: 'PASS' | 'FAIL'
+  geoMetroConsistencyIssues?: readonly string[]
 }
 
 export interface FinalReadyToApplyResult {
@@ -173,6 +192,12 @@ export function evaluateFinalReadyToApplyAudit(input: FinalReadyToApplyInput): F
 
   if (input.sqlSafetyVerdict === undefined) reasons.push(missing('SQL safety check'))
   else if (input.sqlSafetyVerdict === 'FAIL') reasons.push(`SQL safety check failed: ${(input.sqlSafetyIssues ?? []).join('; ') || 'see detail'}.`)
+
+  if (input.neighborhoodReferentialIntegrityVerdict === undefined) reasons.push(missing('Item neighborhood referential integrity'))
+  else if (input.neighborhoodReferentialIntegrityVerdict === 'FAIL') reasons.push(`Item neighborhood referential integrity failed: ${(input.neighborhoodReferentialIntegrityIssues ?? []).join('; ') || 'see detail'}.`)
+
+  if (input.geoMetroConsistencyVerdict === undefined) reasons.push(missing('Item geo-metro consistency'))
+  else if (input.geoMetroConsistencyVerdict === 'FAIL') reasons.push(`Item geo-metro consistency failed: ${(input.geoMetroConsistencyIssues ?? []).join('; ') || 'see detail'}.`)
 
   if (input.metroFinisherStatus === undefined) {
     reasons.push(missing('Metro Finisher deep-research pass'))

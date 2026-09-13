@@ -65,7 +65,17 @@ export const REQUIRED_GATE_CATEGORIES: Readonly<Record<string, readonly string[]
   // themselves build blockers) but are REQUIRED so their findings can
   // never be silently missing from a final certification report.
   SameVenue: ['SAME_VENUE_CLUSTER_REVIEW_GATE'],
-  Neighborhoods: ['NEIGHBORHOOD_COMPLETENESS_GATE'],
+  // ITEM_NEIGHBORHOOD_REFERENTIAL_INTEGRITY_GATE / ITEM_GEO_METRO_CONSISTENCY_GATE
+  // (Chief Phase 2AO, 2026-09-13, Munich neighborhood-integrity postmortem)
+  // — NEIGHBORHOOD_COMPLETENESS_GATE only checks the CANONICAL list's own
+  // coverage; it never verified the reverse direction (does every ITEM's
+  // neighborhood reference actually resolve to a real canonical member?)
+  // or that an item's own verified coordinates are actually inside the
+  // metro being built. Both gaps let a real bad package (8 canonical rows
+  // created, 75 items referencing 39 distinct strings, one item's verified
+  // coordinates 300km away in a different city) reach READY_TO_ACTIVATE.
+  // See itemNeighborhoodIntegrityGate.ts.
+  Neighborhoods: ['NEIGHBORHOOD_COMPLETENESS_GATE', 'ITEM_NEIGHBORHOOD_REFERENTIAL_INTEGRITY_GATE', 'ITEM_GEO_METRO_CONSISTENCY_GATE'],
   // Images: intentionally its own category, evaluated LAST alongside
   // everything else, never used to stop the pipeline early — see
   // imageReadiness.ts. Winston cannot autonomously select images; that

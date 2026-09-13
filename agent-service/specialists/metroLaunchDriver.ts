@@ -101,6 +101,7 @@ import { clusterByPlaceId, buildVenueClusterReviewNotes, evaluateSameVenueCluste
 import { analyzeCatalogVoice, evaluateOpeningVerbConcentrationAudit, type VoiceCatalogEntry } from '../playbooks/catalogVoiceDiagnostics'
 import { evaluatePlacesCompletenessGate, type PlacesCompletenessItemInput } from '../playbooks/placesCompletenessGate'
 import { evaluateNeighborhoodCompletenessGate } from '../playbooks/neighborhoodCompletenessGate'
+import { evaluateItemNeighborhoodReferentialIntegrityGate, evaluateItemGeoMetroConsistencyGate } from '../playbooks/itemNeighborhoodIntegrityGate'
 import { checkSqlPatchSafety } from '../playbooks/sqlPatchSafety'
 import { evaluateFinalReadyToApplyAudit, type FinalReadyToApplyResult } from '../playbooks/finalReadyToApplyAudit'
 import { buildCostReport } from '../playbooks/metroCostReport'
@@ -536,6 +537,26 @@ export interface MetroDriverDeps {
    * being silently skipped or given an invented coordinate.
    */
   emptyNeighborhoodFallbackCentroids?: Readonly<Record<string, { lat: number; lng: number }>>
+  /**
+   * M8 (Chief Phase 2AO, 2026-09-13, Munich neighborhood-integrity
+   * postmortem): the maximum distance (km) a retained item's verified
+   * coordinates may lie from state.m0Decisions.metroCenter before
+   * ITEM_GEO_METRO_CONSISTENCY_GATE (itemNeighborhoodIntegrityGate.ts)
+   * flags it. Defaults to 60km — generous enough to cover a real metro's
+   * outer suburbs/day-trip destinations without requiring a per-metro
+   * override for the common case, while still catching genuine
+   * out-of-market contamination (the real incident this closes: a
+   * Dresden-coordinate item ~300km from Munich's center).
+   */
+  metroGeoBoundaryRadiusKm?: number
+  /**
+   * M8: explicit, named exceptions to metroGeoBoundaryRadiusKm — mirrors
+   * approvedCategoryExceptions' precedent (metroLaunch.ts). The ONLY way
+   * a genuinely far-but-intended item (an accepted nearby-destination
+   * boundary) can still pass ITEM_GEO_METRO_CONSISTENCY_GATE, matched by
+   * candidateName. Never an implicit pass.
+   */
+  approvedGeoDistanceExceptions?: readonly { itemName: string; reason: string }[]
   /**
    * METRO_FINISHER_PACKET_EXECUTION (Chief Phase 3C, Phase A): the real,
    * configurable budget bounding how much bounded follow-up work this
@@ -1859,7 +1880,34 @@ async function stepM8BatchCertification(deps: MetroDriverDeps, run: PlaybookRunR
   const neighborhoodCompletenessGate: StagingGateResult = { key: neighborhoodCompletenessResult.key, verdict: neighborhoodCompletenessResult.verdict, reason: neighborhoodCompletenessResult.reason }
   state.neighborhoodCompletenessReport = { emptyNeighborhoods: neighborhoodCompletenessResult.emptyNeighborhoods, perNeighborhoodCounts: neighborhoodCompletenessResult.perNeighborhoodCounts }
 
-  const gates: StagingGateResult[] = [...distinctivenessGates, itemCertificationGate, tagGate, metadataGate, geoGate, outOfMarketGate, placesCompletenessGate, openingVerbGate, sameVenueClusterGate, neighborhoodCompletenessGate]
+  // ITEM_NEIGHBORHOOD_REFERENTIAL_INTEGRITY_GATE / ITEM_GEO_METRO_CONSISTENCY_GATE
+  // (Chief Phase 2AO, 2026-09-13, Munich neighborhood-integrity postmortem)
+  // — the REVERSE direction of NEIGHBORHOOD_COMPLETENESS_GATE (does every
+  // ITEM's own neighborhood reference actually resolve to a real canonical
+  // member?) plus an independent verified-coordinate distance check. Uses
+  // the SAME per-item neighborhood source as neighborhoodItemCounts above
+  // (candidatesByName(...).neighborhood — still the raw M3/M5 discovery
+  // label until a caller's own neighborhood-assignment step overwrites it;
+  // this gate is what now catches a stale/descriptive label surviving to
+  // here, exactly the Munich defect). See itemNeighborhoodIntegrityGate.ts.
+  const itemNeighborhoodRefs = certified.map((r) => ({ itemName: r.candidateName, neighborhoodName: candidatesByName.get(r.candidateName)?.neighborhood ?? '' })).filter((r) => r.neighborhoodName.trim().length > 0)
+  const neighborhoodReferentialIntegrityResult = evaluateItemNeighborhoodReferentialIntegrityGate(canonicalNeighborhoodNames, itemNeighborhoodRefs)
+  const neighborhoodReferentialIntegrityGate: StagingGateResult = { key: neighborhoodReferentialIntegrityResult.key, verdict: neighborhoodReferentialIntegrityResult.verdict, reason: neighborhoodReferentialIntegrityResult.reason }
+
+  const itemGeoRecordsForConsistency = certified
+    .map((r) => {
+      const g = geoResultsByNameForContamination.get(r.candidateName)
+      return g && typeof g.lat === 'number' && typeof g.lng === 'number' ? { itemName: r.candidateName, lat: g.lat, lng: g.lng, formattedAddress: g.formattedAddress } : null
+    })
+    .filter((r): r is { itemName: string; lat: number; lng: number; formattedAddress: string | null } => r !== null)
+  const geoMetroConsistencyGate: StagingGateResult = metroCenterBias
+    ? (() => {
+        const result = evaluateItemGeoMetroConsistencyGate({ centerLat: metroCenterBias.lat, centerLng: metroCenterBias.lng, maxRadiusKm: deps.metroGeoBoundaryRadiusKm ?? 60, approvedDistanceExceptions: deps.approvedGeoDistanceExceptions }, itemGeoRecordsForConsistency)
+        return { key: result.key, verdict: result.verdict, reason: result.reason }
+      })()
+    : { key: 'ITEM_GEO_METRO_CONSISTENCY_GATE', verdict: 'FAIL', reason: 'No metro center available (state.m0Decisions.metroCenter/deps.metroCenterBias) — refusing to check item geo-metro consistency against nothing.' }
+
+  const gates: StagingGateResult[] = [...distinctivenessGates, itemCertificationGate, tagGate, metadataGate, geoGate, outOfMarketGate, placesCompletenessGate, openingVerbGate, sameVenueClusterGate, neighborhoodCompletenessGate, neighborhoodReferentialIntegrityGate, geoMetroConsistencyGate]
   state.batchCertificationGates = gates
 
   // M8.5 routing (Chief Phase 2AD, 2026-09-09 instruction): a catalog-wide
@@ -3454,6 +3502,16 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
     allItemsCertified: gateVerdict('ITEM_CERTIFICATION_GATE') === 'PASS',
     uncertifiedItemCount: rejected.length,
     emptyNeighborhoods: state.neighborhoodCompletenessReport?.emptyNeighborhoods,
+    neighborhoodReferentialIntegrityVerdict: gateVerdict('ITEM_NEIGHBORHOOD_REFERENTIAL_INTEGRITY_GATE'),
+    neighborhoodReferentialIntegrityIssues: (() => {
+      const g = allGatesForFinalAudit.find((x) => x.key === 'ITEM_NEIGHBORHOOD_REFERENTIAL_INTEGRITY_GATE')
+      return g && g.verdict !== 'PASS' ? [g.reason] : undefined
+    })(),
+    geoMetroConsistencyVerdict: gateVerdict('ITEM_GEO_METRO_CONSISTENCY_GATE'),
+    geoMetroConsistencyIssues: (() => {
+      const g = allGatesForFinalAudit.find((x) => x.key === 'ITEM_GEO_METRO_CONSISTENCY_GATE')
+      return g && g.verdict !== 'PASS' ? [g.reason] : undefined
+    })(),
     placesCompletenessVerdict: gateVerdict('PLACES_COMPLETENESS_GATE'),
     listTitlesWithInternalPrefix,
     // Chief Phase 2AM (2026-09-11) — PRE_APPLY (packageValid, always

@@ -16,6 +16,8 @@ function goodFinalAuditInput(overrides: Partial<FinalReadyToApplyInput> = {}): F
     homeList: { packageValid: true, itemProvenanceValid: true },
     reusedItemsAdditiveOnly: true,
     sqlSafetyVerdict: 'PASS',
+    neighborhoodReferentialIntegrityVerdict: 'PASS',
+    geoMetroConsistencyVerdict: 'PASS',
     executionState: 'GENERATED',
     metroFinisherStatus: { verdict: 'PASS' },
     ...overrides,
@@ -80,6 +82,34 @@ test('evaluateFinalReadyToApplyAudit: a WAIVED metroFinisherStatus never masks a
 test('evaluateFinalReadyToApplyAudit: empty neighborhoods alone never block, even with metroFinisherStatus present', () => {
   const result = evaluateFinalReadyToApplyAudit(goodFinalAuditInput({ emptyNeighborhoods: ['Hobart', 'Allouez'] }))
   assert.equal(result.verdict, 'READY_TO_APPLY')
+})
+
+test('evaluateFinalReadyToApplyAudit: BLOCKED when neighborhoodReferentialIntegrityVerdict is missing entirely — never silently skipped', () => {
+  const input = goodFinalAuditInput() as unknown as Record<string, unknown>
+  delete input.neighborhoodReferentialIntegrityVerdict
+  const result = evaluateFinalReadyToApplyAudit(input as unknown as FinalReadyToApplyInput)
+  assert.equal(result.verdict, 'BLOCKED')
+  assert.ok(result.reasons.some((r) => r.includes('neighborhood referential integrity') && r.includes('missing')))
+})
+
+test('evaluateFinalReadyToApplyAudit: BLOCKED when neighborhoodReferentialIntegrityVerdict is FAIL', () => {
+  const result = evaluateFinalReadyToApplyAudit(goodFinalAuditInput({ neighborhoodReferentialIntegrityVerdict: 'FAIL', neighborhoodReferentialIntegrityIssues: ['Frauenkirche → "Old Town (Altstadt)" not canonical'] }))
+  assert.equal(result.verdict, 'BLOCKED')
+  assert.ok(result.reasons.some((r) => r.toLowerCase().includes('neighborhood referential integrity') && r.includes('Old Town')))
+})
+
+test('evaluateFinalReadyToApplyAudit: BLOCKED when geoMetroConsistencyVerdict is missing entirely — never silently skipped', () => {
+  const input = goodFinalAuditInput() as unknown as Record<string, unknown>
+  delete input.geoMetroConsistencyVerdict
+  const result = evaluateFinalReadyToApplyAudit(input as unknown as FinalReadyToApplyInput)
+  assert.equal(result.verdict, 'BLOCKED')
+  assert.ok(result.reasons.some((r) => r.includes('geo-metro consistency') && r.includes('missing')))
+})
+
+test('evaluateFinalReadyToApplyAudit: BLOCKED when geoMetroConsistencyVerdict is FAIL', () => {
+  const result = evaluateFinalReadyToApplyAudit(goodFinalAuditInput({ geoMetroConsistencyVerdict: 'FAIL', geoMetroConsistencyIssues: ['Frauenkirche is 300km from metro center'] }))
+  assert.equal(result.verdict, 'BLOCKED')
+  assert.ok(result.reasons.some((r) => r.toLowerCase().includes('geo-metro consistency') && r.includes('300km')))
 })
 
 test('evaluateFinalReadyToApplyAudit: a missing, pre-existing required check (e.g. sqlSafetyVerdict) still blocks independently of metroFinisherStatus', () => {

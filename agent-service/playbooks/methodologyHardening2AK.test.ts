@@ -188,6 +188,8 @@ function goodFinalAuditInput() {
     homeList: { packageValid: true, itemProvenanceValid: true } as { packageValid: boolean; itemProvenanceValid: boolean; liveVerificationValid?: boolean },
     reusedItemsAdditiveOnly: true,
     sqlSafetyVerdict: 'PASS' as const,
+    neighborhoodReferentialIntegrityVerdict: 'PASS' as const,
+    geoMetroConsistencyVerdict: 'PASS' as const,
     executionState: 'GENERATED' as const,
     // Chief Phase 3C — the Metro Finisher deep-research pass is now a
     // required check too; a PASS here keeps this fixture's baseline

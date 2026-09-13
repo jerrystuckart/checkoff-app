@@ -64,6 +64,8 @@ function goodInputExcept(overrides: Record<string, unknown> = {}) {
     listTitlesWithInternalPrefix: [] as string[],
     reusedItemsAdditiveOnly: true,
     sqlSafetyVerdict: 'PASS' as const,
+    neighborhoodReferentialIntegrityVerdict: 'PASS' as const,
+    geoMetroConsistencyVerdict: 'PASS' as const,
     executionState: 'GENERATED' as const,
     // Chief Phase 3C — Metro Finisher status is now a required check too;
     // PASS keeps this fixture's "everything but the thing under test"
