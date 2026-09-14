@@ -67,6 +67,7 @@ import { readRealHomeListRows, type HomeListReadPathFailure } from './homeListRe
 import { fetchExistingProductionInventoryForReconciliation, type FetchExistingProductionInventoryInput } from './existingInventoryReadPath'
 import { evaluateOutOfMarketContaminationGate } from '../playbooks/outOfMarketContamination'
 import { reconcileAgainstExistingInventory, type ExistingProductionItem, type ReconciliationResult } from '../playbooks/existingInventoryReconciliation'
+import { runM9ShadowCuration, type M9CurationMode, type M9AdapterCertifiedItem, type M9ShadowComparisonArtifact } from './m9ListCurationAdapter'
 import { deriveDefaultDepthTargets, DEFAULT_CATEGORY_COVERAGE_PLAN } from '../playbooks/defaultMetroManifest'
 import { buildCategoryPolicySetFromPlan, DEFAULT_CATEGORY_PERCENTAGE_BANDS, type CategoryPolicyException, type CommercialOwnershipType } from '../playbooks/categoryPolicy'
 import { runSeedPortfolioAudit, DEFAULT_SEED_PORTFOLIO_AUDIT_LOOP_CONTROLS, type SeedPortfolioAuditReport, type SeedPortfolioAuditLoopControls, type SeedCandidateInput } from '../playbooks/seedPortfolioAudit'
@@ -189,6 +190,16 @@ interface MetroDriverState {
   homeListPlan?: HomeListPlanEntry[]
   /** The one atomic, self-certifying SQL patch text for Jerry to run — this driver never writes public.lists/public.list_items directly (standing write-boundary rule, unchanged). */
   homeListSqlPatch?: string
+  /**
+   * M9 wiring, Session 1 (2026-09-14): the new two-pass list-curation
+   * system's own SHADOW-mode output (see m9ListCurationAdapter.ts) —
+   * populated ONLY when deps.m9CurationMode === 'SHADOW', purely additive
+   * and NEVER read by SQL generation, M10, or any gate. `homeListPlan`/
+   * `homeListSqlPatch` above remain the sole authoritative artifacts
+   * regardless of mode. Overwritten fresh on every SHADOW M9 pass, never
+   * accumulated (same discipline as metroFinisherReport).
+   */
+  m9ShadowCuration?: M9ShadowComparisonArtifact
   tagVocabularyDetail?: string
   batchCertificationGates?: StagingGateResult[]
   rejectedItemCount?: number
@@ -499,6 +510,23 @@ export interface MetroDriverDeps {
    * list".
    */
   flagshipListTitle?: string
+  /**
+   * M9 wiring, Session 1 (2026-09-14): which list-curation path M9 runs.
+   * Defaults to 'LEGACY' — the adapter is never even invoked, byte-for-byte
+   * identical to this driver's behavior before this option existed. 'SHADOW'
+   * additionally runs the new two-pass system (m9ListCurationAdapter.ts)
+   * and stores its output in state.m9ShadowCuration, but never lets it
+   * affect state.homeListPlan/state.homeListSqlPatch or the unconditional
+   * M9->M10 transition — see stepM9HomeListMirror's own doc.
+   *
+   * 'ENFORCED' is intentionally NOT part of this type: the adapter's own
+   * M9CurationMode is a three-way type for a later session's use, but this
+   * driver implements only LEGACY/SHADOW today, and "never silently switch
+   * modes" means an unimplemented mode must never be quietly downgraded to
+   * LEGACY — see stepM9HomeListMirror's fail-closed check for any value
+   * outside this type (reachable only from a non-TypeScript caller).
+   */
+  m9CurationMode?: 'LEGACY' | 'SHADOW'
   /** M10: which Home cards already have an image. Omit to correctly report every required card as still needing one — Winston never fabricates image readiness. */
   checkImageReadiness?: (plan: readonly HomeListPlanEntry[]) => Promise<ImageReadinessCard[]>
   /** M10 BUSINESS_ACTIVATION_KIT_GATE: the actual outreach copy this metro would send — validated deterministically (no network call) for a metro-specific kit reference or a misused /confirm/<token> link. Defaults to a clean template referencing only the canonical URL, since no outreach is sent during a metro build itself. */
@@ -3599,6 +3627,50 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
       run,
       `Cannot build a self-contained item-creation package: ${missingMetadataFor.length} certified item(s) are missing dbCategory/neighborhood/metadata that M8 should already have resolved — this is a real driver bug, not a data issue: ${missingMetadataFor.join(', ')}.`
     )
+  }
+
+  // M9 wiring, Session 1 (2026-09-14) — SHADOW mode. Runs strictly AFTER
+  // the legacy `plan` above is already final and AFTER the same
+  // fail-closed metadata check the legacy SQL path just passed, using the
+  // exact same validated `newItems` pool — so SHADOW only ever evaluates a
+  // catalog the legacy path has itself already accepted. Deliberately
+  // placed BEFORE buildHomeListSqlPatch so a SHADOW failure can never be
+  // confused with (or mask) a real legacy SQL-generation failure below.
+  // Wrapped in its own try/catch as defense in depth on top of
+  // runM9ShadowCuration's own internal no-throw contract: this call must
+  // never be able to block the run, alter `plan`/`homeListSql`, or change
+  // the unconditional M9->M10 transition at the end of this function.
+  if ((deps.m9CurationMode ?? 'LEGACY') === 'SHADOW') {
+    try {
+      const venueNameByCandidateName = new Map(certifiedForRecheck.map((r) => [r.candidateName, r.venueName]))
+      const shadowCertifiedItems: M9AdapterCertifiedItem[] = newItems.map((item) => ({
+        candidateName: item.candidateName,
+        venueName: venueNameByCandidateName.get(item.candidateName) ?? item.candidateName,
+        dbCategory: item.dbCategory,
+        finalTags: item.tags,
+        finalBody: item.body,
+        neighborhoodName: item.neighborhoodName,
+      }))
+      state.m9ShadowCuration = runM9ShadowCuration({
+        certifiedItems: shadowCertifiedItems,
+        legacyPlan: plan.map((p) => ({ title: p.title, kind: p.kind, itemCandidateNames: p.itemCandidateNames })),
+        now: deps.now,
+      })
+    } catch (err) {
+      // Unreachable in practice (runM9ShadowCuration never throws by its
+      // own contract) — kept as genuine defense in depth, never as a
+      // substitute for that contract.
+      state.m9ShadowCuration = {
+        mode: 'SHADOW',
+        computedAt: (deps.now ?? (() => new Date().toISOString()))(),
+        conceptDiscovery: [],
+        membershipDecisionsByConcept: {},
+        conceptDifferences: [],
+        membershipDifferences: [],
+        holdFindings: [],
+        validationFailures: [`m9ListCurationAdapter threw unexpectedly outside its own no-throw contract: ${err instanceof Error ? err.message : String(err)}`],
+      }
+    }
   }
 
   const { sql: homeListSql, neighborhoodsMissingCentroid } = buildHomeListSqlPatch(
