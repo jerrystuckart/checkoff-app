@@ -520,11 +520,15 @@ export interface MetroDriverDeps {
    * M9->M10 transition — see stepM9HomeListMirror's own doc.
    *
    * 'ENFORCED' is intentionally NOT part of this type: the adapter's own
-   * M9CurationMode is a three-way type for a later session's use, but this
-   * driver implements only LEGACY/SHADOW today, and "never silently switch
-   * modes" means an unimplemented mode must never be quietly downgraded to
-   * LEGACY — see stepM9HomeListMirror's fail-closed check for any value
-   * outside this type (reachable only from a non-TypeScript caller).
+   * M9CurationMode is a three-way type reserved for a later session, but
+   * this driver implements only LEGACY/SHADOW today. TypeScript itself is
+   * the enforcement — no caller in this codebase can pass 'ENFORCED' or
+   * any other value and have it compile. A non-TypeScript caller that
+   * bypasses that (e.g. `as never`) gets the same safe behavior as
+   * omitting this option entirely (stepM9HomeListMirror only ever branches
+   * on `=== 'SHADOW'`): the adapter is simply never invoked and only the
+   * legacy artifacts are produced — never a silent, unimplemented
+   * ENFORCED-mode behavior fabricated in its place.
    */
   m9CurationMode?: 'LEGACY' | 'SHADOW'
   /** M10: which Home cards already have an image. Omit to correctly report every required card as still needing one — Winston never fabricates image readiness. */

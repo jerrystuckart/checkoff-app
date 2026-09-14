@@ -199,7 +199,15 @@ export function runM9ShadowCuration(input: RunM9ShadowCurationInput): M9ShadowCo
   let conceptDiscovery: ListConceptCandidate[]
   try {
     const conceptItems = input.certifiedItems.map(toConceptItem)
-    const alreadyAccepted = input.legacyPlan.map((p) => ({ title: p.title, candidateNames: p.itemCandidateNames }))
+    // CURATED_MIRROR is, by design, a full mirror of the entire certified
+    // catalog (see metroLaunchDriver.ts's HomeListPlanEntry.kind doc) — every
+    // discovered concept's members are trivially 100% "already in" it, which
+    // would make discoverListConcepts's overlap check REQUIRES_JERRY every
+    // single concept for a reason that carries no real editorial signal.
+    // Excluded from the overlap check only; still eligible for the
+    // best-legacy-match reporting below (a concept fully mirrored is still
+    // worth reporting on).
+    const alreadyAccepted = input.legacyPlan.filter((p) => p.kind !== 'CURATED_MIRROR').map((p) => ({ title: p.title, candidateNames: p.itemCandidateNames }))
     conceptDiscovery = discoverListConcepts(conceptItems, input.conceptDiscoveryConfig ?? DEFAULT_LIST_CONCEPT_DISCOVERY_CONFIG, alreadyAccepted)
   } catch (err) {
     return emptyArtifact(now, [`PASS A (discoverListConcepts) threw: ${err instanceof Error ? err.message : String(err)}`])
@@ -218,8 +226,15 @@ export function runM9ShadowCuration(input: RunM9ShadowCurationInput): M9ShadowCo
     }
   }
 
+  // Same exclusion as the PASS A overlap check above, for the same reason:
+  // CURATED_MIRROR trivially "matches" every concept's full membership, which
+  // would make every conceptDifference/membershipDifference report against
+  // it instead of against a real editorial list (or, correctly, no match at
+  // all) — never a useful signal.
+  const legacyPlanForMatching = input.legacyPlan.filter((p) => p.kind !== 'CURATED_MIRROR')
+
   const conceptDifferences: M9ConceptDifference[] = conceptDiscovery.map((concept) => {
-    const match = findBestLegacyMatch(concept.candidateNames, input.legacyPlan)
+    const match = findBestLegacyMatch(concept.candidateNames, legacyPlanForMatching)
     return {
       proposedTitle: concept.proposedTitle,
       verdict: concept.verdict,
@@ -235,7 +250,7 @@ export function runM9ShadowCuration(input: RunM9ShadowCurationInput): M9ShadowCo
     if (concept.verdict !== 'CREATE') continue
     const decisions = membershipDecisionsByConcept[concept.proposedTitle]
     if (!decisions) continue // this concept's PASS B threw — already recorded in validationFailures, never silently diffed against nothing.
-    const match = findBestLegacyMatch(concept.candidateNames, input.legacyPlan)
+    const match = findBestLegacyMatch(concept.candidateNames, legacyPlanForMatching)
     if (!match) continue // no corresponding legacy list at all — already fully captured as a conceptDifference with matchedLegacyListTitle: null.
     const shadowIncluded = new Set(decisions.filter((d) => d.verdict === 'INCLUDE').map((d) => d.itemId))
     const legacyIncluded = new Set(match.list.itemCandidateNames)
