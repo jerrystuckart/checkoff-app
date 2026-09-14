@@ -55,7 +55,13 @@ function normalizeText(text: string): string {
 
 const NOISE_WORDS = new Set(['the', 'a', 'an'])
 
-function normalizedVenueKey(name: string): string {
+/**
+ * Exported for reuse by other modules that need the same Unicode/case/
+ * punctuation-insensitive venue-identity normalization (e.g.
+ * researchEvidence.ts's business/venue identity evidence field) — never
+ * re-derive this logic elsewhere.
+ */
+export function normalizedVenueKey(name: string): string {
   return normalizeText(name)
     .split(' ')
     .filter((w) => w && !NOISE_WORDS.has(w))

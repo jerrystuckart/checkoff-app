@@ -109,6 +109,52 @@ test('buildResearchVerifierPrompt: a candidates-only request (no "neighborhoods"
 })
 
 // ---------------------------------------------------------------------------
+// Evidence-contract extension (Munich calibration Phase 2) — ownership,
+// secret-mechanic, difficulty, and geographic-role instructions are gated
+// the same way wantsNeighborhoods already is: only present when the
+// caller's own requiredEvidenceKeys actually asks for them.
+// ---------------------------------------------------------------------------
+
+test('buildResearchVerifierPrompt: requiredEvidenceKeys including "ownershipType" adds the ownership-evidence contract, and requires evidence for anything but UNKNOWN_REQUIRES_VERIFICATION', () => {
+  const ownershipReq: SpecialistExecutionRequest = { ...req(), specialist: 'research_verifier', methodologyId: 'metro_launch', methodologyVersion: 'v1', stage: 'M5_TARGETED_DEEP_DIVES', requiredEvidenceKeys: ['ownershipType'], inputs: { executionType: 'VERIFICATION' } }
+  const { systemPrompt } = buildResearchVerifierPrompt(ownershipReq)
+  assert.match(systemPrompt, /ownershipType/)
+  assert.match(systemPrompt, /UNKNOWN_REQUIRES_VERIFICATION/)
+  assert.match(systemPrompt, /ownershipEvidence/)
+})
+
+test('buildResearchVerifierPrompt: requiredEvidenceKeys including "secretEvidence" bans vague "hidden gem"/"local favorite" wording as sufficient evidence', () => {
+  const secretReq: SpecialistExecutionRequest = { ...req(), specialist: 'research_verifier', methodologyId: 'metro_launch', methodologyVersion: 'v1', stage: 'M5_TARGETED_DEEP_DIVES', requiredEvidenceKeys: ['secretEvidence'], inputs: { executionType: 'VERIFICATION' } }
+  const { systemPrompt } = buildResearchVerifierPrompt(secretReq)
+  assert.match(systemPrompt, /isSecretClaimed/)
+  assert.match(systemPrompt, /hidden gem/)
+  assert.match(systemPrompt, /NEVER sufficient/)
+})
+
+test('buildResearchVerifierPrompt: requiredEvidenceKeys including "difficultyEvidence" instructs never to score difficulty from venue fame alone', () => {
+  const difficultyReq: SpecialistExecutionRequest = { ...req(), specialist: 'research_verifier', methodologyId: 'metro_launch', methodologyVersion: 'v1', stage: 'M5_TARGETED_DEEP_DIVES', requiredEvidenceKeys: ['difficultyEvidence'], inputs: { executionType: 'VERIFICATION' } }
+  const { systemPrompt } = buildResearchVerifierPrompt(difficultyReq)
+  assert.match(systemPrompt, /difficultyEvidence/)
+  assert.match(systemPrompt, /never venue fame or obscurity/)
+})
+
+test('buildResearchVerifierPrompt: requiredEvidenceKeys including "geographicRole" requests exactly one of the 4 recognized values', () => {
+  const geoRoleReq: SpecialistExecutionRequest = { ...req(), specialist: 'research_verifier', methodologyId: 'metro_launch', methodologyVersion: 'v1', stage: 'M5_TARGETED_DEEP_DIVES', requiredEvidenceKeys: ['geographicRole'], inputs: { executionType: 'VERIFICATION' } }
+  const { systemPrompt } = buildResearchVerifierPrompt(geoRoleReq)
+  assert.match(systemPrompt, /geographicRole/)
+  assert.match(systemPrompt, /destination_worthy_outer/)
+})
+
+test('buildResearchVerifierPrompt: a candidates-only request does not mention any evidence-contract-extension fields — gating applies to all 4, not just neighborhoods', () => {
+  const plainReq: SpecialistExecutionRequest = { ...req(), specialist: 'research_verifier', methodologyId: 'metro_launch', methodologyVersion: 'v1', stage: 'M3_BROAD_DISCOVERY', requiredEvidenceKeys: ['candidates'], inputs: { executionType: 'BROAD_DISCOVERY' } }
+  const { systemPrompt } = buildResearchVerifierPrompt(plainReq)
+  assert.equal(systemPrompt.includes('ownershipEvidence'), false)
+  assert.equal(systemPrompt.includes('secretEvidence'), false)
+  assert.equal(systemPrompt.includes('difficultyEvidence'), false)
+  assert.equal(systemPrompt.includes('geographicRole'), false)
+})
+
+// ---------------------------------------------------------------------------
 // Regression (Munich, "Schmalznudeln at Café Frischhut", 2026-09-12):
 // researchExecutionTypeFor silently fell back TARGETED_DEEP_DIVE requests
 // to BROAD_DISCOVERY, so the prompt demanded an evidence.candidates[]

@@ -85,8 +85,8 @@ export const MUNICH_LIST_CURATION_FIXTURES: readonly MunichListCurationFixtureEn
     category: 'Bar & drinks',
     neighborhood: 'Sendling',
     targetLists: ['Munich After Dark'],
-    expectedVerdicts: ['INCLUDE (real outcome) — flagged as the weak case a stricter nighttime-specific rule should reconsider'],
-    note: 'Real live member, but the claim has no time gate — could truthfully be completed at 2pm. calibration-analysis/11-list-portfolio-scorecards.md flags this as the softest of 4 similar cases (with Paulaner Bräuhaus, Higgins Ale Works, Zero Dosage) in an otherwise disciplined list.',
+    expectedVerdicts: ['INCLUDE'],
+    note: 'Real live outcome, flagged as the weak case a stricter nighttime-specific rule should reconsider — the claim has no time gate and could truthfully be completed at 2pm. calibration-analysis/11-list-portfolio-scorecards.md flags this as the softest of 4 similar cases (with Paulaner Bräuhaus, Higgins Ale Works, Zero Dosage) in an otherwise disciplined list.',
   },
   {
     label: 'Strong local-flavor inclusion',
@@ -196,7 +196,7 @@ export const MUNICH_LIST_CURATION_FIXTURES: readonly MunichListCurationFixtureEn
     category: 'Food & drink',
     neighborhood: 'Andechs',
     targetLists: ['Beer Gardens, Breweries & Bavarian Rituals (proposed new list, not in THEMED_LIST_DEFINITIONS at Winston build time)'],
-    expectedVerdicts: ['INCLUDE — and the cluster it belongs to (20 real items) should have triggered a NEW-LIST proposal'],
-    note: 'Real live member of an entirely new, 20-item list Winston never proposed. See calibration-analysis/15-final-calibration-implementation-plan.md for the full analysis of why (catalog material did not exist yet at Winston build time; THEMED_LIST_DEFINITIONS is static, not a discovery mechanism; and the surrounding-municipality geography tier this cluster depends on was still marked out-of-scope in m0.json).',
+    expectedVerdicts: ['INCLUDE'],
+    note: 'Real live member of an entirely new, 20-item list Winston never proposed — and the cluster it belongs to (20 real items) should have triggered a NEW-LIST proposal. See calibration-analysis/15-final-calibration-implementation-plan.md for the full analysis of why (catalog material did not exist yet at Winston build time; THEMED_LIST_DEFINITIONS is static, not a discovery mechanism; and the surrounding-municipality geography tier this cluster depends on was still marked out-of-scope in m0.json).',
   },
 ] as const

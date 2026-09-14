@@ -256,9 +256,9 @@ export const MUNICH_GOLD_STANDARD_CANDIDATES: readonly MunichGoldStandardEntry[]
       neighborhood: 'Altstadt-Lehel',
       claimSupported: "Order a seasonal latte at the Marienplatz 'Starbucks'.",
       address: 'Marienplatz, 80331 München, Germany',
-      ownershipType: 'NATIONAL_CHAIN',
+      ownershipType: 'NATIONAL_OR_INTERNATIONAL_CHAIN',
     },
-    expectedVerdictNote: 'No real Munich chain candidate was found in any of the four accepted-candidate CSVs (the Bulk Add process appears to have simply never proposed one) — this entry is synthetic, modeled on categoryPolicy.ts\'s evaluateCommercialMix needing a NATIONAL_CHAIN example to test against. Expected: counted against commercial-mix local-percentage minimum, not auto-rejected outright (ownership alone doesn\'t reject a candidate in the read code — only the aggregate mix gate does).',
+    expectedVerdictNote: 'No real Munich chain candidate was found in any of the four accepted-candidate CSVs (the Bulk Add process appears to have simply never proposed one) — this entry is synthetic, modeled on categoryPolicy.ts\'s evaluateCommercialMix needing a NATIONAL_OR_INTERNATIONAL_CHAIN example to test against. Expected: counted against commercial-mix local-percentage minimum, not auto-rejected outright (ownership alone doesn\'t reject a candidate in the read code — only the aggregate mix gate does).',
   },
   {
     label: 'Missing ownership evidence',

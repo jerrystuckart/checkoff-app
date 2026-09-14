@@ -135,6 +135,16 @@ export function buildResearchVerifierPrompt(request: SpecialistExecutionRequest,
   // declaration of what this execution needs, so branch on it here
   // rather than inventing a second prompt-builder function.
   const wantsNeighborhoods = request.requiredEvidenceKeys.includes('neighborhoods')
+  // Evidence-contract extension (Munich calibration Phase 2) — gated the
+  // same way wantsNeighborhoods is: only requested when the caller's own
+  // requiredEvidenceKeys actually asks for one of these fields, never
+  // unconditionally added to every research_verifier prompt. See
+  // researchEvidence.ts's ExtendedResearchCandidateEvidence for the exact
+  // shape these instructions describe.
+  const wantsOwnershipEvidence = request.requiredEvidenceKeys.includes('ownershipType')
+  const wantsSecretEvidence = request.requiredEvidenceKeys.includes('secretEvidence')
+  const wantsDifficultyEvidence = request.requiredEvidenceKeys.includes('difficultyEvidence')
+  const wantsGeographicRole = request.requiredEvidenceKeys.includes('geographicRole')
   const systemPrompt = [
     methodologyPreamble(request),
     runtimeDateContextLine(now),
@@ -158,6 +168,46 @@ export function buildResearchVerifierPrompt(request: SpecialistExecutionRequest,
         ]
       : []),
     RESEARCH_EXECUTION_TYPE_INSTRUCTIONS[executionType],
+    ...(wantsOwnershipEvidence
+      ? [
+          'This execution ALSO requires ownership evidence per candidate: evidence.ownershipType, one of INDEPENDENT_LOCAL, ' +
+            'SMALL_LOCAL_GROUP, REGIONAL_OPERATOR, NATIONAL_OR_INTERNATIONAL_CHAIN, PUBLIC_INSTITUTION, ' +
+            'NONCOMMERCIAL_OUTDOOR_OR_CIVIC, or UNKNOWN_REQUIRES_VERIFICATION when you genuinely cannot confirm it. Any value other ' +
+            'than UNKNOWN_REQUIRES_VERIFICATION MUST be accompanied by evidence.ownershipEvidence — a concrete, specific fact (e.g. ' +
+            '"fourth-generation family butcher, per the venue\'s own About page") — never a guess from the venue\'s name/vibe alone. ' +
+            'If you cannot find real evidence of ownership, use UNKNOWN_REQUIRES_VERIFICATION rather than assuming independent.',
+        ]
+      : []),
+    ...(wantsSecretEvidence
+      ? [
+          'This execution ALSO requires secret-mechanic evidence per candidate: evidence.isSecretClaimed (boolean) and, when true, ' +
+            'evidence.secretEvidence describing a CONCRETE discovery mechanic — a concealed/unmarked entrance, a hidden room, an ' +
+            'off-menu item, a secret drink/order, an unusual access route, a hidden exit, or an equivalent structural fact. Wording ' +
+            'like "hidden gem", "local favorite", "underrated", or "less touristy" alone is NEVER sufficient and must not be reported ' +
+            'as secret evidence — only report isSecretClaimed=true when you found an actual concealment/access mechanic, with a real ' +
+            'source for it.',
+        ]
+      : []),
+    ...(wantsDifficultyEvidence
+      ? [
+          'This execution ALSO requires difficulty evidence per candidate: evidence.difficultyEvidence, evaluating ONLY the concrete ' +
+            'experience factors — cost (a meaningful paid admission beyond an ordinary meal/drink/day-pass price), advance booking/ ' +
+            'scheduling requirements, a narrow timing restriction (not any normal operating hours), real physical effort or skill, ' +
+            'limited/seasonal availability, special ordering/completion complexity, and travel distance from the metro core (none / ' +
+            'a close-in outer neighborhood still inside the city / a surrounding metro municipality). Report each factor\'s presence ' +
+            'and a concrete detail for it; NEVER report a factor as present just because the venue seems impressive or well-known — ' +
+            'difficulty reflects real friction in the experience, never venue fame or obscurity, and a normal walk-in visit stays ' +
+            'the default (no factors present).',
+        ]
+      : []),
+    ...(wantsGeographicRole
+      ? [
+          'This execution ALSO requires evidence.geographicRole per candidate — EXACTLY one of "core_urban", ' +
+            '"important_neighborhood", "suburb", or "destination_worthy_outer" (the same 4 values used for metro-level neighborhood ' +
+            'classification) — describing this specific candidate\'s own geographic role within the metro, never invented outside ' +
+            'these 4 values.',
+        ]
+      : []),
     envelopeInstructions(request),
   ].join('\n\n')
 
