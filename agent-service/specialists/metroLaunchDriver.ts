@@ -71,6 +71,7 @@ import { deriveDefaultDepthTargets, DEFAULT_CATEGORY_COVERAGE_PLAN } from '../pl
 import { buildCategoryPolicySetFromPlan, DEFAULT_CATEGORY_PERCENTAGE_BANDS, type CategoryPolicyException, type CommercialOwnershipType } from '../playbooks/categoryPolicy'
 import { runSeedPortfolioAudit, DEFAULT_SEED_PORTFOLIO_AUDIT_LOOP_CONTROLS, type SeedPortfolioAuditReport, type SeedPortfolioAuditLoopControls, type SeedCandidateInput } from '../playbooks/seedPortfolioAudit'
 import { scoreItemsForLists, type ListFitCandidate, type ListFitListDefinition } from '../playbooks/listFitScoring'
+import { sqlQuote } from '../playbooks/listSqlGeneration'
 import { certifyHomeListRow, evaluateHomeListCertificationGate, certifyCuratedListRow, evaluateCuratedListLayerGate, evaluateHomeListPackageValidationGate, derivePackageValidationFromSql, evaluateItemProvenanceGate, type HomeListRow, type CuratedListRow } from '../playbooks/homeListCertification'
 import { evaluateImageReadinessGate, type ImageReadinessCard } from '../playbooks/imageReadiness'
 import { certifyMetroLaunch, type MetroLaunchCertificationReport, type MetroLaunchCertificationSummary } from '../playbooks/metroLaunchCertification'
@@ -2869,10 +2870,6 @@ function buildHomeListSqlPatch(
   lines.push('END $$;')
   lines.push('COMMIT;')
   return { sql: lines.join('\n'), neighborhoodsMissingCentroid }
-}
-
-function sqlQuote(s: string): string {
-  return `'${s.replace(/'/g, "''")}'`
 }
 
 // ---------------------------------------------------------------------------
