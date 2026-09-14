@@ -20,6 +20,24 @@
 // and seedDuplicateNormalization.ts (adjustment 6). Follows
 // metroFinisherReport.ts's validated-parser discipline (adjustment 10) so a
 // malformed persisted report can never crash a reader.
+//
+// Munich calibration Phase 2 (docs/metro-launch-audit/munich/calibration-analysis/
+// 00-executive-summary.md's headline finding): SeedCandidateInput's
+// ownershipType/isSecretClaimed/secretEvidence fields above are real and
+// evaluated correctly by evaluateSeedCandidate/evaluateCommercialMix/
+// evaluateSecretEvidence — but nothing upstream of this stage ever
+// populated them for a real Munich candidate (every one resolved to
+// ownershipType 'UNKNOWN_REQUIRES_VERIFICATION' and isSecretClaimed
+// undefined). ../specialists/researchEvidence.ts's
+// ExtendedResearchCandidateEvidence + validateExtendedResearchCandidate,
+// and ../playbooks/difficultyEvidence.ts's evidence-based 1/5/10/25 rubric,
+// now give the research/discovery execution path a real, validated
+// contract to populate these fields with — see
+// ../specialists/promptBuilders.ts's buildResearchVerifierPrompt for the
+// requiredEvidenceKeys-gated instructions ('ownershipType', 'secretEvidence',
+// 'difficultyEvidence', 'geographicRole') a caller can now request. This
+// module's own evaluation logic is unchanged; only the upstream evidence
+// supply was the gap.
 
 import { checkDistinctiveExperience } from './editorialDistinctiveness'
 import { auditCoverage, type CoverageAuditEvidence, type CoverageGap } from './metroLaunch'

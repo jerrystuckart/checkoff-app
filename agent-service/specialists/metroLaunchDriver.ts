@@ -2473,6 +2473,43 @@ async function stepCatalogVoicePass(deps: MetroDriverDeps, run: PlaybookRunRecor
 // boundary, unchanged), and certifies against REAL runtime state when
 // deps.verifyHomeListRows is wired to an actual read path; otherwise
 // honestly reports the gate as pending human application of that patch.
+//
+// Munich calibration Phase 3 (docs/metro-launch-audit/munich/calibration-analysis/
+// 12-m9-training-requirements.md and 15-final-calibration-implementation-plan.md)
+// found that this function's real selection logic (selectFlagshipList +
+// buildEditorialThemedLists, both in homeListThemes.ts, scored but not
+// filtered by listFitScoring.ts's scoreItemsForLists) never asks "is there a
+// natural, coherent cluster here nobody defined a THEMED_LIST_DEFINITIONS
+// entry for?" — THEMED_LIST_DEFINITIONS is a static, predefined list, and
+// Winston's real Munich build never proposed either of the two real,
+// 20-item themed lists ("Beer Gardens, Breweries & Bavarian Rituals", "Day
+// Trips & Big Adventures") the final human-curated rebuild shipped, as a
+// direct result. Two NEW, independently-tested pure modules now implement
+// the two-pass architecture that gap calls for, ready to wire in as a
+// follow-up to THIS function:
+//   - PASS A (../playbooks/listConceptDiscovery.ts): discovers candidate
+//     list concepts from tag co-occurrence in the certified catalog BEFORE
+//     any membership selection, with real enforced CREATE/HOLD/REJECT/
+//     REQUIRES_JERRY verdicts (never a fixed menu of predefined themes, and
+//     never stretching a weak cluster to reach a target count).
+//   - PASS B (../playbooks/listFitScoring.ts's evaluateItemForListMembership,
+//     extending the existing scoreItemForList/scoreItemsForLists used
+//     below): the currently-ADDITIVE fitScores this function already
+//     attaches to each plan entry (see `fitScores` in the loop below)
+//     become a real ENFORCED per-item decision with list-kind-specific
+//     evidence requirements (Hidden-Gems needs a documented discovery
+//     basis, After-Dark needs an explicit nighttimeSpecific judgment,
+//     food/local-flavor needs a concrete order/product/ritual, day-trip
+//     needs real travel effort).
+// This function's OWN selection behavior is unchanged by Phase 3 — wiring
+// PASS A/B in is deliberately deferred (see Phase 3's own commit message)
+// rather than risked against this driver's existing, heavily-tested
+// production behavior within that pass's scope. ../playbooks/
+// operatorReviewBoundaries.ts (Phase 5) and ../playbooks/holdRecovery.ts
+// (Phase 6) are the companion modules for, respectively, where Jerry's
+// approval is required once this wiring lands (creating a new list
+// concept, a substantially-overlapping concept, a list needing filler to
+// meet size, etc.) and how a HOLD candidate from either pass gets reopened.
 // ---------------------------------------------------------------------------
 
 /**
