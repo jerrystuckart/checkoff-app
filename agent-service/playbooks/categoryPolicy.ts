@@ -98,7 +98,19 @@ function findException(categoryName: string, exceptions: readonly CategoryPolicy
   return exceptions.find((e) => e.categoryName === categoryName)
 }
 
-export type CategoryPolicyVerdict = 'PASS' | 'PASS_WITH_EXCEPTION' | 'FAIL_ABSOLUTE_MINIMUM' | 'FAIL_PERCENTAGE_BAND'
+/**
+ * FLAG_OVERCONCENTRATION is deliberately distinct from FAIL_PERCENTAGE_BAND
+ * (adjustment 2: "percentages are guardrails, not quotas"; Arts & Culture's
+ * overconcentration cap is explicit, but this codebase's own established
+ * precedent — metroLaunch.ts's CATEGORY_OVERREPRESENTED/
+ * CATEGORY_APPROACHING_DOMINANCE — treats too-much-of-a-category as a SOFT
+ * warning, never a blocker: dispatching MORE research at an already-
+ * overrepresented category cannot fix overrepresentation, and
+ * "essential/distinctive items are never rejected purely to hit a
+ * number"). FLAG_OVERCONCENTRATION never blocks categoryPolicyGatePasses
+ * and never dispatches a research iteration — it is reported, not gated.
+ */
+export type CategoryPolicyVerdict = 'PASS' | 'PASS_WITH_EXCEPTION' | 'FAIL_ABSOLUTE_MINIMUM' | 'FAIL_PERCENTAGE_BAND' | 'FLAG_OVERCONCENTRATION'
 
 export interface CategoryPolicyResult {
   categoryName: string
@@ -129,19 +141,26 @@ export function evaluateCategoryPolicies(counts: readonly { categoryName: string
     const failsAbsolute = count < applicableAbsoluteMinimum
     if (failsAbsolute) reasons.push(`${count}/${applicableAbsoluteMinimum} absolute minimum`)
 
-    let failsPercentage = false
+    let failsPercentageFloor = false
+    let isOverconcentrated = false
     if (policy.percentageBand) {
       if (percentOfTotal < policy.percentageBand.minPercent) {
-        failsPercentage = true
+        failsPercentageFloor = true
         reasons.push(`${percentOfTotal.toFixed(1)}% is below the ${policy.percentageBand.minPercent}% guardrail floor`)
       } else if (policy.percentageBand.maxPercent !== undefined && percentOfTotal > policy.percentageBand.maxPercent) {
-        failsPercentage = true
+        isOverconcentrated = true
         reasons.push(`${percentOfTotal.toFixed(1)}% exceeds the ${policy.percentageBand.maxPercent}% overconcentration cap`)
       }
     }
 
-    if (!failsAbsolute && !failsPercentage) {
+    if (!failsAbsolute && !failsPercentageFloor && !isOverconcentrated) {
       return { categoryName: policy.categoryName, count, percentOfTotal, applicableAbsoluteMinimum, verdict: 'PASS', reasons: [], exceptionApplied: null }
+    }
+
+    if (!failsAbsolute && !failsPercentageFloor && isOverconcentrated) {
+      // Soft warning only — never blocks, never eligible for/needs an
+      // exception (see FLAG_OVERCONCENTRATION's own doc).
+      return { categoryName: policy.categoryName, count, percentOfTotal, applicableAbsoluteMinimum, verdict: 'FLAG_OVERCONCENTRATION', reasons, exceptionApplied: null }
     }
 
     const exception = findException(policy.categoryName, policySet.exceptions)
@@ -170,7 +189,7 @@ export function evaluateCategoryPolicies(counts: readonly { categoryName: string
 }
 
 export function categoryPolicyGatePasses(results: readonly CategoryPolicyResult[]): boolean {
-  return results.every((r) => r.verdict === 'PASS' || r.verdict === 'PASS_WITH_EXCEPTION')
+  return results.every((r) => r.verdict === 'PASS' || r.verdict === 'PASS_WITH_EXCEPTION' || r.verdict === 'FLAG_OVERCONCENTRATION')
 }
 
 // ---------------------------------------------------------------------------
@@ -223,14 +242,31 @@ export interface CommercialMixResult {
 export function evaluateCommercialMix(items: readonly CommercialMixItem[], minLocalPercent: number = DEFAULT_COMMERCIAL_MIX_MIN_LOCAL_PERCENT, unknownVolumeThreshold: number = DEFAULT_UNKNOWN_OWNERSHIP_VOLUME_THRESHOLD): CommercialMixResult {
   const excluded = items.filter((i) => COMMERCIAL_MIX_EXCLUDED_TYPES.has(i.ownershipType))
   const eligible = items.filter((i) => !COMMERCIAL_MIX_EXCLUDED_TYPES.has(i.ownershipType))
-  const locallyOwned = eligible.filter((i) => LOCALLY_OWNED_TYPES.has(i.ownershipType))
   const unknown = eligible.filter((i) => i.ownershipType === 'UNKNOWN_REQUIRES_VERIFICATION')
-  const locallyOwnedPercent = eligible.length > 0 ? (locallyOwned.length / eligible.length) * 100 : 0
+  // The PASS/FAIL percentage is computed over KNOWN eligible ownership only
+  // (adjustment 3's own text: a high UNKNOWN volume "is its own finding...
+  // not a pass or fail") — UNKNOWN is never counted toward the numerator
+  // (never silently independent) NOR the denominator (never silently
+  // penalized as a definite non-independent either); it is reported
+  // separately via unknownVolumeFinding instead.
+  const known = eligible.filter((i) => i.ownershipType !== 'UNKNOWN_REQUIRES_VERIFICATION')
+  const locallyOwned = known.filter((i) => LOCALLY_OWNED_TYPES.has(i.ownershipType))
+  const locallyOwnedPercent = known.length > 0 ? (locallyOwned.length / known.length) * 100 : 0
 
   const unknownVolumeFinding = unknown.length >= unknownVolumeThreshold ? `${unknown.length} eligible commercial item(s) are stuck at UNKNOWN_REQUIRES_VERIFICATION ownership — this is its own gap finding (requires-verification), not folded into the pass/fail commercial-mix verdict: ${unknown.map((u) => u.candidateName).join(', ')}` : null
 
-  if (eligible.length === 0) {
-    return { eligibleCount: 0, excludedCount: excluded.length, locallyOwnedCount: 0, locallyOwnedPercent: 0, unknownCount: unknown.length, minLocalPercent, verdict: 'INSUFFICIENT_DATA', reason: 'No eligible commercial inventory (all items are PUBLIC_INSTITUTION/NONCOMMERCIAL_OUTDOOR_OR_CIVIC or the pool is empty) — commercial mix cannot be evaluated.', unknownVolumeFinding }
+  if (known.length === 0) {
+    return {
+      eligibleCount: eligible.length,
+      excludedCount: excluded.length,
+      locallyOwnedCount: 0,
+      locallyOwnedPercent: 0,
+      unknownCount: unknown.length,
+      minLocalPercent,
+      verdict: 'INSUFFICIENT_DATA',
+      reason: eligible.length === 0 ? 'No eligible commercial inventory (all items are PUBLIC_INSTITUTION/NONCOMMERCIAL_OUTDOOR_OR_CIVIC or the pool is empty) — commercial mix cannot be evaluated.' : 'Every eligible item is still UNKNOWN_REQUIRES_VERIFICATION ownership — commercial mix cannot yet be evaluated on real data (see unknownVolumeFinding).',
+      unknownVolumeFinding,
+    }
   }
 
   const pass = locallyOwnedPercent >= minLocalPercent
@@ -243,8 +279,8 @@ export function evaluateCommercialMix(items: readonly CommercialMixItem[], minLo
     minLocalPercent,
     verdict: pass ? 'PASS' : 'FAIL',
     reason: pass
-      ? `${locallyOwned.length}/${eligible.length} (${locallyOwnedPercent.toFixed(1)}%) eligible commercial items are locally-owned/independently-operated — meets the ${minLocalPercent}% threshold.`
-      : `${locallyOwned.length}/${eligible.length} (${locallyOwnedPercent.toFixed(1)}%) eligible commercial items are locally-owned/independently-operated — below the ${minLocalPercent}% threshold.`,
+      ? `${locallyOwned.length}/${known.length} (${locallyOwnedPercent.toFixed(1)}%) known-ownership eligible commercial items are locally-owned/independently-operated — meets the ${minLocalPercent}% threshold.`
+      : `${locallyOwned.length}/${known.length} (${locallyOwnedPercent.toFixed(1)}%) known-ownership eligible commercial items are locally-owned/independently-operated — below the ${minLocalPercent}% threshold.`,
     unknownVolumeFinding,
   }
 }

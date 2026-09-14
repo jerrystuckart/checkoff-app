@@ -31,11 +31,29 @@ test('categoryPolicy: counts AND percentages both checked — either alone fails
   ]
   const results = evaluateCategoryPolicies(counts, policySet)
   const arts = results.find((r) => r.categoryName === 'Arts & Culture')!
-  assert.equal(arts.verdict, 'FAIL_PERCENTAGE_BAND')
+  // Overconcentration is a soft, non-blocking warning (matches this
+  // codebase's own CATEGORY_OVERREPRESENTED precedent) — never
+  // FAIL_PERCENTAGE_BAND, which is reserved for the guardrail FLOOR.
+  assert.equal(arts.verdict, 'FLAG_OVERCONCENTRATION')
   assert.ok(arts.percentOfTotal > 30)
+  assert.equal(categoryPolicyGatePasses(results), true)
 
   const food = results.find((r) => r.categoryName === 'Food & drink')!
   assert.equal(food.verdict, 'PASS')
+})
+
+test('categoryPolicy: percentage guardrail FLOOR violation still blocks the gate (distinct from the overconcentration ceiling)', () => {
+  const policySet = buildCategoryPolicySetFromPlan(plan(), DEFAULT_CATEGORY_PERCENTAGE_BANDS)
+  const results = evaluateCategoryPolicies(
+    [
+      { categoryName: 'Food & drink', count: 198 },
+      { categoryName: 'Arts & Culture', count: 5 }, // above absolute minimum (5 >= 5), but 5/203 = 2.5% < the 3% floor
+    ],
+    policySet
+  )
+  const arts = results.find((r) => r.categoryName === 'Arts & Culture')!
+  assert.equal(arts.verdict, 'FAIL_PERCENTAGE_BAND')
+  assert.equal(categoryPolicyGatePasses(results), false)
 })
 
 test('categoryPolicy: absolute minimum failure even when percentage would pass', () => {
@@ -101,9 +119,27 @@ test('commercial mix: UNKNOWN_REQUIRES_VERIFICATION is never silently treated as
     { candidateName: 'b', ownershipType: 'UNKNOWN_REQUIRES_VERIFICATION' as const },
   ]
   const result = evaluateCommercialMix(items)
+  // Never counted toward the locally-owned numerator...
   assert.equal(result.locallyOwnedCount, 0)
   assert.equal(result.locallyOwnedPercent, 0)
+  // ...and, per adjustment 3's own text ("its own finding... not a pass or
+  // fail"), a pool of ENTIRELY unknown ownership is INSUFFICIENT_DATA, not
+  // a false FAIL — it is never silently treated as definitively
+  // non-independent either. A real FAIL requires real known-bad data (see
+  // the mixed-known-and-unknown test below).
+  assert.equal(result.verdict, 'INSUFFICIENT_DATA')
+})
+
+test('commercial mix: real known-bad data still FAILs even when unknowns are also present', () => {
+  const items = [
+    { candidateName: 'chain1', ownershipType: 'NATIONAL_OR_INTERNATIONAL_CHAIN' as const },
+    { candidateName: 'chain2', ownershipType: 'NATIONAL_OR_INTERNATIONAL_CHAIN' as const },
+    { candidateName: 'indie', ownershipType: 'INDEPENDENT_LOCAL' as const },
+    { candidateName: 'unknown1', ownershipType: 'UNKNOWN_REQUIRES_VERIFICATION' as const },
+  ]
+  const result = evaluateCommercialMix(items)
   assert.equal(result.verdict, 'FAIL')
+  assert.equal(result.unknownCount, 1)
 })
 
 test('commercial mix: high unknown-ownership volume is its own finding, not folded into pass/fail', () => {

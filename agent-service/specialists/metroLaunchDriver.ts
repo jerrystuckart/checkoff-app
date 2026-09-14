@@ -67,7 +67,9 @@ import { readRealHomeListRows, type HomeListReadPathFailure } from './homeListRe
 import { fetchExistingProductionInventoryForReconciliation, type FetchExistingProductionInventoryInput } from './existingInventoryReadPath'
 import { evaluateOutOfMarketContaminationGate } from '../playbooks/outOfMarketContamination'
 import { reconcileAgainstExistingInventory, type ExistingProductionItem, type ReconciliationResult } from '../playbooks/existingInventoryReconciliation'
-import { deriveDefaultDepthTargets } from '../playbooks/defaultMetroManifest'
+import { deriveDefaultDepthTargets, DEFAULT_CATEGORY_COVERAGE_PLAN } from '../playbooks/defaultMetroManifest'
+import { buildCategoryPolicySetFromPlan, DEFAULT_CATEGORY_PERCENTAGE_BANDS, type CategoryPolicyException, type CommercialOwnershipType } from '../playbooks/categoryPolicy'
+import { runSeedPortfolioAudit, DEFAULT_SEED_PORTFOLIO_AUDIT_LOOP_CONTROLS, type SeedPortfolioAuditReport, type SeedPortfolioAuditLoopControls, type SeedCandidateInput } from '../playbooks/seedPortfolioAudit'
 import { certifyHomeListRow, evaluateHomeListCertificationGate, certifyCuratedListRow, evaluateCuratedListLayerGate, evaluateHomeListPackageValidationGate, derivePackageValidationFromSql, evaluateItemProvenanceGate, type HomeListRow, type CuratedListRow } from '../playbooks/homeListCertification'
 import { evaluateImageReadinessGate, type ImageReadinessCard } from '../playbooks/imageReadiness'
 import { certifyMetroLaunch, type MetroLaunchCertificationReport, type MetroLaunchCertificationSummary } from '../playbooks/metroLaunchCertification'
@@ -275,6 +277,15 @@ interface MetroDriverState {
    * happened, exactly like reopen-stage's own state-reset convention.
    */
   launchBoundaryReopens?: Array<{ at: string; fromStage: string; toStage: string }>
+
+  // ---------------------------------------------------------------------
+  // M5_75_SEED_PORTFOLIO_AUDIT — see stepM5_75's own doc for full stage
+  // placement/in-flight-run-compatibility notes.
+  // ---------------------------------------------------------------------
+  /** The most recent accepted SeedPortfolioAuditReport — overwritten on each pass (never accumulated), same discipline as metroFinisherReport. */
+  seedPortfolioAuditReport?: SeedPortfolioAuditReport
+  /** How many bounded targeted-research rounds stepM5_75 has dispatched back through M5_TARGETED_DEEP_DIVES/M4_COVERAGE_AUDIT — bounded by SeedPortfolioAuditLoopControls.maxTargetedResearchIterations before a genuine NEEDS_JERRY escalation (adjustment 7). Reset to 0 once the stage reaches READY_FOR_EDITORIAL. */
+  seedPortfolioAuditIterations?: number
 }
 
 // ---------------------------------------------------------------------------
@@ -416,6 +427,12 @@ export interface MetroDriverDeps {
   execStore: ExecutionStore
   executors: readonly SpecialistExecutor[]
   guardrails?: DriverGuardrails
+  /** M5_75_SEED_PORTFOLIO_AUDIT loop bounds (adjustment 7) — generic/configurable, following packetExecutionBudget.ts's pattern. Defaults to DEFAULT_SEED_PORTFOLIO_AUDIT_LOOP_CONTROLS. */
+  seedPortfolioAuditLoopControls?: SeedPortfolioAuditLoopControls
+  /** M5_75_SEED_PORTFOLIO_AUDIT category-policy exceptions Jerry has explicitly approved for THIS run — the ONLY way a category can pass despite a real count/percentage gap (mirrors metroLaunch.ts's approvedCategoryExceptions precedent). Defaults to none. */
+  seedPortfolioAuditExceptions?: CategoryPolicyException[]
+  /** M5_75_SEED_PORTFOLIO_AUDIT commercial-mix threshold override — defaults to DEFAULT_COMMERCIAL_MIX_MIN_LOCAL_PERCENT (65%). */
+  seedPortfolioAuditCommercialMixMinLocalPercent?: number
   now?: () => string
   /** M8 tag certification: attempts a real live public.tags SELECT first (see tagVocabularyProvider.ts) — omit/reject to exercise the snapshot fallback. Defaults to always-failing (honest: no live access is configured unless the caller wires one in). */
   queryLiveTags?: () => Promise<string[]>
@@ -982,7 +999,7 @@ async function stepM4(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
   if (loop.action === 'PROCEED_TO_VERIFICATION') {
     state.gaps = []
     run.state = state
-    run.currentStage = state.hasRunM6 ? 'M6_5_CHECKOFF_EDITOR' : 'M6_QUALITY_VERIFICATION'
+    run.currentStage = state.hasRunM6 ? 'M5_75_SEED_PORTFOLIO_AUDIT' : 'M6_QUALITY_VERIFICATION'
     return run
   }
 
@@ -1062,7 +1079,7 @@ function stepM4HandleExhaustedLoop(
   if (revisedLoop.action === 'PROCEED_TO_VERIFICATION') {
     state.gaps = []
     run.state = state
-    run.currentStage = state.hasRunM6 ? 'M6_5_CHECKOFF_EDITOR' : 'M6_QUALITY_VERIFICATION'
+    run.currentStage = state.hasRunM6 ? 'M5_75_SEED_PORTFOLIO_AUDIT' : 'M6_QUALITY_VERIFICATION'
     return run
   }
   state.gaps = sortGapsForDispatch(revisedLoop.blockingGaps, history)
@@ -1144,7 +1161,7 @@ async function stepM6(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
   if (toVerify.length === 0) {
     state.hasRunM6 = true
     run.state = state
-    run.currentStage = 'M6_5_CHECKOFF_EDITOR'
+    run.currentStage = 'M5_75_SEED_PORTFOLIO_AUDIT'
     return run
   }
 
@@ -1182,7 +1199,7 @@ async function stepM6(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
   state.removedCandidateNames = [...(state.removedCandidateNames ?? []), ...removedNames]
   run.state = state
 
-  run.currentStage = removedNames.length > 0 ? 'M5B_REPLACEMENT' : 'M6_5_CHECKOFF_EDITOR'
+  run.currentStage = removedNames.length > 0 ? 'M5B_REPLACEMENT' : 'M5_75_SEED_PORTFOLIO_AUDIT'
   return run
 }
 
@@ -1190,7 +1207,7 @@ async function stepM5B(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<P
   const state = readState(run)
   const removed = state.removedCandidateNames ?? []
   if (removed.length === 0) {
-    run.currentStage = 'M6_5_CHECKOFF_EDITOR'
+    run.currentStage = 'M5_75_SEED_PORTFOLIO_AUDIT'
     return run
   }
 
@@ -1222,6 +1239,196 @@ async function stepM5B(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<P
   run.state = state
   run.currentStage = 'M4_COVERAGE_AUDIT'
   return run
+}
+
+/** Duck-types the optional evidence fields a future research_verifier evidence contract MAY supply on a candidate (ownershipType/placeId/isSecretClaimed/secretEvidence) without widening RawCandidate's own required contract — same discipline as candidateMerge.ts's candidateCompletenessScore duck-typing of verificationConfidence/freshnessDate. TODAY, the live research_verifier evidence contract does not populate any of these fields, so every candidate resolves to ownershipType 'UNKNOWN_REQUIRES_VERIFICATION' and isSecretClaimed undefined until that evidence contract is extended (tracked as a known follow-up, not fixed by this stage) — see stepM5_75's own doc for what this means in practice. */
+function toSeedCandidateInput(candidate: RawCandidate & { needsVerification?: boolean }): SeedCandidateInput {
+  const extra = candidate as RawCandidate & {
+    placeId?: string | null
+    ownershipType?: CommercialOwnershipType
+    isSecretClaimed?: boolean
+    secretEvidence?: SeedCandidateInput['secretEvidence']
+  }
+  const canonical = classifyCategory(candidate.category).canonical
+  return {
+    name: candidate.name,
+    category: canonical ?? candidate.category,
+    neighborhood: candidate.neighborhood,
+    claimSupported: candidate.claimSupported,
+    address: candidate.address,
+    placeId: extra.placeId ?? null,
+    ownershipType: extra.ownershipType ?? 'UNKNOWN_REQUIRES_VERIFICATION',
+    isSecretClaimed: extra.isSecretClaimed,
+    secretEvidence: extra.secretEvidence,
+  }
+}
+
+/**
+ * M5_75_SEED_PORTFOLIO_AUDIT — runs the pure Seed Portfolio Audit
+ * (seedPortfolioAudit.ts) over the RAW, unwritten candidate seed. Reached
+ * after M4_COVERAGE_AUDIT's coverage loop, M6_QUALITY_VERIFICATION, and
+ * M5B_REPLACEMENT all settle (every one of their own "next stage"
+ * transitions now points here instead of straight to
+ * M6_5_CHECKOFF_EDITOR — see the five rewired `run.currentStage =` sites
+ * in stepM4/stepM4HandleExhaustedLoop/stepM6/stepM5B above), and BEFORE
+ * M6_5_CHECKOFF_EDITOR (item intake/editorial writing) spends any AI
+ * calls turning candidates into finished CheckOff bodies. It is NOT a
+ * replacement for M8_5_CATALOG_PRUNING (prunes the already-CERTIFIED
+ * catalog later) or the Metro Finisher stages (late negative-space
+ * research on an already-WRITTEN catalog) — see seedPortfolioAudit.ts's
+ * own doc for the full scope boundary.
+ *
+ * BOUNDED LOOP (adjustment 7): when the audit finds unresolved
+ * CATEGORY/GEOGRAPHIC gaps (the same two kinds M4/M5 already know how to
+ * dispatch real targeted research for), this stage translates them into
+ * the existing CoverageGap[] shape and hands control back to the
+ * EXISTING, already-tested M4/M5 coverage loop (state.gaps + currentStage
+ * = 'M5_TARGETED_DEEP_DIVES') rather than building a second, parallel
+ * AI-research dispatch mechanism — a deliberate, conservative reuse
+ * flagged in the final report as a judgment call. Bounded by
+ * SeedPortfolioAuditLoopControls.maxTargetedResearchIterations
+ * (state.seedPortfolioAuditIterations); COMMERCIAL_MIX/UNKNOWN_OWNERSHIP_
+ * VOLUME/secret-evidence/duplicate-cluster findings are NOT things "more
+ * category/geography research" can fix, so they never drive another
+ * loop iteration — an unresolved one of those escalates directly to
+ * NEEDS_JERRY (adjustment 7's "escalate ... rather than looping
+ * indefinitely"), following stepM4HandleExhaustedLoop's own
+ * bounded-then-escalate shape.
+ *
+ * KNOWN, FLAGGED CONSEQUENCE (not a bug, a real judgment call — see final
+ * report): the live research_verifier evidence contract does not
+ * currently supply ownershipType/secretEvidence/placeId at the raw-seed
+ * stage (Place ID is only resolved during M8 geo enrichment, well after
+ * this stage; ownership/secret-mechanic evidence has never been asked of
+ * research_verifier at all). toSeedCandidateInput() duck-types these as
+ * optional so this stage is forward-compatible the moment that evidence
+ * contract is extended, but UNTIL then every candidate resolves to
+ * ownershipType UNKNOWN_REQUIRES_VERIFICATION, which — per adjustment 3's
+ * explicit "never silently independent" rule — will fail COMMERCIAL_MIX
+ * on essentially every real run today. That is the CORRECT, conservative
+ * behavior per the spec (never silently pass an unverified commercial
+ * mix), not a bug in this stage; closing it for real requires either a
+ * future research_verifier evidence-contract change (out of scope here)
+ * or an operator-approved seedPortfolioAuditExceptions entry per run.
+ *
+ * IN-FLIGHT RUN COMPATIBILITY (adjustment 8 — investigated, not assumed):
+ * `PlaybookRunRecord.currentStage` is a plain `string` field
+ * (playbookRun.ts:18) — there is no TypeScript discriminated union or
+ * enum anywhere that enumerates every valid metro_launch driver stage
+ * literal for exhaustiveness checking (MetroLaunchStage in metroLaunch.ts
+ * is a DIFFERENT, older, unused-by-this-switch stage list — the real
+ * driver's switch statement below matches on bare strings with a
+ * `default: throw` only for a stage literal it has never heard of at
+ * all). `readState(run)` (line 389) just casts `run.state` and defaults
+ * to `{}` — it does not branch on `currentStage` either. Adding this ONE
+ * new `case 'M5_75_SEED_PORTFOLIO_AUDIT':` to the switch is therefore
+ * structurally inert for any run whose `currentStage` is not exactly that
+ * literal:
+ *   - A run currently BEFORE this stage in sequence (M0-M6_QUALITY_VERIFICATION/
+ *     M5B_REPLACEMENT): its `currentStage` still matches its own existing
+ *     case exactly as before; it will simply arrive at
+ *     M5_75_SEED_PORTFOLIO_AUDIT the next time ITS OWN stage would
+ *     otherwise have advanced straight to M6_5_CHECKOFF_EDITOR — the
+ *     five rewired transition sites are the ONLY behavior change such a
+ *     run will ever see, and only once it naturally reaches that point.
+ *   - A run currently AT M6_QUALITY_VERIFICATION or M5B_REPLACEMENT:
+ *     same as above — its OWN case is untouched; only where it goes NEXT
+ *     changes.
+ *   - A run currently AT/BEYOND M6_5_CHECKOFF_EDITOR (M7 through
+ *     LAUNCH_READINESS_BOUNDARY): completely unaffected. Its
+ *     `currentStage` never equals 'M5_75_SEED_PORTFOLIO_AUDIT', the new
+ *     case is never matched, and nothing upstream of the switch
+ *     re-evaluates or rewrites an already-advanced `currentStage`.
+ *   - A run that is fully COMPLETED (or NEEDS_JERRY/BLOCKED at
+ *     LAUNCH_READINESS_BOUNDARY, e.g. Munich's real `munich_germany`
+ *     run): `driveMetroLaunch`'s own loop (see stepMetroLaunchRun's doc,
+ *     ~line 3779) already stops immediately on `run.status ===
+ *     'NEEDS_JERRY' || 'BLOCKED'` UNLESS the caller explicitly passes
+ *     `reopenFromLaunchBoundary: true` AND the run is currently at EXACTLY
+ *     `currentStage === 'LAUNCH_READINESS_BOUNDARY'` (line 3806) — and
+ *     even then, that reopen path sends the run to
+ *     'METRO_FINISHER_PACKET_EXECUTION', never anywhere near
+ *     'M5_75_SEED_PORTFOLIO_AUDIT'. Munich's run is already parked at
+ *     LAUNCH_READINESS_BOUNDARY/NEEDS_JERRY, i.e. WAY past this new
+ *     stage in the sequence — adding this case CANNOT reopen, reprocess,
+ *     or mutate it: nothing in this change touches
+ *     stepMetroLaunchRun/reopenFromLaunchBoundary/reopen-stage at all,
+ *     and this stage's own literal is never referenced by any of that
+ *     machinery. CONFIRMED, not merely asserted.
+ */
+async function stepM5_75(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
+  const state = readState(run)
+  const loopControls = deps.seedPortfolioAuditLoopControls ?? DEFAULT_SEED_PORTFOLIO_AUDIT_LOOP_CONTROLS
+  const exceptions = deps.seedPortfolioAuditExceptions ?? []
+  const { evidence } = buildAuditEvidence(state)
+  const candidates = (state.candidates ?? []).map(toSeedCandidateInput)
+  const policySet = buildCategoryPolicySetFromPlan(state.plan ?? DEFAULT_CATEGORY_COVERAGE_PLAN, DEFAULT_CATEGORY_PERCENTAGE_BANDS, undefined, exceptions)
+
+  const report = runSeedPortfolioAudit({
+    metro: run.projectId,
+    now: (deps.now ?? (() => new Date().toISOString()))(),
+    candidates,
+    geographicEvidence: evidence,
+    categoryPolicySet: policySet,
+    commercialMixMinLocalPercent: deps.seedPortfolioAuditCommercialMixMinLocalPercent,
+  })
+  state.seedPortfolioAuditReport = report
+
+  if (report.executiveVerdict.verdict === 'READY_FOR_EDITORIAL') {
+    state.seedPortfolioAuditIterations = 0
+    run.state = state
+    run.currentStage = 'M6_5_CHECKOFF_EDITOR'
+    return run
+  }
+
+  // Only CATEGORY/GEOGRAPHIC gaps are researchable via the existing M4/M5
+  // loop — commercial-mix/unknown-ownership-volume/secret-evidence/
+  // duplicate-cluster findings never drive another research iteration
+  // (see this function's own doc).
+  const researchableGaps = report.remainingGaps.gapStatuses.filter((g) => g.status === 'UNRESOLVED' && (g.kind === 'CATEGORY' || g.kind === 'GEOGRAPHIC'))
+  const iterations = state.seedPortfolioAuditIterations ?? 0
+
+  if (researchableGaps.length > 0 && iterations < loopControls.maxTargetedResearchIterations) {
+    state.seedPortfolioAuditIterations = iterations + 1
+    state.gaps = researchableGaps.map((g) => ({
+      kind: g.kind === 'GEOGRAPHIC' ? 'GEOGRAPHIC_HOLE' : 'CATEGORY_BELOW_MINIMUM',
+      name: g.gapKey,
+      detail: g.detail,
+    }))
+    run.state = state
+    run.currentStage = 'M5_TARGETED_DEEP_DIVES'
+    return run
+  }
+
+  // UNKNOWN_OWNERSHIP_VOLUME is deliberately excluded from the escalating
+  // set — per adjustment 3's own text it "is its own finding... not a
+  // pass or fail." It is still surfaced in the report/requiredHumanDecisions
+  // for visibility, but a run is never blocked purely because ownership
+  // data hasn't been collected yet (as opposed to a real, known-bad
+  // COMMERCIAL_MIX FAIL, which DOES block).
+  const nonResearchableUnresolved = report.remainingGaps.gapStatuses.filter((g) => g.status === 'UNRESOLVED' && g.kind === 'COMMERCIAL_MIX')
+  if (researchableGaps.length === 0 && nonResearchableUnresolved.length === 0) {
+    // Every blocking finding is resolved (WAIVED/FILLED/DOCUMENTED_ZERO) or
+    // was never blocking to begin with (e.g. an UNKNOWN_OWNERSHIP_VOLUME
+    // finding, or a HOLD candidate — adjustment 4: only READY-item defects
+    // block, and READY is zero-defect by construction).
+    state.seedPortfolioAuditIterations = 0
+    run.state = state
+    run.currentStage = 'M6_5_CHECKOFF_EDITOR'
+    return run
+  }
+  run.state = state
+  return escalate(
+    run,
+    researchableGaps.length > 0
+      ? `Seed Portfolio Audit's targeted-research loop exhausted (${iterations}/${loopControls.maxTargetedResearchIterations} iterations) with ${researchableGaps.length} category/geographic gap(s) still unresolved and no approved exception.`
+      : `Seed Portfolio Audit has ${nonResearchableUnresolved.length} unresolved commercial-mix/ownership-verification/secret-evidence/duplicate finding(s) that additional category/geographic research cannot close — requires an explicit human decision (approve an exception, or accept/adjust the finding).`,
+    {
+      decisionNeeded: 'Approve a category-policy exception (CategoryPolicyException), accept the metro at its current commercial-mix/ownership-verification state, or provide additional research direction.',
+      report,
+      unresolvedGaps: report.remainingGaps.gapStatuses.filter((g) => g.status === 'UNRESOLVED'),
+    }
+  )
 }
 
 async function stepEditor(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
@@ -3861,6 +4068,9 @@ export async function driveMetroLaunch(deps: MetroDriverDeps, projectId: string,
         break
       case 'M5B_REPLACEMENT':
         run = await stepM5B(deps, run)
+        break
+      case 'M5_75_SEED_PORTFOLIO_AUDIT':
+        run = await stepM5_75(deps, run)
         break
       case 'M6_5_CHECKOFF_EDITOR':
         run = await stepEditor(deps, run)

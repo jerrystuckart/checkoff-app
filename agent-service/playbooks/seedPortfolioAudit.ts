@@ -89,7 +89,10 @@ export function deriveGapResolutionStatuses(params: {
   const records: GapStatusRecord[] = []
 
   for (const failure of params.categoryFailures) {
-    if (failure.verdict === 'PASS' || failure.verdict === 'PASS_WITH_EXCEPTION') continue
+    // FLAG_OVERCONCENTRATION is a soft, non-blocking warning (see
+    // categoryPolicy.ts's own doc) — it never produces a GapStatusRecord;
+    // it is still visible in the report's categoryCoverage.results.
+    if (failure.verdict === 'PASS' || failure.verdict === 'PASS_WITH_EXCEPTION' || failure.verdict === 'FLAG_OVERCONCENTRATION') continue
     const status: GapResolutionStatus = failure.exceptionApplied ? 'WAIVED' : documentedZeroKeys.has(failure.categoryName) ? 'DOCUMENTED_ZERO' : 'UNRESOLVED'
     records.push({ gapKey: failure.categoryName, kind: 'CATEGORY', status, detail: failure.reasons.join('; ') })
   }
