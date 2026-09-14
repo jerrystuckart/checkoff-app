@@ -70,6 +70,7 @@ import { reconcileAgainstExistingInventory, type ExistingProductionItem, type Re
 import { deriveDefaultDepthTargets, DEFAULT_CATEGORY_COVERAGE_PLAN } from '../playbooks/defaultMetroManifest'
 import { buildCategoryPolicySetFromPlan, DEFAULT_CATEGORY_PERCENTAGE_BANDS, type CategoryPolicyException, type CommercialOwnershipType } from '../playbooks/categoryPolicy'
 import { runSeedPortfolioAudit, DEFAULT_SEED_PORTFOLIO_AUDIT_LOOP_CONTROLS, type SeedPortfolioAuditReport, type SeedPortfolioAuditLoopControls, type SeedCandidateInput } from '../playbooks/seedPortfolioAudit'
+import { scoreItemsForLists, type ListFitCandidate, type ListFitListDefinition } from '../playbooks/listFitScoring'
 import { certifyHomeListRow, evaluateHomeListCertificationGate, certifyCuratedListRow, evaluateCuratedListLayerGate, evaluateHomeListPackageValidationGate, derivePackageValidationFromSql, evaluateItemProvenanceGate, type HomeListRow, type CuratedListRow } from '../playbooks/homeListCertification'
 import { evaluateImageReadinessGate, type ImageReadinessCard } from '../playbooks/imageReadiness'
 import { certifyMetroLaunch, type MetroLaunchCertificationReport, type MetroLaunchCertificationSummary } from '../playbooks/metroLaunchCertification'
@@ -395,6 +396,24 @@ export interface HomeListPlanEntry {
   kind: 'PRIMARY_SEASONAL' | 'THEMED' | 'CURATED_MIRROR'
   itemCandidateNames: string[]
   requiresImage: boolean
+  /**
+   * Adjustment 9 (catalog/list separation, commit 4/5) — independent
+   * per-item fit score + reason for every item on this list, from
+   * listFitScoring.ts. Reporting/audit only: catalog inclusion never
+   * implies list inclusion, and these scores document WHY each already-
+   * selected item independently fits this list — they never themselves
+   * remove an item from itemCandidateNames here (a deliberate,
+   * conservative choice: existing selection — buildEditorialThemedLists'
+   * pattern/tag/category matching, selectFlagshipList's quota
+   * apportionment — already performs independent, non-blanket selection
+   * with its own extensive existing test coverage; layering a second,
+   * silently-filtering pass on top risked destabilizing that without a
+   * live-data validation pass, so this stays additive/reporting-only —
+   * flagged explicitly in the final report). Omitted for CURATED_MIRROR,
+   * which is a full mirror of the certified catalog BY DESIGN, not a
+   * fit-scored theme.
+   */
+  fitScores?: import('../playbooks/listFitScoring').ListFitScore[]
 }
 
 function readState(run: PlaybookRunRecord): MetroDriverState {
@@ -2477,8 +2496,18 @@ function buildHomeListPlan(state: MetroDriverState, flagshipListTitle: string): 
   // which shipped literal "Themed list: X" titles into production.
   const plan: HomeListPlanEntry[] = [{ label: flagshipListTitle, title: flagshipListTitle, kind: 'PRIMARY_SEASONAL', itemCandidateNames: flagshipNames, requiresImage: true }]
 
-  for (const theme of buildEditorialThemedLists(themeable, THEMED_LIST_DEFINITIONS, THEMED_LIST_MIN_ITEMS)) {
-    plan.push({ label: `Themed list: ${theme.title}`, title: theme.title, kind: 'THEMED', itemCandidateNames: theme.candidateNames, requiresImage: true })
+  // Adjustment 9's independent fit-scoring input pool — every dbCategory-
+  // classified certified item, regardless of which list (if any) it ends
+  // up on. Computed once, reused per list below.
+  const fitCandidates: ListFitCandidate[] = themeable.map((t) => ({ candidateName: t.candidateName, venueName: t.venueName, dbCategory: t.dbCategory, finalTags: t.finalTags, finalBody: t.finalBody }))
+
+  for (const themeDef of THEMED_LIST_DEFINITIONS) {
+    const theme = buildEditorialThemedLists(themeable, [themeDef], THEMED_LIST_MIN_ITEMS)[0]
+    if (!theme) continue
+    const listDef: ListFitListDefinition = { title: themeDef.title, categories: themeDef.categories, tags: themeDef.tags, patterns: themeDef.patterns }
+    const relevantCandidates = fitCandidates.filter((c) => theme.candidateNames.includes(c.candidateName))
+    const fitScores = scoreItemsForLists(relevantCandidates, [listDef])
+    plan.push({ label: `Themed list: ${theme.title}`, title: theme.title, kind: 'THEMED', itemCandidateNames: theme.candidateNames, requiresImage: true, fitScores })
   }
 
   // Chief Phase 3C, Phase A — METRO_FINISHER_PACKET_EXECUTION's own
@@ -2492,7 +2521,19 @@ function buildHomeListPlan(state: MetroDriverState, flagshipListTitle: string): 
     if (decision.verdict !== 'CREATED') continue
     const itemCandidateNames = decision.itemCandidateNames.filter((n) => certifiedNameSet.has(n))
     if (itemCandidateNames.length === 0) continue
-    plan.push({ label: `Themed list (Finisher): ${decision.title}`, title: decision.title, kind: 'THEMED', itemCandidateNames, requiresImage: true })
+    // No pre-existing categories/tags/patterns definition exists for a
+    // Finisher-authored theme (it's a novel, AI-proposed title — see
+    // metroFinisherReport.ts's own "no hardcoded theme list" doc) — fit
+    // scoring against an unconfigured list always reports score 0/EXCLUDE
+    // with an explicit "no configured fit signals" reason (never silently
+    // treated as a pass), which is the honest answer here: this codebase
+    // has no independent signal to check a Finisher theme's members
+    // against beyond the Finisher stage's own certification.
+    const fitScores = scoreItemsForLists(
+      fitCandidates.filter((c) => itemCandidateNames.includes(c.candidateName)),
+      [{ title: decision.title }]
+    )
+    plan.push({ label: `Themed list (Finisher): ${decision.title}`, title: decision.title, kind: 'THEMED', itemCandidateNames, requiresImage: true, fitScores })
   }
 
   plan.push({ label: 'Curated-layer mirror', title: 'Curated-layer mirror', kind: 'CURATED_MIRROR', itemCandidateNames: names, requiresImage: false })
