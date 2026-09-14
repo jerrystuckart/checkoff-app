@@ -31,6 +31,7 @@ test('buildStageArtifactFiles: produces all 10 named artifacts', () => {
   const expectedNames = [
     '01-discovered-candidates.json',
     '02-canonical-venues.json',
+    '02a-seed-portfolio-audit-report.json',
     '03-editorial-certified.json',
     '04-pruning-decisions.json',
     '05-final-retained-catalog.json',
@@ -52,6 +53,36 @@ test('buildStageArtifactFiles: produces all 10 named artifacts', () => {
 
   assert.match(files['05-final-retained-catalog.csv'], /Cafe A/)
   assert.equal(files['09-production-package.sql'], 'BEGIN; COMMIT;')
+})
+
+test('buildStageArtifactFiles: 02a-seed-portfolio-audit-report.json reflects "not yet available" as null, and the real report when supplied', () => {
+  const empty = buildStageArtifactFiles({
+    candidates: [],
+    itemCertifications: {},
+    catalogPruningDrops: [],
+    homeListPlan: [],
+    categoryCounts: [],
+    neighborhoodCounts: [],
+    homeListSqlPatch: null,
+    venueDuplicateClusters: [],
+    finalReportJson: null,
+  })
+  assert.equal(JSON.parse(empty['02a-seed-portfolio-audit-report.json']), null)
+
+  const withReport = buildStageArtifactFiles({
+    candidates: [],
+    itemCertifications: {},
+    catalogPruningDrops: [],
+    homeListPlan: [],
+    categoryCounts: [],
+    neighborhoodCounts: [],
+    homeListSqlPatch: null,
+    venueDuplicateClusters: [],
+    finalReportJson: null,
+    seedPortfolioAuditReport: { metro: 'test_metro', generatedAt: '2026-09-14T00:00:00.000Z' } as never,
+  })
+  const parsed = JSON.parse(withReport['02a-seed-portfolio-audit-report.json'])
+  assert.equal(parsed.metro, 'test_metro')
 })
 
 test('buildStageArtifactFiles: never errors on empty/missing upstream data', () => {

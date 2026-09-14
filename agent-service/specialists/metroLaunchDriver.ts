@@ -3804,6 +3804,7 @@ async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRun
       finalReportJson: report,
       metroFinisherReport: state.metroFinisherReport ?? null,
       metroFinisherPackets: state.metroFinisherPackets ?? null,
+      seedPortfolioAuditReport: state.seedPortfolioAuditReport ?? null,
     })
     for (const [name, content] of Object.entries(files)) await deps.writeStageArtifact(name, content)
     state.stageArtifactManifest = Object.keys(files)

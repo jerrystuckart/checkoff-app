@@ -25,6 +25,7 @@ import type { DriverItemCertificationRecord, HomeListPlanEntry } from './metroLa
 import type { VenueCluster } from '../playbooks/venueDuplicateDetection'
 import type { MetroFinisherReport } from '../playbooks/metroFinisherReport'
 import type { MetroFinisherWorkPackets } from '../playbooks/metroFinisherIntegration'
+import type { SeedPortfolioAuditReport } from '../playbooks/seedPortfolioAudit'
 
 export interface StageArtifactInput {
   candidates: readonly (RawCandidate & { needsVerification: boolean })[]
@@ -40,6 +41,8 @@ export interface StageArtifactInput {
   metroFinisherReport?: MetroFinisherReport | null
   /** Chief Phase 3C — METRO_FINISHER_INTEGRATION's deterministic work packets, when this run has computed them. */
   metroFinisherPackets?: MetroFinisherWorkPackets | null
+  /** M5_75_SEED_PORTFOLIO_AUDIT's most recent accepted report, when this run has reached that stage — reflects "not yet available" as null, same discipline as metroFinisherReport above. */
+  seedPortfolioAuditReport?: SeedPortfolioAuditReport | null
 }
 
 function certifiedOnly(itemCertifications: Readonly<Record<string, DriverItemCertificationRecord>>) {
@@ -76,6 +79,11 @@ export function buildStageArtifactFiles(input: StageArtifactInput): Record<strin
     null,
     2
   )
+
+  // M5_75_SEED_PORTFOLIO_AUDIT runs on the raw, pre-editorial candidate
+  // seed — its report belongs between the raw-candidate artifacts above
+  // and editorial certification below, reflecting real pipeline order.
+  files['02a-seed-portfolio-audit-report.json'] = JSON.stringify(input.seedPortfolioAuditReport ?? null, null, 2)
 
   files['03-editorial-certified.json'] = JSON.stringify(
     certified.map((r) => ({ candidateName: r.candidateName, venueName: r.venueName, finalBody: r.finalBody, finalTags: r.finalTags, dbCategory: r.dbCategory ?? null })),
