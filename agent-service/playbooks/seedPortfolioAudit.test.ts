@@ -47,6 +47,18 @@ test('evaluateSeedCandidate: generic-action candidate is REJECTed', () => {
   assert.ok(decision.reasons.length > 0)
 })
 
+test('evaluateSeedCandidate: a venue name that happens to substring-match a generic category noun (e.g. "...Diner") never false-positives the generic-action check on its own', () => {
+  // Regression: "DowntownDiner serves a real, specific dish" naively
+  // substring-matches checkDistinctiveExperience's "eat-at-the-restaurant"
+  // concept (verb-equivalent "dine" inside "Diner", noun "diner") purely
+  // because of the venue's OWN name — the candidate's raw name must be
+  // stripped before the generic-concept scan, same as this codebase
+  // already does for certified body text via the quoted-venue-name
+  // convention (checkDistinctiveExperience's own venueName param).
+  const decision = evaluateSeedCandidate(candidate({ name: 'DowntownDiner', claimSupported: 'DowntownDiner serves a real, specific dish', category: 'Food & drink' }), new Set())
+  assert.equal(decision.verdict, 'READY')
+})
+
 test('evaluateSeedCandidate: distinctive candidate not in any cluster is READY with zero reasons', () => {
   const decision = evaluateSeedCandidate(candidate({ name: 'Unagi Don' }), new Set())
   assert.equal(decision.verdict, 'READY')

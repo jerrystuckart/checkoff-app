@@ -158,7 +158,15 @@ export interface SeedCandidateDecision {
 export function evaluateSeedCandidate(candidate: SeedCandidateInput, duplicateClusterNames: ReadonlySet<string>): SeedCandidateDecision {
   const reasons: string[] = []
 
-  const distinctiveness = checkDistinctiveExperience(candidate.claimSupported)
+  // checkDistinctiveExperience's own venueName-stripping only strips a
+  // SINGLE-QUOTED span ('Venue Name') — the certified-body convention
+  // downstream of M6.5. Raw, pre-editorial claimSupported text has no such
+  // quoting yet, so the raw candidate NAME is stripped here instead
+  // (case-insensitive, unquoted) before the generic-concept scan — a real
+  // venue literally named "...Diner"/"...Cafe"/etc. must never
+  // substring-match a generic category noun via its own name text alone.
+  const nameStrippedClaim = candidate.name ? candidate.claimSupported.split(new RegExp(candidate.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i')).join(' ') : candidate.claimSupported
+  const distinctiveness = checkDistinctiveExperience(nameStrippedClaim)
   const isGeneric = !distinctiveness.pass
 
   const isDuplicateFlagged = duplicateClusterNames.has(candidate.name)

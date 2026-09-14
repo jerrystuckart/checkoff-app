@@ -287,6 +287,8 @@ interface MetroDriverState {
   seedPortfolioAuditReport?: SeedPortfolioAuditReport
   /** How many bounded targeted-research rounds stepM5_75 has dispatched back through M5_TARGETED_DEEP_DIVES/M4_COVERAGE_AUDIT — bounded by SeedPortfolioAuditLoopControls.maxTargetedResearchIterations before a genuine NEEDS_JERRY escalation (adjustment 7). Reset to 0 once the stage reaches READY_FOR_EDITORIAL. */
   seedPortfolioAuditIterations?: number
+  /** Candidate names on HOLD (unresolved seed duplicate cluster) at the moment the audit last reached READY_FOR_EDITORIAL — excluded from state.candidates for that pass (never silently advanced to M6.5, never silently rejected), reportable for a human to resolve and reopen. Overwritten each time the audit reaches READY_FOR_EDITORIAL, never accumulated. */
+  seedPortfolioAuditHeldCandidates?: string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -1394,6 +1396,27 @@ async function stepM5_75(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise
   state.seedPortfolioAuditReport = report
 
   if (report.executiveVerdict.verdict === 'READY_FOR_EDITORIAL') {
+    // Adjustment 4: only READY candidates advance to M6.5 editorial intake.
+    // REJECT (generic filler) is recorded into editorRejectedCandidates —
+    // the SAME "ordinary bounded rejection, permanently excluded from
+    // `remaining`" convention stepEditor's own alreadyDone set already
+    // uses for an M6.5 write that repeatedly fails evidence validation, so
+    // this never re-enters the seed audit's rejection on a later resume.
+    // HOLD (duplicate-cluster review pending) is recorded separately
+    // (seedPortfolioAuditHeldCandidates) and also excluded from this
+    // pass's `remaining` — never silently rejected, never silently
+    // advanced; a human resolving the cluster can reopen the run to bring
+    // it back (same operator-driven reopen-stage convention used
+    // elsewhere in this driver).
+    const readyNames = new Set(report.candidateDecisions.ready)
+    const holdNames = new Set(report.candidateDecisions.hold.map((d) => d.candidateName))
+    const alreadyRejected = new Set((state.editorRejectedCandidates ?? []).map((r) => r.name))
+    state.candidates = (state.candidates ?? []).filter((c) => readyNames.has(c.name))
+    state.editorRejectedCandidates = [
+      ...(state.editorRejectedCandidates ?? []),
+      ...report.candidateDecisions.reject.filter((d) => !alreadyRejected.has(d.candidateName)).map((d) => ({ name: d.candidateName, reason: `M5_75_SEED_PORTFOLIO_AUDIT: ${d.reasons.join('; ')}` })),
+    ]
+    state.seedPortfolioAuditHeldCandidates = [...holdNames]
     state.seedPortfolioAuditIterations = 0
     run.state = state
     run.currentStage = 'M6_5_CHECKOFF_EDITOR'
