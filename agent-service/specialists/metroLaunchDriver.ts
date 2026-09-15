@@ -67,7 +67,8 @@ import { readRealHomeListRows, type HomeListReadPathFailure } from './homeListRe
 import { fetchExistingProductionInventoryForReconciliation, type FetchExistingProductionInventoryInput } from './existingInventoryReadPath'
 import { evaluateOutOfMarketContaminationGate } from '../playbooks/outOfMarketContamination'
 import { reconcileAgainstExistingInventory, type ExistingProductionItem, type ReconciliationResult } from '../playbooks/existingInventoryReconciliation'
-import { runM9ShadowCuration, type M9CurationMode, type M9AdapterCertifiedItem, type M9ShadowComparisonArtifact } from './m9ListCurationAdapter'
+import { runM9ShadowCuration, runM9EnforcedCuration, type M9AdapterCertifiedItem, type M9ShadowComparisonArtifact } from './m9ListCurationAdapter'
+import type { M9EnforcedCurationArtifact, M9OperatorDecisionRecord, M9OperatorDecisionInput } from './m9EnforcedTypes'
 import { deriveDefaultDepthTargets, DEFAULT_CATEGORY_COVERAGE_PLAN } from '../playbooks/defaultMetroManifest'
 import { buildCategoryPolicySetFromPlan, DEFAULT_CATEGORY_PERCENTAGE_BANDS, type CategoryPolicyException, type CommercialOwnershipType } from '../playbooks/categoryPolicy'
 import { runSeedPortfolioAudit, DEFAULT_SEED_PORTFOLIO_AUDIT_LOOP_CONTROLS, type SeedPortfolioAuditReport, type SeedPortfolioAuditLoopControls, type SeedCandidateInput } from '../playbooks/seedPortfolioAudit'
@@ -200,6 +201,31 @@ interface MetroDriverState {
    * accumulated (same discipline as metroFinisherReport).
    */
   m9ShadowCuration?: M9ShadowComparisonArtifact
+  /**
+   * M9 wiring, Session 2 (2026-09-14): the ENFORCED mode's own authoritative
+   * curation artifact — populated ONLY when deps.m9CurationMode ===
+   * 'ENFORCED'. Distinct from `homeListPlan`/`m9ShadowCuration`: in
+   * ENFORCED, `homeListPlan` is deliberately NEVER written (the legacy
+   * plan is never authoritative in this mode — see stepM9HomeListMirror's
+   * own doc), so THIS field is the only authoritative M9 output that
+   * exists while ENFORCED is active. Overwritten fresh on every ENFORCED
+   * M9 pass — never accumulated — but its own `finalApprovedMemberships`
+   * only ever reflects concepts with a currently-valid (non-stale-fingerprint)
+   * operator decision, which IS durable (see m9OperatorDecisions below).
+   */
+  m9EnforcedCuration?: M9EnforcedCurationArtifact
+  /**
+   * M9 wiring, Session 2 (2026-09-14): every operator decision ever
+   * accepted for this run's ENFORCED curation, keyed by conceptId —
+   * accumulated across the WHOLE run, never reset by a resume (same
+   * discipline as catalogPruningDrops/planRelaxations). A decision here is
+   * only actually APPLIED by runM9EnforcedCuration when its own
+   * decidedForFingerprint still matches the concept's current fingerprint
+   * — see m9EnforcedTypes.ts's own doc on stale-approval invalidation.
+   */
+  m9OperatorDecisions?: Record<string, M9OperatorDecisionRecord>
+  /** M9 wiring, Session 2: every operator decision INPUT this run has ever submitted but had refused (empty decisionText, unknown conceptId, etc) — reporting only, so a caller can see a submission never silently vanished. Overwritten fresh each ENFORCED pass that has any rejections (never accumulated — a caller resubmitting corrected input naturally supersedes the old rejection record). */
+  m9RejectedOperatorDecisionInputs?: Array<{ conceptId: string; reason: string; at: string }>
   tagVocabularyDetail?: string
   batchCertificationGates?: StagingGateResult[]
   rejectedItemCount?: number
@@ -511,26 +537,39 @@ export interface MetroDriverDeps {
    */
   flagshipListTitle?: string
   /**
-   * M9 wiring, Session 1 (2026-09-14): which list-curation path M9 runs.
-   * Defaults to 'LEGACY' — the adapter is never even invoked, byte-for-byte
-   * identical to this driver's behavior before this option existed. 'SHADOW'
-   * additionally runs the new two-pass system (m9ListCurationAdapter.ts)
-   * and stores its output in state.m9ShadowCuration, but never lets it
-   * affect state.homeListPlan/state.homeListSqlPatch or the unconditional
-   * M9->M10 transition — see stepM9HomeListMirror's own doc.
+   * M9 wiring, Session 1/2: which list-curation path M9 runs. Defaults to
+   * 'LEGACY' — the adapter is never even invoked, byte-for-byte identical
+   * to this driver's behavior before this option existed.
    *
-   * 'ENFORCED' is intentionally NOT part of this type: the adapter's own
-   * M9CurationMode is a three-way type reserved for a later session, but
-   * this driver implements only LEGACY/SHADOW today. TypeScript itself is
-   * the enforcement — no caller in this codebase can pass 'ENFORCED' or
-   * any other value and have it compile. A non-TypeScript caller that
-   * bypasses that (e.g. `as never`) gets the same safe behavior as
-   * omitting this option entirely (stepM9HomeListMirror only ever branches
-   * on `=== 'SHADOW'`): the adapter is simply never invoked and only the
-   * legacy artifacts are produced — never a silent, unimplemented
-   * ENFORCED-mode behavior fabricated in its place.
+   * 'SHADOW' (Session 1) additionally runs the new two-pass system and
+   * stores its output in state.m9ShadowCuration, but never lets it affect
+   * state.homeListPlan/state.homeListSqlPatch or the unconditional M9->M10
+   * transition.
+   *
+   * 'ENFORCED' (Session 2) makes the new system's own result authoritative
+   * instead: state.homeListPlan is never written, buildHomeListSqlPatch is
+   * never called, and the run either parks at M9_HOME_LIST_MIRROR with
+   * status WAITING (a fully-approved, valid plan with no SQL path yet —
+   * Session 3's job), NEEDS_JERRY (outstanding decisions, all
+   * approval-sufficient), or BLOCKED (INVALID/ERROR) — see
+   * stepM9HomeListMirror's own ENFORCED branch and m9EnforcedTypes.ts's
+   * M9EnforcedResult contract. Never falls through to M10 in this session.
+   * Still the caller's own explicit choice every time — the default stays
+   * 'LEGACY', and nothing in this driver ever switches a run into ENFORCED
+   * on its own.
    */
-  m9CurationMode?: 'LEGACY' | 'SHADOW'
+  m9CurationMode?: 'LEGACY' | 'SHADOW' | 'ENFORCED'
+  /**
+   * M9 wiring, Session 2 (2026-09-14), ENFORCED only: real operator
+   * decisions (Jerry's own approvals/rejections) this invocation is
+   * submitting. Validated by runM9EnforcedCuration — a decision with empty
+   * decisionText/decidedBy is refused outright (see
+   * state.m9RejectedOperatorDecisionInputs), never silently accepted as a
+   * bare force-approval. Accepted decisions are merged into
+   * state.m9OperatorDecisions and persist across future calls; omit this
+   * to re-evaluate with only the decisions already on record.
+   */
+  m9OperatorDecisionInputs?: readonly M9OperatorDecisionInput[]
   /** M10: which Home cards already have an image. Omit to correctly report every required card as still needing one — Winston never fabricates image readiness. */
   checkImageReadiness?: (plan: readonly HomeListPlanEntry[]) => Promise<ImageReadinessCard[]>
   /** M10 BUSINESS_ACTIVATION_KIT_GATE: the actual outreach copy this metro would send — validated deterministically (no network call) for a metro-specific kit reference or a misused /confirm/<token> link. Defaults to a clean template referencing only the canonical URL, since no outreach is sent during a metro build itself. */
@@ -3553,8 +3592,17 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
     )
   }
 
+  const curationMode = deps.m9CurationMode ?? 'LEGACY'
   const plan = buildHomeListPlan(state, deps.flagshipListTitle ?? 'Primary seasonal list')
-  state.homeListPlan = plan
+  // M9 wiring, Session 2 (2026-09-14) — ENFORCED never treats the legacy
+  // plan as authoritative (the task's own "does not use legacy list
+  // selections as authoritative input" rule), so it must never even be
+  // WRITTEN to state.homeListPlan — that field IS "authoritative" by every
+  // other reader in this codebase (buildHomeListSqlPatch, M10). `plan` is
+  // still computed above (cheap, pure) so ENFORCED's own comparison-only
+  // diagnostics can cite it as a labeled legacy artifact, exactly as
+  // Session 1's SHADOW mode already does.
+  if (curationMode !== 'ENFORCED') state.homeListPlan = plan
   const itemBodyByCandidateName = new Map(
     certifiedForRecheck.map((r) => [r.candidateName, r.finalBody])
   )
@@ -3644,7 +3692,7 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
   // runM9ShadowCuration's own internal no-throw contract: this call must
   // never be able to block the run, alter `plan`/`homeListSql`, or change
   // the unconditional M9->M10 transition at the end of this function.
-  if ((deps.m9CurationMode ?? 'LEGACY') === 'SHADOW') {
+  if (curationMode === 'SHADOW') {
     try {
       const venueNameByCandidateName = new Map(certifiedForRecheck.map((r) => [r.candidateName, r.venueName]))
       const shadowCertifiedItems: M9AdapterCertifiedItem[] = newItems.map((item) => ({
@@ -3675,6 +3723,80 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
         validationFailures: [`m9ListCurationAdapter threw unexpectedly outside its own no-throw contract: ${err instanceof Error ? err.message : String(err)}`],
       }
     }
+  }
+
+  // M9 wiring, Session 2 (2026-09-14) — ENFORCED mode. Structurally
+  // prevents the M9->M10 fall-through for anything but a fully-resolved
+  // plan: this branch RETURNS before buildHomeListSqlPatch is ever called,
+  // so ENFORCED can never generate legacy SQL from a failed (or even a
+  // successful) new plan — SQL generation from the new curation result is
+  // Session 3's job, not this one's. See m9EnforcedTypes.ts's own doc for
+  // the full result contract and metroLaunchDriverM9Enforced.test.ts for
+  // the end-to-end proof this never reaches M10 in this session.
+  if (curationMode === 'ENFORCED') {
+    const venueNameByCandidateName = new Map(certifiedForRecheck.map((r) => [r.candidateName, r.venueName]))
+    const enforcedCertifiedItems: M9AdapterCertifiedItem[] = newItems.map((item) => ({
+      candidateName: item.candidateName,
+      venueName: venueNameByCandidateName.get(item.candidateName) ?? item.candidateName,
+      dbCategory: item.dbCategory,
+      finalTags: item.tags,
+      finalBody: item.body,
+      neighborhoodName: item.neighborhoodName,
+    }))
+    const { artifact, acceptedDecisions, rejectedDecisionInputs } = runM9EnforcedCuration({
+      certifiedItems: enforcedCertifiedItems,
+      legacyPlan: plan.map((p) => ({ title: p.title, kind: p.kind, itemCandidateNames: p.itemCandidateNames })),
+      storedOperatorDecisions: state.m9OperatorDecisions ?? {},
+      newOperatorDecisionInputs: deps.m9OperatorDecisionInputs,
+      now: deps.now,
+    })
+    // Persist every accepted decision immediately — "operator decisions
+    // are recorded, not merely converted into booleans," and a decision
+    // accepted this call must survive a future rerun even if THIS call's
+    // overall result is still NEEDS_JERRY/HOLD because other concepts
+    // remain outstanding. Never cleared/reset — same discipline as every
+    // other accumulated-across-the-whole-run field in this state (e.g.
+    // catalogPruningDrops).
+    if (acceptedDecisions.length > 0) {
+      const merged = { ...(state.m9OperatorDecisions ?? {}) }
+      for (const decision of acceptedDecisions) merged[decision.conceptId] = decision
+      state.m9OperatorDecisions = merged
+    }
+    if (rejectedDecisionInputs.length > 0) {
+      state.m9RejectedOperatorDecisionInputs = rejectedDecisionInputs.map((r) => ({ conceptId: r.input.conceptId, reason: r.reason, at: (deps.now ?? (() => new Date().toISOString()))() }))
+    }
+    state.m9EnforcedCuration = artifact
+    run.state = state
+
+    if (artifact.result.kind === 'READY') {
+      // Approved, valid, and fully resolved — but there is no safe SQL
+      // path for the new curation result yet (Session 3's job). Parked
+      // here rather than advanced: WAITING is the existing status this
+      // codebase already uses for "cannot proceed until something outside
+      // this run's own control changes" (destinationRelationshipDriver.ts/
+      // destinationHubDriver.ts's own precedent) — distinct from BLOCKED
+      // (a real bug/data problem) and from NEEDS_JERRY (an operator
+      // decision is what's missing). jerryReason/decisionPacket are
+      // reserved for NEEDS_JERRY by playbookRun.ts's own doc, so neither
+      // is set here. currentStage deliberately stays M9_HOME_LIST_MIRROR —
+      // never advanced to M10_METRO_LAUNCH_CERTIFICATION.
+      run.status = 'WAITING'
+      return run
+    }
+    if (artifact.result.kind === 'INVALID' || artifact.result.kind === 'ERROR') {
+      return block(run, `ENFORCED M9 curation could not proceed (${artifact.result.kind}: ${artifact.result.reasonCode}): ${artifact.result.explanation}`)
+    }
+    // NEEDS_JERRY or HOLD — both real, but distinguished from each other in
+    // the persisted artifact/decisionPacket (approvalSufficient/
+    // evidenceMandatory per requiredDecision), not by a different run
+    // status: this reuses the existing NEEDS_JERRY vocabulary rather than
+    // inventing a new one, per this task's own "first inspect the existing
+    // status vocabulary" instruction.
+    return escalate(run, `ENFORCED M9 curation has ${artifact.result.requiredDecisions.length} outstanding decision(s) (${artifact.result.kind}): ${artifact.result.explanation}`, {
+      decisionNeeded: artifact.result.kind === 'HOLD' ? 'One or more list-curation findings require real evidence or an explicit, substantiated operator decision — a bare approval cannot resolve them.' : 'One or more newly-discovered list concepts require explicit operator approval before they can become authoritative.',
+      requiredDecisions: artifact.result.requiredDecisions,
+      earliestSafeResumePoint: artifact.result.earliestSafeResumePoint,
+    })
   }
 
   const { sql: homeListSql, neighborhoodsMissingCentroid } = buildHomeListSqlPatch(
@@ -4186,6 +4308,24 @@ export async function driveMetroLaunch(deps: MetroDriverDeps, projectId: string,
     // at LAUNCH_READINESS_BOUNDARY, or an invocation that omits the
     // flag, behaves identically to before this option existed).
     const reopenLaunchBoundary = options.reopenFromLaunchBoundary === true && run.currentStage === 'LAUNCH_READINESS_BOUNDARY'
+    // M9 wiring, Session 2 (2026-09-14) — a run parked NEEDS_JERRY/BLOCKED
+    // at M9_HOME_LIST_MIRROR under ENFORCED mode always re-enters, no
+    // explicit reopen flag needed (unlike LAUNCH_READINESS_BOUNDARY, this
+    // never changes currentStage — it just lets the SAME deterministic
+    // step run again). Safe by construction: stepM9HomeListMirror's
+    // ENFORCED branch recomputes the result fresh from the current
+    // catalog + state.m9OperatorDecisions + this call's own
+    // deps.m9OperatorDecisionInputs every time, and reproduces the
+    // IDENTICAL outcome when nothing relevant changed (repeated ENFORCED
+    // execution is idempotent — see runM9EnforcedCuration's own doc).
+    // Re-entry itself never decides anything, so this can never be a
+    // bypass — the same anti-bypass guarantee holdRecovery.ts's
+    // verifyHoldNotBypassed makes explicit for its own module. Applies
+    // equally whether the park was an outstanding decision (NEEDS_JERRY)
+    // or one of the universal, mode-independent fail-closed gates above
+    // it in stepM9HomeListMirror (BLOCKED) — both are equally safe to
+    // recompute.
+    const reopenM9Enforced = run.currentStage === 'M9_HOME_LIST_MIRROR' && (deps.m9CurationMode ?? 'LEGACY') === 'ENFORCED'
     if (reopenLaunchBoundary) {
       // Pull the run back to METRO_FINISHER_PACKET_EXECUTION (the newer
       // stage this run's original pass never had a chance to execute,
@@ -4203,6 +4343,8 @@ export async function driveMetroLaunch(deps: MetroDriverDeps, projectId: string,
       run.decisionPacket = null
       run.loopIteration = 0
       run.totalRetries = 0
+      run.status = 'RUNNING'
+    } else if (reopenM9Enforced) {
       run.status = 'RUNNING'
     } else {
       // Only re-enter if the caller has since resolved the M0 decisions —
