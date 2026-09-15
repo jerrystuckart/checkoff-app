@@ -29,36 +29,116 @@ import type { ListConceptVerdict } from '../playbooks/listConceptDiscovery'
 import type { ItemListMembershipVerdict } from '../playbooks/listFitScoring'
 
 // ---------------------------------------------------------------------------
-// Deterministic identity — "use deterministic concept identities or
-// fingerprints so operator decisions remain attached to the same proposal
-// across reruns... do not rely on list title text alone as identity."
+// Deterministic identity — Session 3 PREREQUISITE 1 hardening.
+//
+// Session 2's original computeM9ConceptId(seedTags) hashed ONLY the seed
+// tags. Within one discoverListConcepts() pass that's collision-free (a
+// given tag combination forms at most one cluster — discoverClusterSeeds's
+// own seenMemberKeys/pair-generation logic guarantees that), but the
+// IDENTITY itself was under-specified: it carried no metro scope and no
+// list-kind scope, so if this identity were ever compared, stored, or
+// looked up OUTSIDE this one run's own state (a shared/cross-run decision
+// store, a future centralized approval index — not how this codebase
+// works today, but exactly the failure mode a "durable identity" must be
+// safe against even if the CURRENT caller happens to avoid it by
+// accident) two UNRELATED concepts that happen to share a seed tag
+// combination (e.g. a generic tag like "coffee" recurring in two
+// different metros, or the same tags meaning something different under a
+// different discovery config) would collide under the SAME identity.
+//
+// Fixed by making conceptId a genuine durable identity — metro scope +
+// list kind + normalized seed-tag key — and moving everything that is
+// legitimately mutable (current membership, the evidence text describing
+// it, the discovery config that shaped it) into conceptFingerprint
+// instead, exactly mirroring the task's own instruction: "ordinary
+// membership changes should update the fingerprint, not create an
+// unrelated concept identity."
 // ---------------------------------------------------------------------------
 
 function stableHash(input: string): string {
   return createHash('sha256').update(input).digest('hex').slice(0, 16)
 }
 
-/**
- * A concept's IDENTITY — stable across reruns as long as its seed tags are
- * unchanged, regardless of which specific items currently cluster under
- * it (that's `computeM9ConceptFingerprint`'s job). Deliberately NOT
- * derived from `proposedTitle` (draftTitleFromTags' output, listConceptDiscovery.ts)
- * even though today the title is itself tag-derived — title text is
- * display/editorial and this task explicitly forbids using it as identity.
- */
-export function computeM9ConceptId(seedTags: readonly string[]): string {
-  return stableHash(['m9-concept', ...[...seedTags].sort()].join('|'))
+function normalizeIdentityToken(s: string): string {
+  return s.trim().toLowerCase().replace(/\s+/g, ' ')
+}
+
+export interface M9ConceptIdentityInput {
+  /** The metro this concept was discovered within — REQUIRED, never optional, so conceptId can never be computed without metro scope (the whole point of this hardening: a concept from one metro can never collide with a concept from another, even if a future caller compares identities across runs). Use the same real, established slug convention as deps.metroAreaSlug (metroLaunchDriver.ts) — never the CLI/task-tracking projectId alone if a distinct real slug exists. */
+  metroSlug: string
+  /** The ListMembershipKind (listFitScoring.ts) this concept is evaluated as — part of durable identity because the SAME seed tags evaluated under a DIFFERENT kind (e.g. a future re-classification) are a materially different proposal with a different evidence bar, not "the same concept with new membership." */
+  listKind: string
+  seedTags: readonly string[]
 }
 
 /**
- * A concept's CONTENT fingerprint — changes whenever its actual member set
- * changes, even though its identity (conceptId) stays the same. An
- * operator decision recorded against one fingerprint is stale, and must be
- * treated as unresolved again, once the concept's real fingerprint no
- * longer matches (see runM9EnforcedCuration's own stale-approval check).
+ * A concept's durable IDENTITY — stable across reruns as long as its
+ * metro, list kind, and normalized seed-tag set are unchanged, regardless
+ * of which specific items currently cluster under it (that's
+ * `computeM9ConceptFingerprint`'s job) and regardless of title
+ * punctuation/capitalization (title is never an input here at all —
+ * `proposedTitle`, draftTitleFromTags' output in listConceptDiscovery.ts,
+ * plays no role in identity, deliberately, per the task's own "do not use
+ * display title alone" instruction — in this design it is not used AT
+ * ALL, not even partially, which is stricter than the instruction
+ * requires and avoids any title-normalization edge case entirely).
  */
-export function computeM9ConceptFingerprint(conceptId: string, candidateNames: readonly string[]): string {
-  return stableHash([conceptId, ...[...candidateNames].sort()].join('|'))
+export function computeM9ConceptId(input: M9ConceptIdentityInput): string {
+  const normalizedTags = [...input.seedTags].map(normalizeIdentityToken).sort()
+  return stableHash(['m9-concept-id', 'v2', normalizeIdentityToken(input.metroSlug), normalizeIdentityToken(input.listKind), normalizedTags.join('+')].join('|'))
+}
+
+export interface M9ConceptFingerprintMember {
+  candidateName: string
+  dbCategory: string
+  finalTags: readonly string[]
+  neighborhoodName: string
+}
+
+export interface M9ConceptFingerprintInput {
+  conceptId: string
+  /** Current proposed membership, WITH enough per-item detail that a metadata-only change (e.g. an item's dbCategory or tags changing without its candidateName changing) also invalidates a stale approval — bare candidateNames alone would miss that class of material change. */
+  members: readonly M9ConceptFingerprintMember[]
+  /**
+   * The concept's own generated evidence text (listConceptDiscovery.ts's
+   * ListConceptCandidate.editorialPromise) — deliberately fingerprint
+   * content, not identity: it is entirely DERIVED from the seed tags and
+   * current member composition (draftTitleFromTags-adjacent templating,
+   * never independently authored in this codebase today), so a real
+   * change to it only ever happens alongside a real change to the
+   * evidence/composition it describes — exactly the kind of "material
+   * configuration that would change the meaning of an approval" the task
+   * asks fingerprint (not identity) to capture. Included here so the
+   * task's own required test ("material change to the editorial promise
+   * changes concept identity or explicitly invalidates approval") is
+   * satisfied via invalidation, the more conservative and more correct of
+   * the two named options — see this file's module doc.
+   */
+  editorialPromise: string
+  /** Hash of the exact ListConceptDiscoveryConfig used to produce this concept (computeM9DiscoveryConfigFingerprint) — a caller-side config change (different minViableItems/minStrongFitRatio/etc) changes what a CREATE verdict even means, so it must invalidate a prior approval too. */
+  discoveryConfigFingerprint: string
+}
+
+/**
+ * A concept's CONTENT fingerprint — changes whenever its actual member
+ * set, per-member metadata, generated evidence text, or discovery
+ * configuration changes, even though its identity (conceptId) stays the
+ * same. An operator decision recorded against one fingerprint is stale,
+ * and must be treated as unresolved again, once the concept's real
+ * fingerprint no longer matches (see runM9EnforcedCuration's own
+ * stale-approval check).
+ */
+export function computeM9ConceptFingerprint(input: M9ConceptFingerprintInput): string {
+  const memberSignature = [...input.members]
+    .map((m) => `${m.candidateName}::${m.dbCategory}::${[...m.finalTags].sort().join(',')}::${m.neighborhoodName}`)
+    .sort()
+    .join('|')
+  return stableHash(['m9-concept-fingerprint', 'v2', input.conceptId, memberSignature, normalizeIdentityToken(input.editorialPromise), input.discoveryConfigFingerprint].join('|'))
+}
+
+/** Hashes exactly the ListConceptDiscoveryConfig fields that change what a discovery verdict MEANS — a config change (e.g. a looser minViableItems) invalidates every prior approval computed under the old config, since "CREATE" no longer means the same thing. */
+export function computeM9DiscoveryConfigFingerprint(config: { minViableItems: number; minStrongFitRatio: number; overlapRequiresJerryThreshold: number; maxTagPrevalenceToSeed: number; excludedTags: ReadonlySet<string> }): string {
+  return stableHash(['m9-discovery-config', 'v1', config.minViableItems, config.minStrongFitRatio, config.overlapRequiresJerryThreshold, config.maxTagPrevalenceToSeed, [...config.excludedTags].sort().join(',')].join('|'))
 }
 
 /** The whole certified catalog's own fingerprint — persisted on the artifact so a caller can tell, without diffing every item, whether the input catalog changed materially since the artifact was last computed. */
@@ -186,6 +266,8 @@ export interface M9EnforcedConceptVerdict {
   fingerprint: string
   proposedTitle: string
   seedTags: string[]
+  /** The listFitScoring.ts ListMembershipKind this concept was evaluated as — part of this concept's durable identity (see computeM9ConceptId's own doc) and what determines which list-kind-specific evidence gate PASS B applied. */
+  listKind: string
   /** PASS A's own raw verdict (listConceptDiscovery.ts) — CREATE/HOLD/REJECT/REQUIRES_JERRY. Never itself authoritative on its own; `approvalState` below is what ENFORCED actually acts on. */
   discoveryVerdict: ListConceptVerdict
   approvalState: M9ConceptApprovalState
@@ -198,7 +280,8 @@ export interface M9EnforcedConceptVerdict {
   duplicateFindings: M9DuplicateFinding[]
 }
 
-export const M9_ENFORCED_ARTIFACT_VERSION = 1
+/** Bumped to 2 in Session 3: conceptId/fingerprint computation changed materially (metro+kind-scoped identity, richer fingerprint inputs) — any artifact persisted under version 1 must be treated as needing fresh discovery, never compared directly against a version-2 artifact's ids/fingerprints. */
+export const M9_ENFORCED_ARTIFACT_VERSION = 2
 
 export interface M9EnforcedCurationArtifact {
   mode: 'ENFORCED'

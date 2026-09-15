@@ -3744,6 +3744,7 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
       neighborhoodName: item.neighborhoodName,
     }))
     const { artifact, acceptedDecisions, rejectedDecisionInputs } = runM9EnforcedCuration({
+      metroSlug,
       certifiedItems: enforcedCertifiedItems,
       legacyPlan: plan.map((p) => ({ title: p.title, kind: p.kind, itemCandidateNames: p.itemCandidateNames })),
       storedOperatorDecisions: state.m9OperatorDecisions ?? {},

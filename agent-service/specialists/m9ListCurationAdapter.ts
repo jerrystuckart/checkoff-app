@@ -32,7 +32,7 @@
 // explicitly out of scope — that is Session 3.
 
 import { discoverListConcepts, DEFAULT_LIST_CONCEPT_DISCOVERY_CONFIG, type ListConceptCandidate, type ListConceptCandidateItem, type ListConceptDiscoveryConfig, type ListConceptVerdict } from '../playbooks/listConceptDiscovery'
-import { evaluateItemForListMembership, detectPortfolioRepetition, type ItemListFitDecision, type ItemListMembershipVerdict, type ListFitCandidate, type ListMembershipListContext, type PortfolioReviewItem } from '../playbooks/listFitScoring'
+import { evaluateItemForListMembership, detectPortfolioRepetition, type ItemListFitDecision, type ItemListMembershipVerdict, type ListFitCandidate, type ListMembershipListContext, type ListMembershipKind, type PortfolioReviewItem } from '../playbooks/listFitScoring'
 import { evaluateOperatorReviewBoundary, type OperatorReviewAction } from '../playbooks/operatorReviewBoundaries'
 import { reopenHoldCandidate, verifyReopenStageCompleteness, verifyHoldNotBypassed, type HoldReasonKind, type HoldRecord } from '../playbooks/holdRecovery'
 import type { RealDbCategory } from '../playbooks/metroCatalog'
@@ -41,6 +41,7 @@ import {
   computeM9ConceptId,
   computeM9ConceptFingerprint,
   computeM9CatalogFingerprint,
+  computeM9DiscoveryConfigFingerprint,
   M9_ENFORCED_ARTIFACT_VERSION,
   type M9ApprovalSufficiency,
   type M9EnforcedCurationArtifact,
@@ -52,6 +53,50 @@ import {
   type M9DuplicateFinding,
   type M9ItemMembershipRecord,
 } from './m9EnforcedTypes'
+
+// ---------------------------------------------------------------------------
+// Session 3, PREREQUISITE 1 — list-kind classification, now a durable
+// IDENTITY input (see m9EnforcedTypes.ts's own doc on why listKind is part
+// of conceptId). Reuses listConceptDiscovery.ts's own already-computed
+// ListConceptCandidate.type (never re-derives a second classification from
+// scratch) plus a lightweight seed-tag check for Hidden-Gems-shaped
+// clusters (inferConceptType, listConceptDiscovery.ts, has no Hidden-Gems
+// branch at all today — it only distinguishes NIGHTLIFE/FOOD_AND_DRINK/
+// ADVENTURE/CULTURAL/SEASONAL/EVERGREEN/OTHER). Exported so Phase 2's
+// evidence-gated membership curation (this file, later in Session 3) and
+// this file's own identity computation always agree on exactly one
+// classification per concept — never two independent guesses that could
+// disagree.
+// ---------------------------------------------------------------------------
+
+const HIDDEN_GEMS_SEED_TAG_PATTERN = /hidden|secret|gem|discovery|overlooked/i
+
+/**
+ * Maps a discovered concept onto listFitScoring.ts's existing
+ * ListMembershipKind vocabulary — never invents a new kind. ADVENTURE maps
+ * to DAY_TRIP (the closest real evidence-gated kind for a travel/adventure
+ * cluster; ListMembershipKind has no generic "adventure" kind of its own).
+ * CULTURAL/EVERGREEN/OTHER map to THEMED — this codebase has no
+ * established stricter evidence contract for arts/culture today (the real
+ * "Imperial & Grand Landmarks"/"Classical & Performing Arts" legacy
+ * THEMED_LIST_DEFINITIONS entries are themselves ordinary THEMED lists),
+ * so THEMED is the honest mapping, not a fabricated one.
+ */
+export function classifyM9ListKind(concept: { type: string; seedTags: readonly string[] }): ListMembershipKind {
+  if (concept.seedTags.some((t) => HIDDEN_GEMS_SEED_TAG_PATTERN.test(t))) return 'HIDDEN_GEMS'
+  switch (concept.type) {
+    case 'SEASONAL':
+      return 'SEASONAL'
+    case 'NIGHTLIFE':
+      return 'AFTER_DARK'
+    case 'FOOD_AND_DRINK':
+      return 'FOOD_LOCAL_FLAVOR'
+    case 'ADVENTURE':
+      return 'DAY_TRIP'
+    default:
+      return 'THEMED'
+  }
+}
 
 /**
  * The three-way mode this adapter (and, once wired, MetroDriverDeps) is
@@ -318,6 +363,8 @@ export type { ItemListFitDecision, ItemListMembershipVerdict, ListConceptCandida
 // ---------------------------------------------------------------------------
 
 export interface RunM9EnforcedCurationInput {
+  /** REQUIRED — the real, established metro slug (mirrors deps.metroAreaSlug, metroLaunchDriver.ts). Part of every discovered concept's durable identity (computeM9ConceptId) so an operator decision can never be confused across metros, even in a hypothetical future shared decision store. Never optional and never defaulted from something else here — the caller must supply the real value, the same discipline deps.metroAreaSlug already uses. */
+  metroSlug: string
   certifiedItems: readonly M9AdapterCertifiedItem[]
   /** Comparison only — see m9EnforcedTypes.ts's own doc and the task's "may use legacy output only as a labeled comparison artifact" rule. Never read as authoritative input to concept discovery or membership curation. */
   legacyPlan: readonly M9AdapterLegacyListSummary[]
@@ -349,8 +396,13 @@ export interface RunM9EnforcedCurationOutput {
   rejectedDecisionInputs: Array<{ input: M9OperatorDecisionInput; reason: string }>
 }
 
-function legacyListPseudoId(title: string): string {
-  return computeM9ConceptId([`legacy-list-title:${title}`])
+/** A stable, metro-scoped pseudo-identity for a LEGACY list, used only to label overlap-finding cross-references — never a real conceptId (a legacy list never went through concept discovery, so it has no seedTags/listKind of its own). */
+function legacyListPseudoId(metroSlug: string, title: string): string {
+  return computeM9ConceptId({ metroSlug, listKind: 'LEGACY_LIST', seedTags: [`legacy-list-title:${normalizeForPseudoId(title)}`] })
+}
+
+function normalizeForPseudoId(s: string): string {
+  return s.trim().toLowerCase()
 }
 
 /**
@@ -447,18 +499,38 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
     return { artifact: emptyEnforcedArtifact(now, inputCatalogFingerprint, result, structuralErrors), acceptedDecisions: [], rejectedDecisionInputs: [] }
   }
 
+  const discoveryConfig = input.conceptDiscoveryConfig ?? DEFAULT_LIST_CONCEPT_DISCOVERY_CONFIG
+  const discoveryConfigFingerprint = computeM9DiscoveryConfigFingerprint(discoveryConfig)
+
   let conceptDiscovery: ListConceptCandidate[]
   try {
     const conceptItems = input.certifiedItems.map(toConceptItem)
     const alreadyAccepted = input.legacyPlan.filter((p) => p.kind !== 'CURATED_MIRROR').map((p) => ({ title: p.title, candidateNames: p.itemCandidateNames }))
-    conceptDiscovery = discoverListConcepts(conceptItems, input.conceptDiscoveryConfig ?? DEFAULT_LIST_CONCEPT_DISCOVERY_CONFIG, alreadyAccepted)
+    conceptDiscovery = discoverListConcepts(conceptItems, discoveryConfig, alreadyAccepted)
   } catch (err) {
     const result = blockingResult('ERROR', 'PASS_A_THREW', `PASS A (discoverListConcepts) threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`, [])
     return { artifact: emptyEnforcedArtifact(now, inputCatalogFingerprint, result), acceptedDecisions: [], rejectedDecisionInputs: [] }
   }
 
   const itemsByName = new Map(input.certifiedItems.map((i) => [i.candidateName, i]))
-  const conceptsById = new Map(conceptDiscovery.map((c) => [computeM9ConceptId(c.seedTags), c]))
+
+  // Session 3 identity hardening — conceptId is now metro+listKind+seedTags
+  // scoped (m9EnforcedTypes.ts's own doc), so it must be computed the same
+  // way everywhere this function needs it: once per concept here, and
+  // reused (never recomputed with different inputs) below.
+  function identityFor(concept: ListConceptCandidate): { conceptId: string; listKind: ListMembershipKind } {
+    const listKind = classifyM9ListKind(concept)
+    return { conceptId: computeM9ConceptId({ metroSlug: input.metroSlug, listKind, seedTags: concept.seedTags }), listKind }
+  }
+  function fingerprintFor(concept: ListConceptCandidate, conceptId: string): string {
+    const members = concept.candidateNames.map((name) => {
+      const item = itemsByName.get(name)
+      return { candidateName: name, dbCategory: item?.dbCategory ?? 'UNKNOWN', finalTags: item?.finalTags ?? [], neighborhoodName: item?.neighborhoodName ?? 'UNKNOWN' }
+    })
+    return computeM9ConceptFingerprint({ conceptId, members, editorialPromise: concept.editorialPromise, discoveryConfigFingerprint })
+  }
+
+  const conceptsById = new Map(conceptDiscovery.map((c) => [identityFor(c).conceptId, c]))
 
   // Validate + accept/reject this call's own decision submissions BEFORE
   // evaluating any concept, so every concept sees the final, settled
@@ -484,7 +556,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
     }
     const record: M9OperatorDecisionRecord = {
       conceptId: decisionInput.conceptId,
-      decidedForFingerprint: computeM9ConceptFingerprint(decisionInput.conceptId, concept.candidateNames),
+      decidedForFingerprint: fingerprintFor(concept, decisionInput.conceptId),
       action: decisionInput.action,
       decision: decisionInput.decision,
       decisionText: decisionInput.decisionText,
@@ -502,9 +574,9 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
   const previousById = new Map((input.previousArtifact?.conceptVerdicts ?? []).map((v) => [v.conceptId, v]))
 
   for (const concept of conceptDiscovery) {
-    const conceptId = computeM9ConceptId(concept.seedTags)
-    const fingerprint = computeM9ConceptFingerprint(conceptId, concept.candidateNames)
-    const overlapFindings = concept.overlapWithOtherConcepts.map((o) => ({ withConceptId: legacyListPseudoId(o.withTitle), withTitle: o.withTitle, sharedItemCount: o.sharedItemCount, sharedPercent: o.sharedPercent }))
+    const { conceptId, listKind } = identityFor(concept)
+    const fingerprint = fingerprintFor(concept, conceptId)
+    const overlapFindings = concept.overlapWithOtherConcepts.map((o) => ({ withConceptId: legacyListPseudoId(input.metroSlug, o.withTitle), withTitle: o.withTitle, sharedItemCount: o.sharedItemCount, sharedPercent: o.sharedPercent }))
 
     // REJECT is automatic and final — "insufficient depth blocks rather
     // than adding filler": never scored for membership, never offered for
@@ -517,6 +589,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
         fingerprint,
         proposedTitle: concept.proposedTitle,
         seedTags: concept.seedTags,
+        listKind,
         discoveryVerdict: concept.verdict,
         approvalState: 'AUTO_EXCLUDED',
         memberDecisions: [],
@@ -601,6 +674,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
         fingerprint,
         proposedTitle: concept.proposedTitle,
         seedTags: concept.seedTags,
+        listKind,
         discoveryVerdict: concept.verdict,
         approvalState: 'REJECTED',
         operatorDecision: stored,
@@ -639,6 +713,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
         fingerprint,
         proposedTitle: concept.proposedTitle,
         seedTags: concept.seedTags,
+        listKind,
         discoveryVerdict: concept.verdict,
         approvalState: 'APPROVED',
         operatorDecision: stored,
@@ -694,6 +769,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
       fingerprint,
       proposedTitle: concept.proposedTitle,
       seedTags: concept.seedTags,
+      listKind,
       discoveryVerdict: concept.verdict,
       approvalState: concept.verdict === 'HOLD' || duplicateFindings.length > 0 ? 'HOLD' : 'PENDING',
       memberDecisions,
