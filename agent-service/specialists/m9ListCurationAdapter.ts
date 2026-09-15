@@ -50,6 +50,7 @@ import {
   type M9RequiredDecision,
   type M9OperatorDecisionInput,
   type M9OperatorDecisionRecord,
+  type M9OperatorResolutionAction,
   type M9DuplicateFinding,
   type M9ItemMembershipRecord,
 } from './m9EnforcedTypes'
@@ -437,6 +438,99 @@ function structuralValidationErrors(items: readonly M9AdapterCertifiedItem[]): s
   return errors
 }
 
+// ---------------------------------------------------------------------------
+// Session 3 PREREQUISITE 2 — structured evidence-required resolution.
+// See m9EnforcedTypes.ts's own doc on M9OperatorResolutionAction for why
+// this replaces Session 2's "any non-empty decisionText resolves anything"
+// rule.
+// ---------------------------------------------------------------------------
+
+/**
+ * reasonCodes this session has deliberately reviewed and marked safe for
+ * an ACCEPT_EXCEPTION resolution — EMPTY on purpose. No reasonCode this
+ * codebase produces today (CONCEPT_WEAK_STRONG_FIT_RATIO,
+ * UNRESOLVED_VENUE_DUPLICATE, CONCEPT_SUBSTANTIAL_OVERLAP,
+ * CONCEPT_CREATE_PENDING_APPROVAL, or any MEMBERSHIP_MISSING_*_EVIDENCE
+ * reason Phase 2 adds) has been reviewed as exception-eligible — a factual
+ * duplicate or an unsupported evidence-required claim must always be
+ * resolved by real evidence or an explicit rejection, never waved through.
+ * Add an entry here ONLY as a deliberate, reviewed, documented policy
+ * decision — never to unblock a specific test or run.
+ */
+export const M9_EXCEPTION_ELIGIBLE_REASON_CODES: ReadonlySet<string> = new Set()
+
+interface M9ConceptRequirementContext {
+  approvalSufficiency: M9ApprovalSufficiency
+  reasonCode: string
+}
+
+function resolveDecisionOutcome(action: M9OperatorResolutionAction): 'APPROVED' | 'REJECTED' {
+  return action === 'REJECT' ? 'REJECTED' : 'APPROVED'
+}
+
+/**
+ * The real enforcement behind PREREQUISITE 2's required behaviors. Called
+ * BEFORE a decision input is ever turned into a stored
+ * M9OperatorDecisionRecord — an input that fails here is refused outright
+ * (see rejectedDecisionInputs) and the underlying requirement stays
+ * outstanding, exactly as if nothing had been submitted.
+ */
+function validateM9OperatorResolution(input: M9OperatorDecisionInput, requirement: M9ConceptRequirementContext | undefined): { ok: true } | { ok: false; reason: string } {
+  switch (input.resolutionAction) {
+    case 'REJECT':
+      // "REJECT may resolve the issue by excluding the affected concept or
+      // membership" — always permitted, regardless of approvalSufficiency;
+      // excluding something is never less safe than including it.
+      return { ok: true }
+    case 'APPROVE':
+      if (requirement && (requirement.approvalSufficiency === 'EVIDENCE_REQUIRED' || requirement.approvalSufficiency === 'RESEARCH_REQUIRED')) {
+        return { ok: false, reason: `APPROVE cannot resolve an ${requirement.approvalSufficiency} decision (reasonCode "${requirement.reasonCode}") — use SUPPLY_EVIDENCE with structured evidence addressing this exact issue, or REJECT to exclude it.` }
+      }
+      return { ok: true }
+    case 'SUPPLY_EVIDENCE': {
+      if (!requirement || (requirement.approvalSufficiency !== 'EVIDENCE_REQUIRED' && requirement.approvalSufficiency !== 'RESEARCH_REQUIRED')) {
+        return { ok: false, reason: 'SUPPLY_EVIDENCE is only a valid resolution for a decision whose approvalSufficiency is EVIDENCE_REQUIRED or RESEARCH_REQUIRED.' }
+      }
+      const e = input.evidence
+      if (!e) return { ok: false, reason: 'SUPPLY_EVIDENCE requires structured evidence (sourceOrEvidenceId, evidenceSummary, dateVerified, confidence, issueResolved) — arbitrary prose in decisionText alone is never sufficient, however substantive it reads.' }
+      const missingFields: string[] = []
+      if (!e.sourceOrEvidenceId || !e.sourceOrEvidenceId.trim()) missingFields.push('sourceOrEvidenceId')
+      if (!e.evidenceSummary || !e.evidenceSummary.trim()) missingFields.push('evidenceSummary')
+      if (!e.dateVerified || !e.dateVerified.trim()) missingFields.push('dateVerified')
+      if (!e.confidence) missingFields.push('confidence')
+      if (!e.issueResolved || !e.issueResolved.trim()) missingFields.push('issueResolved')
+      if (missingFields.length > 0) return { ok: false, reason: `Structured evidence is incomplete — missing: ${missingFields.join(', ')}.` }
+      if (e.issueResolved !== requirement.reasonCode) {
+        return { ok: false, reason: `Evidence issueResolved ("${e.issueResolved}") does not match this concept's actual outstanding issue ("${requirement.reasonCode}") — unrelated evidence (even if real) cannot resolve a different issue.` }
+      }
+      return { ok: true }
+    }
+    case 'ACCEPT_EXCEPTION': {
+      if (!requirement) return { ok: false, reason: 'ACCEPT_EXCEPTION requires a real outstanding requirement to except.' }
+      if (!M9_EXCEPTION_ELIGIBLE_REASON_CODES.has(requirement.reasonCode)) {
+        return { ok: false, reason: `reasonCode "${requirement.reasonCode}" does not explicitly permit an exception — ACCEPT_EXCEPTION can never resolve a factual duplicate or any other evidence-required finding unless that specific issue has been deliberately, explicitly marked exception-eligible (none are, in this codebase, today). Use SUPPLY_EVIDENCE or REJECT instead.` }
+      }
+      return { ok: true }
+    }
+    case 'REPLACE_CONCEPT':
+    case 'REOPEN':
+      // Phase 4 wires the specific completed-list replace/reopen semantics
+      // (metroLaunchDriver.ts / this file's own later additions) — these
+      // two actions are structurally valid resolutions here; the
+      // completed-list-specific policy check happens where that context
+      // (an existing production list's status) is actually available.
+      return { ok: true }
+    case 'REQUEST_RESEARCH':
+      return { ok: false, reason: 'REQUEST_RESEARCH records that research was requested but never itself resolves anything — RESEARCH_REQUIRED remains blocked until real research results are attached via SUPPLY_EVIDENCE.' }
+    default:
+      // Defensive only — every real M9OperatorResolutionAction is handled
+      // above; a caller bypassing TypeScript (e.g. `as never`, a stale
+      // pre-hardening payload) lands here rather than crashing on an
+      // undefined result.
+      return { ok: false, reason: `Unrecognized resolutionAction "${String(input.resolutionAction)}" — a decision must specify one of the real M9OperatorResolutionAction values (APPROVE/REJECT/SUPPLY_EVIDENCE/REQUEST_RESEARCH/ACCEPT_EXCEPTION/REPLACE_CONCEPT/REOPEN).` }
+  }
+}
+
 function blockingResult(
   kind: 'NEEDS_JERRY' | 'HOLD' | 'INVALID' | 'ERROR',
   reasonCode: string,
@@ -530,48 +624,36 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
     return computeM9ConceptFingerprint({ conceptId, members, editorialPromise: concept.editorialPromise, discoveryConfigFingerprint })
   }
 
-  const conceptsById = new Map(conceptDiscovery.map((c) => [identityFor(c).conceptId, c]))
-
-  // Validate + accept/reject this call's own decision submissions BEFORE
-  // evaluating any concept, so every concept sees the final, settled
-  // decision set exactly once. A bare force-approval flag (empty
-  // decisionText) is rejected here, unconditionally — see the module doc's
-  // CRITICAL DESIGN RULE and M9OperatorDecisionInput.decisionText's own doc.
-  const acceptedDecisions: M9OperatorDecisionRecord[] = []
-  const rejectedDecisionInputs: RunM9EnforcedCurationOutput['rejectedDecisionInputs'] = []
-  const workingDecisions: Record<string, M9OperatorDecisionRecord> = { ...input.storedOperatorDecisions }
-  for (const decisionInput of input.newOperatorDecisionInputs ?? []) {
-    if (!decisionInput.decisionText || !decisionInput.decisionText.trim()) {
-      rejectedDecisionInputs.push({ input: decisionInput, reason: 'decisionText is required and must be non-empty — a bare force-approval flag can never satisfy an ENFORCED decision, regardless of that decision\'s own approvalSufficiency.' })
-      continue
-    }
-    if (!decisionInput.decidedBy || !decisionInput.decidedBy.trim()) {
-      rejectedDecisionInputs.push({ input: decisionInput, reason: 'decidedBy is required — a decision must be attributable to a real operator, never anonymous.' })
-      continue
-    }
-    const concept = conceptsById.get(decisionInput.conceptId)
-    if (!concept) {
-      rejectedDecisionInputs.push({ input: decisionInput, reason: `No concept with id "${decisionInput.conceptId}" was discovered in this run — the decision may be stale (the concept's seed tags no longer cluster) or malformed.` })
-      continue
-    }
-    const record: M9OperatorDecisionRecord = {
-      conceptId: decisionInput.conceptId,
-      decidedForFingerprint: fingerprintFor(concept, decisionInput.conceptId),
-      action: decisionInput.action,
-      decision: decisionInput.decision,
-      decisionText: decisionInput.decisionText,
-      newEvidence: decisionInput.newEvidence,
-      decidedBy: decisionInput.decidedBy,
-      decidedAt: now(),
-    }
-    workingDecisions[decisionInput.conceptId] = record
-    acceptedDecisions.push(record)
+  // ---------------------------------------------------------------------
+  // PASS 1 (Session 3, PREREQUISITE 2 restructure) — evaluate every
+  // non-REJECT concept's real requirement context (memberDecisions,
+  // duplicateFindings, action/approvalSufficiency/reasonCode) BEFORE
+  // looking at any decision input. This is what makes context-aware
+  // resolution validation possible at all: PREREQUISITE 2 requires
+  // knowing whether a submitted APPROVE/SUPPLY_EVIDENCE actually matches
+  // this concept's real outstanding issue, which is only known once PASS
+  // B + duplicate detection have run. REJECT concepts are finalized
+  // immediately here (nothing else to evaluate for them).
+  // ---------------------------------------------------------------------
+  interface ConceptEval {
+    concept: ListConceptCandidate
+    conceptId: string
+    fingerprint: string
+    listKind: ListMembershipKind
+    overlapFindings: M9EnforcedConceptVerdict['overlapFindings']
+    memberDecisions: M9ItemMembershipRecord[]
+    duplicateFindings: M9DuplicateFinding[]
+    includedItemIds: string[]
+    action: OperatorReviewAction
+    approvalSufficiency: M9ApprovalSufficiency
+    reasonCode: string
+    explanation: string
+    tiesIntoExistingMechanism: string | null
+    missingEvidence: string[]
   }
 
   const conceptVerdicts: M9EnforcedConceptVerdict[] = []
-  const finalApprovedMemberships: Record<string, string[]> = {}
-  const allRequiredDecisions: M9RequiredDecision[] = []
-  const previousById = new Map((input.previousArtifact?.conceptVerdicts ?? []).map((v) => [v.conceptId, v]))
+  const evalsByConceptId = new Map<string, ConceptEval>()
 
   for (const concept of conceptDiscovery) {
     const { conceptId, listKind } = identityFor(concept)
@@ -659,12 +741,73 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
     if (duplicateFindings.length > 0) {
       approvalSufficiency = 'EVIDENCE_REQUIRED'
       reasonCode = 'UNRESOLVED_VENUE_DUPLICATE'
-      explanation = `${duplicateFindings.map((d) => d.detail).join(' ')} An explicit operator decision with real substantiating content is required (a bare approval flag is not sufficient) — the same Kunst Oase/Vereinsheim precedent this codebase already recognizes at the seed-duplicate stage (holdRecovery.ts) applies here too: an explicit "these are genuinely distinct, keep both" decision is valid even without NEW evidence, but an empty/boolean-only approval is not.`
-      missingEvidence.push('explicit operator decision addressing the duplicate venue finding (decisionText), not merely an approval flag')
+      explanation = `${duplicateFindings.map((d) => d.detail).join(' ')} Real, structured evidence (SUPPLY_EVIDENCE) or an explicit, substantiated decision is required — the same Kunst Oase/Vereinsheim precedent this codebase already recognizes at the seed-duplicate stage (holdRecovery.ts) applies here too: an explicit "these are genuinely distinct, keep both" decision is valid even without NEW evidence, but a bare APPROVE (or any decisionText with no matching structured evidence) is not.`
+      missingEvidence.push('structured evidence (SUPPLY_EVIDENCE) whose issueResolved is UNRESOLVED_VENUE_DUPLICATE, or an explicit REJECT excluding the affected concept')
       tiesIntoExistingMechanism = 'holdRecovery.ts (Kunst Oase/Vereinsheim explicit-decision precedent) + NEEDS_JERRY / escalate() (metroLaunchDriver.ts)'
     }
     if (concept.verdict === 'HOLD') missingEvidence.push('additional strong-fit evidence, or an explicit operator judgment accepting the cluster as-is')
 
+    evalsByConceptId.set(conceptId, { concept, conceptId, fingerprint, listKind, overlapFindings, memberDecisions, duplicateFindings, includedItemIds, action, approvalSufficiency, reasonCode, explanation, tiesIntoExistingMechanism, missingEvidence })
+  }
+
+  // ---------------------------------------------------------------------
+  // PASS 2 — validate + accept/reject this call's own decision
+  // submissions, now WITH real per-concept requirement context available
+  // (PREREQUISITE 2's whole point: APPROVE cannot resolve an
+  // EVIDENCE_REQUIRED/RESEARCH_REQUIRED decision, SUPPLY_EVIDENCE must be
+  // structurally complete AND address the concept's actual reasonCode,
+  // ACCEPT_EXCEPTION is refused unless that reasonCode is deliberately
+  // whitelisted). Every concept sees the final, settled decision set
+  // exactly once in PASS 3.
+  // ---------------------------------------------------------------------
+  const acceptedDecisions: M9OperatorDecisionRecord[] = []
+  const rejectedDecisionInputs: RunM9EnforcedCurationOutput['rejectedDecisionInputs'] = []
+  const workingDecisions: Record<string, M9OperatorDecisionRecord> = { ...input.storedOperatorDecisions }
+  for (const decisionInput of input.newOperatorDecisionInputs ?? []) {
+    if (!decisionInput.decisionText || !decisionInput.decisionText.trim()) {
+      rejectedDecisionInputs.push({ input: decisionInput, reason: 'decisionText is required and must be non-empty on every resolution — an attributable human explanation is always required, even alongside structured evidence.' })
+      continue
+    }
+    if (!decisionInput.decidedBy || !decisionInput.decidedBy.trim()) {
+      rejectedDecisionInputs.push({ input: decisionInput, reason: 'decidedBy is required — a decision must be attributable to a real operator, never anonymous.' })
+      continue
+    }
+    const evalEntry = evalsByConceptId.get(decisionInput.conceptId)
+    if (!evalEntry) {
+      rejectedDecisionInputs.push({ input: decisionInput, reason: `No concept with id "${decisionInput.conceptId}" is currently evaluable in this run (either never discovered, or auto-excluded as REJECT) — the decision may be stale (the concept's seed tags no longer cluster) or malformed.` })
+      continue
+    }
+    const validation = validateM9OperatorResolution(decisionInput, { approvalSufficiency: evalEntry.approvalSufficiency, reasonCode: evalEntry.reasonCode })
+    if (!validation.ok) {
+      rejectedDecisionInputs.push({ input: decisionInput, reason: validation.reason })
+      continue
+    }
+    const record: M9OperatorDecisionRecord = {
+      conceptId: decisionInput.conceptId,
+      decidedForFingerprint: evalEntry.fingerprint,
+      action: decisionInput.action,
+      resolutionAction: decisionInput.resolutionAction,
+      decision: resolveDecisionOutcome(decisionInput.resolutionAction),
+      decisionText: decisionInput.decisionText,
+      evidence: decisionInput.evidence,
+      decidedBy: decisionInput.decidedBy,
+      decidedAt: now(),
+    }
+    workingDecisions[decisionInput.conceptId] = record
+    acceptedDecisions.push(record)
+  }
+
+  // ---------------------------------------------------------------------
+  // PASS 3 — finalize every non-REJECT concept using PASS 1's evaluation
+  // and PASS 2's validated decisions. Identical control flow to Session
+  // 2's original single-pass loop, just reading precomputed data instead
+  // of recomputing it.
+  // ---------------------------------------------------------------------
+  const finalApprovedMemberships: Record<string, string[]> = {}
+  const allRequiredDecisions: M9RequiredDecision[] = []
+  const previousById = new Map((input.previousArtifact?.conceptVerdicts ?? []).map((v) => [v.conceptId, v]))
+
+  for (const { concept, conceptId, fingerprint, listKind, overlapFindings, memberDecisions, duplicateFindings, includedItemIds, action, approvalSufficiency, reasonCode, explanation, tiesIntoExistingMechanism, missingEvidence } of evalsByConceptId.values()) {
     const stored = workingDecisions[conceptId]
     const decisionValid = stored && stored.decidedForFingerprint === fingerprint
 
@@ -700,7 +843,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
       if (approvalSufficiency === 'EVIDENCE_REQUIRED' || approvalSufficiency === 'RESEARCH_REQUIRED') {
         const holdReasonKind = toHoldReasonKind(reasonCode) ?? 'LIST_CONCEPT_WEAK_STRONG_FIT_RATIO'
         const holdRecord: HoldRecord = { candidateName: conceptId, holdReasonKind, originalReasons: [explanation], originalHeldAt: stored!.decidedAt }
-        const reopenResult = reopenHoldCandidate({ hold: holdRecord, newEvidence: stored!.newEvidence, explicitDecision: stored!.decisionText, reopenedBy: stored!.decidedBy, reopenedAt: stored!.decidedAt })
+        const reopenResult = reopenHoldCandidate({ hold: holdRecord, newEvidence: stored!.evidence?.evidenceSummary, explicitDecision: stored!.decisionText, reopenedBy: stored!.decidedBy, reopenedAt: stored!.decidedAt })
         const completeness = verifyReopenStageCompleteness(reopenResult)
         if (!reopenResult.ok || !completeness.ok || reopenResult.reentryStage !== 'M9_HOME_LIST_MIRROR') {
           const result = blockingResult('ERROR', 'HOLD_REOPEN_INVARIANT_VIOLATED', `holdRecovery.ts's reopen invariants were violated resolving concept "${concept.proposedTitle}": ${!reopenResult.ok ? reopenResult.errors.join('; ') : completeness.reason}`, [])

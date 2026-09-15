@@ -182,7 +182,7 @@ test('ENFORCED: an approved concept proceeds to membership curation and the plan
   assert.ok(decision, 'a required decision must exist for the discovered concept')
 
   const second = await driveMetroLaunch(
-    { ...deps, m9OperatorDecisionInputs: [{ conceptId: decision.affectedConceptIds[0], action: decision.action, decision: 'APPROVED', decisionText: 'Reviewed the Canal Stop cluster — coherent, approved.', decidedBy: 'jerry' }] } as never,
+    { ...deps, m9OperatorDecisionInputs: [{ conceptId: decision.affectedConceptIds[0], action: decision.action, resolutionAction: 'APPROVE', decisionText: 'Reviewed the Canal Stop cluster — coherent, approved.', decidedBy: 'jerry' }] } as never,
     'enf-approve',
     { categoryPlan: PLAN, maxSteps: 30 }
   )
@@ -209,7 +209,7 @@ test('ENFORCED: a rejected concept stays excluded from finalApprovedMemberships,
   const decision = enforcedState(first).m9EnforcedCuration!.requiredDecisions[0]
 
   const second = await driveMetroLaunch(
-    { ...deps, m9OperatorDecisionInputs: [{ conceptId: decision.affectedConceptIds[0], action: decision.action, decision: 'REJECTED', decisionText: 'Not a strong enough concept for this metro — reject.', decidedBy: 'jerry' }] } as never,
+    { ...deps, m9OperatorDecisionInputs: [{ conceptId: decision.affectedConceptIds[0], action: decision.action, resolutionAction: 'REJECT', decisionText: 'Not a strong enough concept for this metro — reject.', decidedBy: 'jerry' }] } as never,
     'enf-reject',
     { categoryPlan: PLAN, maxSteps: 30 }
   )
@@ -258,30 +258,109 @@ test('ENFORCED: an unresolved venue duplicate (Vereinsheim/Kunst Oase pattern) e
   assert.equal(decision!.approvalSufficiency, 'EVIDENCE_REQUIRED', 'an unresolved venue duplicate must require real evidence, not a plain approval')
   assert.equal(first.status, 'NEEDS_JERRY')
 
-  // Bare force-approval — decisionText empty — must be refused and must
-  // NOT clear the HOLD.
+  // 1. Empty force approval — refused outright.
   const bareForce = await driveMetroLaunch(
-    { ...deps, m9OperatorDecisionInputs: [{ conceptId: beerConcept!.conceptId, action: decision!.action, decision: 'APPROVED', decisionText: '', decidedBy: 'jerry' }] } as never,
+    { ...deps, m9OperatorDecisionInputs: [{ conceptId: beerConcept!.conceptId, action: decision!.action, resolutionAction: 'APPROVE', decisionText: '', decidedBy: 'jerry' }] } as never,
     'enf-duplicate',
     { categoryPlan: PLAN, maxSteps: 30 }
   )
   const bareForceArtifact = enforcedState(bareForce).m9EnforcedCuration!
-  assert.equal(bareForceArtifact.finalApprovedMemberships[beerConcept!.conceptId], undefined, 'a bare force-approval must never clear an unresolved venue duplicate')
-  assert.notEqual(bareForce.status, 'WAITING', 'the run must not become READY/parked-as-approved from a bare force-approval')
+  assert.equal(bareForceArtifact.finalApprovedMemberships[beerConcept!.conceptId], undefined, 'an empty force-approval must never clear an unresolved venue duplicate')
+  assert.notEqual(bareForce.status, 'WAITING', 'the run must not become READY/parked-as-approved from an empty force-approval')
 
-  // Real, substantive decision (the actual Kunst Oase/Vereinsheim precedent:
-  // an explicit decision, no NEW evidence required) — must resolve it.
+  // 2. Nonempty "looks fine to me" APPROVE — real text, but APPROVE can
+  // never resolve an EVIDENCE_REQUIRED decision at all (PREREQUISITE 2).
+  const vagueApprove = await driveMetroLaunch(
+    { ...deps, m9OperatorDecisionInputs: [{ conceptId: beerConcept!.conceptId, action: decision!.action, resolutionAction: 'APPROVE', decisionText: 'looks fine to me', decidedBy: 'jerry' }] } as never,
+    'enf-duplicate',
+    { categoryPlan: PLAN, maxSteps: 30 }
+  )
+  const vagueApproveArtifact = enforcedState(vagueApprove).m9EnforcedCuration!
+  assert.equal(vagueApproveArtifact.finalApprovedMemberships[beerConcept!.conceptId], undefined, 'a nonempty but non-evidentiary APPROVE must never resolve an EVIDENCE_REQUIRED duplicate')
+  assert.notEqual(vagueApprove.status, 'WAITING')
+
+  // 3. Structured evidence supplied, but for an UNRELATED issue (issueResolved
+  // does not match the real outstanding reasonCode) — refused.
+  const unrelatedEvidence = await driveMetroLaunch(
+    {
+      ...deps,
+      m9OperatorDecisionInputs: [
+        {
+          conceptId: beerConcept!.conceptId,
+          action: decision!.action,
+          resolutionAction: 'SUPPLY_EVIDENCE',
+          decisionText: 'Attaching evidence.',
+          decidedBy: 'jerry',
+          evidence: { sourceOrEvidenceId: 'https://example.com/unrelated', evidenceSummary: 'This is about hours of operation, not the duplicate.', dateVerified: '2026-09-15', confidence: 'HIGH', affectedConceptId: beerConcept!.conceptId, issueResolved: 'CONCEPT_CREATE_PENDING_APPROVAL' },
+        },
+      ],
+    } as never,
+    'enf-duplicate',
+    { categoryPlan: PLAN, maxSteps: 30 }
+  )
+  const unrelatedEvidenceArtifact = enforcedState(unrelatedEvidence).m9EnforcedCuration!
+  assert.equal(unrelatedEvidenceArtifact.finalApprovedMemberships[beerConcept!.conceptId], undefined, 'evidence whose issueResolved does not match the real outstanding reasonCode must be refused')
+
+  // 4. Real, structured duplicate-resolution evidence — the actual Kunst
+  // Oase/Vereinsheim precedent (an explicit decision addressing the
+  // specific duplicate) — must resolve it.
   const resolved = await driveMetroLaunch(
     {
       ...deps,
-      m9OperatorDecisionInputs: [{ conceptId: beerConcept!.conceptId, action: decision!.action, decision: 'APPROVED', decisionText: 'Reviewed: Vereinsheim pub quiz night and live music night are genuinely distinct recurring experiences at the same venue — keep both, same precedent as the real Kunst Oase case.', decidedBy: 'jerry' }],
+      m9OperatorDecisionInputs: [
+        {
+          conceptId: beerConcept!.conceptId,
+          action: decision!.action,
+          resolutionAction: 'SUPPLY_EVIDENCE',
+          decisionText: 'Reviewed: Vereinsheim pub quiz night and live music night are genuinely distinct recurring experiences at the same venue — keep both, same precedent as the real Kunst Oase case.',
+          decidedBy: 'jerry',
+          evidence: {
+            sourceOrEvidenceId: 'operator-review-2026-09-15',
+            evidenceSummary: 'Confirmed via the venue\'s own event calendar: pub quiz night (Tuesdays) and live music night (Fridays) are two separate, independently-bookable recurring events at the same address.',
+            dateVerified: '2026-09-15',
+            confidence: 'HIGH',
+            affectedConceptId: beerConcept!.conceptId,
+            issueResolved: 'UNRESOLVED_VENUE_DUPLICATE',
+          },
+        },
+      ],
     } as never,
     'enf-duplicate',
     { categoryPlan: PLAN, maxSteps: 30 }
   )
   const resolvedArtifact = enforcedState(resolved).m9EnforcedCuration!
-  assert.ok(resolvedArtifact.finalApprovedMemberships[beerConcept!.conceptId], 'a real, substantive decision must resolve the duplicate and finalize membership')
+  assert.ok(resolvedArtifact.finalApprovedMemberships[beerConcept!.conceptId], 'real, structured, on-issue evidence must resolve the duplicate and finalize membership')
   assert.equal(resolved.status, 'WAITING', 'now READY/parked, since the only outstanding concept is resolved')
+})
+
+// ---------------------------------------------------------------------------
+// Explicit rejection of a duplicate-containing concept — REJECT always
+// resolves by exclusion, regardless of approvalSufficiency.
+// ---------------------------------------------------------------------------
+
+test('ENFORCED: explicit REJECT resolves a duplicate-containing concept by exclusion, without needing evidence', async () => {
+  const runStore = new InMemoryPlaybookRunStore()
+  const specs: ItemSpec[] = [
+    { name: 'Vereinsheim Pub Quiz', venueName: 'Vereinsheim', tags: ['beer-garden', 'v-1'] },
+    { name: 'Vereinsheim Live Music', venueName: 'Vereinsheim', tags: ['beer-garden', 'v-2'] },
+    ...Array.from({ length: 13 }, (_, i) => ({ name: `Beer Garden ${i}`, tags: ['beer-garden', `bg-${i}`] })),
+    ...fillerItems(40, 'Filler'),
+  ]
+  await seedAtM9(runStore, 'enf-duplicate-reject', specs)
+  const deps = baseDeps(runStore)
+  const first = await driveMetroLaunch(deps as never, 'enf-duplicate-reject', { categoryPlan: PLAN, maxSteps: 30 })
+  const beerConcept = enforcedState(first).m9EnforcedCuration!.conceptVerdicts.find((v) => v.seedTags.includes('beer-garden'))!
+  const decision = enforcedState(first).m9EnforcedCuration!.requiredDecisions.find((d) => d.affectedConceptIds.includes(beerConcept.conceptId))!
+
+  const rejected = await driveMetroLaunch(
+    { ...deps, m9OperatorDecisionInputs: [{ conceptId: beerConcept.conceptId, action: decision.action, resolutionAction: 'REJECT', decisionText: 'Not resolving the duplicate — dropping this concept entirely.', decidedBy: 'jerry' }] } as never,
+    'enf-duplicate-reject',
+    { categoryPlan: PLAN, maxSteps: 30 }
+  )
+  const rejectedArtifact = enforcedState(rejected).m9EnforcedCuration!
+  assert.equal(rejectedArtifact.conceptVerdicts.find((v) => v.conceptId === beerConcept.conceptId)?.approvalState, 'REJECTED')
+  assert.equal(rejectedArtifact.finalApprovedMemberships[beerConcept.conceptId], undefined)
+  assert.equal(rejected.status, 'WAITING', 'the only concept is now resolved (rejected), so the plan is READY')
 })
 
 // ---------------------------------------------------------------------------
@@ -299,7 +378,7 @@ test('ENFORCED: a changed catalog that alters a concept\'s membership invalidate
   const conceptId = decision.affectedConceptIds[0]
 
   const approved = await driveMetroLaunch(
-    { ...deps, m9OperatorDecisionInputs: [{ conceptId, action: decision.action, decision: 'APPROVED', decisionText: 'Approved.', decidedBy: 'jerry' }] } as never,
+    { ...deps, m9OperatorDecisionInputs: [{ conceptId, action: decision.action, resolutionAction: 'APPROVE', decisionText: 'Approved.', decidedBy: 'jerry' }] } as never,
     'enf-stale',
     { categoryPlan: PLAN, maxSteps: 30 }
   )

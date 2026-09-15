@@ -217,26 +217,65 @@ export type M9EnforcedResult = M9EnforcedReadyResult | M9EnforcedBlockingResult
 export type M9ConceptApprovalState = 'PENDING' | 'APPROVED' | 'REJECTED' | 'HOLD' | 'AUTO_EXCLUDED'
 
 /** One recorded, attributable operator decision — "operator decisions are recorded, not merely converted into booleans" (Phase 6). `decisionText` is mandatory and non-empty by construction (see the adapter's own validation) — a bare force-approval flag with no substantive text can never become one of these records. */
+// ---------------------------------------------------------------------------
+// Session 3 PREREQUISITE 2 — the structured operator resolution contract.
+//
+// Session 2's contract had a real loophole: ANY non-empty decisionText
+// (e.g. "looks fine to me") could resolve ANY outstanding decision,
+// including an EVIDENCE_REQUIRED/RESEARCH_REQUIRED one — decisionText
+// being mandatory prevented a bare BOOLEAN force-approval, but never
+// verified the TEXT actually addressed the real issue. This section
+// replaces that with a typed resolution action plus, for evidence-class
+// resolutions, a real structured evidence record — see
+// m9ListCurationAdapter.ts's validateM9OperatorResolution for the
+// enforcement (APPROVE can never resolve EVIDENCE_REQUIRED/RESEARCH_REQUIRED;
+// SUPPLY_EVIDENCE requires a complete M9StructuredEvidence whose
+// issueResolved matches the actual outstanding reasonCode; ACCEPT_EXCEPTION
+// is refused for any reasonCode not deliberately whitelisted).
+// ---------------------------------------------------------------------------
+
+export type M9OperatorResolutionAction = 'APPROVE' | 'REJECT' | 'SUPPLY_EVIDENCE' | 'REQUEST_RESEARCH' | 'ACCEPT_EXCEPTION' | 'REPLACE_CONCEPT' | 'REOPEN'
+
+export type M9EvidenceConfidence = 'HIGH' | 'MEDIUM' | 'LOW'
+
+/** Real, structured evidence — never a substitute for arbitrary prose in decisionText, and never accepted as a resolution unless `issueResolved` matches the concept's actual outstanding M9RequiredDecision.reasonCode (an unrelated URL or fact, however real, does not resolve a DIFFERENT issue). */
+export interface M9StructuredEvidence {
+  /** A real citation — a URL, a document id, a specific field/record reference. Never a placeholder. */
+  sourceOrEvidenceId: string
+  evidenceSummary: string
+  /** ISO date the evidence was actually verified/checked — not merely when it was written. */
+  dateVerified: string
+  confidence: M9EvidenceConfidence
+  affectedConceptId: string
+  affectedItemId?: string
+  /** Must equal the M9RequiredDecision.reasonCode this evidence claims to resolve. */
+  issueResolved: string
+}
+
 export interface M9OperatorDecisionRecord {
   conceptId: string
   /** The concept CONTENT fingerprint this decision was made against — a later run whose concept fingerprint no longer matches this treats the decision as stale (see computeM9ConceptFingerprint's own doc). */
   decidedForFingerprint: string
   action: OperatorReviewAction
+  /** HOW this was resolved — see M9OperatorResolutionAction's own doc. REJECT always maps to `decision: 'REJECTED'`; every other resolving action maps to `decision: 'APPROVED'` (REQUEST_RESEARCH never resolves anything and can never reach this record type — see the adapter's own validation). */
+  resolutionAction: M9OperatorResolutionAction
   decision: 'APPROVED' | 'REJECTED'
   decisionText: string
-  newEvidence?: string
+  /** Present only for a SUPPLY_EVIDENCE resolution — validated complete and on-issue before this record is ever constructed. */
+  evidence?: M9StructuredEvidence
   decidedBy: string
   decidedAt: string
 }
 
-/** The caller-supplied input for ONE decision this invocation — validated and, if valid, turned into an M9OperatorDecisionRecord and persisted. */
+/** The caller-supplied input for ONE decision this invocation — validated (against the real outstanding requirement for `conceptId`, not just structurally) and, if valid, turned into an M9OperatorDecisionRecord and persisted. */
 export interface M9OperatorDecisionInput {
   conceptId: string
   action: OperatorReviewAction
-  decision: 'APPROVED' | 'REJECTED'
-  /** Mandatory, non-empty. A caller submitting only `{decision: 'APPROVED'}` with no real text is exactly the "generic force flag" the task's CRITICAL DESIGN RULE forbids — rejected outright by the adapter, regardless of which approvalSufficiency this decision's action actually needs (see runM9EnforcedCuration's own validation: requiring real text unconditionally is a stricter, simpler, and more conservative rule than trying to infer whether THIS particular action would have tolerated a bare boolean). */
+  resolutionAction: M9OperatorResolutionAction
+  /** Mandatory, non-empty on every resolution regardless of resolutionAction — an attributable human explanation is always required, even alongside structured evidence. Never sufficient BY ITSELF to resolve an EVIDENCE_REQUIRED/RESEARCH_REQUIRED decision — see `evidence`. */
   decisionText: string
-  newEvidence?: string
+  /** Required (and validated complete + on-issue) when resolutionAction === 'SUPPLY_EVIDENCE'; ignored for every other resolutionAction. */
+  evidence?: M9StructuredEvidence
   decidedBy: string
 }
 
