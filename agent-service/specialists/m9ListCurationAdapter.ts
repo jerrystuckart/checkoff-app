@@ -39,6 +39,7 @@ import type { RealDbCategory } from '../playbooks/metroCatalog'
 import type { CommercialOwnershipType } from '../playbooks/categoryPolicy'
 import {
   computeM9ConceptId,
+  computeM9ConceptKey,
   computeM9ConceptFingerprint,
   computeM9CatalogFingerprint,
   computeM9DiscoveryConfigFingerprint,
@@ -475,7 +476,13 @@ export interface RunM9EnforcedCurationOutput {
 
 /** A stable, metro-scoped pseudo-identity for a LEGACY list, used only to label overlap-finding cross-references — never a real conceptId (a legacy list never went through concept discovery, so it has no seedTags/listKind of its own). */
 function legacyListPseudoId(metroSlug: string, title: string): string {
-  return computeM9ConceptId({ metroSlug, listKind: 'LEGACY_LIST', seedTags: [`legacy-list-title:${normalizeForPseudoId(title)}`] })
+  const normalizedTitle = normalizeForPseudoId(title)
+  // A legacy list has no real seedTags/editorialPromise of its own (it
+  // never went through concept discovery) — the normalized title stands
+  // in for both, consistently, so the SAME legacy list always produces
+  // the SAME pseudo id (this value is never compared against a real
+  // conceptId, only used to label overlap-finding cross-references).
+  return computeM9ConceptId({ metroSlug, listKind: 'LEGACY_LIST', seedTags: [`legacy-list-title:${normalizedTitle}`], editorialPromise: normalizedTitle })
 }
 
 function normalizeForPseudoId(s: string): string {
@@ -684,21 +691,25 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
 
   const itemsByName = new Map(input.certifiedItems.map((i) => [i.candidateName, i]))
 
-  // Session 3 identity hardening — conceptId is now metro+listKind+seedTags
-  // scoped (m9EnforcedTypes.ts's own doc), so it must be computed the same
-  // way everywhere this function needs it: once per concept here, and
-  // reused (never recomputed with different inputs) below.
-  function identityFor(concept: ListConceptCandidate): { conceptId: string; listKind: ListMembershipKind } {
+  // Session 3 identity hardening — conceptId is metro+listKind+seedTags+
+  // editorialPromise scoped (m9EnforcedTypes.ts's own doc, v3), so it must
+  // be computed the same way everywhere this function needs it: once per
+  // concept here, and reused (never recomputed with different inputs) below.
+  function identityFor(concept: ListConceptCandidate): { conceptId: string; conceptKey: string; listKind: ListMembershipKind } {
     const members = concept.candidateNames.map((name) => itemsByName.get(name)).filter((i): i is M9AdapterCertifiedItem => Boolean(i))
     const listKind = classifyM9ListKind(concept, members)
-    return { conceptId: computeM9ConceptId({ metroSlug: input.metroSlug, listKind, seedTags: concept.seedTags }), listKind }
+    return {
+      conceptId: computeM9ConceptId({ metroSlug: input.metroSlug, listKind, seedTags: concept.seedTags, editorialPromise: concept.editorialPromise }),
+      conceptKey: computeM9ConceptKey(concept.seedTags),
+      listKind,
+    }
   }
   function fingerprintFor(concept: ListConceptCandidate, conceptId: string): string {
     const members = concept.candidateNames.map((name) => {
       const item = itemsByName.get(name)
       return { candidateName: name, dbCategory: item?.dbCategory ?? 'UNKNOWN', finalTags: item?.finalTags ?? [], neighborhoodName: item?.neighborhoodName ?? 'UNKNOWN' }
     })
-    return computeM9ConceptFingerprint({ conceptId, members, editorialPromise: concept.editorialPromise, discoveryConfigFingerprint })
+    return computeM9ConceptFingerprint({ conceptId, members, discoveryConfigFingerprint })
   }
 
   // ---------------------------------------------------------------------
@@ -715,6 +726,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
   interface ConceptEval {
     concept: ListConceptCandidate
     conceptId: string
+    conceptKey: string
     fingerprint: string
     listKind: ListMembershipKind
     overlapFindings: M9EnforcedConceptVerdict['overlapFindings']
@@ -733,7 +745,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
   const evalsByConceptId = new Map<string, ConceptEval>()
 
   for (const concept of conceptDiscovery) {
-    const { conceptId, listKind } = identityFor(concept)
+    const { conceptId, conceptKey, listKind } = identityFor(concept)
     const fingerprint = fingerprintFor(concept, conceptId)
     const overlapFindings = concept.overlapWithOtherConcepts.map((o) => ({ withConceptId: legacyListPseudoId(input.metroSlug, o.withTitle), withTitle: o.withTitle, sharedItemCount: o.sharedItemCount, sharedPercent: o.sharedPercent }))
 
@@ -745,6 +757,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
     if (concept.verdict === 'REJECT') {
       conceptVerdicts.push({
         conceptId,
+        conceptKey,
         fingerprint,
         proposedTitle: concept.proposedTitle,
         seedTags: concept.seedTags,
@@ -824,7 +837,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
     }
     if (concept.verdict === 'HOLD') missingEvidence.push('additional strong-fit evidence, or an explicit operator judgment accepting the cluster as-is')
 
-    evalsByConceptId.set(conceptId, { concept, conceptId, fingerprint, listKind, overlapFindings, memberDecisions, duplicateFindings, includedItemIds, action, approvalSufficiency, reasonCode, explanation, tiesIntoExistingMechanism, missingEvidence })
+    evalsByConceptId.set(conceptId, { concept, conceptId, conceptKey, fingerprint, listKind, overlapFindings, memberDecisions, duplicateFindings, includedItemIds, action, approvalSufficiency, reasonCode, explanation, tiesIntoExistingMechanism, missingEvidence })
   }
 
   // ---------------------------------------------------------------------
@@ -884,13 +897,14 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
   const allRequiredDecisions: M9RequiredDecision[] = []
   const previousById = new Map((input.previousArtifact?.conceptVerdicts ?? []).map((v) => [v.conceptId, v]))
 
-  for (const { concept, conceptId, fingerprint, listKind, overlapFindings, memberDecisions, duplicateFindings, includedItemIds, action, approvalSufficiency, reasonCode, explanation, tiesIntoExistingMechanism, missingEvidence } of evalsByConceptId.values()) {
+  for (const { concept, conceptId, conceptKey, fingerprint, listKind, overlapFindings, memberDecisions, duplicateFindings, includedItemIds, action, approvalSufficiency, reasonCode, explanation, tiesIntoExistingMechanism, missingEvidence } of evalsByConceptId.values()) {
     const stored = workingDecisions[conceptId]
     const decisionValid = stored && stored.decidedForFingerprint === fingerprint
 
     if (decisionValid && stored!.decision === 'REJECTED') {
       conceptVerdicts.push({
         conceptId,
+        conceptKey,
         fingerprint,
         proposedTitle: concept.proposedTitle,
         seedTags: concept.seedTags,
@@ -930,6 +944,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
       finalApprovedMemberships[conceptId] = includedItemIds
       conceptVerdicts.push({
         conceptId,
+        conceptKey,
         fingerprint,
         proposedTitle: concept.proposedTitle,
         seedTags: concept.seedTags,
@@ -986,6 +1001,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
     allRequiredDecisions.push(requiredDecision)
     conceptVerdicts.push({
       conceptId,
+      conceptKey,
       fingerprint,
       proposedTitle: concept.proposedTitle,
       seedTags: concept.seedTags,

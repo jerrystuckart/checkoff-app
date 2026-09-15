@@ -9,6 +9,7 @@ import type { M9EnforcedCurationArtifact, M9EnforcedConceptVerdict } from './m9E
 
 function makeVerdict(overrides: Partial<M9EnforcedConceptVerdict> & Pick<M9EnforcedConceptVerdict, 'conceptId' | 'proposedTitle'>): M9EnforcedConceptVerdict {
   return {
+    conceptKey: 'tag',
     fingerprint: 'fp',
     seedTags: ['tag'],
     listKind: 'THEMED',
