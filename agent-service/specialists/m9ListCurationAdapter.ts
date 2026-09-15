@@ -34,6 +34,7 @@
 import { discoverListConcepts, DEFAULT_LIST_CONCEPT_DISCOVERY_CONFIG, type ListConceptCandidate, type ListConceptCandidateItem, type ListConceptDiscoveryConfig, type ListConceptVerdict } from '../playbooks/listConceptDiscovery'
 import { evaluateItemForListMembership, detectPortfolioRepetition, type ItemListFitDecision, type ItemListMembershipVerdict, type ListFitCandidate, type ListMembershipListContext, type PortfolioReviewItem } from '../playbooks/listFitScoring'
 import { evaluateOperatorReviewBoundary, type OperatorReviewAction } from '../playbooks/operatorReviewBoundaries'
+import { reopenHoldCandidate, verifyReopenStageCompleteness, verifyHoldNotBypassed, type HoldReasonKind, type HoldRecord } from '../playbooks/holdRecovery'
 import type { RealDbCategory } from '../playbooks/metroCatalog'
 import type { CommercialOwnershipType } from '../playbooks/categoryPolicy'
 import {
@@ -324,6 +325,18 @@ export interface RunM9EnforcedCurationInput {
   storedOperatorDecisions: Readonly<Record<string, M9OperatorDecisionRecord>>
   /** New decisions the caller is submitting THIS invocation (e.g. a real Jerry approval/rejection) — validated and, if valid, folded into this call's own evaluation (though NOT into storedOperatorDecisions, which this function treats as read-only; the caller persists acceptedDecisions itself). */
   newOperatorDecisionInputs?: readonly M9OperatorDecisionInput[]
+  /**
+   * Phase 6 — the previous ENFORCED artifact for this run, when one
+   * exists (the driver's own state.m9EnforcedCuration going into this
+   * call). Used ONLY for the anti-bypass self-check below
+   * (verifyHoldNotBypassed, holdRecovery.ts): when a concept still has NO
+   * valid decision this call (no new evidence/decision was supplied for
+   * it), its re-evaluated verdict/memberDecisions must be IDENTICAL to
+   * what this previous artifact already recorded for the same
+   * conceptId+fingerprint — never itself consulted to derive the new
+   * result. Omit on a first-ever pass (nothing to compare against).
+   */
+  previousArtifact?: M9EnforcedCurationArtifact
   conceptDiscoveryConfig?: ListConceptDiscoveryConfig
   now?: () => string
 }
@@ -338,6 +351,26 @@ export interface RunM9EnforcedCurationOutput {
 
 function legacyListPseudoId(title: string): string {
   return computeM9ConceptId([`legacy-list-title:${title}`])
+}
+
+/**
+ * Maps this adapter's own reasonCode to holdRecovery.ts's existing
+ * HoldReasonKind vocabulary — reused, never re-invented. Both of this
+ * adapter's evidence-mandatory reasons already correspond to a kind whose
+ * HOLD_REENTRY_STAGE entry is 'M9_HOME_LIST_MIRROR' (never an earlier
+ * stage) — see holdRecovery.ts's own table. UNRESOLVED_VENUE_DUPLICATE
+ * reuses LIST_MEMBERSHIP_MISSING_KIND_SPECIFIC_EVIDENCE (the closest
+ * existing kind for "a real, membership-level finding discovered during
+ * M9 curation") rather than SEED_DUPLICATE_CLUSTER, which — correctly —
+ * maps to the EARLIER M5_75_SEED_PORTFOLIO_AUDIT stage and would be wrong
+ * here: our duplicate is discovered during list-membership curation, not
+ * seed research, so reopening at M5.75 would rerun unrelated, already-
+ * completed work.
+ */
+function toHoldReasonKind(reasonCode: string): HoldReasonKind | null {
+  if (reasonCode === 'CONCEPT_WEAK_STRONG_FIT_RATIO') return 'LIST_CONCEPT_WEAK_STRONG_FIT_RATIO'
+  if (reasonCode === 'UNRESOLVED_VENUE_DUPLICATE') return 'LIST_MEMBERSHIP_MISSING_KIND_SPECIFIC_EVIDENCE'
+  return null
 }
 
 function structuralValidationErrors(items: readonly M9AdapterCertifiedItem[]): string[] {
@@ -466,6 +499,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
   const conceptVerdicts: M9EnforcedConceptVerdict[] = []
   const finalApprovedMemberships: Record<string, string[]> = {}
   const allRequiredDecisions: M9RequiredDecision[] = []
+  const previousById = new Map((input.previousArtifact?.conceptVerdicts ?? []).map((v) => [v.conceptId, v]))
 
   for (const concept of conceptDiscovery) {
     const conceptId = computeM9ConceptId(concept.seedTags)
@@ -579,6 +613,26 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
     }
 
     if (decisionValid && stored!.decision === 'APPROVED') {
+      // Phase 6 — genuinely wiring holdRecovery.ts into the driver: when
+      // this decision is resolving a real evidence-mandatory HOLD (not a
+      // plain approval-sufficient NEEDS_JERRY), route it through the
+      // existing reopenHoldCandidate/verifyReopenStageCompleteness pair
+      // and assert their own invariant — reentry never lands earlier than
+      // M9_HOME_LIST_MIRROR, and every stage from there through M10 is
+      // present in order. This can only ever fail from a real bug in this
+      // adapter (the mapping above is deliberately conservative and
+      // always resolves to M9), never from anything an operator submits —
+      // so a violation here becomes ERROR, not HOLD/NEEDS_JERRY.
+      if (approvalSufficiency === 'EVIDENCE_REQUIRED' || approvalSufficiency === 'RESEARCH_REQUIRED') {
+        const holdReasonKind = toHoldReasonKind(reasonCode) ?? 'LIST_CONCEPT_WEAK_STRONG_FIT_RATIO'
+        const holdRecord: HoldRecord = { candidateName: conceptId, holdReasonKind, originalReasons: [explanation], originalHeldAt: stored!.decidedAt }
+        const reopenResult = reopenHoldCandidate({ hold: holdRecord, newEvidence: stored!.newEvidence, explicitDecision: stored!.decisionText, reopenedBy: stored!.decidedBy, reopenedAt: stored!.decidedAt })
+        const completeness = verifyReopenStageCompleteness(reopenResult)
+        if (!reopenResult.ok || !completeness.ok || reopenResult.reentryStage !== 'M9_HOME_LIST_MIRROR') {
+          const result = blockingResult('ERROR', 'HOLD_REOPEN_INVARIANT_VIOLATED', `holdRecovery.ts's reopen invariants were violated resolving concept "${concept.proposedTitle}": ${!reopenResult.ok ? reopenResult.errors.join('; ') : completeness.reason}`, [])
+          return { artifact: emptyEnforcedArtifact(now, inputCatalogFingerprint, result), acceptedDecisions: [], rejectedDecisionInputs: [] }
+        }
+      }
       finalApprovedMemberships[conceptId] = includedItemIds
       conceptVerdicts.push({
         conceptId,
@@ -594,6 +648,30 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
         duplicateFindings,
       })
       continue
+    }
+
+    // Phase 6 anti-bypass proof — genuinely exercising holdRecovery.ts's
+    // own verifyHoldNotBypassed: when nothing changed for this concept
+    // this call (same fingerprint as last time, and no fresh decision was
+    // accepted for it), re-evaluating from scratch must reproduce the
+    // IDENTICAL member decisions/approval posture as last time. A
+    // mismatch here would mean a rerun with NO new evidence silently
+    // changed the outcome — a real certification-bypass bug, never
+    // something this function may paper over with ERROR-becomes-quietly-READY;
+    // it becomes an explicit ERROR result instead.
+    const previous = previousById.get(conceptId)
+    const gotFreshDecisionThisCall = acceptedDecisions.some((d) => d.conceptId === conceptId)
+    if (previous && previous.fingerprint === fingerprint && !gotFreshDecisionThisCall && previous.approvalState !== 'APPROVED' && previous.approvalState !== 'REJECTED') {
+      const reEvaluatedApprovalState: 'HOLD' | 'PENDING' = concept.verdict === 'HOLD' || duplicateFindings.length > 0 ? 'HOLD' : 'PENDING'
+      const bypassCheck = verifyHoldNotBypassed({
+        hadNewEvidence: false,
+        originalVerdict: { approvalState: previous.approvalState, memberDecisions: previous.memberDecisions },
+        reEvaluatedVerdict: { approvalState: reEvaluatedApprovalState, memberDecisions },
+      })
+      if (!bypassCheck.ok) {
+        const result = blockingResult('ERROR', 'HOLD_BYPASS_DETECTED', `verifyHoldNotBypassed (holdRecovery.ts) detected a certification bypass for concept "${concept.proposedTitle}": ${bypassCheck.reason}`, [])
+        return { artifact: emptyEnforcedArtifact(now, inputCatalogFingerprint, result), acceptedDecisions: [], rejectedDecisionInputs: [] }
+      }
     }
 
     // No valid (fresh-fingerprint) decision on record — outstanding.

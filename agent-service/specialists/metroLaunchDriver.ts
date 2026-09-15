@@ -3748,6 +3748,7 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
       legacyPlan: plan.map((p) => ({ title: p.title, kind: p.kind, itemCandidateNames: p.itemCandidateNames })),
       storedOperatorDecisions: state.m9OperatorDecisions ?? {},
       newOperatorDecisionInputs: deps.m9OperatorDecisionInputs,
+      previousArtifact: state.m9EnforcedCuration,
       now: deps.now,
     })
     // Persist every accepted decision immediately — "operator decisions
