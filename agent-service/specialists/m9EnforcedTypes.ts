@@ -99,6 +99,8 @@ export interface M9RequiredDecision {
   missingEvidence: string[] | null
   /** True when new evidence (not just an operator's say-so) is REQUIRED — mirrors approvalSufficiency but kept as its own explicit boolean per the task's own field list, since a caller checking "can I just approve this?" shouldn't have to know the full M9ApprovalSufficiency enum. */
   evidenceMandatory: boolean
+  /** operatorReviewBoundaries.ts's own `tiesIntoExistingMechanism` for `action` — the existing driver-level mechanism (NEEDS_JERRY/escalate, reopen-stage, etc) this decision routes through, when one is already established. Always sourced from evaluateOperatorReviewBoundary(action), never invented here (Phase 4's "wire the existing operator-boundary module into the real driver" requirement, made an explicit, checkable field rather than an implicit assumption). */
+  tiesIntoExistingMechanism: string | null
 }
 
 /** Shared shape for every non-READY result kind — see the module doc's CRITICAL DESIGN RULE for why every one of these fields is mandatory rather than optional-by-kind. */

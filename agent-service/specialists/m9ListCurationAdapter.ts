@@ -529,7 +529,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
       action = 'CONCEPT_WITH_SUBSTANTIAL_OVERLAP'
       approvalSufficiency = 'APPROVAL_SUFFICIENT'
       reasonCode = 'CONCEPT_SUBSTANTIAL_OVERLAP'
-      explanation = concept.reasoning
+      explanation = `${concept.reasoning} ${evaluateOperatorReviewBoundary(action).reason}`
     } else if (concept.verdict === 'HOLD') {
       action = 'CREATE_NEW_LIST_CONCEPT'
       approvalSufficiency = 'RESEARCH_REQUIRED'
@@ -539,14 +539,22 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
       action = 'CREATE_NEW_LIST_CONCEPT'
       approvalSufficiency = 'APPROVAL_SUFFICIENT'
       reasonCode = 'CONCEPT_CREATE_PENDING_APPROVAL'
-      explanation = evaluateOperatorReviewBoundary('CREATE_NEW_LIST_CONCEPT').reason
+      explanation = evaluateOperatorReviewBoundary(action).reason
     }
+    // Phase 4 — "wire the existing operator-boundary module into the real
+    // driver": every required decision's tiesIntoExistingMechanism is
+    // ALWAYS sourced from evaluateOperatorReviewBoundary(action), never
+    // hand-written here, so the connection to the existing boundary table
+    // is a checkable fact on every M9RequiredDecision, not just an
+    // implicit assumption.
+    let tiesIntoExistingMechanism = evaluateOperatorReviewBoundary(action).tiesIntoExistingMechanism
     const missingEvidence: string[] = []
     if (duplicateFindings.length > 0) {
       approvalSufficiency = 'EVIDENCE_REQUIRED'
       reasonCode = 'UNRESOLVED_VENUE_DUPLICATE'
       explanation = `${duplicateFindings.map((d) => d.detail).join(' ')} An explicit operator decision with real substantiating content is required (a bare approval flag is not sufficient) — the same Kunst Oase/Vereinsheim precedent this codebase already recognizes at the seed-duplicate stage (holdRecovery.ts) applies here too: an explicit "these are genuinely distinct, keep both" decision is valid even without NEW evidence, but an empty/boolean-only approval is not.`
       missingEvidence.push('explicit operator decision addressing the duplicate venue finding (decisionText), not merely an approval flag')
+      tiesIntoExistingMechanism = 'holdRecovery.ts (Kunst Oase/Vereinsheim explicit-decision precedent) + NEEDS_JERRY / escalate() (metroLaunchDriver.ts)'
     }
     if (concept.verdict === 'HOLD') missingEvidence.push('additional strong-fit evidence, or an explicit operator judgment accepting the cluster as-is')
 
@@ -600,6 +608,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
       affectedItemIds: concept.candidateNames,
       missingEvidence: missingEvidence.length > 0 ? missingEvidence : null,
       evidenceMandatory: approvalSufficiency === 'EVIDENCE_REQUIRED' || approvalSufficiency === 'RESEARCH_REQUIRED',
+      tiesIntoExistingMechanism,
     }
     allRequiredDecisions.push(requiredDecision)
     conceptVerdicts.push({
