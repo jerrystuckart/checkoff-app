@@ -69,6 +69,9 @@ import { evaluateOutOfMarketContaminationGate } from '../playbooks/outOfMarketCo
 import { reconcileAgainstExistingInventory, type ExistingProductionItem, type ReconciliationResult } from '../playbooks/existingInventoryReconciliation'
 import { runM9ShadowCuration, runM9EnforcedCuration, type M9AdapterCertifiedItem, type M9ShadowComparisonArtifact } from './m9ListCurationAdapter'
 import type { M9EnforcedCurationArtifact, M9OperatorDecisionRecord, M9OperatorDecisionInput } from './m9EnforcedTypes'
+import { buildM9SafeSqlPlan, buildM9CompatibilityPlan, computeM9SqlValidationManifest, type M9SafeSqlIntegrationResult, type M9SqlValidationManifest } from './m9SafeSqlIntegration'
+import type { M9ReusedItemResolution } from './m9ReusedItemValidation'
+import type { M9ExistingListLookup } from './m9CompletedListResolution'
 import { deriveDefaultDepthTargets, DEFAULT_CATEGORY_COVERAGE_PLAN } from '../playbooks/defaultMetroManifest'
 import { buildCategoryPolicySetFromPlan, DEFAULT_CATEGORY_PERCENTAGE_BANDS, type CategoryPolicyException, type CommercialOwnershipType } from '../playbooks/categoryPolicy'
 import { runSeedPortfolioAudit, DEFAULT_SEED_PORTFOLIO_AUDIT_LOOP_CONTROLS, type SeedPortfolioAuditReport, type SeedPortfolioAuditLoopControls, type SeedCandidateInput } from '../playbooks/seedPortfolioAudit'
@@ -226,6 +229,10 @@ interface MetroDriverState {
   m9OperatorDecisions?: Record<string, M9OperatorDecisionRecord>
   /** M9 wiring, Session 2: every operator decision INPUT this run has ever submitted but had refused (empty decisionText, unknown conceptId, etc) — reporting only, so a caller can see a submission never silently vanished. Overwritten fresh each ENFORCED pass that has any rejections (never accumulated — a caller resubmitting corrected input naturally supersedes the old rejection record). */
   m9RejectedOperatorDecisionInputs?: Array<{ conceptId: string; reason: string; at: string }>
+  /** Session 3, Phase 5/6: the most recent safe-SQL-plan attempt for a READY ENFORCED artifact — diagnostic (never itself authoritative; only state.homeListSqlPatch/state.m9SqlValidationManifest, written ONLY when this plan's own `ok` was true, are). Overwritten fresh on every ENFORCED pass that reaches the READY check. */
+  m9SafeSqlPlan?: M9SafeSqlIntegrationResult
+  /** Session 3, Phase 6: written ONLY alongside an ENFORCED-derived state.homeListPlan/state.homeListSqlPatch — the cross-check record M10 uses to refuse a stale/mismatched artifact set (see stepM10FinalCertification's own ENFORCED consistency check). Absent for a LEGACY/SHADOW-produced homeListPlan — that absence is itself how M10 tells the two cases apart, never a separate mode marker. */
+  m9SqlValidationManifest?: M9SqlValidationManifest
   tagVocabularyDetail?: string
   batchCertificationGates?: StagingGateResult[]
   rejectedItemCount?: number
@@ -570,6 +577,24 @@ export interface MetroDriverDeps {
    * to re-evaluate with only the decisions already on record.
    */
   m9OperatorDecisionInputs?: readonly M9OperatorDecisionInput[]
+  /**
+   * Session 3, Phase 5/6, ENFORCED only: the real, one-time production
+   * item resolution for every candidate name in a READY plan's approved
+   * memberships — a real DB read this driver cannot perform itself (same
+   * discipline as deps.verifyHomeListRows/deps.fetchExistingProductionInventory).
+   * Defaults to a function that resolves NOTHING (every candidate comes
+   * back with zero matchedItemIds) — deliberately: no real, verified
+   * production query has been wired for this yet (see the Session 3
+   * handoff's default-mode decision for exactly why), so by default a
+   * READY ENFORCED plan stays parked at WAITING rather than silently
+   * treating an unresolved item as safe. A caller supplies a real
+   * implementation to actually produce SQL.
+   */
+  resolveM9ProductionItems?: (input: { items: readonly { candidateName: string; conceptId: string }[]; metroSlug: string }) => Promise<M9ReusedItemResolution[]>
+  /** Session 3, Phase 5/6, ENFORCED only: the real, one-time production list lookup for every approved concept. Same "defaults to resolving nothing" discipline as resolveM9ProductionItems — every concept comes back with existingList: null (treated as needing a new list) until a caller wires a real lookup. */
+  resolveM9ProductionLists?: (input: { concepts: readonly { conceptId: string; proposedTitle: string }[]; metroSlug: string }) => Promise<M9ExistingListLookup[]>
+  /** Session 3, ENFORCED only: the real metro_areas.id, when known — feeds only m9ReusedItemValidation.ts's out-of-metro check. Omit (or null) to skip that specific check, never to assume a match. */
+  metroAreaId?: string | null
   /** M10: which Home cards already have an image. Omit to correctly report every required card as still needing one — Winston never fabricates image readiness. */
   checkImageReadiness?: (plan: readonly HomeListPlanEntry[]) => Promise<ImageReadinessCard[]>
   /** M10 BUSINESS_ACTIVATION_KIT_GATE: the actual outreach copy this metro would send — validated deterministically (no network call) for a metro-specific kit reference or a misused /confirm/<token> link. Defaults to a clean template referencing only the canonical URL, since no outreach is sent during a metro build itself. */
@@ -3772,17 +3797,58 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
     run.state = state
 
     if (artifact.result.kind === 'READY') {
-      // Approved, valid, and fully resolved — but there is no safe SQL
-      // path for the new curation result yet (Session 3's job). Parked
-      // here rather than advanced: WAITING is the existing status this
-      // codebase already uses for "cannot proceed until something outside
-      // this run's own control changes" (destinationRelationshipDriver.ts/
-      // destinationHubDriver.ts's own precedent) — distinct from BLOCKED
-      // (a real bug/data problem) and from NEEDS_JERRY (an operator
-      // decision is what's missing). jerryReason/decisionPacket are
-      // reserved for NEEDS_JERRY by playbookRun.ts's own doc, so neither
-      // is set here. currentStage deliberately stays M9_HOME_LIST_MIRROR —
-      // never advanced to M10_METRO_LAUNCH_CERTIFICATION.
+      // Session 3, Phase 5/6 — approved and valid is not yet SAFE TO SHIP:
+      // attempt the real safe-SQL pipeline (m9SafeSqlIntegration.ts) using
+      // whatever real production resolvers the caller supplied (or the
+      // safe "resolves nothing" default when it didn't — see
+      // deps.resolveM9ProductionItems/resolveM9ProductionLists's own doc).
+      const approvedConceptIds = Object.keys(artifact.finalApprovedMemberships)
+      const itemsForResolution = approvedConceptIds.flatMap((conceptId) => (artifact.finalApprovedMemberships[conceptId] ?? []).map((candidateName) => ({ candidateName, conceptId })))
+      const conceptsForLookup = approvedConceptIds.map((conceptId) => ({ conceptId, proposedTitle: artifact.conceptVerdicts.find((v) => v.conceptId === conceptId)?.proposedTitle ?? conceptId }))
+      const resolveItems = deps.resolveM9ProductionItems ?? (async (i: { items: readonly { candidateName: string; conceptId: string }[] }) => i.items.map((it) => ({ candidateName: it.candidateName, conceptId: it.conceptId, matchedItemIds: [] })))
+      const resolveLists = deps.resolveM9ProductionLists ?? (async (i: { concepts: readonly { conceptId: string; proposedTitle: string }[] }) => i.concepts.map((c) => ({ conceptId: c.conceptId, existingList: null })))
+      const [itemResolutions, listLookups] = await Promise.all([resolveItems({ items: itemsForResolution, metroSlug }), resolveLists({ concepts: conceptsForLookup, metroSlug })])
+      const operatorDecisionsForCompletedList: Record<string, { resolutionAction: string; decisionText: string; decidedBy: string; decidedAt: string }> = {}
+      for (const [decisionConceptId, decision] of Object.entries(state.m9OperatorDecisions ?? {})) {
+        operatorDecisionsForCompletedList[decisionConceptId] = { resolutionAction: decision.resolutionAction, decisionText: decision.decisionText, decidedBy: decision.decidedBy, decidedAt: decision.decidedAt }
+      }
+      const safeSqlPlan = buildM9SafeSqlPlan({
+        artifact,
+        metroSlug,
+        metroId: deps.metroAreaId ?? null,
+        itemResolutions,
+        listLookups,
+        operatorDecisionsByConceptId: operatorDecisionsForCompletedList,
+        itemBodyByCandidateName,
+      })
+      state.m9SafeSqlPlan = safeSqlPlan
+      run.state = state
+
+      if (safeSqlPlan.ok) {
+        // Every required artifact becomes authoritative together, in the
+        // SAME step — never a partial write. state.homeListPlan is the
+        // deterministic compatibility PROJECTION of the approved artifact
+        // (buildM9CompatibilityPlan), never a second independent source of
+        // truth; state.homeListSqlPatch is the real, safe, generated SQL;
+        // state.m9SqlValidationManifest is what stepM10FinalCertification's
+        // own ENFORCED consistency check cross-verifies all three (plus
+        // state.m9EnforcedCuration itself) against.
+        state.homeListPlan = buildM9CompatibilityPlan(artifact, safeSqlPlan)
+        state.homeListSqlPatch = safeSqlPlan.combinedSql ?? undefined
+        state.m9SqlValidationManifest = computeM9SqlValidationManifest(artifact, safeSqlPlan, deps.now ?? (() => new Date().toISOString()))
+        run.state = state
+        run.currentStage = 'M10_METRO_LAUNCH_CERTIFICATION'
+        run.status = 'RUNNING'
+        return run
+      }
+
+      // Approved/valid curation, but the SQL pipeline could not (yet)
+      // produce a complete, safe plan — missing production resolvers, an
+      // unresolved item, an unreopened completed list, or a genuinely new
+      // list needing out-of-band creation (see state.m9SafeSqlPlan for
+      // exactly which). Parked exactly as before Phase 5 existed: WAITING
+      // at M9_HOME_LIST_MIRROR — approved/valid, never a bug (BLOCKED)
+      // and never missing an operator decision (NEEDS_JERRY).
       run.status = 'WAITING'
       return run
     }
@@ -3860,6 +3926,48 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
 
 async function stepM10FinalCertification(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<PlaybookRunRecord> {
   const state = readState(run)
+
+  // Session 3, Phase 6 — ENFORCED artifact consistency check. Presence of
+  // state.m9SqlValidationManifest is itself how this step tells an
+  // ENFORCED-derived state.homeListPlan apart from a LEGACY/SHADOW one
+  // (see the manifest field's own doc on MetroDriverState) — a
+  // LEGACY/SHADOW run never has one, and this whole block is a no-op for
+  // it. When present, every artifact it should be consistent with
+  // (state.m9EnforcedCuration's own inputCatalogFingerprint, every
+  // concept's own CURRENT fingerprint, and state.homeListSqlPatch's mere
+  // presence) is cross-checked before M10 is allowed to consume anything
+  // — "reject stale or mismatched artifacts... prevent manual replacement
+  // of one artifact without invalidating the others."
+  if (state.m9SqlValidationManifest) {
+    const manifest = state.m9SqlValidationManifest
+    const enforcedArtifact = state.m9EnforcedCuration
+    const mismatches: string[] = []
+    if (!enforcedArtifact) {
+      mismatches.push('state.m9EnforcedCuration is missing entirely, but state.m9SqlValidationManifest exists — the originating curation artifact was removed after SQL was generated from it.')
+    } else if (enforcedArtifact.inputCatalogFingerprint !== manifest.inputCatalogFingerprint) {
+      mismatches.push(`state.m9EnforcedCuration.inputCatalogFingerprint ("${enforcedArtifact.inputCatalogFingerprint}") no longer matches the manifest's own recorded value ("${manifest.inputCatalogFingerprint}") — the catalog changed since this SQL was generated.`)
+    } else {
+      const verdictsById = new Map(enforcedArtifact.conceptVerdicts.map((v) => [v.conceptId, v]))
+      for (const [conceptId, fingerprintUsed] of Object.entries(manifest.conceptFingerprintsUsed)) {
+        const current = verdictsById.get(conceptId)
+        if (!current) {
+          mismatches.push(`Concept "${conceptId}" (used to generate this SQL) no longer appears in state.m9EnforcedCuration at all.`)
+        } else if (current.fingerprint !== fingerprintUsed) {
+          mismatches.push(`Concept "${conceptId}"'s current fingerprint ("${current.fingerprint}") no longer matches the fingerprint this SQL was generated from ("${fingerprintUsed}") — its approved membership changed since SQL generation.`)
+        }
+      }
+    }
+    if (!state.homeListSqlPatch) {
+      mismatches.push('state.homeListSqlPatch is missing even though an ENFORCED SQL validation manifest exists.')
+    }
+    if (mismatches.length > 0) {
+      return block(
+        run,
+        `ENFORCED artifact consistency check failed — refusing to let M10 consume mismatched/stale artifacts: ${mismatches.join(' ')} Re-run M9 in ENFORCED mode to regenerate a consistent artifact set before M10 can proceed.`
+      )
+    }
+  }
+
   const plan = state.homeListPlan ?? []
   const existingGates = state.batchCertificationGates ?? []
 

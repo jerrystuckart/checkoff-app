@@ -23,6 +23,7 @@
 // brand-new metro (see the Session 3 handoff's default-mode decision):
 // a first-ever metro launch is ALL new lists.
 
+import { createHash } from 'node:crypto'
 import { generateListMembershipSql, type ListSqlItemResolution } from '../playbooks/listSqlGeneration'
 import { validateM9ReusedItems, type M9ReusedItemResolution, type M9ReusedItemValidationFinding } from './m9ReusedItemValidation'
 import { resolveM9CompletedListHandling, type M9ExistingListLookup, type M9CompletedListOperatorDecision, type M9ListResolution } from './m9CompletedListResolution'
@@ -140,4 +141,80 @@ export function buildM9SafeSqlPlan(input: M9SafeSqlIntegrationInput): M9SafeSqlI
   const combinedSql = ok ? perListOutcomes.map((o) => o.sql).filter((s): s is string => Boolean(s)).join('\n\n') : null
 
   return { ok, combinedSql, perListOutcomes, reusedItemFindings: itemValidation.findings, listResolutions }
+}
+
+// ---------------------------------------------------------------------------
+// Session 3, Phase 6 — M10 consumption support: a deterministic
+// compatibility projection of the approved artifact (never a second
+// independent source of truth — see the Session 3 handoff's Phase 1
+// trace) plus a validation manifest M10 can check every other artifact's
+// fingerprint against.
+// ---------------------------------------------------------------------------
+
+/**
+ * Deliberately shaped to be structurally assignable to metroLaunchDriver.ts's
+ * own HomeListPlanEntry (label/title/kind/itemCandidateNames/requiresImage)
+ * WITHOUT importing that type — this file must stay standalone (the
+ * driver imports FROM it, so the reverse import would be circular; same
+ * discipline m9ListCurationAdapter.ts's own M9AdapterLegacyListSummary
+ * already established in Session 1). `kind: 'THEMED'` is a real member of
+ * HomeListPlanEntry's own kind union (never a fabricated new one M10's
+ * existing officialListsCount/themedListsCount reporting wouldn't
+ * recognize) — an ENFORCED-approved list genuinely IS a themed list from
+ * M10's perspective.
+ */
+export interface M9CompatibilityPlanEntry {
+  label: string
+  title: string
+  kind: 'THEMED'
+  itemCandidateNames: string[]
+  requiresImage: boolean
+}
+
+/**
+ * The ONLY place state.homeListPlan's shape is ever derived from an
+ * ENFORCED artifact — deterministically, from `finalApprovedMemberships`
+ * and `conceptVerdicts` alone. Called ONLY after `buildM9SafeSqlPlan`
+ * reports `ok: true` (never before — a plan with any blocked concept has
+ * no safe compatibility projection at all, per this module's own "one
+ * blocked concept blocks the whole plan" rule).
+ */
+export function buildM9CompatibilityPlan(artifact: M9EnforcedCurationArtifact, safeSqlPlan: M9SafeSqlIntegrationResult): M9CompatibilityPlanEntry[] {
+  return safeSqlPlan.perListOutcomes
+    .filter((o) => o.status === 'GENERATED')
+    .map((o) => {
+      const members = artifact.finalApprovedMemberships[o.conceptId] ?? []
+      return { label: `ENFORCED: ${o.listTitle}`, title: o.listTitle, kind: 'THEMED' as const, itemCandidateNames: members, requiresImage: true }
+    })
+}
+
+export interface M9SqlValidationManifest {
+  /** Ties this manifest back to the exact ENFORCED artifact/catalog state that produced it — M10 refuses to proceed if this no longer matches the live state.m9EnforcedCuration.inputCatalogFingerprint (see the driver's own M10 consumption check). */
+  inputCatalogFingerprint: string
+  /** conceptId -> the concept's own fingerprint at the moment SQL was generated — a later, different fingerprint for the same conceptId means the approval this SQL was built from is now stale. */
+  conceptFingerprintsUsed: Record<string, string>
+  expectedMembershipCounts: Record<string, number>
+  /** Hash of the manifest's own content — the single value every other artifact (compatibility plan, SQL patch, curation artifact) is cross-checked against for exact consistency. */
+  manifestFingerprint: string
+  generatedAt: string
+}
+
+function stableHash(input: string): string {
+  return createHash('sha256').update(input).digest('hex').slice(0, 16)
+}
+
+export function computeM9SqlValidationManifest(artifact: M9EnforcedCurationArtifact, safeSqlPlan: M9SafeSqlIntegrationResult, now: () => string): M9SqlValidationManifest {
+  const verdictsById = new Map(artifact.conceptVerdicts.map((v) => [v.conceptId, v]))
+  const conceptFingerprintsUsed: Record<string, string> = {}
+  const expectedMembershipCounts: Record<string, number> = {}
+  for (const outcome of safeSqlPlan.perListOutcomes) {
+    if (outcome.status !== 'GENERATED') continue
+    const fp = verdictsById.get(outcome.conceptId)?.fingerprint
+    if (fp) conceptFingerprintsUsed[outcome.conceptId] = fp
+    expectedMembershipCounts[outcome.conceptId] = outcome.expectedMembershipCount
+  }
+  const manifestFingerprint = stableHash(
+    ['m9-sql-validation-manifest', 'v1', artifact.inputCatalogFingerprint, JSON.stringify(conceptFingerprintsUsed), JSON.stringify(expectedMembershipCounts)].join('|')
+  )
+  return { inputCatalogFingerprint: artifact.inputCatalogFingerprint, conceptFingerprintsUsed, expectedMembershipCounts, manifestFingerprint, generatedAt: now() }
 }
