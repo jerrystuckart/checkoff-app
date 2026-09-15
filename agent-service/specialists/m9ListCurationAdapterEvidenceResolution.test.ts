@@ -27,9 +27,9 @@ function cleanCatalog(): M9AdapterCertifiedItem[] {
 
 function duplicateCatalog(): M9AdapterCertifiedItem[] {
   const items: M9AdapterCertifiedItem[] = []
-  items.push({ candidateName: 'Vereinsheim Pub Quiz', venueName: 'Vereinsheim', dbCategory: 'Adventure', finalTags: ['beer-garden', 'v-1'], finalBody: 'Join pub quiz.', neighborhoodName: 'Schwabing' })
-  items.push({ candidateName: 'Vereinsheim Live Music', venueName: 'Vereinsheim', dbCategory: 'Adventure', finalTags: ['beer-garden', 'v-2'], finalBody: 'Catch live music.', neighborhoodName: 'Schwabing' })
-  for (let i = 0; i < 13; i++) items.push({ candidateName: `Beer Garden ${i}`, venueName: `Beer Garden ${i}`, dbCategory: 'Adventure', finalTags: ['beer-garden', `bg-${i}`], finalBody: `Enjoy Beer Garden ${i}.`, neighborhoodName: 'Downtown' })
+  items.push({ candidateName: 'Vereinsheim Pub Quiz', venueName: 'Vereinsheim', dbCategory: 'Adventure', finalTags: ['riverside-walk', 'v-1'], finalBody: 'Join pub quiz.', neighborhoodName: 'Schwabing' })
+  items.push({ candidateName: 'Vereinsheim Live Music', venueName: 'Vereinsheim', dbCategory: 'Adventure', finalTags: ['riverside-walk', 'v-2'], finalBody: 'Catch live music.', neighborhoodName: 'Schwabing' })
+  for (let i = 0; i < 13; i++) items.push({ candidateName: `Beer Garden ${i}`, venueName: `Beer Garden ${i}`, dbCategory: 'Adventure', finalTags: ['riverside-walk', `bg-${i}`], finalBody: `Enjoy Beer Garden ${i}.`, neighborhoodName: 'Downtown' })
   for (let i = 0; i < 40; i++) items.push({ candidateName: `Filler ${i}`, venueName: `Filler ${i}`, dbCategory: 'Adventure', finalTags: [`filler-${i}`], finalBody: `Filler ${i}.`, neighborhoodName: 'Downtown' })
   return items
 }

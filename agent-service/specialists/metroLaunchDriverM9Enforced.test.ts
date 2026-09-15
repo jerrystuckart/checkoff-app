@@ -240,9 +240,9 @@ test('ENFORCED: an unresolved venue duplicate (Vereinsheim/Kunst Oase pattern) e
   // exactly how the real research pipeline produced the Vereinsheim pub-
   // quiz-night pair) that both resolve to the SAME real-world venue.
   const specs: ItemSpec[] = [
-    { name: 'Vereinsheim Pub Quiz', venueName: 'Vereinsheim', tags: ['beer-garden', 'v-1'] },
-    { name: 'Vereinsheim Live Music', venueName: 'Vereinsheim', tags: ['beer-garden', 'v-2'] },
-    ...Array.from({ length: 13 }, (_, i) => ({ name: `Beer Garden ${i}`, tags: ['beer-garden', `bg-${i}`] })),
+    { name: 'Vereinsheim Pub Quiz', venueName: 'Vereinsheim', tags: ['riverside-walk', 'v-1'] },
+    { name: 'Vereinsheim Live Music', venueName: 'Vereinsheim', tags: ['riverside-walk', 'v-2'] },
+    ...Array.from({ length: 13 }, (_, i) => ({ name: `Beer Garden ${i}`, tags: ['riverside-walk', `bg-${i}`] })),
     ...fillerItems(40, 'Filler'),
   ]
   await seedAtM9(runStore, 'enf-duplicate', specs)
@@ -250,7 +250,7 @@ test('ENFORCED: an unresolved venue duplicate (Vereinsheim/Kunst Oase pattern) e
 
   const first = await driveMetroLaunch(deps as never, 'enf-duplicate', { categoryPlan: PLAN, maxSteps: 30 })
   const firstArtifact = enforcedState(first).m9EnforcedCuration!
-  const beerConcept = firstArtifact.conceptVerdicts.find((v) => v.seedTags.includes('beer-garden'))
+  const beerConcept = firstArtifact.conceptVerdicts.find((v) => v.seedTags.includes('riverside-walk'))
   assert.ok(beerConcept, 'the beer-garden cluster (including the Vereinsheim duplicate pair) must be discovered')
   assert.ok(beerConcept!.duplicateFindings.some((d) => d.kind === 'DUPLICATE_VENUE'), 'the same-venue Vereinsheim pair must be flagged as a duplicate finding')
   const decision = firstArtifact.requiredDecisions.find((d) => d.affectedConceptIds.includes(beerConcept!.conceptId))
@@ -341,15 +341,15 @@ test('ENFORCED: an unresolved venue duplicate (Vereinsheim/Kunst Oase pattern) e
 test('ENFORCED: explicit REJECT resolves a duplicate-containing concept by exclusion, without needing evidence', async () => {
   const runStore = new InMemoryPlaybookRunStore()
   const specs: ItemSpec[] = [
-    { name: 'Vereinsheim Pub Quiz', venueName: 'Vereinsheim', tags: ['beer-garden', 'v-1'] },
-    { name: 'Vereinsheim Live Music', venueName: 'Vereinsheim', tags: ['beer-garden', 'v-2'] },
-    ...Array.from({ length: 13 }, (_, i) => ({ name: `Beer Garden ${i}`, tags: ['beer-garden', `bg-${i}`] })),
+    { name: 'Vereinsheim Pub Quiz', venueName: 'Vereinsheim', tags: ['riverside-walk', 'v-1'] },
+    { name: 'Vereinsheim Live Music', venueName: 'Vereinsheim', tags: ['riverside-walk', 'v-2'] },
+    ...Array.from({ length: 13 }, (_, i) => ({ name: `Beer Garden ${i}`, tags: ['riverside-walk', `bg-${i}`] })),
     ...fillerItems(40, 'Filler'),
   ]
   await seedAtM9(runStore, 'enf-duplicate-reject', specs)
   const deps = baseDeps(runStore)
   const first = await driveMetroLaunch(deps as never, 'enf-duplicate-reject', { categoryPlan: PLAN, maxSteps: 30 })
-  const beerConcept = enforcedState(first).m9EnforcedCuration!.conceptVerdicts.find((v) => v.seedTags.includes('beer-garden'))!
+  const beerConcept = enforcedState(first).m9EnforcedCuration!.conceptVerdicts.find((v) => v.seedTags.includes('riverside-walk'))!
   const decision = enforcedState(first).m9EnforcedCuration!.requiredDecisions.find((d) => d.affectedConceptIds.includes(beerConcept.conceptId))!
 
   const rejected = await driveMetroLaunch(
