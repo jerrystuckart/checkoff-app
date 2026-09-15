@@ -21,16 +21,36 @@
 //     captured as a `validationFailures` entry on the returned artifact —
 //     it is NEVER allowed to raise, block, or otherwise influence the
 //     caller's control flow. See runM9ShadowCuration's own try/catch.
-//   - ENFORCED mode (the new system actually gating production SQL) is
-//     explicitly out of scope for this session — see the handoff doc's
-//     "Behaviors expected to change once wiring lands" section for what
-//     that will require (real HOLD/NEEDS_JERRY exits, a genuine mode
-//     precedent on MetroDriverDeps, etc).
+//
+// SESSION 2 (2026-09-14) adds ENFORCED mode — see runM9EnforcedCuration
+// below and m9EnforcedTypes.ts for the full result/artifact contract. Its
+// own CRITICAL DESIGN RULE: expected curation outcomes (a concept needing
+// review, a HOLD, invalid input) are always a typed M9EnforcedResult value,
+// never an exception — but unlike SHADOW's diagnostics-only artifact,
+// ENFORCED's result genuinely gates the driver (see metroLaunchDriver.ts's
+// stepM9HomeListMirror). SQL generation from the new plan is still
+// explicitly out of scope — that is Session 3.
 
 import { discoverListConcepts, DEFAULT_LIST_CONCEPT_DISCOVERY_CONFIG, type ListConceptCandidate, type ListConceptCandidateItem, type ListConceptDiscoveryConfig, type ListConceptVerdict } from '../playbooks/listConceptDiscovery'
-import { evaluateItemForListMembership, type ItemListFitDecision, type ItemListMembershipVerdict, type ListFitCandidate, type ListMembershipListContext } from '../playbooks/listFitScoring'
+import { evaluateItemForListMembership, detectPortfolioRepetition, type ItemListFitDecision, type ItemListMembershipVerdict, type ListFitCandidate, type ListMembershipListContext, type PortfolioReviewItem } from '../playbooks/listFitScoring'
+import { evaluateOperatorReviewBoundary, type OperatorReviewAction } from '../playbooks/operatorReviewBoundaries'
 import type { RealDbCategory } from '../playbooks/metroCatalog'
 import type { CommercialOwnershipType } from '../playbooks/categoryPolicy'
+import {
+  computeM9ConceptId,
+  computeM9ConceptFingerprint,
+  computeM9CatalogFingerprint,
+  M9_ENFORCED_ARTIFACT_VERSION,
+  type M9ApprovalSufficiency,
+  type M9EnforcedCurationArtifact,
+  type M9EnforcedConceptVerdict,
+  type M9EnforcedResult,
+  type M9RequiredDecision,
+  type M9OperatorDecisionInput,
+  type M9OperatorDecisionRecord,
+  type M9DuplicateFinding,
+  type M9ItemMembershipRecord,
+} from './m9EnforcedTypes'
 
 /**
  * The three-way mode this adapter (and, once wired, MetroDriverDeps) is
@@ -291,3 +311,337 @@ export function runM9ShadowCuration(input: RunM9ShadowCurationInput): M9ShadowCo
 }
 
 export type { ItemListFitDecision, ItemListMembershipVerdict, ListConceptCandidate, ListConceptVerdict }
+
+// ---------------------------------------------------------------------------
+// ENFORCED mode (Session 2, Phase 2).
+// ---------------------------------------------------------------------------
+
+export interface RunM9EnforcedCurationInput {
+  certifiedItems: readonly M9AdapterCertifiedItem[]
+  /** Comparison only — see m9EnforcedTypes.ts's own doc and the task's "may use legacy output only as a labeled comparison artifact" rule. Never read as authoritative input to concept discovery or membership curation. */
+  legacyPlan: readonly M9AdapterLegacyListSummary[]
+  /** Every operator decision already durably recorded for THIS run, keyed by conceptId — the driver's own persisted state.m9OperatorDecisions, carried in unchanged (never mutated by this function; see acceptedDecisions in the output for what the caller should merge back in). */
+  storedOperatorDecisions: Readonly<Record<string, M9OperatorDecisionRecord>>
+  /** New decisions the caller is submitting THIS invocation (e.g. a real Jerry approval/rejection) — validated and, if valid, folded into this call's own evaluation (though NOT into storedOperatorDecisions, which this function treats as read-only; the caller persists acceptedDecisions itself). */
+  newOperatorDecisionInputs?: readonly M9OperatorDecisionInput[]
+  conceptDiscoveryConfig?: ListConceptDiscoveryConfig
+  now?: () => string
+}
+
+export interface RunM9EnforcedCurationOutput {
+  artifact: M9EnforcedCurationArtifact
+  /** Decisions actually accepted and applied this call — the caller persists these into its own durable store (state.m9OperatorDecisions), keyed by conceptId. */
+  acceptedDecisions: M9OperatorDecisionRecord[]
+  /** Decisions submitted this call but refused (empty decisionText, empty decidedBy, or naming a conceptId this run's discovery pass never produced) — never silently dropped. */
+  rejectedDecisionInputs: Array<{ input: M9OperatorDecisionInput; reason: string }>
+}
+
+function legacyListPseudoId(title: string): string {
+  return computeM9ConceptId([`legacy-list-title:${title}`])
+}
+
+function structuralValidationErrors(items: readonly M9AdapterCertifiedItem[]): string[] {
+  const errors: string[] = []
+  items.forEach((item, i) => {
+    if (!item.candidateName || !item.candidateName.trim()) errors.push(`item[${i}]: missing candidateName`)
+    if (!item.venueName || !item.venueName.trim()) errors.push(`item[${i}] (${item.candidateName}): missing venueName`)
+    if (!item.dbCategory) errors.push(`item[${i}] (${item.candidateName}): missing dbCategory`)
+    if (!item.neighborhoodName || !item.neighborhoodName.trim()) errors.push(`item[${i}] (${item.candidateName}): missing neighborhoodName`)
+    if (!item.finalBody || !item.finalBody.trim()) errors.push(`item[${i}] (${item.candidateName}): missing finalBody`)
+  })
+  return errors
+}
+
+function blockingResult(
+  kind: 'NEEDS_JERRY' | 'HOLD' | 'INVALID' | 'ERROR',
+  reasonCode: string,
+  explanation: string,
+  requiredDecisions: M9RequiredDecision[]
+): M9EnforcedResult {
+  const affectedConceptIds = [...new Set(requiredDecisions.flatMap((d) => d.affectedConceptIds))]
+  const affectedItemIds = [...new Set(requiredDecisions.flatMap((d) => d.affectedItemIds))]
+  const missingEvidence = [...new Set(requiredDecisions.flatMap((d) => d.missingEvidence ?? []))]
+  return {
+    kind,
+    reasonCode,
+    explanation,
+    affectedConceptIds,
+    affectedItemIds,
+    missingEvidence,
+    earliestSafeResumePoint: 'M9_HOME_LIST_MIRROR',
+    approvalSufficient: requiredDecisions.length > 0 && requiredDecisions.every((d) => d.approvalSufficiency === 'APPROVAL_SUFFICIENT' || d.approvalSufficiency === 'REJECTION_REQUIRED' || d.approvalSufficiency === 'CONFIGURATION_REQUIRED'),
+    evidenceMandatory: requiredDecisions.some((d) => d.evidenceMandatory),
+    requiredDecisions,
+  }
+}
+
+function emptyEnforcedArtifact(now: () => string, inputCatalogFingerprint: string, result: M9EnforcedResult, errors: string[] = []): M9EnforcedCurationArtifact {
+  const nowIso = now()
+  return {
+    mode: 'ENFORCED',
+    artifactVersion: M9_ENFORCED_ARTIFACT_VERSION,
+    inputCatalogFingerprint,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    conceptVerdicts: [],
+    finalApprovedMemberships: {},
+    requiredDecisions: result.kind === 'READY' ? [] : result.requiredDecisions,
+    validation: { ok: errors.length === 0, errors },
+    result,
+  }
+}
+
+/**
+ * ENFORCED entry point. Runs PASS A against the real certified catalog,
+ * then — for every non-REJECT concept — speculatively runs PASS B and
+ * duplicate-venue detection so a required decision's approvalSufficiency
+ * is accurate from the FIRST time it's ever surfaced (never "APPROVAL_SUFFICIENT
+ * at first, then upgraded to EVIDENCE_REQUIRED on a later call" — an
+ * operator must see the real bar before deciding, not after).
+ *
+ * Never throws: PASS A/B exceptions become an 'ERROR' result; malformed
+ * input becomes 'INVALID' before either pass ever runs. Every expected
+ * curation outcome — a concept awaiting approval, a HOLD, a stale
+ * fingerprint — is a plain returned value.
+ */
+export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9EnforcedCurationOutput {
+  const now = input.now ?? (() => new Date().toISOString())
+  const inputCatalogFingerprint = computeM9CatalogFingerprint(input.certifiedItems)
+
+  const structuralErrors = structuralValidationErrors(input.certifiedItems)
+  if (structuralErrors.length > 0) {
+    const result = blockingResult('INVALID', 'MALFORMED_CERTIFIED_ITEM', `${structuralErrors.length} certified item(s) are missing required fields — refusing to run concept discovery against malformed input.`, [])
+    return { artifact: emptyEnforcedArtifact(now, inputCatalogFingerprint, result, structuralErrors), acceptedDecisions: [], rejectedDecisionInputs: [] }
+  }
+
+  let conceptDiscovery: ListConceptCandidate[]
+  try {
+    const conceptItems = input.certifiedItems.map(toConceptItem)
+    const alreadyAccepted = input.legacyPlan.filter((p) => p.kind !== 'CURATED_MIRROR').map((p) => ({ title: p.title, candidateNames: p.itemCandidateNames }))
+    conceptDiscovery = discoverListConcepts(conceptItems, input.conceptDiscoveryConfig ?? DEFAULT_LIST_CONCEPT_DISCOVERY_CONFIG, alreadyAccepted)
+  } catch (err) {
+    const result = blockingResult('ERROR', 'PASS_A_THREW', `PASS A (discoverListConcepts) threw unexpectedly: ${err instanceof Error ? err.message : String(err)}`, [])
+    return { artifact: emptyEnforcedArtifact(now, inputCatalogFingerprint, result), acceptedDecisions: [], rejectedDecisionInputs: [] }
+  }
+
+  const itemsByName = new Map(input.certifiedItems.map((i) => [i.candidateName, i]))
+  const conceptsById = new Map(conceptDiscovery.map((c) => [computeM9ConceptId(c.seedTags), c]))
+
+  // Validate + accept/reject this call's own decision submissions BEFORE
+  // evaluating any concept, so every concept sees the final, settled
+  // decision set exactly once. A bare force-approval flag (empty
+  // decisionText) is rejected here, unconditionally — see the module doc's
+  // CRITICAL DESIGN RULE and M9OperatorDecisionInput.decisionText's own doc.
+  const acceptedDecisions: M9OperatorDecisionRecord[] = []
+  const rejectedDecisionInputs: RunM9EnforcedCurationOutput['rejectedDecisionInputs'] = []
+  const workingDecisions: Record<string, M9OperatorDecisionRecord> = { ...input.storedOperatorDecisions }
+  for (const decisionInput of input.newOperatorDecisionInputs ?? []) {
+    if (!decisionInput.decisionText || !decisionInput.decisionText.trim()) {
+      rejectedDecisionInputs.push({ input: decisionInput, reason: 'decisionText is required and must be non-empty — a bare force-approval flag can never satisfy an ENFORCED decision, regardless of that decision\'s own approvalSufficiency.' })
+      continue
+    }
+    if (!decisionInput.decidedBy || !decisionInput.decidedBy.trim()) {
+      rejectedDecisionInputs.push({ input: decisionInput, reason: 'decidedBy is required — a decision must be attributable to a real operator, never anonymous.' })
+      continue
+    }
+    const concept = conceptsById.get(decisionInput.conceptId)
+    if (!concept) {
+      rejectedDecisionInputs.push({ input: decisionInput, reason: `No concept with id "${decisionInput.conceptId}" was discovered in this run — the decision may be stale (the concept's seed tags no longer cluster) or malformed.` })
+      continue
+    }
+    const record: M9OperatorDecisionRecord = {
+      conceptId: decisionInput.conceptId,
+      decidedForFingerprint: computeM9ConceptFingerprint(decisionInput.conceptId, concept.candidateNames),
+      action: decisionInput.action,
+      decision: decisionInput.decision,
+      decisionText: decisionInput.decisionText,
+      newEvidence: decisionInput.newEvidence,
+      decidedBy: decisionInput.decidedBy,
+      decidedAt: now(),
+    }
+    workingDecisions[decisionInput.conceptId] = record
+    acceptedDecisions.push(record)
+  }
+
+  const conceptVerdicts: M9EnforcedConceptVerdict[] = []
+  const finalApprovedMemberships: Record<string, string[]> = {}
+  const allRequiredDecisions: M9RequiredDecision[] = []
+
+  for (const concept of conceptDiscovery) {
+    const conceptId = computeM9ConceptId(concept.seedTags)
+    const fingerprint = computeM9ConceptFingerprint(conceptId, concept.candidateNames)
+    const overlapFindings = concept.overlapWithOtherConcepts.map((o) => ({ withConceptId: legacyListPseudoId(o.withTitle), withTitle: o.withTitle, sharedItemCount: o.sharedItemCount, sharedPercent: o.sharedPercent }))
+
+    // REJECT is automatic and final — "insufficient depth blocks rather
+    // than adding filler": never scored for membership, never offered for
+    // approval, and never re-litigated (there is nothing an operator
+    // decision could productively attach to here; the concept simply
+    // doesn't have enough real items).
+    if (concept.verdict === 'REJECT') {
+      conceptVerdicts.push({
+        conceptId,
+        fingerprint,
+        proposedTitle: concept.proposedTitle,
+        seedTags: concept.seedTags,
+        discoveryVerdict: concept.verdict,
+        approvalState: 'AUTO_EXCLUDED',
+        memberDecisions: [],
+        exclusionReasons: concept.candidateNames.map((itemId) => ({ itemId, reason: concept.reasoning })),
+        overlapFindings,
+        duplicateFindings: [],
+      })
+      continue
+    }
+
+    // Speculative PASS B + duplicate detection — run for EVERY non-REJECT
+    // concept regardless of approval state, so a required decision's
+    // approvalSufficiency reflects the real evidence picture from the
+    // moment it's first surfaced (see this function's own doc).
+    let memberDecisions: M9ItemMembershipRecord[] = []
+    try {
+      const decisions = evaluateConceptMembership(concept, itemsByName)
+      memberDecisions = decisions.map((d) => ({ itemId: d.itemId, verdict: d.verdict, fitScore: d.fitScore, fitReason: d.fitReason }))
+    } catch (err) {
+      const result = blockingResult('ERROR', 'PASS_B_THREW', `PASS B (evaluateItemForListMembership) threw unexpectedly for concept "${concept.proposedTitle}": ${err instanceof Error ? err.message : String(err)}`, [])
+      return { artifact: emptyEnforcedArtifact(now, inputCatalogFingerprint, result), acceptedDecisions: [], rejectedDecisionInputs: [] }
+    }
+
+    const includedItemIds = memberDecisions.filter((d) => d.verdict === 'INCLUDE').map((d) => d.itemId)
+    const portfolioMembers: PortfolioReviewItem[] = includedItemIds
+      .map((id) => itemsByName.get(id))
+      .filter((i): i is M9AdapterCertifiedItem => Boolean(i))
+      .map((i) => ({ candidateName: i.candidateName, venueName: i.venueName, dbCategory: i.dbCategory, neighborhoodName: i.neighborhoodName, finalBody: i.finalBody }))
+    const repetitionFindings = detectPortfolioRepetition(portfolioMembers)
+    const duplicateFindings: M9DuplicateFinding[] = repetitionFindings.filter((f) => f.kind === 'DUPLICATE_VENUE').map((f) => ({ kind: 'DUPLICATE_VENUE', detail: f.detail, affectedItemIds: f.affectedCandidateNames }))
+
+    // Base action/sufficiency by PASS A's own verdict — see this file's
+    // module doc for why HOLD/REQUIRES_JERRY reuse CREATE_NEW_LIST_CONCEPT/
+    // CONCEPT_WITH_SUBSTANTIAL_OVERLAP rather than inventing new
+    // OperatorReviewAction values the existing boundary module doesn't
+    // define. An unresolved duplicate ALWAYS escalates to EVIDENCE_REQUIRED
+    // regardless of the base verdict — Phase 4's explicit "unresolved
+    // venue duplicate" requirement.
+    let action: OperatorReviewAction
+    let approvalSufficiency: M9ApprovalSufficiency
+    let reasonCode: string
+    let explanation: string
+    if (concept.verdict === 'REQUIRES_JERRY') {
+      action = 'CONCEPT_WITH_SUBSTANTIAL_OVERLAP'
+      approvalSufficiency = 'APPROVAL_SUFFICIENT'
+      reasonCode = 'CONCEPT_SUBSTANTIAL_OVERLAP'
+      explanation = concept.reasoning
+    } else if (concept.verdict === 'HOLD') {
+      action = 'CREATE_NEW_LIST_CONCEPT'
+      approvalSufficiency = 'RESEARCH_REQUIRED'
+      reasonCode = 'CONCEPT_WEAK_STRONG_FIT_RATIO'
+      explanation = concept.reasoning
+    } else {
+      action = 'CREATE_NEW_LIST_CONCEPT'
+      approvalSufficiency = 'APPROVAL_SUFFICIENT'
+      reasonCode = 'CONCEPT_CREATE_PENDING_APPROVAL'
+      explanation = evaluateOperatorReviewBoundary('CREATE_NEW_LIST_CONCEPT').reason
+    }
+    const missingEvidence: string[] = []
+    if (duplicateFindings.length > 0) {
+      approvalSufficiency = 'EVIDENCE_REQUIRED'
+      reasonCode = 'UNRESOLVED_VENUE_DUPLICATE'
+      explanation = `${duplicateFindings.map((d) => d.detail).join(' ')} An explicit operator decision with real substantiating content is required (a bare approval flag is not sufficient) — the same Kunst Oase/Vereinsheim precedent this codebase already recognizes at the seed-duplicate stage (holdRecovery.ts) applies here too: an explicit "these are genuinely distinct, keep both" decision is valid even without NEW evidence, but an empty/boolean-only approval is not.`
+      missingEvidence.push('explicit operator decision addressing the duplicate venue finding (decisionText), not merely an approval flag')
+    }
+    if (concept.verdict === 'HOLD') missingEvidence.push('additional strong-fit evidence, or an explicit operator judgment accepting the cluster as-is')
+
+    const stored = workingDecisions[conceptId]
+    const decisionValid = stored && stored.decidedForFingerprint === fingerprint
+
+    if (decisionValid && stored!.decision === 'REJECTED') {
+      conceptVerdicts.push({
+        conceptId,
+        fingerprint,
+        proposedTitle: concept.proposedTitle,
+        seedTags: concept.seedTags,
+        discoveryVerdict: concept.verdict,
+        approvalState: 'REJECTED',
+        operatorDecision: stored,
+        memberDecisions,
+        exclusionReasons: concept.candidateNames.map((itemId) => ({ itemId, reason: `Rejected by operator decision: ${stored!.decisionText}` })),
+        overlapFindings,
+        duplicateFindings,
+      })
+      continue
+    }
+
+    if (decisionValid && stored!.decision === 'APPROVED') {
+      finalApprovedMemberships[conceptId] = includedItemIds
+      conceptVerdicts.push({
+        conceptId,
+        fingerprint,
+        proposedTitle: concept.proposedTitle,
+        seedTags: concept.seedTags,
+        discoveryVerdict: concept.verdict,
+        approvalState: 'APPROVED',
+        operatorDecision: stored,
+        memberDecisions,
+        exclusionReasons: memberDecisions.filter((d) => d.verdict !== 'INCLUDE').map((d) => ({ itemId: d.itemId, reason: d.fitReason })),
+        overlapFindings,
+        duplicateFindings,
+      })
+      continue
+    }
+
+    // No valid (fresh-fingerprint) decision on record — outstanding.
+    const decisionId = `${conceptId}:${action}`
+    const requiredDecision: M9RequiredDecision = {
+      decisionId,
+      action,
+      approvalSufficiency,
+      reasonCode,
+      explanation,
+      affectedConceptIds: [conceptId],
+      affectedItemIds: concept.candidateNames,
+      missingEvidence: missingEvidence.length > 0 ? missingEvidence : null,
+      evidenceMandatory: approvalSufficiency === 'EVIDENCE_REQUIRED' || approvalSufficiency === 'RESEARCH_REQUIRED',
+    }
+    allRequiredDecisions.push(requiredDecision)
+    conceptVerdicts.push({
+      conceptId,
+      fingerprint,
+      proposedTitle: concept.proposedTitle,
+      seedTags: concept.seedTags,
+      discoveryVerdict: concept.verdict,
+      approvalState: concept.verdict === 'HOLD' || duplicateFindings.length > 0 ? 'HOLD' : 'PENDING',
+      memberDecisions,
+      exclusionReasons: [],
+      overlapFindings,
+      duplicateFindings,
+    })
+  }
+
+  const nowIso = now()
+  let result: M9EnforcedResult
+  if (allRequiredDecisions.length === 0) {
+    result = { kind: 'READY', approvedConceptIds: Object.keys(finalApprovedMemberships), comparedAgainstLegacyListTitles: input.legacyPlan.map((p) => p.title) }
+  } else {
+    const anyEvidenceOrResearch = allRequiredDecisions.some((d) => d.approvalSufficiency === 'EVIDENCE_REQUIRED' || d.approvalSufficiency === 'RESEARCH_REQUIRED')
+    result = blockingResult(
+      anyEvidenceOrResearch ? 'HOLD' : 'NEEDS_JERRY',
+      anyEvidenceOrResearch ? 'OUTSTANDING_EVIDENCE_OR_RESEARCH_REQUIRED' : 'OUTSTANDING_OPERATOR_APPROVAL_REQUIRED',
+      `${allRequiredDecisions.length} concept-level decision(s) remain outstanding before this plan can become authoritative.`,
+      allRequiredDecisions
+    )
+  }
+
+  const artifact: M9EnforcedCurationArtifact = {
+    mode: 'ENFORCED',
+    artifactVersion: M9_ENFORCED_ARTIFACT_VERSION,
+    inputCatalogFingerprint,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    conceptVerdicts,
+    finalApprovedMemberships,
+    requiredDecisions: allRequiredDecisions,
+    validation: { ok: true, errors: [] },
+    result,
+  }
+
+  return { artifact, acceptedDecisions, rejectedDecisionInputs }
+}
