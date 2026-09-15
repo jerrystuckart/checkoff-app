@@ -83,8 +83,14 @@ const HIDDEN_GEMS_SEED_TAG_PATTERN = /hidden|secret|gem|discovery|overlooked/i
  * THEMED_LIST_DEFINITIONS entries are themselves ordinary THEMED lists),
  * so THEMED is the honest mapping, not a fabricated one.
  */
-export function classifyM9ListKind(concept: { type: string; seedTags: readonly string[] }): ListMembershipKind {
+const HIDDEN_GEMS_SECRET_SHARE_THRESHOLD = 0.5
+
+export function classifyM9ListKind(concept: { type: string; seedTags: readonly string[] }, members: readonly { isSecretClaimed?: boolean }[] = []): ListMembershipKind {
   if (concept.seedTags.some((t) => HIDDEN_GEMS_SEED_TAG_PATTERN.test(t))) return 'HIDDEN_GEMS'
+  if (members.length > 0) {
+    const secretShare = members.filter((m) => m.isSecretClaimed).length / members.length
+    if (secretShare >= HIDDEN_GEMS_SECRET_SHARE_THRESHOLD) return 'HIDDEN_GEMS'
+  }
   switch (concept.type) {
     case 'SEASONAL':
       return 'SEASONAL'
@@ -119,6 +125,8 @@ export interface M9AdapterCertifiedItem {
   neighborhoodName: string
   /** Mirrors listConceptDiscovery.ts's own duck-typed default — omit when the driver has no real evaluated ownership signal for this item (today: always omitted: the live driver never persists this per-item; see metroLaunchDriver.ts's own doc on candidate.ownershipType). */
   ownershipType?: CommercialOwnershipType
+  /** Real, already-evaluated METADATA_COMPLETENESS_GATE is_secret value (metadataEnrichmentResults[].isSecret.value, metroLaunchDriver.ts) — used only by classifyM9ListKind's Hidden-Gems-shaped-cluster check, never as a substitute for a real discoveryBasis (a secret CLAIM alone does not clear categoryPolicy.ts's own evaluateSecretEvidence bar). Omit when unknown. */
+  isSecretClaimed?: boolean
 }
 
 /** A minimal, adapter-owned summary of one legacy HomeListPlanEntry — just enough to diff against, without importing metroLaunchDriver.ts's own HomeListPlanEntry type (keeps this module genuinely standalone, per the handoff's "adapter outside metroLaunchDriver.ts" instruction). */
@@ -219,6 +227,74 @@ function evaluateConceptMembership(concept: ListConceptCandidate, itemsByName: R
     const item = itemsByName.get(candidateName)
     if (!item) continue // defensive only — every concept member came from the same certifiedItems pool passed to discoverListConcepts.
     decisions.push(evaluateItemForListMembership({ item: toFitCandidate(item), list }))
+  }
+  return decisions
+}
+
+/**
+ * PASS B, ENFORCED-only variant (Session 3, Phase 2) — same base
+ * mechanism as evaluateConceptMembership above, but evaluated against the
+ * concept's REAL classifyM9ListKind() kind instead of a hardcoded
+ * 'THEMED'. This is what actually closes the handoff's per-list-kind
+ * evidence gap: evaluateItemForListMembership (listFitScoring.ts) already
+ * HOLDs a HIDDEN_GEMS item with no discoveryBasis, HOLDs an AFTER_DARK
+ * item with no nighttimeSpecific judgment, HOLDs a FOOD_LOCAL_FLAVOR item
+ * with no concreteLocalFlavorAction, and EXCLUDEs a DAY_TRIP item with no
+ * travelEffort — this function supplies every one of those per-kind
+ * evidence inputs as `undefined`/`null` because the live driver does not
+ * yet persist ANY of that real, evaluated per-item evidence anywhere in
+ * MetroDriverState (no discoveryBasis, no nighttimeSpecific judgment, no
+ * concreteLocalFlavorAction, no travelEffort field exists today). This is
+ * the honest, correct behavior the task requires ("missing required
+ * list-kind evidence must HOLD or exclude the membership... it cannot
+ * silently pass") — NOT a workaround to avoid writing the check: a
+ * concept classified into one of these four stricter kinds will
+ * correctly produce zero INCLUDE members until a real per-item evidence
+ * pipeline exists upstream of M9. SEASONAL/THEMED/OTHER-mapped concepts
+ * (the switch's own default branch, listFitScoring.ts) have no
+ * additional per-kind gate beyond base category/tag/pattern fit — exactly
+ * as today's legacy THEMED_LIST_DEFINITIONS lists already work, so
+ * "seasonal flagship prioritizes strength and variety" is satisfied by
+ * the SAME independent fit-scoring every other concept already goes
+ * through, not a fabricated extra rule.
+ *
+ * SHADOW's own evaluateConceptMembership (above) is deliberately left
+ * untouched — SHADOW's diagnostic output must not change behavior
+ * mid-session (Session 2's own "LEGACY and SHADOW must retain their
+ * current M10 behavior" rule).
+ */
+function evaluateConceptMembershipForKind(concept: ListConceptCandidate, itemsByName: ReadonlyMap<string, M9AdapterCertifiedItem>, listKind: ListMembershipKind): ItemListFitDecision[] {
+  const list: ListMembershipListContext = {
+    title: concept.proposedTitle,
+    kind: listKind,
+    tags: concept.seedTags,
+    proposedListIdentity: concept.proposedTitle,
+    listId: null,
+  }
+  const decisions: ItemListFitDecision[] = []
+  for (const candidateName of concept.candidateNames) {
+    const item = itemsByName.get(candidateName)
+    if (!item) continue // defensive only — every concept member came from the same certifiedItems pool passed to discoverListConcepts.
+    decisions.push(
+      evaluateItemForListMembership({
+        item: toFitCandidate(item),
+        list,
+        // Every list-kind-specific evidence input below is real state this
+        // session's driver has, or an honest `undefined`/`null` when it
+        // doesn't — never fabricated. Only isSecret (metadataEnrichmentResults,
+        // already threaded onto M9AdapterCertifiedItem.isSecretClaimed
+        // below in this same commit) is real per-item evidence available
+        // today, and it only ever feeds HIDDEN_GEMS classification
+        // (classifyM9ListKind), not this per-item evaluation call — a
+        // secret CLAIM alone is not itself a discoveryBasis (categoryPolicy.ts's
+        // own evaluateSecretEvidence bar is stricter than a boolean flag),
+        // so discoveryBasis stays honestly unset here too.
+        discoveryBasis: undefined,
+        nighttimeSpecific: undefined,
+        concreteLocalFlavorAction: undefined,
+        travelEffort: undefined,
+      })
+    )
   }
   return decisions
 }
@@ -613,7 +689,8 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
   // way everywhere this function needs it: once per concept here, and
   // reused (never recomputed with different inputs) below.
   function identityFor(concept: ListConceptCandidate): { conceptId: string; listKind: ListMembershipKind } {
-    const listKind = classifyM9ListKind(concept)
+    const members = concept.candidateNames.map((name) => itemsByName.get(name)).filter((i): i is M9AdapterCertifiedItem => Boolean(i))
+    const listKind = classifyM9ListKind(concept, members)
     return { conceptId: computeM9ConceptId({ metroSlug: input.metroSlug, listKind, seedTags: concept.seedTags }), listKind }
   }
   function fingerprintFor(concept: ListConceptCandidate, conceptId: string): string {
@@ -688,7 +765,7 @@ export function runM9EnforcedCuration(input: RunM9EnforcedCurationInput): RunM9E
     // moment it's first surfaced (see this function's own doc).
     let memberDecisions: M9ItemMembershipRecord[] = []
     try {
-      const decisions = evaluateConceptMembership(concept, itemsByName)
+      const decisions = evaluateConceptMembershipForKind(concept, itemsByName, listKind)
       memberDecisions = decisions.map((d) => ({ itemId: d.itemId, verdict: d.verdict, fitScore: d.fitScore, fitReason: d.fitReason }))
     } catch (err) {
       const result = blockingResult('ERROR', 'PASS_B_THREW', `PASS B (evaluateItemForListMembership) threw unexpectedly for concept "${concept.proposedTitle}": ${err instanceof Error ? err.message : String(err)}`, [])

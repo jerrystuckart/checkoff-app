@@ -3742,6 +3742,7 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
       finalTags: item.tags,
       finalBody: item.body,
       neighborhoodName: item.neighborhoodName,
+      isSecretClaimed: item.isSecret,
     }))
     const { artifact, acceptedDecisions, rejectedDecisionInputs } = runM9EnforcedCuration({
       metroSlug,
