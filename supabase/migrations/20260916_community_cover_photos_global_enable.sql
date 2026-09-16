@@ -76,9 +76,23 @@ BEGIN
     RAISE EXCEPTION 'SELFTEST SKIPPED-UNSAFE: no rows exist in public.items to borrow an ID from';
   END IF;
 
+  -- IMPORTANT: this whole script runs over a privileged connection (the
+  -- role `supabase db query --linked` connects as owns these tables /
+  -- has BYPASSRLS), which ignores RLS entirely regardless of
+  -- request.jwt.claim.sub. Faking the JWT claim alone (the first version of
+  -- this self-check) is not enough — auth.uid() would resolve correctly,
+  -- but RLS itself would never actually be evaluated, so every check below
+  -- would trivially "pass" whether or not the real policies work. Each
+  -- block below explicitly `SET LOCAL ROLE` to `anon`/`authenticated` (the
+  -- same unprivileged Postgres roles PostgREST itself connects as for
+  -- real app traffic) so RLS is actually engaged, then `RESET ROLE`
+  -- immediately after to return to the privileged connection role for the
+  -- next borrow/cleanup step.
+
   -- 1. Anonymous (no session at all) cannot INSERT — proves Bug 2
   -- requirement "anonymous users cannot create an item_cover_candidates
   -- record" at the RLS layer, independent of the client-side UI gate.
+  SET LOCAL ROLE anon;
   PERFORM set_config('request.jwt.claim.sub', '', true);
   BEGIN
     INSERT INTO public.item_cover_candidates (item_id, submitted_by_user_id, storage_path, consent_ack)
@@ -87,6 +101,7 @@ BEGIN
   EXCEPTION WHEN insufficient_privilege OR OTHERS THEN
     IF SQLSTATE NOT IN ('42501', '28000') THEN RAISE; END IF;
   END;
+  RESET ROLE;
 
   -- 2. A normal (non-admin, non-tester — the exact population the tester
   -- gate used to block) authenticated user CAN insert their own candidate.
@@ -94,10 +109,12 @@ BEGIN
   -- photo" — the capture screen itself (camera -> storage upload -> this
   -- insert) is unchanged app code, already covered by existing
   -- lib/coverCandidates.test.js / lib/coverCandidateEligibility.test.js.
+  SET LOCAL ROLE authenticated;
   PERFORM set_config('request.jwt.claim.sub', normal_user_1::text, true);
   INSERT INTO public.item_cover_candidates (item_id, submitted_by_user_id, storage_path, consent_ack)
   VALUES (real_item_id, normal_user_1, '__selftest_normal_user_insert__.jpg', true)
   RETURNING id INTO fixture_candidate_id;
+  RESET ROLE;
 
   -- New rows default to status = 'pending' -- the same starting state every
   -- submission has always had, which is what makes it visible in the
@@ -114,8 +131,10 @@ BEGIN
   -- 3. Not public: another normal (non-owning, non-admin) user cannot SELECT
   -- this still-pending candidate. Proves "remains non-public until
   -- approved" holds for an ordinary user, not just for anon.
+  SET LOCAL ROLE authenticated;
   PERFORM set_config('request.jwt.claim.sub', normal_user_2::text, true);
   SELECT count(*) INTO row_count FROM public.item_cover_candidates WHERE id = fixture_candidate_id;
+  RESET ROLE;
   IF row_count <> 0 THEN
     RAISE EXCEPTION 'SELFTEST FAILED: a pending candidate must not be visible to a non-owning, non-admin user';
   END IF;
@@ -124,8 +143,10 @@ BEGIN
   -- 'selected' is anon/public-readable (supabase/migrations/
   -- 20260903_selected_cover_public_read.sql) -- this fixture row is
   -- 'pending', so anon must see zero rows for it.
+  SET LOCAL ROLE anon;
   PERFORM set_config('request.jwt.claim.sub', '', true);
   SELECT count(*) INTO row_count FROM public.item_cover_candidates WHERE id = fixture_candidate_id;
+  RESET ROLE;
   IF row_count <> 0 THEN
     RAISE EXCEPTION 'SELFTEST FAILED: a pending candidate must not be visible to anon';
   END IF;
@@ -134,28 +155,30 @@ BEGIN
   -- admin-only, unconditionally -- proves "normal authenticated user
   -- cannot approve, update, or delete candidates" survives the tester-gate
   -- removal.
+  SET LOCAL ROLE authenticated;
   PERFORM set_config('request.jwt.claim.sub', normal_user_1::text, true);
   UPDATE public.item_cover_candidates SET status = 'approved' WHERE id = fixture_candidate_id;
   GET DIAGNOSTICS row_count = ROW_COUNT;
+  RESET ROLE;
   IF row_count <> 0 THEN
     RAISE EXCEPTION 'SELFTEST FAILED: a normal (non-admin) user, including the submission owner, must never be able to UPDATE a candidate''s status';
   END IF;
 
+  SET LOCAL ROLE authenticated;
   PERFORM set_config('request.jwt.claim.sub', normal_user_1::text, true);
   DELETE FROM public.item_cover_candidates WHERE id = fixture_candidate_id;
   GET DIAGNOSTICS row_count = ROW_COUNT;
+  RESET ROLE;
   IF row_count <> 0 THEN
     RAISE EXCEPTION 'SELFTEST FAILED: a normal (non-admin) user, including the submission owner, must never be able to DELETE a candidate';
   END IF;
 
-  -- Cleanup -- admin-equivalent delete via a transaction-local privilege
-  -- escalation (disable RLS just for this cleanup statement), nothing from
-  -- this self-check persists past COMMIT regardless, but this keeps the
-  -- fixture row from lingering if this whole DO block is ever run with
-  -- COMMIT swapped out for testing.
-  SET LOCAL row_security = off;
+  -- Cleanup -- back on the privileged connection role (RESET ROLE already
+  -- called after every simulated block above), which can delete
+  -- unconditionally. Nothing from this self-check persists past COMMIT
+  -- regardless, but this keeps the fixture row from lingering if this
+  -- whole DO block is ever run with COMMIT swapped out for testing.
   DELETE FROM public.item_cover_candidates WHERE id = fixture_candidate_id;
-  SET LOCAL row_security = on;
 
   RAISE NOTICE 'community_cover_photos RLS self-check PASSED';
 END $$;
