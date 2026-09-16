@@ -145,13 +145,21 @@ test('buildResearchVerifierPrompt: requiredEvidenceKeys including "geographicRol
   assert.match(systemPrompt, /destination_worthy_outer/)
 })
 
-test('buildResearchVerifierPrompt: a candidates-only request does not mention any evidence-contract-extension fields — gating applies to all 4, not just neighborhoods', () => {
+test('buildResearchVerifierPrompt: requiredEvidenceKeys including "placeId" requests it only when confirmable from a real source, never guessed from name/address', () => {
+  const placeIdReq: SpecialistExecutionRequest = { ...req(), specialist: 'research_verifier', methodologyId: 'metro_launch', methodologyVersion: 'v1', stage: 'M5_TARGETED_DEEP_DIVES', requiredEvidenceKeys: ['placeId'], inputs: { executionType: 'VERIFICATION' } }
+  const { systemPrompt } = buildResearchVerifierPrompt(placeIdReq)
+  assert.match(systemPrompt, /evidence\.placeId/)
+  assert.match(systemPrompt, /never derive, construct, or guess/)
+})
+
+test('buildResearchVerifierPrompt: a candidates-only request does not mention any evidence-contract-extension fields — gating applies to all 5, not just neighborhoods', () => {
   const plainReq: SpecialistExecutionRequest = { ...req(), specialist: 'research_verifier', methodologyId: 'metro_launch', methodologyVersion: 'v1', stage: 'M3_BROAD_DISCOVERY', requiredEvidenceKeys: ['candidates'], inputs: { executionType: 'BROAD_DISCOVERY' } }
   const { systemPrompt } = buildResearchVerifierPrompt(plainReq)
   assert.equal(systemPrompt.includes('ownershipEvidence'), false)
   assert.equal(systemPrompt.includes('secretEvidence'), false)
   assert.equal(systemPrompt.includes('difficultyEvidence'), false)
   assert.equal(systemPrompt.includes('geographicRole'), false)
+  assert.equal(systemPrompt.includes('evidence.placeId'), false)
 })
 
 // ---------------------------------------------------------------------------

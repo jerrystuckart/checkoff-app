@@ -8,6 +8,7 @@ import {
   validateExtendedResearchCandidates,
   normalizedBusinessIdentity,
   resolveSecretEvidenceForCandidate,
+  sanitizeExtendedCandidateEvidence,
   type ResearchCandidateEvidence,
   type ExtendedResearchCandidateEvidence,
 } from './researchEvidence'
@@ -290,4 +291,112 @@ test('normalizedBusinessIdentity: reuses seedDuplicateNormalization.ts\'s exact 
 test('resolveSecretEvidenceForCandidate: isSecretClaimed falsy resolves to unsupported without needing a secretEvidence record at all', () => {
   const result = resolveSecretEvidenceForCandidate(extendedCandidate({ isSecretClaimed: false }))
   assert.equal(result.supported, false)
+})
+
+// ---------------------------------------------------------------------------
+// sanitizeExtendedCandidateEvidence — the real live-ingestion boundary: a
+// research_verifier envelope's evidence.candidates[] entries are UNTYPED
+// JSON (SpecialistResultEnvelope.evidence: Record<string, unknown>), not an
+// already-typed ExtendedResearchCandidateEvidence. This is what
+// metroLaunchDriver.ts's toSeedCandidateInput() now runs every raw
+// candidate through before it reaches SeedCandidateInput/M5.75.
+// ---------------------------------------------------------------------------
+
+test('sanitizeExtendedCandidateEvidence: KNOWN, well-formed evidence (ownership with evidence, a concrete secret mechanic, a real placeId, valid difficultyEvidence) is fully retained with zero downgrades', () => {
+  const raw = {
+    ownershipType: 'INDEPENDENT_LOCAL',
+    ownershipEvidence: 'Fourth-generation family butcher, per venue history page.',
+    ownershipConfidence: 'HIGH',
+    isSecretClaimed: true,
+    secretEvidence: {
+      mechanic: 'A rooftop bar accessible only through an unmarked entrance inside the building.',
+      evidenceType: 'LOCAL_EDITORIAL_GUIDE',
+      source: 'https://example.test/haus-im-tal',
+      dateVerified: '2026-09-10',
+      confidence: 'MEDIUM',
+      verdict: 'HOLD',
+    },
+    placeId: 'ChIJN1t_tDeuEmsRUsoyG83frY4',
+    difficultyEvidence: { ...noFrictionDifficultyEvidence('Café Frischhut'), timingRestriction: { present: true, detail: 'Only at dawn.' } },
+  }
+  const result = sanitizeExtendedCandidateEvidence(raw)
+  assert.equal(result.ownershipType, 'INDEPENDENT_LOCAL')
+  assert.equal(result.ownershipEvidence, raw.ownershipEvidence)
+  assert.equal(result.ownershipConfidence, 'HIGH')
+  assert.equal(result.isSecretClaimed, true)
+  assert.deepEqual(result.secretEvidence, raw.secretEvidence)
+  assert.equal(result.placeId, 'ChIJN1t_tDeuEmsRUsoyG83frY4')
+  assert.equal(result.proposedDifficulty, 5)
+  assert.deepEqual(result.downgrades, [])
+})
+
+test('sanitizeExtendedCandidateEvidence: UNKNOWN/absent input (empty object, or explicit UNKNOWN_REQUIRES_VERIFICATION) resolves to the explicit unknown state, no downgrade noise', () => {
+  const empty = sanitizeExtendedCandidateEvidence({})
+  assert.equal(empty.ownershipType, 'UNKNOWN_REQUIRES_VERIFICATION')
+  assert.equal(empty.isSecretClaimed, false)
+  assert.equal(empty.secretEvidence, null)
+  assert.equal(empty.placeId, null)
+  assert.equal(empty.difficultyEvidence, undefined)
+  assert.equal(empty.proposedDifficulty, undefined)
+  assert.deepEqual(empty.downgrades, [])
+
+  const explicit = sanitizeExtendedCandidateEvidence({ ownershipType: 'UNKNOWN_REQUIRES_VERIFICATION' })
+  assert.equal(explicit.ownershipType, 'UNKNOWN_REQUIRES_VERIFICATION')
+  assert.deepEqual(explicit.downgrades, [])
+})
+
+test('sanitizeExtendedCandidateEvidence: CONFLICTING evidence — ownership asserted as INDEPENDENT_LOCAL from "colorful wording" with no ownershipEvidence is downgraded to UNKNOWN, never silently trusted', () => {
+  const result = sanitizeExtendedCandidateEvidence({ ownershipType: 'INDEPENDENT_LOCAL' })
+  assert.equal(result.ownershipType, 'UNKNOWN_REQUIRES_VERIFICATION')
+  assert.equal(result.ownershipEvidence, undefined)
+  assert.ok(result.downgrades.some((d) => d.includes('ownershipEvidence')))
+})
+
+test('sanitizeExtendedCandidateEvidence: CONFLICTING evidence — an unrecognized/invented ownershipType string is downgraded to UNKNOWN', () => {
+  const result = sanitizeExtendedCandidateEvidence({ ownershipType: 'PROBABLY_LOCAL_VIBES', ownershipEvidence: 'seems local' })
+  assert.equal(result.ownershipType, 'UNKNOWN_REQUIRES_VERIFICATION')
+  assert.ok(result.downgrades.some((d) => d.includes('not a recognized CommercialOwnershipType')))
+})
+
+test('sanitizeExtendedCandidateEvidence: INSUFFICIENT evidence — isSecretClaimed=true with no secretEvidence record downgrades to false/null, per requirement isSecret may only be true with documented mechanic', () => {
+  const result = sanitizeExtendedCandidateEvidence({ isSecretClaimed: true })
+  assert.equal(result.isSecretClaimed, false)
+  assert.equal(result.secretEvidence, null)
+  assert.ok(result.downgrades.some((d) => d.includes('secretEvidence')))
+})
+
+test('sanitizeExtendedCandidateEvidence: INSUFFICIENT evidence — isSecretClaimed=true with a malformed secretEvidence record (missing confidence) downgrades to false/null', () => {
+  const result = sanitizeExtendedCandidateEvidence({
+    isSecretClaimed: true,
+    secretEvidence: { mechanic: 'hidden gem', evidenceType: 'EDITORIAL_VOICE', source: 'https://example.test', dateVerified: null, verdict: 'REJECT' },
+  })
+  assert.equal(result.isSecretClaimed, false)
+  assert.equal(result.secretEvidence, null)
+})
+
+test('sanitizeExtendedCandidateEvidence: INSUFFICIENT evidence — a blank/whitespace/non-string placeId is dropped to null, never guessed', () => {
+  assert.equal(sanitizeExtendedCandidateEvidence({ placeId: '' }).placeId, null)
+  assert.equal(sanitizeExtendedCandidateEvidence({ placeId: '   ' }).placeId, null)
+  assert.equal(sanitizeExtendedCandidateEvidence({ placeId: 42 }).placeId, null)
+})
+
+test('sanitizeExtendedCandidateEvidence: INSUFFICIENT evidence — malformed difficultyEvidence (bad travel.level) leaves difficultyEvidence/proposedDifficulty absent, never a fabricated band-1 default', () => {
+  const result = sanitizeExtendedCandidateEvidence({ difficultyEvidence: { ...noFrictionDifficultyEvidence('bad'), travel: { level: 'ON_THE_MOON', detail: '' } } })
+  assert.equal(result.difficultyEvidence, undefined)
+  assert.equal(result.proposedDifficulty, undefined)
+  assert.ok(result.downgrades.some((d) => d.includes('difficultyEvidence')))
+})
+
+test('sanitizeExtendedCandidateEvidence: proposedDifficulty is always DERIVED from difficultyEvidence, never taken from a raw AI-asserted number even when one is supplied', () => {
+  const result = sanitizeExtendedCandidateEvidence({ difficultyEvidence: noFrictionDifficultyEvidence('no factors'), proposedDifficulty: 25 })
+  assert.equal(result.proposedDifficulty, 1, 'the real evidence (no factors) computes to 1, regardless of the raw proposedDifficulty: 25 the input tried to assert')
+})
+
+test('sanitizeExtendedCandidateEvidence: non-object input (null/undefined/a string) resolves to the fully-unknown state rather than throwing', () => {
+  for (const raw of [null, undefined, 'not an object', 42]) {
+    const result = sanitizeExtendedCandidateEvidence(raw)
+    assert.equal(result.ownershipType, 'UNKNOWN_REQUIRES_VERIFICATION')
+    assert.equal(result.isSecretClaimed, false)
+    assert.equal(result.placeId, null)
+  }
 })

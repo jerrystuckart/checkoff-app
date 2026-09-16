@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { evaluateDifficultyEvidence, noFrictionDifficultyEvidence, type DifficultyEvidence } from './difficultyEvidence'
+import { evaluateDifficultyEvidence, noFrictionDifficultyEvidence, parseDifficultyEvidence, type DifficultyEvidence } from './difficultyEvidence'
 
 const present = (detail: string) => ({ present: true, detail })
 const absent = () => ({ present: false, detail: '' })
@@ -149,4 +149,67 @@ test('difficultyEvidence: travel to a close-in outer neighborhood (still inside 
 test('difficultyEvidence: never escalates difficulty from venue fame alone — a famous landmark with zero evidenced factors stays 1', () => {
   const evidence = noFrictionDifficultyEvidence('guardrail check — a famous, free, walk-in landmark must not be scored harder for being famous')
   assert.equal(evaluateDifficultyEvidence(evidence).proposedDifficulty, 1)
+})
+
+// ---------------------------------------------------------------------------
+// parseDifficultyEvidence — the untyped-JSON ingestion boundary a real
+// research_verifier envelope's evidence.candidates[].difficultyEvidence
+// arrives through. Must never fabricate a "no friction" record for
+// malformed/missing input (that would silently manufacture false evidence).
+// ---------------------------------------------------------------------------
+
+test('parseDifficultyEvidence: a well-formed record (known evidence) parses and evaluates exactly as the typed shape would', () => {
+  const raw = {
+    cost: { present: false, detail: '' },
+    advanceBooking: { present: true, detail: 'Must book the guided visit in advance.' },
+    timingRestriction: { present: false, detail: '' },
+    physicalEffort: { present: false, detail: '' },
+    limitedAvailability: { present: false, detail: '' },
+    specialOrderingComplexity: { present: false, detail: '' },
+    travel: { level: 'NONE', detail: '' },
+    source: 'https://example.com/juristische-bibliothek',
+  }
+  const parsed = parseDifficultyEvidence(raw)
+  assert.notEqual(parsed, null)
+  assert.equal(evaluateDifficultyEvidence(parsed!).proposedDifficulty, 5)
+})
+
+test('parseDifficultyEvidence: entirely missing/unknown input (undefined, null, a bare string) returns null, never a fabricated no-friction record', () => {
+  assert.equal(parseDifficultyEvidence(undefined), null)
+  assert.equal(parseDifficultyEvidence(null), null)
+  assert.equal(parseDifficultyEvidence('no factors present'), null)
+  assert.equal(parseDifficultyEvidence({}), null)
+})
+
+test('parseDifficultyEvidence: a factor missing its `present` boolean (conflicting/malformed shape) is rejected wholesale, not partially trusted', () => {
+  const raw = {
+    cost: { detail: 'a fee' }, // missing `present`
+    advanceBooking: { present: false, detail: '' },
+    timingRestriction: { present: false, detail: '' },
+    physicalEffort: { present: false, detail: '' },
+    limitedAvailability: { present: false, detail: '' },
+    specialOrderingComplexity: { present: false, detail: '' },
+    travel: { level: 'NONE', detail: '' },
+    source: 'https://example.com/malformed',
+  }
+  assert.equal(parseDifficultyEvidence(raw), null)
+})
+
+test('parseDifficultyEvidence: an invented travel.level value outside the 3 recognized ones is rejected', () => {
+  const raw = {
+    cost: { present: false, detail: '' },
+    advanceBooking: { present: false, detail: '' },
+    timingRestriction: { present: false, detail: '' },
+    physicalEffort: { present: false, detail: '' },
+    limitedAvailability: { present: false, detail: '' },
+    specialOrderingComplexity: { present: false, detail: '' },
+    travel: { level: 'FAR_AWAY', detail: 'invented value' },
+    source: 'https://example.com/bad-travel-level',
+  }
+  assert.equal(parseDifficultyEvidence(raw), null)
+})
+
+test('parseDifficultyEvidence: a missing/empty source (required, same discipline as ResearchCandidateEvidence.source) is rejected', () => {
+  const raw = { ...noFrictionDifficultyEvidence(''), source: '' }
+  assert.equal(parseDifficultyEvidence(raw), null)
 })

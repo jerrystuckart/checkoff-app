@@ -22,22 +22,21 @@
 // malformed persisted report can never crash a reader.
 //
 // Munich calibration Phase 2 (docs/metro-launch-audit/munich/calibration-analysis/
-// 00-executive-summary.md's headline finding): SeedCandidateInput's
-// ownershipType/isSecretClaimed/secretEvidence fields above are real and
-// evaluated correctly by evaluateSeedCandidate/evaluateCommercialMix/
-// evaluateSecretEvidence — but nothing upstream of this stage ever
-// populated them for a real Munich candidate (every one resolved to
-// ownershipType 'UNKNOWN_REQUIRES_VERIFICATION' and isSecretClaimed
-// undefined). ../specialists/researchEvidence.ts's
-// ExtendedResearchCandidateEvidence + validateExtendedResearchCandidate,
-// and ../playbooks/difficultyEvidence.ts's evidence-based 1/5/10/25 rubric,
-// now give the research/discovery execution path a real, validated
-// contract to populate these fields with — see
-// ../specialists/promptBuilders.ts's buildResearchVerifierPrompt for the
-// requiredEvidenceKeys-gated instructions ('ownershipType', 'secretEvidence',
-// 'difficultyEvidence', 'geographicRole') a caller can now request. This
-// module's own evaluation logic is unchanged; only the upstream evidence
-// supply was the gap.
+// 00-executive-summary.md's headline finding) + its follow-up wiring pass:
+// SeedCandidateInput's ownershipType/isSecretClaimed/secretEvidence/
+// difficultyEvidence fields are evaluated correctly by
+// evaluateSeedCandidate/evaluateCommercialMix/evaluateSecretEvidence, and
+// the real M3/M5/M5B driver call sites now request
+// 'ownershipType'/'secretEvidence'/'difficultyEvidence'/'placeId' in
+// requiredEvidenceKeys (see ../specialists/promptBuilders.ts's
+// buildResearchVerifierPrompt) — metroLaunchDriver.ts's
+// toSeedCandidateInput() runs every raw research_verifier candidate through
+// ../specialists/researchEvidence.ts's sanitizeExtendedCandidateEvidence
+// before it reaches this stage, so a candidate whose research pass
+// genuinely couldn't confirm a field still arrives here as explicit
+// UNKNOWN_REQUIRES_VERIFICATION/null/absent (never guessed), which is the
+// correct, honest input for this module's existing evaluation logic
+// (unchanged by this wiring pass).
 
 import { checkDistinctiveExperience } from './editorialDistinctiveness'
 import { auditCoverage, type CoverageAuditEvidence, type CoverageGap } from './metroLaunch'
@@ -57,6 +56,7 @@ import {
   DEFAULT_UNKNOWN_OWNERSHIP_VOLUME_THRESHOLD,
 } from './categoryPolicy'
 import { detectSeedDuplicateClusters, candidateNamesInAnyCluster, type SeedDuplicateCandidate, type SeedDuplicateCluster } from './seedDuplicateNormalization'
+import type { DifficultyEvidence, DifficultyBand } from './difficultyEvidence'
 
 // ---------------------------------------------------------------------------
 // Adjustment 7 — loop termination controls. Generic/configurable, following
@@ -152,6 +152,10 @@ export interface SeedCandidateInput {
   ownershipType?: CommercialOwnershipType
   isSecretClaimed?: boolean
   secretEvidence?: SecretEvidenceRecord | null
+  /** Reuses difficultyEvidence.ts's rubric verbatim — absent means INSUFFICIENT_DATA (never yet evaluated), not "no friction." */
+  difficultyEvidence?: DifficultyEvidence
+  /** Always the evaluateDifficultyEvidence-derived band for difficultyEvidence when present — carried alongside it, never independently asserted. */
+  proposedDifficulty?: DifficultyBand
 }
 
 export interface SeedCandidateDecision {
@@ -160,6 +164,9 @@ export interface SeedCandidateDecision {
   reasons: string[]
   /** Whether an isSecret claim survives evaluateSecretEvidence — false whenever isSecretClaimed is falsy too. Never blocks READY on its own (adjustment 5: the claim is stripped, the item is not rejected). */
   isSecretRetained: boolean
+  /** Passed through from SeedCandidateInput, unchanged — absent means difficulty is INSUFFICIENT_DATA for this candidate, not "1". */
+  difficultyEvidence?: DifficultyEvidence
+  proposedDifficulty?: DifficultyBand
 }
 
 /**
@@ -195,14 +202,14 @@ export function evaluateSeedCandidate(candidate: SeedCandidateInput, duplicateCl
 
   if (isGeneric) {
     reasons.push(`Generic action, no distinctive experience: ${distinctiveness.reason}`)
-    return { candidateName: candidate.name, verdict: 'REJECT', reasons, isSecretRetained }
+    return { candidateName: candidate.name, verdict: 'REJECT', reasons, isSecretRetained, difficultyEvidence: candidate.difficultyEvidence, proposedDifficulty: candidate.proposedDifficulty }
   }
 
   if (isDuplicateFlagged) {
-    return { candidateName: candidate.name, verdict: 'HOLD', reasons, isSecretRetained }
+    return { candidateName: candidate.name, verdict: 'HOLD', reasons, isSecretRetained, difficultyEvidence: candidate.difficultyEvidence, proposedDifficulty: candidate.proposedDifficulty }
   }
 
-  return { candidateName: candidate.name, verdict: 'READY', reasons: [], isSecretRetained }
+  return { candidateName: candidate.name, verdict: 'READY', reasons: [], isSecretRetained, difficultyEvidence: candidate.difficultyEvidence, proposedDifficulty: candidate.proposedDifficulty }
 }
 
 // ---------------------------------------------------------------------------

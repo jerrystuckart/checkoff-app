@@ -48,6 +48,24 @@ export interface DelegationRequest {
   /** What evidence Chief requires back before this delegation can be accepted — checked by validateResultEnvelope. */
   requiredEvidenceKeys: string[]
   /**
+   * Evidence-contract extension fields a research_verifier prompt should
+   * ALSO ask for (see promptBuilders.ts's buildResearchVerifierPrompt) when
+   * the field lives PER-CANDIDATE inside evidence.candidates[] rather than
+   * as a top-level evidence.<key> — 'ownershipType'/'secretEvidence'/
+   * 'difficultyEvidence'/'placeId' are per-candidate, so they belong here,
+   * never in requiredEvidenceKeys: validateResultEnvelope checks
+   * requiredEvidenceKeys against top-level result.evidence[key] presence,
+   * and evidence.candidates[] genuinely has no top-level `ownershipType`
+   * key even when every individual candidate carries one — putting a
+   * per-candidate field in requiredEvidenceKeys would fail EVERY real
+   * BROAD_DISCOVERY/CATEGORY_GAP/GEOGRAPHIC_GAP/REPLACEMENT execution's
+   * validation outright. Purely a prompt-instruction signal; never
+   * enforced by validateResultEnvelope, so an execution whose research
+   * genuinely could not confirm one of these fields for every candidate
+   * still passes evidence validation normally.
+   */
+  optionalEvidenceKeys?: string[]
+  /**
    * Which versioned methodology (agent-service/specialists/methodologies/<id>/<version>.md) this
    * delegation executes — Phase 2D requirement: every specialist execution runs a versioned
    * CheckOff methodology, never an ad hoc prompt invented at delegation time. Checked by

@@ -7,9 +7,9 @@
 // verified.
 
 import type { CommercialOwnershipType, SecretEvidenceRecord } from '../playbooks/categoryPolicy'
-import { evaluateSecretEvidence } from '../playbooks/categoryPolicy'
+import { evaluateSecretEvidence, VALID_COMMERCIAL_OWNERSHIP_TYPES } from '../playbooks/categoryPolicy'
 import type { DifficultyEvidence, DifficultyBand } from '../playbooks/difficultyEvidence'
-import { evaluateDifficultyEvidence } from '../playbooks/difficultyEvidence'
+import { evaluateDifficultyEvidence, parseDifficultyEvidence } from '../playbooks/difficultyEvidence'
 import { normalizedVenueKey } from '../playbooks/seedDuplicateNormalization'
 
 export type ResearchExecutionType = 'BROAD_DISCOVERY' | 'CATEGORY_GAP' | 'GEOGRAPHIC_GAP' | 'VERIFICATION' | 'REPLACEMENT' | 'TARGETED_DEEP_DIVE'
@@ -275,4 +275,144 @@ export function validateExtendedResearchCandidates(candidates: ExtendedResearchC
 export function resolveSecretEvidenceForCandidate(candidate: ExtendedResearchCandidateEvidence): { supported: boolean; reason: string } {
   if (!candidate.isSecretClaimed) return { supported: false, reason: 'No isSecret claim made.' }
   return evaluateSecretEvidence(candidate.secretEvidence ?? null)
+}
+
+// ---------------------------------------------------------------------------
+// Live-ingestion sanitizer — the real research_verifier envelope is an
+// UNTYPED Record<string, unknown> (SpecialistResultEnvelope.evidence), so a
+// candidate's extension fields arrive as raw, unvalidated JSON, not an
+// already-typed ExtendedResearchCandidateEvidence. Unlike
+// validateExtendedResearchCandidate (which accepts-or-rejects the WHOLE
+// candidate), this DOWNGRADES individual malformed/unsupported fields to
+// their explicit unknown/absent state so one bad field never drops an
+// otherwise-good candidate — same "strip the claim, keep the venue"
+// discipline as evaluateSecretEvidence itself. Every downgrade is recorded
+// in `downgrades` so a caller/audit trail can see exactly what was not
+// trusted and why.
+// ---------------------------------------------------------------------------
+
+export interface SanitizedCandidateEvidence {
+  ownershipType: CommercialOwnershipType
+  ownershipEvidence?: string
+  ownershipConfidence?: VerificationConfidence
+  isSecretClaimed: boolean
+  secretEvidence: SecretEvidenceRecord | null
+  placeId: string | null
+  difficultyEvidence?: DifficultyEvidence
+  /** Always DERIVED from difficultyEvidence via evaluateDifficultyEvidence — never taken from a raw AI-asserted number, so it can never drift from the evidence backing it. */
+  proposedDifficulty?: DifficultyBand
+  downgrades: string[]
+}
+
+const VERIFICATION_CONFIDENCES: readonly VerificationConfidence[] = ['LOW', 'MEDIUM', 'HIGH']
+
+function isPlainRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null
+}
+
+/**
+ * Parses a raw secretEvidence value into a SecretEvidenceRecord only when
+ * every required field is present with the right shape — a partial/
+ * malformed record is treated the same as no record at all (null), never
+ * coerced with fabricated defaults for missing pieces.
+ */
+function parseSecretEvidenceRecord(raw: unknown): SecretEvidenceRecord | null {
+  if (!isPlainRecord(raw)) return null
+  const mechanic = raw.mechanic
+  const evidenceType = raw.evidenceType
+  const source = raw.source
+  const dateVerified = raw.dateVerified
+  const confidence = raw.confidence
+  const verdict = raw.verdict
+  if (typeof mechanic !== 'string' || mechanic.trim().length === 0) return null
+  if (typeof source !== 'string') return null
+  if (typeof evidenceType !== 'string') return null
+  if (dateVerified !== null && typeof dateVerified !== 'string') return null
+  if (confidence !== 'HIGH' && confidence !== 'MEDIUM' && confidence !== 'LOW') return null
+  if (verdict !== 'READY' && verdict !== 'HOLD' && verdict !== 'REJECT') return null
+  return { mechanic, evidenceType, source, dateVerified, confidence, verdict }
+}
+
+/**
+ * Sanitizes ONE candidate's raw extension-field JSON (as it actually
+ * arrives from a research_verifier envelope's evidence.candidates[]
+ * entry) into a safe, explicit-unknown-by-default shape. Reuses
+ * evaluateSecretEvidence/evaluateDifficultyEvidence/parseDifficultyEvidence/
+ * VALID_COMMERCIAL_OWNERSHIP_TYPES verbatim — never a second rulebook.
+ *
+ *   - ownershipType: kept only if it's a recognized CommercialOwnershipType
+ *     AND (when not UNKNOWN_REQUIRES_VERIFICATION) ownershipEvidence is a
+ *     non-empty string — otherwise downgraded to
+ *     UNKNOWN_REQUIRES_VERIFICATION (never silently treated as verified
+ *     from a bare label or "colorful wording").
+ *   - isSecretClaimed/secretEvidence: isSecretClaimed is true only when a
+ *     structurally valid secretEvidence record is also present — otherwise
+ *     both are downgraded to false/null. (Whether that record's MECHANIC is
+ *     actually concrete enough is evaluateSecretEvidence's job downstream,
+ *     at the seed-audit stage — this only guards malformed contract shape.)
+ *   - placeId: kept only as a non-empty trimmed string; anything else
+ *     (missing, blank, non-string) becomes null — never guessed.
+ *   - difficultyEvidence/proposedDifficulty: difficultyEvidence is kept
+ *     only when parseDifficultyEvidence accepts its shape; proposedDifficulty
+ *     is then ALWAYS the evaluateDifficultyEvidence-computed band for that
+ *     evidence (never an AI-asserted number) — malformed difficultyEvidence
+ *     leaves both fields absent (INSUFFICIENT_DATA), never defaults to a
+ *     fabricated "no friction" band.
+ */
+export function sanitizeExtendedCandidateEvidence(raw: unknown): SanitizedCandidateEvidence {
+  const o = isPlainRecord(raw) ? raw : {}
+  const downgrades: string[] = []
+
+  let ownershipType: CommercialOwnershipType = 'UNKNOWN_REQUIRES_VERIFICATION'
+  let ownershipEvidence: string | undefined
+  let ownershipConfidence: VerificationConfidence | undefined
+  const rawOwnershipType = o.ownershipType
+  if (typeof rawOwnershipType === 'string' && (VALID_COMMERCIAL_OWNERSHIP_TYPES as readonly string[]).includes(rawOwnershipType)) {
+    const candidateOwnershipEvidence = typeof o.ownershipEvidence === 'string' ? o.ownershipEvidence.trim() : ''
+    if (rawOwnershipType === 'UNKNOWN_REQUIRES_VERIFICATION' || candidateOwnershipEvidence.length > 0) {
+      ownershipType = rawOwnershipType as CommercialOwnershipType
+      if (candidateOwnershipEvidence.length > 0) ownershipEvidence = candidateOwnershipEvidence
+      const rawOwnershipConfidence = o.ownershipConfidence
+      if (typeof rawOwnershipConfidence === 'string' && (VERIFICATION_CONFIDENCES as readonly string[]).includes(rawOwnershipConfidence)) {
+        ownershipConfidence = rawOwnershipConfidence as VerificationConfidence
+      }
+    } else {
+      downgrades.push(`ownershipType "${rawOwnershipType}" asserted without ownershipEvidence — downgraded to UNKNOWN_REQUIRES_VERIFICATION rather than silently treated as verified.`)
+    }
+  } else if (rawOwnershipType !== undefined) {
+    downgrades.push(`ownershipType "${String(rawOwnershipType)}" is not a recognized CommercialOwnershipType — downgraded to UNKNOWN_REQUIRES_VERIFICATION.`)
+  }
+
+  let isSecretClaimed = false
+  let secretEvidence: SecretEvidenceRecord | null = null
+  if (o.isSecretClaimed === true) {
+    const parsed = parseSecretEvidenceRecord(o.secretEvidence)
+    if (parsed) {
+      isSecretClaimed = true
+      secretEvidence = parsed
+    } else {
+      downgrades.push('isSecretClaimed=true was asserted without a structurally valid secretEvidence record — downgraded to isSecretClaimed=false.')
+    }
+  }
+
+  let placeId: string | null = null
+  if (typeof o.placeId === 'string' && o.placeId.trim().length > 0) {
+    placeId = o.placeId.trim()
+  } else if (o.placeId !== undefined && o.placeId !== null) {
+    downgrades.push(`placeId "${String(o.placeId)}" is not a usable string — downgraded to null (never guessed from name/address alone).`)
+  }
+
+  let difficultyEvidence: DifficultyEvidence | undefined
+  let proposedDifficulty: DifficultyBand | undefined
+  if (o.difficultyEvidence !== undefined) {
+    const parsed = parseDifficultyEvidence(o.difficultyEvidence)
+    if (parsed) {
+      difficultyEvidence = parsed
+      proposedDifficulty = evaluateDifficultyEvidence(parsed).proposedDifficulty
+    } else {
+      downgrades.push('difficultyEvidence was present but did not match the required shape — left absent (INSUFFICIENT_DATA), never defaulted to a fabricated no-friction record.')
+    }
+  }
+
+  return { ownershipType, ownershipEvidence, ownershipConfidence, isSecretClaimed, secretEvidence, placeId, difficultyEvidence, proposedDifficulty, downgrades }
 }

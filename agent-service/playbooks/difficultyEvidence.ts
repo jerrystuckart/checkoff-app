@@ -142,6 +142,52 @@ export function evaluateDifficultyEvidence(evidence: DifficultyEvidence): Diffic
   return { proposedDifficulty: band, confidence: 'DETERMINISTIC', reasons }
 }
 
+const DIFFICULTY_TRAVEL_LEVELS: readonly DifficultyTravelLevel[] = ['NONE', 'CLOSE_IN_OUTER_NEIGHBORHOOD', 'SURROUNDING_MUNICIPALITY']
+
+function isDifficultyFactor(v: unknown): v is DifficultyFactor {
+  return typeof v === 'object' && v !== null && typeof (v as Record<string, unknown>).present === 'boolean' && typeof (v as Record<string, unknown>).detail === 'string'
+}
+
+/**
+ * Strict shape parser for an UNTYPED, real research_verifier JSON response
+ * (never a cast) — returns null for anything malformed rather than
+ * fabricating a "no friction" record, which would silently manufacture
+ * false evidence for a candidate research never actually evaluated. A
+ * caller that gets null must treat difficulty as not-yet-evaluated
+ * (INSUFFICIENT_DATA), never fall through to evaluateDifficultyEvidence
+ * with a guessed shape.
+ */
+export function parseDifficultyEvidence(raw: unknown): DifficultyEvidence | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const o = raw as Record<string, unknown>
+
+  const factorKeys = ['cost', 'advanceBooking', 'timingRestriction', 'physicalEffort', 'limitedAvailability', 'specialOrderingComplexity'] as const
+  for (const key of factorKeys) {
+    if (!isDifficultyFactor(o[key])) return null
+  }
+
+  const travel = o.travel as Record<string, unknown> | undefined
+  if (typeof travel !== 'object' || travel === null) return null
+  if (typeof travel.level !== 'string' || !DIFFICULTY_TRAVEL_LEVELS.includes(travel.level as DifficultyTravelLevel)) return null
+  if (typeof travel.detail !== 'string') return null
+
+  if (typeof o.source !== 'string' || o.source.trim().length === 0) return null
+
+  const boundaryCaseNote = typeof o.boundaryCaseNote === 'string' && o.boundaryCaseNote.trim().length > 0 ? o.boundaryCaseNote : undefined
+
+  return {
+    cost: o.cost as DifficultyFactor,
+    advanceBooking: o.advanceBooking as DifficultyFactor,
+    timingRestriction: o.timingRestriction as DifficultyFactor,
+    physicalEffort: o.physicalEffort as DifficultyFactor,
+    limitedAvailability: o.limitedAvailability as DifficultyFactor,
+    specialOrderingComplexity: o.specialOrderingComplexity as DifficultyFactor,
+    travel: { level: travel.level as DifficultyTravelLevel, detail: travel.detail },
+    source: o.source,
+    ...(boundaryCaseNote ? { boundaryCaseNote } : {}),
+  }
+}
+
 /** Convenience builder for the common "no factor at all" (difficulty-1, walk-in) evidence shape. */
 export function noFrictionDifficultyEvidence(source: string): DifficultyEvidence {
   const absent = (): DifficultyFactor => ({ present: false, detail: '' })

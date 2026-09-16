@@ -136,15 +136,23 @@ export function buildResearchVerifierPrompt(request: SpecialistExecutionRequest,
   // rather than inventing a second prompt-builder function.
   const wantsNeighborhoods = request.requiredEvidenceKeys.includes('neighborhoods')
   // Evidence-contract extension (Munich calibration Phase 2) — gated the
-  // same way wantsNeighborhoods is: only requested when the caller's own
-  // requiredEvidenceKeys actually asks for one of these fields, never
-  // unconditionally added to every research_verifier prompt. See
-  // researchEvidence.ts's ExtendedResearchCandidateEvidence for the exact
-  // shape these instructions describe.
-  const wantsOwnershipEvidence = request.requiredEvidenceKeys.includes('ownershipType')
-  const wantsSecretEvidence = request.requiredEvidenceKeys.includes('secretEvidence')
-  const wantsDifficultyEvidence = request.requiredEvidenceKeys.includes('difficultyEvidence')
-  const wantsGeographicRole = request.requiredEvidenceKeys.includes('geographicRole')
+  // same way wantsNeighborhoods is: only requested when the caller asks
+  // for one of these fields, never unconditionally added to every
+  // research_verifier prompt. These 5 are all PER-CANDIDATE fields (live
+  // inside evidence.candidates[], not as a top-level evidence.<key>), so a
+  // real caller requests them via optionalEvidenceKeys (never
+  // requiredEvidenceKeys — see DelegationRequest's own doc comment for why
+  // that would break validateResultEnvelope). requiredEvidenceKeys is
+  // still checked too, purely so existing/direct tests that set these keys
+  // there keep working unchanged. See researchEvidence.ts's
+  // ExtendedResearchCandidateEvidence for the exact shape these
+  // instructions describe.
+  const wants = (key: string) => request.requiredEvidenceKeys.includes(key) || (request.optionalEvidenceKeys ?? []).includes(key)
+  const wantsOwnershipEvidence = wants('ownershipType')
+  const wantsSecretEvidence = wants('secretEvidence')
+  const wantsDifficultyEvidence = wants('difficultyEvidence')
+  const wantsGeographicRole = wants('geographicRole')
+  const wantsPlaceId = wants('placeId')
   const systemPrompt = [
     methodologyPreamble(request),
     runtimeDateContextLine(now),
@@ -206,6 +214,15 @@ export function buildResearchVerifierPrompt(request: SpecialistExecutionRequest,
             '"important_neighborhood", "suburb", or "destination_worthy_outer" (the same 4 values used for metro-level neighborhood ' +
             'classification) — describing this specific candidate\'s own geographic role within the metro, never invented outside ' +
             'these 4 values.',
+        ]
+      : []),
+    ...(wantsPlaceId
+      ? [
+          'This execution ALSO requests evidence.placeId per candidate: a Google Place ID or Google Maps listing identifier, ONLY ' +
+            'when your source itself states or directly confirms one (e.g. a Google Maps link/listing you actually found for this ' +
+            'exact venue) — never derive, construct, or guess one from the venue\'s name and address alone. If you did not find a ' +
+            'real, sourced Place ID, omit evidence.placeId for that candidate entirely rather than inventing a plausible-looking one; ' +
+            'a later stage resolves this properly against the real Places API and does not depend on you supplying it.',
         ]
       : []),
     envelopeInstructions(request),

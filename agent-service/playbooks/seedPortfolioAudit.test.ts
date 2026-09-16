@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import { runSeedPortfolioAudit, evaluateSeedCandidate, deriveGapResolutionStatuses, validateSeedPortfolioAuditReport, type SeedCandidateInput, type SeedPortfolioAuditInput } from './seedPortfolioAudit'
 import { buildCategoryPolicySetFromPlan, DEFAULT_CATEGORY_PERCENTAGE_BANDS } from './categoryPolicy'
 import type { CategoryCoveragePlan, CoverageAuditEvidence } from './metroLaunch'
+import { noFrictionDifficultyEvidence } from './difficultyEvidence'
 
 function plan(): CategoryCoveragePlan {
   return {
@@ -149,6 +150,28 @@ test('deriveGapResolutionStatuses: WAIVED, DOCUMENTED_ZERO, and UNRESOLVED are d
   })
   assert.equal(statuses.find((s) => s.gapKey === 'A')!.status, 'UNRESOLVED')
   assert.equal(statuses.find((s) => s.gapKey === 'B')!.status, 'DOCUMENTED_ZERO')
+})
+
+test('evaluateSeedCandidate: difficultyEvidence/proposedDifficulty pass through unchanged onto the decision for every verdict (READY/HOLD/REJECT) — carried forward for M6.5, never re-derived here', () => {
+  const evidence = noFrictionDifficultyEvidence('test — advance booking only')
+  const readyDecision = evaluateSeedCandidate(candidate({ name: 'Unagi Don', difficultyEvidence: evidence, proposedDifficulty: 1 }), new Set())
+  assert.equal(readyDecision.verdict, 'READY')
+  assert.deepEqual(readyDecision.difficultyEvidence, evidence)
+  assert.equal(readyDecision.proposedDifficulty, 1)
+
+  const rejectDecision = evaluateSeedCandidate(candidate({ name: 'Generic Spot', claimSupported: 'Eat at the restaurant and enjoy the food', difficultyEvidence: evidence, proposedDifficulty: 1 }), new Set())
+  assert.equal(rejectDecision.verdict, 'REJECT')
+  assert.deepEqual(rejectDecision.difficultyEvidence, evidence)
+
+  const holdDecision = evaluateSeedCandidate(candidate({ name: 'Dup Candidate', difficultyEvidence: evidence, proposedDifficulty: 1 }), new Set(['Dup Candidate']))
+  assert.equal(holdDecision.verdict, 'HOLD')
+  assert.deepEqual(holdDecision.difficultyEvidence, evidence)
+})
+
+test('evaluateSeedCandidate: a candidate with no difficultyEvidence at all (INSUFFICIENT_DATA, not "1") carries that absence through to the decision rather than defaulting', () => {
+  const decision = evaluateSeedCandidate(candidate({ name: 'Unagi Don' }), new Set())
+  assert.equal(decision.difficultyEvidence, undefined)
+  assert.equal(decision.proposedDifficulty, undefined)
 })
 
 test('validateSeedPortfolioAuditReport: rejects malformed input without crashing', () => {
