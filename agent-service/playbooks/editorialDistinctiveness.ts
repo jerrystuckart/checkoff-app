@@ -207,6 +207,74 @@ export function checkVenueQuoted(body: string, venueName: string): VenueQuotingC
 }
 
 // ---------------------------------------------------------------------------
+// Experience-anchor preservation (2026-09-16 follow-up to the Munich
+// opening-word fix) — venue-quoting and length-ratio alone never proved a
+// voice rewrite kept the SPECIFIC action/order/object/mechanic a body
+// names; a rewrite could satisfy both of those checks while quietly
+// replacing "the Painkiller" with "a refreshing beverage" (generic
+// synonym substitution) and still pass. This closes that gap: every
+// CheckOff body written in the standard, VENUE_QUOTING_GATE-enforced
+// `<Verb> <core noun phrase> at '<Venue>'.` shape has an extractable
+// ANCHOR — the noun phrase between the opening verb and the venue
+// clause, e.g. "the Painkiller", "the hidden back room's speakeasy
+// entrance", "the antique lamp collection." A voice rewrite (which is
+// only ever supposed to vary the OPENING word, never the concrete
+// content) must keep that anchor intact, verbatim, in the new body.
+// ---------------------------------------------------------------------------
+
+/**
+ * Extracts the concrete-experience anchor phrase — the text between the
+ * opening verb and the venue clause (" at '<venueName>'"). Returns '' for
+ * a body that doesn't match the expected shape (e.g. no quoted venue
+ * found) — never a guessed anchor, so checkExperienceAnchorPreserved
+ * treats an unextractable anchor as nothing to verify rather than a
+ * false-positive rejection of a body this function can't parse.
+ */
+export function extractExperienceAnchor(body: string, venueName: string): string {
+  const normalizedBody = normalizeQuotes(body)
+  const normalizedVenue = normalizeQuotes(venueName).trim()
+  const wrapped = `'${normalizedVenue}'`
+  const atIdx = normalizedBody.lastIndexOf(` at ${wrapped}`)
+  if (atIdx < 0) return ''
+  let core = normalizedBody.slice(0, atIdx).trim()
+  // Strip the leading opener (first word only — everything after it is
+  // the concrete content this function exists to protect).
+  core = core.replace(/^[A-Za-z]+(?:'[A-Za-z]+)*\s*/, '').trim()
+  return core.toLowerCase()
+}
+
+export interface ExperienceAnchorCheck {
+  pass: boolean
+  reason: string
+  anchor: string
+}
+
+/**
+ * Verifies a rewritten body still contains the ORIGINAL anchor phrase
+ * verbatim (case-insensitive). A generic-synonym rewrite ("a refreshing
+ * beverage" for "the Painkiller") fails this even when it separately
+ * passes checkVenueQuoted and a length-ratio check, because the specific
+ * named order/object/activity/mechanic is gone. An empty `anchor` (the
+ * original body didn't match the extractable shape) always passes —
+ * nothing this function can verify, never a reason to block a rewrite
+ * for a body shape it doesn't recognize.
+ */
+export function checkExperienceAnchorPreserved(newBody: string, anchor: string): ExperienceAnchorCheck {
+  if (!anchor) {
+    return { pass: true, reason: 'No extractable anchor phrase from the original body (unexpected shape) — nothing to verify.', anchor }
+  }
+  const normalizedNew = normalizeQuotes(newBody).toLowerCase()
+  if (normalizedNew.includes(anchor)) {
+    return { pass: true, reason: `Original experience anchor "${anchor}" preserved verbatim.`, anchor }
+  }
+  return {
+    pass: false,
+    reason: `Original experience anchor "${anchor}" (the specific order/activity/object/mechanic) does not appear in the rewritten body — a voice rewrite may only vary the OPENING word, never replace the concrete experience with a vague synonym.`,
+    anchor,
+  }
+}
+
+// ---------------------------------------------------------------------------
 // 3. Hard opening-word distribution gate — same computation as
 //    metroCatalog.ts's advisory batch check, exposed here as a
 //    standalone, certification-blocking gate. Default threshold matches

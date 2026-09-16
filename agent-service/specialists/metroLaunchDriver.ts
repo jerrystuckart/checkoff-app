@@ -34,6 +34,7 @@ import { runExecutionRouted } from './routing'
 import type { ExecutionStore, SpecialistExecutor, SpecialistExecutionRequest } from './executor'
 import { getOrCreateRun, type PlaybookRunStore, type PlaybookRunRecord } from './playbookRun'
 import { dedupeCandidates, findSuspectedDuplicates, type RawCandidate } from './candidateMerge'
+import { sanitizeExtendedCandidateEvidence } from './researchEvidence'
 
 /**
  * Real research_verifier (OpenAI) output has, in practice, occasionally
@@ -53,9 +54,28 @@ function sanitizeRawCandidates<T extends RawCandidate>(candidates: T[]): T[] {
     (c) => typeof c?.name === 'string' && c.name.trim().length > 0 && typeof c?.claimSupported === 'string' && c.claimSupported.trim().length > 0
   )
 }
+
+/**
+ * optionalEvidenceKeys for every real candidate-producing research_verifier
+ * call (stepM3 broad discovery, stepM5 targeted deep dives, stepM5B
+ * replacement research) — this is what actually activates
+ * promptBuilders.ts's ownership/secret/difficulty/placeId prompt
+ * instructions (previously requested nowhere, so those instructions
+ * existed but were never triggered for any real driver call). These are
+ * deliberately NOT in requiredEvidenceKeys — they are per-candidate fields
+ * inside evidence.candidates[], and requiredEvidenceKeys is checked
+ * against top-level evidence.<key> presence by validateResultEnvelope (see
+ * DelegationRequest.optionalEvidenceKeys's own doc comment in types.ts) —
+ * putting them there would fail evidence validation on every real
+ * execution. toSeedCandidateInput() below runs every candidate this
+ * produces through researchEvidence.ts's sanitizeExtendedCandidateEvidence
+ * before it reaches M5.75, so a field the AI still could not confirm
+ * arrives there as an explicit unknown, never a guess.
+ */
+const SEED_CANDIDATE_OPTIONAL_EVIDENCE_KEYS = ['ownershipType', 'secretEvidence', 'difficultyEvidence', 'placeId']
 import { DEFAULT_DRIVER_GUARDRAILS, type DriverGuardrails } from './driverGuardrails'
 import type { SpecialistResultEnvelope, ProviderUsageInfo } from './types'
-import { certifyEditorialDistinctiveness, checkDistinctiveExperience, checkVenueQuoted, type DistinctivenessCertificationItem } from '../playbooks/editorialDistinctiveness'
+import { certifyEditorialDistinctiveness, checkDistinctiveExperience, checkVenueQuoted, extractExperienceAnchor, checkExperienceAnchorPreserved, type DistinctivenessCertificationItem } from '../playbooks/editorialDistinctiveness'
 import { evaluateItemCritique, evaluateItemCertificationGate, type ItemCritiqueAnswers, type ItemCertificationOutcome, type CatalogItemCertificationCheck, type ItemCertificationRecord } from '../playbooks/itemCertificationLoop'
 import { evaluateTagCertificationGate, validateItemTags, type ItemTagProposal } from '../playbooks/metroTagCertification'
 import { deriveTagShortlist } from '../playbooks/tagShortlist'
@@ -73,7 +93,7 @@ import { buildM9SafeSqlPlan, buildM9CompatibilityPlan, computeM9SqlValidationMan
 import type { M9ReusedItemResolution } from './m9ReusedItemValidation'
 import type { M9ExistingListLookup } from './m9CompletedListResolution'
 import { deriveDefaultDepthTargets, DEFAULT_CATEGORY_COVERAGE_PLAN } from '../playbooks/defaultMetroManifest'
-import { buildCategoryPolicySetFromPlan, DEFAULT_CATEGORY_PERCENTAGE_BANDS, type CategoryPolicyException, type CommercialOwnershipType } from '../playbooks/categoryPolicy'
+import { buildCategoryPolicySetFromPlan, DEFAULT_CATEGORY_PERCENTAGE_BANDS, type CategoryPolicyException } from '../playbooks/categoryPolicy'
 import { runSeedPortfolioAudit, DEFAULT_SEED_PORTFOLIO_AUDIT_LOOP_CONTROLS, type SeedPortfolioAuditReport, type SeedPortfolioAuditLoopControls, type SeedCandidateInput } from '../playbooks/seedPortfolioAudit'
 import { scoreItemsForLists, type ListFitCandidate, type ListFitListDefinition } from '../playbooks/listFitScoring'
 import { sqlQuote } from '../playbooks/listSqlGeneration'
@@ -1010,6 +1030,7 @@ async function stepM3(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
     objective: `${run.projectId}: broad discovery`,
     inputs: { executionType: 'BROAD_DISCOVERY' },
     requiredEvidenceKeys: ['candidates'],
+    optionalEvidenceKeys: SEED_CANDIDATE_OPTIONAL_EVIDENCE_KEYS,
     methodologyId: 'metro_launch',
     methodologyVersion: 'v1',
     executionId: executionId(run.runId, 'M3', 'broad'),
@@ -1248,6 +1269,7 @@ async function stepM5(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<Pl
         objective: `${run.projectId}: targeted research for ${gap.kind} ${gap.name} (${gap.detail})`,
         inputs: { executionType: gap.kind === 'GEOGRAPHIC_HOLE' ? 'GEOGRAPHIC_GAP' : 'CATEGORY_GAP', gap },
         requiredEvidenceKeys: ['candidates'],
+    optionalEvidenceKeys: SEED_CANDIDATE_OPTIONAL_EVIDENCE_KEYS,
         methodologyId: 'metro_launch',
         methodologyVersion: 'v1',
         executionId: executionId(run.runId, 'M5', label),
@@ -1340,6 +1362,7 @@ async function stepM5B(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<P
     objective: `${run.projectId}: replacement research for ${removed.length} candidate(s) removed by verification (${removed.join(', ')})`,
     inputs: { executionType: 'REPLACEMENT', removedCandidateNames: removed },
     requiredEvidenceKeys: ['candidates'],
+    optionalEvidenceKeys: SEED_CANDIDATE_OPTIONAL_EVIDENCE_KEYS,
     methodologyId: 'metro_launch',
     methodologyVersion: 'v1',
     executionId: executionId(run.runId, 'M5B', String(run.loopIteration)),
@@ -1363,14 +1386,20 @@ async function stepM5B(deps: MetroDriverDeps, run: PlaybookRunRecord): Promise<P
   return run
 }
 
-/** Duck-types the optional evidence fields a future research_verifier evidence contract MAY supply on a candidate (ownershipType/placeId/isSecretClaimed/secretEvidence) without widening RawCandidate's own required contract — same discipline as candidateMerge.ts's candidateCompletenessScore duck-typing of verificationConfidence/freshnessDate. TODAY, the live research_verifier evidence contract does not populate any of these fields, so every candidate resolves to ownershipType 'UNKNOWN_REQUIRES_VERIFICATION' and isSecretClaimed undefined until that evidence contract is extended (tracked as a known follow-up, not fixed by this stage) — see stepM5_75's own doc for what this means in practice. */
-function toSeedCandidateInput(candidate: RawCandidate & { needsVerification?: boolean }): SeedCandidateInput {
-  const extra = candidate as RawCandidate & {
-    placeId?: string | null
-    ownershipType?: CommercialOwnershipType
-    isSecretClaimed?: boolean
-    secretEvidence?: SeedCandidateInput['secretEvidence']
-  }
+/**
+ * Runs a raw research_verifier candidate's evidence-contract extension
+ * fields (ownershipType/placeId/isSecretClaimed/secretEvidence/
+ * difficultyEvidence) — real, untyped JSON from stepM3/stepM5/stepM5B's
+ * responses (SEED_CANDIDATE_EVIDENCE_KEYS now requests them) — through
+ * researchEvidence.ts's sanitizeExtendedCandidateEvidence before building
+ * the SeedCandidateInput M5.75 consumes. A field the research pass
+ * genuinely could not confirm, or returned malformed, arrives here as an
+ * explicit UNKNOWN_REQUIRES_VERIFICATION/null/absent value — never a guess
+ * — same discipline as candidateMerge.ts's candidateCompletenessScore
+ * duck-typing of verificationConfidence/freshnessDate.
+ */
+export function toSeedCandidateInput(candidate: RawCandidate & { needsVerification?: boolean }): SeedCandidateInput {
+  const sanitized = sanitizeExtendedCandidateEvidence(candidate)
   const canonical = classifyCategory(candidate.category).canonical
   return {
     name: candidate.name,
@@ -1378,10 +1407,12 @@ function toSeedCandidateInput(candidate: RawCandidate & { needsVerification?: bo
     neighborhood: candidate.neighborhood,
     claimSupported: candidate.claimSupported,
     address: candidate.address,
-    placeId: extra.placeId ?? null,
-    ownershipType: extra.ownershipType ?? 'UNKNOWN_REQUIRES_VERIFICATION',
-    isSecretClaimed: extra.isSecretClaimed,
-    secretEvidence: extra.secretEvidence,
+    placeId: sanitized.placeId,
+    ownershipType: sanitized.ownershipType,
+    isSecretClaimed: sanitized.isSecretClaimed,
+    secretEvidence: sanitized.secretEvidence,
+    difficultyEvidence: sanitized.difficultyEvidence,
+    proposedDifficulty: sanitized.proposedDifficulty,
   }
 }
 
@@ -1417,21 +1448,25 @@ function toSeedCandidateInput(candidate: RawCandidate & { needsVerification?: bo
  * indefinitely"), following stepM4HandleExhaustedLoop's own
  * bounded-then-escalate shape.
  *
- * KNOWN, FLAGGED CONSEQUENCE (not a bug, a real judgment call — see final
- * report): the live research_verifier evidence contract does not
- * currently supply ownershipType/secretEvidence/placeId at the raw-seed
- * stage (Place ID is only resolved during M8 geo enrichment, well after
- * this stage; ownership/secret-mechanic evidence has never been asked of
- * research_verifier at all). toSeedCandidateInput() duck-types these as
- * optional so this stage is forward-compatible the moment that evidence
- * contract is extended, but UNTIL then every candidate resolves to
- * ownershipType UNKNOWN_REQUIRES_VERIFICATION, which — per adjustment 3's
- * explicit "never silently independent" rule — will fail COMMERCIAL_MIX
- * on essentially every real run today. That is the CORRECT, conservative
- * behavior per the spec (never silently pass an unverified commercial
- * mix), not a bug in this stage; closing it for real requires either a
- * future research_verifier evidence-contract change (out of scope here)
- * or an operator-approved seedPortfolioAuditExceptions entry per run.
+ * EVIDENCE SUPPLY (previously a known gap, now wired): stepM3/stepM5/
+ * stepM5B request SEED_CANDIDATE_EVIDENCE_KEYS
+ * ('ownershipType'/'secretEvidence'/'difficultyEvidence'/'placeId'), which
+ * activates promptBuilders.ts's gated instructions for research_verifier to
+ * populate them, and toSeedCandidateInput() runs the raw response through
+ * researchEvidence.ts's sanitizeExtendedCandidateEvidence. A real research
+ * pass may still genuinely fail to confirm a field (or the model may return
+ * one malformed) — that candidate still resolves to ownershipType
+ * UNKNOWN_REQUIRES_VERIFICATION / isSecretClaimed=false / placeId=null /
+ * difficultyEvidence=undefined, exactly as before, which — per adjustment
+ * 3's explicit "never silently independent" rule — can still fail
+ * COMMERCIAL_MIX when too much of a real run's ownership genuinely
+ * couldn't be confirmed. That remains the CORRECT, conservative behavior
+ * per the spec (never silently pass an unverified commercial mix), not a
+ * bug in this stage; a persistently-unresolved case still requires either
+ * more targeted research or an operator-approved
+ * seedPortfolioAuditExceptions entry per run. Place ID here is
+ * best-effort/research-sourced only — M8 geo enrichment remains the real,
+ * API-verified resolution and may override it.
  *
  * IN-FLIGHT RUN COMPATIBILITY (adjustment 8 — investigated, not assumed):
  * `PlaybookRunRecord.currentStage` is a plain `string` field
@@ -2462,6 +2497,13 @@ export const MAX_VOICE_REWRITE_ATTEMPTS = 2
 
 async function rewriteOneItemVoice(deps: MetroDriverDeps, run: PlaybookRunRecord, candidateName: string, body: string, venueName: string, dominantOpeningWord: string): Promise<string | null> {
   const safeName = candidateName.replace(/[^a-zA-Z0-9_-]/g, '_')
+  // 2026-09-16 follow-up — the specific order/activity/object/mechanic the
+  // ORIGINAL body names, extracted once before any attempt. A rewrite
+  // that drops it (e.g. "a refreshing beverage" swapped in for "the
+  // Painkiller") is rejected below, same as a dropped venue quote —
+  // venue-quoting and length ratio alone never proved the concrete
+  // experience survived a rewrite.
+  const originalAnchor = extractExperienceAnchor(body, venueName)
 
   for (let attempt = 1; attempt <= MAX_VOICE_REWRITE_ATTEMPTS; attempt++) {
     const label = `voice-${safeName}-attempt${attempt}`
@@ -2494,6 +2536,7 @@ async function rewriteOneItemVoice(deps: MetroDriverDeps, run: PlaybookRunRecord
     if (!checkVenueQuoted(newBody, venueName).pass) continue
     const lengthRatio = newBody.length / body.length
     if (lengthRatio < 0.5 || lengthRatio > 2) continue
+    if (!checkExperienceAnchorPreserved(newBody, originalAnchor).pass) continue
     return newBody
   }
   return null

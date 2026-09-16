@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { checkDistinctiveExperience, checkVenueQuoted, evaluateOpeningDistributionGate, certifyEditorialDistinctiveness, REJECT_NO_DISTINCTIVE_EXPERIENCE } from './editorialDistinctiveness'
+import { checkDistinctiveExperience, checkVenueQuoted, extractExperienceAnchor, checkExperienceAnchorPreserved, evaluateOpeningDistributionGate, certifyEditorialDistinctiveness, REJECT_NO_DISTINCTIVE_EXPERIENCE } from './editorialDistinctiveness'
 
 // ---------------------------------------------------------------------------
 // 1. REJECT_NO_DISTINCTIVE_EXPERIENCE — required regression cases.
@@ -86,6 +86,52 @@ test('checkVenueQuoted: fails when the venue name appears unquoted', () => {
 test('checkVenueQuoted: accepts curly quotes as equivalent to straight quotes', () => {
   const result = checkVenueQuoted('Order the flight at ‘Coronado Brewing Co’', 'Coronado Brewing Co')
   assert.equal(result.pass, true)
+})
+
+// ---------------------------------------------------------------------------
+// 2b. Experience-anchor preservation (2026-09-16 follow-up to the Munich
+// opening-word fix) — venue-quoting and length ratio alone never proved a
+// voice rewrite kept the SPECIFIC order/activity/object/mechanic a body
+// names.
+// ---------------------------------------------------------------------------
+
+test('extractExperienceAnchor: extracts the concrete noun phrase between the opener and the venue clause', () => {
+  const anchor = extractExperienceAnchor("Order the Half Century Highball at 'Hennessey's Tavern'.", "Hennessey's Tavern")
+  assert.equal(anchor, 'the half century highball')
+})
+
+test('extractExperienceAnchor: returns empty for a body that does not match the expected shape (never a guessed anchor)', () => {
+  const anchor = extractExperienceAnchor('This body has no quoted venue clause at all.', 'Hennessey\'s Tavern')
+  assert.equal(anchor, '')
+})
+
+test('checkExperienceAnchorPreserved: PASSes when the opener changes but the anchor stays verbatim (a real, valid voice rewrite)', () => {
+  const anchor = extractExperienceAnchor("Order the Half Century Highball at 'Hennessey's Tavern'.", "Hennessey's Tavern")
+  const rewritten = "Sip the Half Century Highball at 'Hennessey's Tavern'." // only the opener changed
+  const result = checkExperienceAnchorPreserved(rewritten, anchor)
+  assert.equal(result.pass, true)
+})
+
+test('checkExperienceAnchorPreserved: REJECTS a generic-synonym rewrite that drops the specific named order', () => {
+  const anchor = extractExperienceAnchor("Order the Half Century Highball at 'Hennessey's Tavern'.", "Hennessey's Tavern")
+  const rewritten = "Sip a refreshing cocktail at 'Hennessey's Tavern'." // vague synonym replacing the specific order
+  const result = checkExperienceAnchorPreserved(rewritten, anchor)
+  assert.equal(result.pass, false)
+  assert.match(result.reason, /does not appear in the rewritten body/)
+})
+
+test('checkExperienceAnchorPreserved: REJECTS a rewrite that swaps a named secret mechanic for a vague description', () => {
+  const original = "Find the hidden speakeasy entrance behind the bookshelf at 'Kunst Oase'."
+  const anchor = extractExperienceAnchor(original, 'Kunst Oase')
+  const rewritten = "Discover a cool hidden feature at 'Kunst Oase'." // the specific mechanic (bookshelf entrance) is gone
+  const result = checkExperienceAnchorPreserved(rewritten, anchor)
+  assert.equal(result.pass, false)
+})
+
+test('checkExperienceAnchorPreserved: an unextractable original anchor never blocks a rewrite (nothing to verify, not a false rejection)', () => {
+  const result = checkExperienceAnchorPreserved("Anything goes at 'Some Venue'.", '')
+  assert.equal(result.pass, true)
+  assert.match(result.reason, /No extractable anchor/)
 })
 
 // ---------------------------------------------------------------------------

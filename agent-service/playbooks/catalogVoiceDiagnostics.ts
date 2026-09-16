@@ -80,8 +80,19 @@ export interface VoiceDiagnosticsReport {
   flaggedCandidateNames: string[]
   /** True when no single word crossed the per-word dominance threshold, but the combined share of several notable, frequently-repeated openers still constitutes real repetition (the exact Munich shape) — reported so a caller can distinguish "obviously dominant word" from "diffuse but real concentration" in its own reporting. */
   hasDiffuseConcentration: boolean
-  /** The specific notable words contributing to hasDiffuseConcentration (empty when hasDiffuseConcentration is false) — a caller (stepCatalogVoicePass) uses this to name the actual overused opener for an item flagged ONLY via diffuse concentration (no single dominantOpeningWords entry to fall back on, since by definition none crossed that higher bar). */
+  /** Every notable word contributing to hasDiffuseConcentration (diagnostic/reporting only — NOT the repair target list; see diffuseConcentrationRepairCandidates for that). */
   notableConcentrationWords: string[]
+  /**
+   * The MINIMUM set of candidateNames (selected deterministically, greedily
+   * from the currently-largest notable opener down) whose repair would
+   * bring the projected combined concentration to at or under the
+   * threshold — a strict subset of "every item using a notable opener"
+   * whenever the catalog is over-concentrated by more than the minimum
+   * required margin. Included in flaggedCandidateNames; exposed
+   * separately so a caller can see exactly which items this specific
+   * signal selected. Empty when hasDiffuseConcentration is false.
+   */
+  diffuseConcentrationRepairCandidates: string[]
 }
 
 const MIN_BATCH_SIZE_FOR_DIAGNOSTICS = 10
@@ -92,7 +103,7 @@ export function analyzeCatalogVoice(entries: readonly VoiceCatalogEntry[], opts?
   const maxFlagged = opts?.maxFlagged ?? entries.length
 
   if (entries.length < MIN_BATCH_SIZE_FOR_DIAGNOSTICS) {
-    return { totalItems: entries.length, openingWordCounts: {}, dominantOpeningWords: [], repeatedOpeningPhrases: [], flaggedCandidateNames: [], hasDiffuseConcentration: false, notableConcentrationWords: [] }
+    return { totalItems: entries.length, openingWordCounts: {}, dominantOpeningWords: [], repeatedOpeningPhrases: [], flaggedCandidateNames: [], hasDiffuseConcentration: false, notableConcentrationWords: [], diffuseConcentrationRepairCandidates: [] }
   }
 
   const wordCounts = new Map<string, number>()
@@ -118,13 +129,24 @@ export function analyzeCatalogVoice(entries: readonly VoiceCatalogEntry[], opts?
   const notable = computeNotableOpeners(wordCounts, entries.length)
   const combinedNotableShare = notable.reduce((sum, n) => sum + n.count, 0) / entries.length
   const hasDiffuseConcentration = combinedNotableShare > DEFAULT_MAX_COMBINED_NOTABLE_OPENER_SHARE
-  const diffuseConcentrationWordSet = hasDiffuseConcentration ? new Set(notable.map((n) => n.word)) : new Set<string>()
+
+  // Follow-up fix (2026-09-16) — rewrite the MINIMUM number of items
+  // needed to bring the projected combined share back to/under the
+  // threshold, never every item behind a notable opener. Without this,
+  // a catalog with (say) 59 contributing items would have all 59
+  // rewritten even though bringing the share just under 25% might only
+  // require repairing a dozen or so — needless churn on bodies that were
+  // never individually the problem.
+  const diffuseConcentrationRepairCandidates = hasDiffuseConcentration
+    ? selectMinimalDiffuseConcentrationRepairCandidates(entries, wordCounts, entries.length, DEFAULT_MAX_COMBINED_NOTABLE_OPENER_SHARE)
+    : []
+  const diffuseConcentrationCandidateSet = new Set(diffuseConcentrationRepairCandidates)
 
   const dominantWordSet = new Set(dominantOpeningWords)
   const repeatedPhraseSet = new Set(repeatedOpeningPhrases.map((p) => p.phrase))
 
   const flaggedCandidateNames = entries
-    .filter((e) => dominantWordSet.has(firstWordOf(e.body)) || repeatedPhraseSet.has(openingPhraseOf(e.body)) || diffuseConcentrationWordSet.has(firstWordOf(e.body)))
+    .filter((e) => dominantWordSet.has(firstWordOf(e.body)) || repeatedPhraseSet.has(openingPhraseOf(e.body)) || diffuseConcentrationCandidateSet.has(e.candidateName))
     .map((e) => e.candidateName)
     .slice(0, maxFlagged)
 
@@ -136,7 +158,56 @@ export function analyzeCatalogVoice(entries: readonly VoiceCatalogEntry[], opts?
     flaggedCandidateNames,
     hasDiffuseConcentration,
     notableConcentrationWords: hasDiffuseConcentration ? notable.map((n) => n.word) : [],
+    diffuseConcentrationRepairCandidates,
   }
+}
+
+/**
+ * Greedily, deterministically selects the minimum set of candidateNames
+ * to repair so the projected combined notable-opener share lands at or
+ * under `threshold`. Each iteration targets the CURRENTLY largest
+ * remaining notable word (ties broken alphabetically, never randomly or
+ * by insertion order) and removes exactly one of its real items (in the
+ * catalog's own entries order, never re-ordered) — so the selection is
+ * reproducible given the same input, and stops the instant the
+ * projection passes rather than continuing to select every contributing
+ * item. This is a greedy, not a globally re-optimized, minimum — always
+ * sufficient and always as small as the greedy strategy can make it,
+ * which is what "stop as soon as the projected distribution passes"
+ * requires; it does not attempt every possible combination in search of
+ * a smaller one.
+ */
+function selectMinimalDiffuseConcentrationRepairCandidates(entries: readonly VoiceCatalogEntry[], wordCounts: ReadonlyMap<string, number>, totalCount: number, threshold: number): string[] {
+  const itemsByWord = new Map<string, string[]>()
+  for (const e of entries) {
+    const w = firstWordOf(e.body)
+    if (!w) continue
+    itemsByWord.set(w, [...(itemsByWord.get(w) ?? []), e.candidateName])
+  }
+
+  const remainingCounts = new Map(wordCounts)
+  const consumedIndexByWord = new Map<string, number>()
+  const selected: string[] = []
+
+  // Bounded by total item count — cannot loop forever: every iteration
+  // either selects a real item (shrinking what's left to select from) or
+  // breaks via a safety valve.
+  for (let guard = 0; guard < totalCount; guard++) {
+    const notable = computeNotableOpeners(remainingCounts, totalCount)
+    const combinedShare = notable.reduce((sum, n) => sum + n.count, 0) / totalCount
+    if (combinedShare <= threshold) break
+    if (notable.length === 0) break // safety valve — should be unreachable given the loop condition above
+    const target = [...notable].sort((a, b) => b.count - a.count || a.word.localeCompare(b.word))[0]!
+    const pool = itemsByWord.get(target.word) ?? []
+    const nextIndex = consumedIndexByWord.get(target.word) ?? 0
+    const candidateName = pool[nextIndex]
+    if (!candidateName) break // safety valve — should be unreachable: remainingCounts is derived from the same pool
+    consumedIndexByWord.set(target.word, nextIndex + 1)
+    selected.push(candidateName)
+    remainingCounts.set(target.word, target.count - 1)
+  }
+
+  return selected
 }
 
 // ---------------------------------------------------------------------------

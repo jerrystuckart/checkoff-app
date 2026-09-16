@@ -87,7 +87,13 @@ function munichCatalogFixture(): VoiceCatalogEntry[] {
   const items: VoiceCatalogEntry[] = []
   for (const { opener, count } of groups) {
     for (let i = 0; i < count; i++) {
-      items.push({ candidateName: `${opener} Item ${i}`, body: `${opener} the specialty at 'Venue ${opener}${i}'.` })
+      // A DISTINCT concrete noun phrase per item (real Munich shape — same
+      // generic opener, different specific order/object each time), so
+      // only the diffuse-concentration (shared opening WORD) signal fires
+      // here, never the separate repeated-3-word-opening-phrase mechanism
+      // (which correctly flags a truly identical template and is out of
+      // scope for this fixture).
+      items.push({ candidateName: `${opener} Item ${i}`, body: `${opener} the ${distinctFillerWord(300 + i)} at 'Venue ${opener}${i}'.` })
     }
   }
   // 125 remaining items, each with its OWN distinct opening word — real
@@ -121,12 +127,58 @@ test('MUNICH REGRESSION: the new default (frequency-driven, no watchlist restric
   assert.deepEqual(words, ['catch', 'choose', 'find', 'order', 'take'])
 })
 
-test('MUNICH REGRESSION: analyzeCatalogVoice flags every contributing item via hasDiffuseConcentration, even though dominantOpeningWords is empty', () => {
+test('MUNICH REGRESSION: analyzeCatalogVoice flags via hasDiffuseConcentration even though dominantOpeningWords is empty, but the OLD "flag all 59" behavior no longer happens', () => {
   const report = analyzeCatalogVoice(munichCatalogFixture())
   assert.equal(report.hasDiffuseConcentration, true)
-  assert.deepEqual([...report.notableConcentrationWords].sort(), ['catch', 'choose', 'find', 'order', 'take'])
-  assert.equal(report.flaggedCandidateNames.length, 59, 'exactly the 12+8+12+18+9 = 59 real contributing items, never the 125 varied ones')
+  assert.deepEqual([...report.notableConcentrationWords].sort(), ['catch', 'choose', 'find', 'order', 'take'], 'notableConcentrationWords still reports every CONTRIBUTING word (diagnostic), even though only some of their items are selected for repair')
+  assert.ok(report.flaggedCandidateNames.length < 59, 'must select fewer than every one of the 59 items behind a notable opener — repairing all of them was the bug this follow-up fixes')
   assert.ok(report.flaggedCandidateNames.every((n) => !n.startsWith('Varied Item')), 'the 125 genuinely varied items must never be flagged')
+})
+
+// ---------------------------------------------------------------------------
+// FOLLOW-UP FIX (2026-09-16): minimum-necessary repair selection + the
+// experience-anchor preservation safeguard (the anchor extraction/check
+// itself lives in editorialDistinctiveness.ts and is tested there;
+// metroLaunchDriverCatalogVoicePass.test.ts proves both through the real
+// driver end to end).
+// ---------------------------------------------------------------------------
+
+test('MINIMUM REPAIR SELECTION: selects a real strict subset of the 59 Munich contributors, deterministically, and the selection alone is provably sufficient', () => {
+  const fixture = munichCatalogFixture()
+  const report = analyzeCatalogVoice(fixture)
+  const selected = report.diffuseConcentrationRepairCandidates
+  assert.ok(selected.length > 0 && selected.length < 59, `expected a real strict subset, got ${selected.length}`)
+  assert.ok(selected.every((n) => !n.startsWith('Varied Item')))
+
+  // Simulate removing exactly the selected items — each gets its OWN
+  // distinct new opener (never one shared new template; a shared
+  // replacement would itself become a new notable word once enough items
+  // used it, confounding this test's own measurement) — and confirm the
+  // PROJECTED combined share is at/under the 25% threshold, proving the
+  // selection is genuinely sufficient, not just "some subset."
+  const selectedSet = new Set(selected)
+  let repairIndex = 0
+  const projected = fixture.map((e) => (selectedSet.has(e.candidateName) ? { ...e, body: `${distinctFillerWord(400 + repairIndex++)} the thing at 'Venue'.` } : e))
+  const projectedReport = analyzeCatalogVoice(projected)
+  assert.equal(projectedReport.hasDiffuseConcentration, false, 'after repairing exactly the selected items, the catalog must no longer be in diffuse concentration')
+
+  // Determinism: running the same analysis twice on the same input
+  // yields the identical selection, in the identical order.
+  const again = analyzeCatalogVoice(munichCatalogFixture())
+  assert.deepEqual(again.diffuseConcentrationRepairCandidates, selected)
+})
+
+test('MINIMUM REPAIR SELECTION: stops as soon as the projection passes — removing one fewer selected item would NOT have passed', () => {
+  const fixture = munichCatalogFixture()
+  const report = analyzeCatalogVoice(fixture)
+  const selected = report.diffuseConcentrationRepairCandidates
+  // Repair every selected item EXCEPT the last one chosen — again, each
+  // repaired item gets its own distinct new opener.
+  const oneFewer = new Set(selected.slice(0, -1))
+  let repairIndex = 0
+  const projected = fixture.map((e) => (oneFewer.has(e.candidateName) ? { ...e, body: `${distinctFillerWord(500 + repairIndex++)} the thing at 'Venue'.` } : e))
+  const projectedReport = analyzeCatalogVoice(projected)
+  assert.equal(projectedReport.hasDiffuseConcentration, true, 'one fewer repair than selected must still fail the concentration check — the selection stops at the minimum, not earlier')
 })
 
 test('MUNICH REGRESSION: structured before/after report shows the real counts and percentages, and reflects a real repair', () => {
