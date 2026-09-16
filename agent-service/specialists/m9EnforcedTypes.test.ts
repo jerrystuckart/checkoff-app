@@ -11,7 +11,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { computeM9ConceptId, computeM9ConceptKey, computeM9ConceptFingerprint, computeM9DiscoveryConfigFingerprint } from './m9EnforcedTypes'
+import { computeM9ConceptId, computeM9ConceptKey, computeM9ConceptFingerprint, computeM9DiscoveryConfigFingerprint, computeM9ListId } from './m9EnforcedTypes'
 
 const PROMISE_A = 'A coherent set of experiences sharing "beer-garden" + "brewery" — discovered from real tag co-occurrence in the certified catalog, not a predefined template.'
 
@@ -158,4 +158,63 @@ test('CONCEPT KEY: computeM9ConceptKey is a stable, normalized, tag-only territo
   const idTwo = computeM9ConceptId({ metroSlug: 'munich', listKind: 'FOOD_LOCAL_FLAVOR', seedTags: ['beer-garden', 'brewery'], editorialPromise: 'Promise two.' })
   assert.notEqual(idOne, idTwo)
   assert.equal(computeM9ConceptKey(['beer-garden', 'brewery']), key)
+})
+
+// ---------------------------------------------------------------------------
+// computeM9ListId — Session 4 (follow-up correction): deterministic list
+// identity derived from conceptId alone, replacing a first-cut
+// (metro_id, title) natural-key mechanism that would have let a title
+// rename silently duplicate a list. Every property the correction
+// required, proven directly.
+// ---------------------------------------------------------------------------
+
+test('LIST ID: is a well-formed RFC 4122 UUIDv5 (version nibble 5, RFC 4122 variant bits)', () => {
+  const conceptId = computeM9ConceptId({ metroSlug: 'munich', listKind: 'THEMED', seedTags: ['beer-garden', 'brewery'], editorialPromise: PROMISE_A })
+  const listId = computeM9ListId(conceptId)
+  assert.match(listId, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+})
+
+test('LIST ID: the SAME conceptId always resolves to the SAME list UUID (idempotent by construction, deterministic across process runs)', () => {
+  const conceptId = computeM9ConceptId({ metroSlug: 'munich', listKind: 'THEMED', seedTags: ['beer-garden', 'brewery'], editorialPromise: PROMISE_A })
+  const a = computeM9ListId(conceptId)
+  const b = computeM9ListId(conceptId)
+  assert.equal(a, b)
+})
+
+test('LIST ID: a title change never changes it — title is not even a parameter to this function', () => {
+  // computeM9ListId's signature takes ONLY conceptId — there is no title
+  // parameter to vary, which is itself the proof: whatever proposedTitle a
+  // concept carries (or is later renamed to) can never influence this id.
+  const conceptId = computeM9ConceptId({ metroSlug: 'munich', listKind: 'THEMED', seedTags: ['beer-garden', 'brewery'], editorialPromise: PROMISE_A })
+  assert.equal(computeM9ListId.length, 1, 'computeM9ListId must take exactly one parameter (conceptId) — title can never be an input')
+  assert.equal(computeM9ListId(conceptId), computeM9ListId(conceptId))
+})
+
+test('LIST ID: a membership/metadata change never changes it — deliberately NOT derived from conceptFingerprint (which DOES change on membership drift)', () => {
+  const conceptId = computeM9ConceptId({ metroSlug: 'munich', listKind: 'THEMED', seedTags: ['beer-garden', 'brewery'], editorialPromise: PROMISE_A })
+  const fpBeforeMembershipChange = computeM9ConceptFingerprint({ conceptId, members: baseMembers, discoveryConfigFingerprint: baseConfigFingerprint })
+  const fpAfterMembershipChange = computeM9ConceptFingerprint({
+    conceptId,
+    members: [...baseMembers, { candidateName: 'Venue C (newly added)', dbCategory: 'Adventure', finalTags: ['canal-crawl'], neighborhoodName: 'Downtown' }],
+    discoveryConfigFingerprint: baseConfigFingerprint,
+  })
+  assert.notEqual(fpBeforeMembershipChange, fpAfterMembershipChange, 'sanity check — the fingerprint DOES change on a real membership change')
+  assert.equal(computeM9ListId(conceptId), computeM9ListId(conceptId), 'but the list id, keyed by conceptId alone, is completely unaffected by that membership change')
+})
+
+test('LIST ID: two DIFFERENT conceptIds proposing the IDENTICAL title receive DIFFERENT list UUIDs — title is never identity', () => {
+  const conceptA = computeM9ConceptId({ metroSlug: 'munich', listKind: 'FOOD_LOCAL_FLAVOR', seedTags: ['beer-garden'], editorialPromise: 'Promise one — beer gardens.' })
+  const conceptB = computeM9ConceptId({ metroSlug: 'munich', listKind: 'DAY_TRIP', seedTags: ['hike', 'outdoor'], editorialPromise: 'Promise two — day trips.' })
+  assert.notEqual(conceptA, conceptB)
+  // Both would legitimately propose the SAME display title (e.g. an
+  // operator renames one to match the other, or two independent discovery
+  // passes coincidentally choose the same wording) — the list ids must
+  // still never collide, because title was never part of the input.
+  assert.notEqual(computeM9ListId(conceptA), computeM9ListId(conceptB))
+})
+
+test('LIST ID: different metros with an otherwise-identical concept receive different list UUIDs (inherits computeM9ConceptId\'s own metro scoping)', () => {
+  const munichConcept = computeM9ConceptId({ metroSlug: 'munich', listKind: 'THEMED', seedTags: ['beer-garden', 'brewery'], editorialPromise: PROMISE_A })
+  const denverConcept = computeM9ConceptId({ metroSlug: 'denver', listKind: 'THEMED', seedTags: ['beer-garden', 'brewery'], editorialPromise: PROMISE_A })
+  assert.notEqual(computeM9ListId(munichConcept), computeM9ListId(denverConcept))
 })

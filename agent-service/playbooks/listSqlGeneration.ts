@@ -188,6 +188,142 @@ export function generateListMembershipSql(input: ListSqlGenerationInput): ListSq
 }
 
 // ---------------------------------------------------------------------------
+// New-list creation — M9 ENFORCED, Session 4 (corrected). UUID-keyed
+// throughout, same discipline as generateListMembershipSql
+// (preflight-before-mutation, postflight-count-verified, ON CONFLICT DO
+// NOTHING, one BEGIN...COMMIT), with ONE addition: an idempotent "create
+// the list row if it doesn't already exist" step ahead of membership
+// linking.
+//
+// IDENTITY CORRECTION (read before changing): the first cut of this
+// function used a `(metro_id, title)` natural-key lookup as its
+// idempotency mechanism — this was rejected: title is mutable
+// presentation text (an operator can rename a list), so a rename could
+// silently create a SECOND list, and two unrelated concepts proposing the
+// same title could collide. The caller (m9SafeSqlIntegration.ts) now
+// derives `listId` deterministically from the concept's own durable
+// conceptId (m9EnforcedTypes.ts's computeM9ListId, RFC 4122 UUIDv5) BEFORE
+// calling this function — this module never derives, guesses, or looks up
+// an identity itself; `listId` is a plain, already-decided input, exactly
+// like `resolutions[].matchedItemIds`. The generated SQL uses that exact
+// id as the row's real, explicit primary key (`INSERT INTO public.lists
+// (id, ...) VALUES ($listId, ...)`) — no schema change is required for
+// this: `public.lists.id` is an ordinary insertable uuid primary key
+// column (Postgres only auto-generates it when the INSERT omits it), so
+// supplying it explicitly is standard, unprivileged SQL.
+//
+// Idempotency/atomicity: `ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title`
+// means the SAME conceptId (hence the SAME listId) always converges to
+// ONE row — a rerun with an unchanged title is a no-op update; a rerun
+// after an approved title change (still the SAME conceptId) updates the
+// title IN PLACE, never creating a second row; this happens ONLY through
+// this function's own generated SQL (i.e. only through a fresh, gated
+// buildM9SafeSqlPlan call), never as an out-of-band raw title edit — the
+// "explicit approved path" the correction requires. An UNRELATED-metro
+// conflict (the deterministic id already belongs to a different metro's
+// list — astronomically unlikely for UUIDv5, but checked, never assumed)
+// RAISE EXCEPTIONs inside the transaction as defense in depth; the
+// caller's own TypeScript-level check (m9SafeSqlIntegration.ts's
+// deterministicListIdLookups) is the PRIMARY gate that refuses to even
+// generate this SQL for that case — see its own doc for why both layers
+// exist. No temp table. Title/creatorId both go through sqlQuote so
+// apostrophes are always safely doubled-escaped, never a dollar-quoting
+// mismatch.
+//
+// SCOPE: never creates a public.items row (member ids are always
+// caller-resolved, pre-existing production UUIDs, exactly like
+// generateListMembershipSql) and never touches any list other than the
+// single row at `listId` — every DELETE/INSERT below is scoped to
+// v_list_id, which can only ever be that one row.
+// ---------------------------------------------------------------------------
+
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export interface NewListCreationSqlInput {
+  metroSlug: string
+  /** The list's real, durable primary-key identity — a deterministic UUID the caller derived from the concept's own conceptId (never title, never this module's own guess). Must already be a well-formed UUID string. */
+  listId: string
+  listTitle: string
+  /** Real production creator_id (a user/service-account UUID) to attribute as the creator of the new public.lists row — never invented here. */
+  creatorId: string
+  resolutions: readonly ListSqlItemResolution[]
+}
+
+export interface NewListCreationSqlResult {
+  ok: boolean
+  sql: string | null
+  errors: string[]
+  expectedMembershipCount: number
+}
+
+/**
+ * Generates the safe, idempotent SQL to create a brand-new public.lists
+ * row (only if one doesn't already exist at `input.listId` — a
+ * deterministic, conceptId-derived identity the caller supplies) and link
+ * its initial membership — the CREATE-list counterpart to
+ * generateListMembershipSql, which only ever links membership into an
+ * ALREADY-EXISTING list looked up by title. Reuses resolveListItemsPreflight
+ * (same zero-match/ambiguous-match fail-closed discipline) rather than a
+ * second resolution mechanism.
+ */
+export function generateNewListCreationSql(input: NewListCreationSqlInput): NewListCreationSqlResult {
+  if (!UUID_PATTERN.test(input.listId)) {
+    return { ok: false, sql: null, errors: [`listId "${input.listId}" is not a well-formed UUID — refusing to generate list-creation SQL with a malformed identity.`], expectedMembershipCount: 0 }
+  }
+
+  const preflight = resolveListItemsPreflight(input.resolutions)
+  if (!preflight.ok) {
+    return {
+      ok: false,
+      sql: null,
+      errors: [`Preflight failed for new list "${input.listTitle}" (id ${input.listId}) — item resolution must be complete (exactly one match per intended membership) before ANY list creation is generated:`, ...preflight.errors],
+      expectedMembershipCount: 0,
+    }
+  }
+
+  const seen = new Set<string>()
+  const deduped = preflight.resolved.filter((r) => {
+    if (seen.has(r.itemId)) return false
+    seen.add(r.itemId)
+    return true
+  })
+  const ordered = [...deduped].sort((a, b) => a.sortOrder - b.sortOrder)
+
+  const lines: string[] = []
+  lines.push('BEGIN;')
+  lines.push('DO $$')
+  lines.push('DECLARE')
+  lines.push('  v_metro_id uuid;')
+  lines.push(`  v_list_id uuid := ${sqlQuote(input.listId)}::uuid;`)
+  lines.push('  v_existing_metro_id uuid;')
+  lines.push('  v_count integer;')
+  lines.push('BEGIN')
+  lines.push(`  SELECT id INTO v_metro_id FROM public.metro_areas WHERE slug = ${sqlQuote(input.metroSlug)};`)
+  lines.push(`  IF v_metro_id IS NULL THEN RAISE EXCEPTION 'metro_areas row for slug % not found', ${sqlQuote(input.metroSlug)}; END IF;`)
+  lines.push('  SELECT metro_id INTO v_existing_metro_id FROM public.lists WHERE id = v_list_id;')
+  lines.push('  IF v_existing_metro_id IS NOT NULL AND v_existing_metro_id <> v_metro_id THEN')
+  lines.push(`    RAISE EXCEPTION 'deterministic list id % already belongs to a different metro (%) than the intended metro % — refusing to repoint an existing list', v_list_id, v_existing_metro_id, v_metro_id;`)
+  lines.push('  END IF;')
+  lines.push('  INSERT INTO public.lists (id, metro_id, title, is_official, is_public, creator_id, is_featured_eligible)')
+  lines.push(`  VALUES (v_list_id, v_metro_id, ${sqlQuote(input.listTitle)}, true, true, ${sqlQuote(input.creatorId)}, false)`)
+  lines.push('  ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title;')
+  lines.push('  DELETE FROM public.list_items WHERE list_id = v_list_id;')
+  if (ordered.length > 0) {
+    lines.push('  INSERT INTO public.list_items (list_id, item_id)')
+    const values = ordered.map((r) => `    (v_list_id, ${sqlQuote(r.itemId)}::uuid)`).join(',\n')
+    lines.push('  VALUES')
+    lines.push(values)
+    lines.push('  ON CONFLICT (list_id, item_id) DO NOTHING;')
+  }
+  lines.push('  SELECT count(*) INTO v_count FROM public.list_items WHERE list_id = v_list_id;')
+  lines.push(`  IF v_count <> ${ordered.length} THEN RAISE EXCEPTION 'postflight: expected % membership(s) for list %, found %', ${ordered.length}, ${sqlQuote(input.listTitle)}, v_count; END IF;`)
+  lines.push('END $$;')
+  lines.push('COMMIT;')
+
+  return { ok: true, sql: lines.join('\n'), errors: [], expectedMembershipCount: ordered.length }
+}
+
+// ---------------------------------------------------------------------------
 // Item body repair — the one legitimate remaining use of literal body text
 // in generated SQL (correcting a corrupted/incorrect body in place). Uses
 // sqlDollarQuote correctly (never sqlQuote's doubled-apostrophe rule) —

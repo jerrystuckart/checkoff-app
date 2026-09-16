@@ -13,21 +13,45 @@
 // no path for creating a brand-new public.items row either). That is a
 // deliberate safety boundary, not an oversight, and this module respects
 // it rather than reaching back into the LEGACY buildHomeListSqlPatch/
-// NewItemSqlInput machinery (which DOES create lists/items, and is
+// NewItemSqlInput machinery (which DOES create catalog items, and is
 // exactly the higher-risk surface this whole ENFORCED track exists to
-// move away from). A concept whose approved membership needs a genuinely
-// NEW list is therefore reported as BLOCKED_NEW_LIST_NEEDED here — never
-// silently routed through the unsafe path — and creating that list is
-// left as an explicit, separate, out-of-band operator step. This is the
-// single largest reason ENFORCED cannot yet become the default for a
-// brand-new metro (see the Session 3 handoff's default-mode decision):
-// a first-ever metro launch is ALL new lists.
+// move away from).
+//
+// Session 4 — genuinely NEW list creation is now safely supported too, via
+// listSqlGeneration.ts's generateNewListCreationSql (idempotent
+// deterministic-UUID create-if-missing, still never creates a public.items
+// row). It is strictly OPT-IN (input.newListCreatorId) and gated by
+// validateNewListCreationApproval below — a concept whose approved
+// membership needs a new list, but for which the caller did not supply
+// newListCreatorId, or whose approval doesn't clear the extra new-list
+// gate, still reports BLOCKED_NEW_LIST_NEEDED / BLOCKED_NEW_LIST_APPROVAL_INVALID
+// here, never silently routed through the unsafe LEGACY path.
+//
+// IDENTITY CORRECTION (Session 4 follow-up): the list a CREATE_NEW concept
+// creates is identified by computeM9ListId(conceptId) — a deterministic
+// RFC 4122 UUIDv5 derived from the concept's own durable conceptId, NEVER
+// from its proposedTitle. The first cut of this module used a
+// `(metro_id, title)` natural-key lookup inside the generated SQL itself,
+// which was rejected: a title rename could silently create a duplicate
+// list, and two unrelated concepts proposing the same title could
+// collide. Before generating any SQL for a CREATE_NEW concept, this module
+// now also requires a caller-supplied deterministicListIdLookups entry —
+// the real, one-time production check for "does a public.lists row
+// already exist at this exact deterministic id, and if so, whose is it?"
+// — and blocks (BLOCKED_NEW_LIST_ID_CONFLICT) if that id is already
+// claimed by an unrelated metro or a non-official list, BEFORE any
+// executable SQL exists. This is deliberately a SEPARATE check from the
+// (unchanged) title-based listLookups/resolveM9CompletedListHandling
+// REUSE-vs-CREATE routing above it in the pipeline — that routing decides
+// WHETHER a new list is needed at all (a pre-existing Session 3 concern,
+// out of this correction's scope); this new check guards the IDENTITY the
+// new list will actually be created under.
 
 import { createHash } from 'node:crypto'
-import { generateListMembershipSql, type ListSqlItemResolution } from '../playbooks/listSqlGeneration'
+import { generateListMembershipSql, generateNewListCreationSql, type ListSqlItemResolution } from '../playbooks/listSqlGeneration'
 import { validateM9ReusedItems, type M9ReusedItemResolution, type M9ReusedItemValidationFinding } from './m9ReusedItemValidation'
 import { resolveM9CompletedListHandling, type M9ExistingListLookup, type M9CompletedListOperatorDecision, type M9ListResolution } from './m9CompletedListResolution'
-import type { M9EnforcedCurationArtifact } from './m9EnforcedTypes'
+import { computeM9ListId, type M9EnforcedCurationArtifact, type M9EnforcedConceptVerdict } from './m9EnforcedTypes'
 
 export interface M9SafeSqlIntegrationInput {
   artifact: M9EnforcedCurationArtifact
@@ -41,9 +65,47 @@ export interface M9SafeSqlIntegrationInput {
   operatorDecisionsByConceptId: Readonly<Record<string, M9CompletedListOperatorDecision>>
   /** candidateName -> certified item body — used only as the SQL's own human-readable intendedBody label; never the resolution mechanism itself (see listSqlGeneration.ts's own doc on why body-text is never re-used operationally). */
   itemBodyByCandidateName: ReadonlyMap<string, string>
+  /**
+   * Session 4 — real production creator_id (a user/service-account UUID)
+   * to attribute as the creator of any newly-created public.lists row.
+   * OPT-IN, never a silent default: omitted (or null) means every
+   * CREATE_NEW-resolved concept still reports BLOCKED_NEW_LIST_NEEDED
+   * exactly as it did before this field existed — safe new-list creation
+   * only activates when the caller explicitly supplies a real creator id
+   * (mirrors LEGACY's own always-required officialListCreatorId), never
+   * merely by an approved concept resolving to CREATE_NEW.
+   */
+  newListCreatorId?: string | null
+  /**
+   * Session 4 — one real, one-time production lookup per CREATE_NEW-bound
+   * conceptId: "does a public.lists row already exist at
+   * computeM9ListId(conceptId)?" — required (defense in depth, fail
+   * closed) whenever `newListCreatorId` is supplied; a missing entry for a
+   * concept that needs one blocks that concept exactly like a missing
+   * item resolution would, never silently treated as clear.
+   */
+  deterministicListIdLookups?: readonly M9DeterministicListIdLookup[]
 }
 
-export type M9ListSqlOutcomeStatus = 'GENERATED' | 'BLOCKED_NEW_LIST_NEEDED' | 'BLOCKED_NEEDS_REOPEN' | 'BLOCKED_ITEM_RESOLUTION_FAILED'
+export interface M9DeterministicListIdLookup {
+  conceptId: string
+  /** The real row found at computeM9ListId(conceptId), if any — null when nothing exists there yet (the ordinary case for a genuinely first-time concept). Never guessed. */
+  existingRowAtId: { metroSlug: string; title: string; isOfficial: boolean } | null
+}
+
+export type M9ListSqlOutcomeStatus =
+  | 'GENERATED'
+  | 'GENERATED_NEW_LIST'
+  | 'BLOCKED_NEW_LIST_NEEDED'
+  | 'BLOCKED_NEW_LIST_APPROVAL_INVALID'
+  | 'BLOCKED_NEW_LIST_ID_CONFLICT'
+  | 'BLOCKED_NEEDS_REOPEN'
+  | 'BLOCKED_ITEM_RESOLUTION_FAILED'
+
+/** GENERATED and GENERATED_NEW_LIST are both "real, safe, executable SQL was produced" — the only difference is whether a list row also had to be created. Every whole-plan/manifest/compatibility-plan check below treats them identically. */
+function isGeneratedStatus(status: M9ListSqlOutcomeStatus): boolean {
+  return status === 'GENERATED' || status === 'GENERATED_NEW_LIST'
+}
 
 export interface M9ListSqlOutcome {
   conceptId: string
@@ -62,6 +124,55 @@ export interface M9SafeSqlIntegrationResult {
   perListOutcomes: M9ListSqlOutcome[]
   reusedItemFindings: M9ReusedItemValidationFinding[]
   listResolutions: M9ListResolution[]
+}
+
+/**
+ * Session 4 — the extra gate a genuinely NEW list must clear beyond what
+ * `finalApprovedMemberships` already guarantees (every concept keyed
+ * there already has a fresh-fingerprint, decision:'APPROVED' operator
+ * decision on record — see m9ListCurationAdapter.ts's PASS 3, which only
+ * ever populates finalApprovedMemberships from that exact condition).
+ * This function re-checks that explicitly anyway (defense in depth, same
+ * discipline as this module's own conceptsWithUnresolvedDuplicates
+ * computation) rather than trusting it implicitly, and adds the ONE
+ * check that is NOT already guaranteed upstream: a concept can reach
+ * approvalState 'APPROVED' via ACCEPT_EXCEPTION/REPLACE_CONCEPT/etc even
+ * while `duplicateFindings` is still non-empty (the artifact's own
+ * conceptsWithUnresolvedDuplicates set above only flags a duplicate on a
+ * NON-approved concept) — creating a brand-new list identity from a
+ * concept with ANY residual duplicate-venue finding is refused here
+ * regardless of approval, since reusing an EXISTING list under the same
+ * circumstances is a materially lower-risk action than minting a new one.
+ */
+function validateNewListCreationApproval(verdict: M9EnforcedConceptVerdict | undefined): string[] {
+  const errors: string[] = []
+  if (!verdict) {
+    errors.push('No concept verdict was found for this approved concept — cannot verify a Jerry approval exists for new-list creation.')
+    return errors
+  }
+  if (verdict.discoveryVerdict !== 'CREATE') {
+    errors.push(`Concept's own PASS A discovery verdict is "${verdict.discoveryVerdict}", not CREATE — a new list may only be created from a genuine CREATE verdict.`)
+  }
+  if (verdict.approvalState !== 'APPROVED') {
+    errors.push(`Concept approvalState is "${verdict.approvalState}", not APPROVED — new-list creation requires explicit approval, never inferred from being present in finalApprovedMemberships alone.`)
+  }
+  if (verdict.duplicateFindings.length > 0) {
+    errors.push(`Concept has ${verdict.duplicateFindings.length} unresolved duplicate-venue finding(s) on record — a brand-new list may never be created while a duplicate conflict remains, even if the concept itself was separately approved (reusing an existing list under the same circumstances is a materially lower-risk action).`)
+  }
+  const decision = verdict.operatorDecision
+  if (!decision) {
+    errors.push('No operator decision is on record for this concept — a genuinely new list may never be created without an explicit, attributable Jerry approval.')
+  } else {
+    if (decision.decidedForFingerprint !== verdict.fingerprint) {
+      errors.push(
+        `The recorded approval was decided against fingerprint "${decision.decidedForFingerprint}", but this concept's CURRENT fingerprint is "${verdict.fingerprint}" — the approval is stale (the concept's membership/metadata changed since it was approved) and does not authorize creating a new list.`
+      )
+    }
+    if (decision.decision !== 'APPROVED') {
+      errors.push(`The recorded operator decision is "${decision.decision}", not APPROVED — cannot authorize new-list creation.`)
+    }
+  }
+  return errors
 }
 
 /**
@@ -85,6 +196,7 @@ export function buildM9SafeSqlPlan(input: M9SafeSqlIntegrationInput): M9SafeSqlI
   const listResolutions = resolveM9CompletedListHandling({ lookups: input.listLookups, operatorDecisionsByConceptId: input.operatorDecisionsByConceptId })
   const listResolutionByConceptId = new Map(listResolutions.map((r) => [r.conceptId, r]))
   const listLookupByConceptId = new Map(input.listLookups.map((l) => [l.conceptId, l]))
+  const deterministicListIdLookupByConceptId = new Map((input.deterministicListIdLookups ?? []).map((l) => [l.conceptId, l]))
 
   const perListOutcomes: M9ListSqlOutcome[] = []
 
@@ -95,7 +207,70 @@ export function buildM9SafeSqlPlan(input: M9SafeSqlIntegrationInput): M9SafeSqlI
     const listTitleForReporting = verdict?.proposedTitle ?? conceptId
 
     if (!listRes || listRes.kind === 'CREATE_NEW') {
-      perListOutcomes.push({ conceptId, listTitle: listTitleForReporting, status: 'BLOCKED_NEW_LIST_NEEDED', sql: null, expectedMembershipCount: 0, errors: [listRes?.reason ?? 'No list resolution was supplied for this approved concept.'] })
+      if (!input.newListCreatorId) {
+        perListOutcomes.push({ conceptId, listTitle: listTitleForReporting, status: 'BLOCKED_NEW_LIST_NEEDED', sql: null, expectedMembershipCount: 0, errors: [listRes?.reason ?? 'No list resolution was supplied for this approved concept.'] })
+        continue
+      }
+      const approvalErrors = validateNewListCreationApproval(verdict)
+      if (approvalErrors.length > 0) {
+        perListOutcomes.push({ conceptId, listTitle: listTitleForReporting, status: 'BLOCKED_NEW_LIST_APPROVAL_INVALID', sql: null, expectedMembershipCount: 0, errors: approvalErrors })
+        continue
+      }
+      const deterministicListId = computeM9ListId(conceptId)
+      const idLookup = deterministicListIdLookupByConceptId.get(conceptId)
+      if (!idLookup) {
+        perListOutcomes.push({
+          conceptId,
+          listTitle: listTitleForReporting,
+          status: 'BLOCKED_NEW_LIST_ID_CONFLICT',
+          sql: null,
+          expectedMembershipCount: 0,
+          errors: [`No deterministicListIdLookups entry was supplied for this concept's deterministic list id (${deterministicListId}) — never assumed clear; a real one-time production check is required before creating a new list.`],
+        })
+        continue
+      }
+      if (idLookup.existingRowAtId && (idLookup.existingRowAtId.metroSlug !== input.metroSlug || !idLookup.existingRowAtId.isOfficial)) {
+        perListOutcomes.push({
+          conceptId,
+          listTitle: listTitleForReporting,
+          status: 'BLOCKED_NEW_LIST_ID_CONFLICT',
+          sql: null,
+          expectedMembershipCount: 0,
+          errors: [
+            `Deterministic list id ${deterministicListId} already belongs to ${
+              idLookup.existingRowAtId.metroSlug !== input.metroSlug
+                ? `metro "${idLookup.existingRowAtId.metroSlug}", not the intended metro "${input.metroSlug}"`
+                : 'a non-official list'
+            } (title "${idLookup.existingRowAtId.title}") — refusing to create/repoint a list at this id.`,
+          ],
+        })
+        continue
+      }
+      if (!itemValidation.ok) {
+        perListOutcomes.push({
+          conceptId,
+          listTitle: listTitleForReporting,
+          status: 'BLOCKED_ITEM_RESOLUTION_FAILED',
+          sql: null,
+          expectedMembershipCount: 0,
+          errors: itemValidation.findings.filter((f) => f.blocking).map((f) => `${f.candidateName}: ${f.detail}`),
+        })
+        continue
+      }
+      const newListResolutions: ListSqlItemResolution[] = memberIds.map((candidateName, i) => ({
+        intendedBody: input.itemBodyByCandidateName.get(candidateName) ?? candidateName,
+        sortOrder: i,
+        matchedItemIds: itemValidation.resolvedItemIdByCandidateName[candidateName] ? [itemValidation.resolvedItemIdByCandidateName[candidateName]!] : [],
+      }))
+      const newListSqlResult = generateNewListCreationSql({ metroSlug: input.metroSlug, listId: deterministicListId, listTitle: listTitleForReporting, creatorId: input.newListCreatorId, resolutions: newListResolutions })
+      perListOutcomes.push({
+        conceptId,
+        listTitle: listTitleForReporting,
+        status: newListSqlResult.ok ? 'GENERATED_NEW_LIST' : 'BLOCKED_ITEM_RESOLUTION_FAILED',
+        sql: newListSqlResult.sql,
+        expectedMembershipCount: newListSqlResult.expectedMembershipCount,
+        errors: newListSqlResult.errors,
+      })
       continue
     }
     if (listRes.kind === 'BLOCKED_NEEDS_REOPEN') {
@@ -137,7 +312,7 @@ export function buildM9SafeSqlPlan(input: M9SafeSqlIntegrationInput): M9SafeSqlI
     })
   }
 
-  const ok = perListOutcomes.length > 0 && perListOutcomes.every((o) => o.status === 'GENERATED')
+  const ok = perListOutcomes.length > 0 && perListOutcomes.every((o) => isGeneratedStatus(o.status))
   const combinedSql = ok ? perListOutcomes.map((o) => o.sql).filter((s): s is string => Boolean(s)).join('\n\n') : null
 
   return { ok, combinedSql, perListOutcomes, reusedItemFindings: itemValidation.findings, listResolutions }
@@ -181,7 +356,7 @@ export interface M9CompatibilityPlanEntry {
  */
 export function buildM9CompatibilityPlan(artifact: M9EnforcedCurationArtifact, safeSqlPlan: M9SafeSqlIntegrationResult): M9CompatibilityPlanEntry[] {
   return safeSqlPlan.perListOutcomes
-    .filter((o) => o.status === 'GENERATED')
+    .filter((o) => isGeneratedStatus(o.status))
     .map((o) => {
       const members = artifact.finalApprovedMemberships[o.conceptId] ?? []
       return { label: `ENFORCED: ${o.listTitle}`, title: o.listTitle, kind: 'THEMED' as const, itemCandidateNames: members, requiresImage: true }
@@ -208,7 +383,7 @@ export function computeM9SqlValidationManifest(artifact: M9EnforcedCurationArtif
   const conceptFingerprintsUsed: Record<string, string> = {}
   const expectedMembershipCounts: Record<string, number> = {}
   for (const outcome of safeSqlPlan.perListOutcomes) {
-    if (outcome.status !== 'GENERATED') continue
+    if (!isGeneratedStatus(outcome.status)) continue
     const fp = verdictsById.get(outcome.conceptId)?.fingerprint
     if (fp) conceptFingerprintsUsed[outcome.conceptId] = fp
     expectedMembershipCounts[outcome.conceptId] = outcome.expectedMembershipCount

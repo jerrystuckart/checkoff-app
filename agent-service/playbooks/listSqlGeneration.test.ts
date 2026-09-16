@@ -5,6 +5,7 @@ import {
   sqlDollarQuote,
   resolveListItemsPreflight,
   generateListMembershipSql,
+  generateNewListCreationSql,
   generateItemBodyRepairSql,
   type ListSqlItemResolution,
 } from './listSqlGeneration'
@@ -172,6 +173,141 @@ test('generateListMembershipSql: idempotency by construction — regenerating fr
   const a = generateListMembershipSql({ metroSlug: 'munich', listTitle: 'Munich After Dark', resolutions: goodResolutions() })
   const b = generateListMembershipSql({ metroSlug: 'munich', listTitle: 'Munich After Dark', resolutions: goodResolutions() })
   assert.equal(a.sql, b.sql)
+})
+
+// ---------------------------------------------------------------------------
+// generateNewListCreationSql — M9 ENFORCED Session 4 (corrected): the
+// idempotent CREATE-list counterpart to generateListMembershipSql,
+// identified by a caller-supplied DETERMINISTIC UUID (never title/metro
+// natural-key lookup — see this module's own doc for why that was
+// rejected and corrected).
+// ---------------------------------------------------------------------------
+
+const CREATOR_ID = '99999999-9999-9999-9999-999999999999'
+const LIST_ID = 'a1b2c3d4-e5f6-5a1b-8c2d-3e4f5a6b7c8d'
+const OTHER_LIST_ID = 'f0e0d0c0-b0a0-5000-8000-0000000000ff'
+
+test('generateNewListCreationSql: a clean preflight generates transactional, UUID-keyed SQL using the caller-supplied deterministic list id', () => {
+  const result = generateNewListCreationSql({ metroSlug: 'munich', listId: LIST_ID, listTitle: 'Beer Gardens, Breweries & Bavarian Rituals', creatorId: CREATOR_ID, resolutions: goodResolutions() })
+  assert.equal(result.ok, true)
+  assert.equal(result.expectedMembershipCount, 2)
+  assert.ok(result.sql)
+  assert.match(result.sql!, /^BEGIN;/)
+  assert.match(result.sql!, /COMMIT;$/)
+  assert.match(result.sql!, new RegExp(`v_list_id uuid := '${LIST_ID}'::uuid;`))
+  assert.match(result.sql!, /INSERT INTO public\.lists \(id, metro_id, title, is_official, is_public, creator_id, is_featured_eligible\)/)
+  assert.match(result.sql!, /ON CONFLICT \(id\) DO UPDATE SET title = EXCLUDED\.title;/)
+  assert.match(result.sql!, /11111111-1111-1111-1111-111111111111/)
+  assert.match(result.sql!, /22222222-2222-2222-2222-222222222222/)
+  assert.match(result.sql!, /ON CONFLICT \(list_id, item_id\) DO NOTHING/)
+})
+
+test('generateNewListCreationSql: a malformed listId is refused outright — never generates SQL with an invalid identity', () => {
+  const result = generateNewListCreationSql({ metroSlug: 'munich', listId: 'not-a-uuid', listTitle: 'Day Trips & Big Adventures', creatorId: CREATOR_ID, resolutions: goodResolutions() })
+  assert.equal(result.ok, false)
+  assert.equal(result.sql, null)
+  assert.ok(result.errors.some((e) => e.includes('not a well-formed UUID')))
+})
+
+test('generateNewListCreationSql: never creates a public.items row — only public.lists and public.list_items are ever written', () => {
+  const result = generateNewListCreationSql({ metroSlug: 'munich', listId: LIST_ID, listTitle: 'Day Trips & Big Adventures', creatorId: CREATOR_ID, resolutions: goodResolutions() })
+  assert.equal(/INSERT INTO public\.items/i.test(result.sql!), false)
+})
+
+test('generateNewListCreationSql: NEVER embeds raw body text into the mutation — same UUID-only discipline as generateListMembershipSql', () => {
+  const result = generateNewListCreationSql({ metroSlug: 'munich', listId: LIST_ID, listTitle: 'Day Trips & Big Adventures', creatorId: CREATOR_ID, resolutions: goodResolutions() })
+  assert.equal(result.sql!.includes('Pusser'), false)
+  assert.equal(result.sql!.includes('Schumann'), false)
+})
+
+test('generateNewListCreationSql: zero matches on any row refuses to generate ANY SQL — same fail-closed preflight as membership SQL', () => {
+  const result = generateNewListCreationSql({ metroSlug: 'munich', listId: LIST_ID, listTitle: 'Day Trips & Big Adventures', creatorId: CREATOR_ID, resolutions: [{ intendedBody: 'Missing item', sortOrder: 1, matchedItemIds: [] }] })
+  assert.equal(result.ok, false)
+  assert.equal(result.sql, null)
+})
+
+test('generateNewListCreationSql: multiple matches on any row refuses to generate ANY SQL', () => {
+  const result = generateNewListCreationSql({ metroSlug: 'munich', listId: LIST_ID, listTitle: 'Day Trips & Big Adventures', creatorId: CREATOR_ID, resolutions: [{ intendedBody: 'Ambiguous item', sortOrder: 1, matchedItemIds: ['a', 'b'] }] })
+  assert.equal(result.ok, false)
+  assert.equal(result.sql, null)
+})
+
+test('generateNewListCreationSql: preserves unrelated metros and lists by construction — scoped by metro slug -> v_metro_id, and the exact target id -> v_list_id, never a bare public.lists/list_items write', () => {
+  const result = generateNewListCreationSql({ metroSlug: 'munich', listId: LIST_ID, listTitle: 'Day Trips & Big Adventures', creatorId: CREATOR_ID, resolutions: goodResolutions() })
+  assert.match(result.sql!, /WHERE slug = 'munich'/)
+  assert.match(result.sql!, new RegExp(`v_list_id uuid := '${LIST_ID}'::uuid;`))
+  assert.match(result.sql!, /DELETE FROM public\.list_items WHERE list_id = v_list_id;/)
+  assert.equal(result.sql!.includes(OTHER_LIST_ID), false, 'must never reference any other list id')
+})
+
+test('generateNewListCreationSql: an unrelated-metro conflict at the SAME deterministic id RAISE EXCEPTIONs inside the transaction — defense in depth alongside the caller\'s own TypeScript-level pre-check', () => {
+  const result = generateNewListCreationSql({ metroSlug: 'munich', listId: LIST_ID, listTitle: 'Day Trips & Big Adventures', creatorId: CREATOR_ID, resolutions: goodResolutions() })
+  assert.match(result.sql!, /SELECT metro_id INTO v_existing_metro_id FROM public\.lists WHERE id = v_list_id;/)
+  assert.match(result.sql!, /IF v_existing_metro_id IS NOT NULL AND v_existing_metro_id <> v_metro_id THEN/)
+  assert.match(result.sql!, /RAISE EXCEPTION 'deterministic list id % already belongs to a different metro/)
+})
+
+test('generateNewListCreationSql: idempotency by construction — regenerating from the SAME conceptId-derived input produces byte-identical SQL (no random/generated UUID, no timestamp)', () => {
+  const a = generateNewListCreationSql({ metroSlug: 'munich', listId: LIST_ID, listTitle: 'Day Trips & Big Adventures', creatorId: CREATOR_ID, resolutions: goodResolutions() })
+  const b = generateNewListCreationSql({ metroSlug: 'munich', listId: LIST_ID, listTitle: 'Day Trips & Big Adventures', creatorId: CREATOR_ID, resolutions: goodResolutions() })
+  assert.equal(a.sql, b.sql, 'rerunning must never produce a second, different list-creation statement for the same input — a real rerun against the same DB state converges on the SAME row via ON CONFLICT (id)')
+})
+
+test('generateNewListCreationSql: the SAME listId with a CHANGED title still targets the SAME row — a title change updates in place via ON CONFLICT (id), never a second row', () => {
+  const renamed = generateNewListCreationSql({ metroSlug: 'munich', listId: LIST_ID, listTitle: 'Day Trips & Epic Adventures (renamed)', creatorId: CREATOR_ID, resolutions: goodResolutions() })
+  assert.equal(renamed.ok, true)
+  assert.match(renamed.sql!, new RegExp(`v_list_id uuid := '${LIST_ID}'::uuid;`), 'the id is completely unaffected by the title change')
+  assert.match(renamed.sql!, /ON CONFLICT \(id\) DO UPDATE SET title = EXCLUDED\.title;/, 'the renamed title is applied via an explicit, in-place UPDATE on the SAME row, never a new INSERT')
+})
+
+test('generateNewListCreationSql: the SAME listId with CHANGED membership still targets the SAME row', () => {
+  const changedMembership = generateNewListCreationSql({
+    metroSlug: 'munich',
+    listId: LIST_ID,
+    listTitle: 'Day Trips & Big Adventures',
+    creatorId: CREATOR_ID,
+    resolutions: [{ intendedBody: 'A brand-new third member', sortOrder: 3, matchedItemIds: ['33333333-3333-3333-3333-333333333333'] }, ...goodResolutions()],
+  })
+  assert.equal(changedMembership.ok, true)
+  assert.equal(changedMembership.expectedMembershipCount, 3)
+  assert.match(changedMembership.sql!, new RegExp(`v_list_id uuid := '${LIST_ID}'::uuid;`))
+})
+
+test('generateNewListCreationSql: two DIFFERENT listIds (as two different conceptIds would derive) never collide, even with the identical title', () => {
+  const a = generateNewListCreationSql({ metroSlug: 'munich', listId: LIST_ID, listTitle: 'Day Trips & Big Adventures', creatorId: CREATOR_ID, resolutions: goodResolutions() })
+  const b = generateNewListCreationSql({ metroSlug: 'munich', listId: OTHER_LIST_ID, listTitle: 'Day Trips & Big Adventures', creatorId: CREATOR_ID, resolutions: goodResolutions() })
+  assert.notEqual(a.sql, b.sql)
+  assert.match(a.sql!, new RegExp(LIST_ID))
+  assert.match(b.sql!, new RegExp(OTHER_LIST_ID))
+  assert.equal(a.sql!.includes(OTHER_LIST_ID), false)
+  assert.equal(b.sql!.includes(LIST_ID.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')), false)
+})
+
+test('generateNewListCreationSql: real Pusser\'s New York Bar / Schumann\'s apostrophes in the TITLE are safely handled via sqlQuote doubling, never dollar-quote mismatched', () => {
+  const result = generateNewListCreationSql({
+    metroSlug: 'munich',
+    listId: LIST_ID,
+    listTitle: "Pusser's & Schumann's After Dark",
+    creatorId: CREATOR_ID,
+    resolutions: goodResolutions(),
+  })
+  assert.equal(result.ok, true)
+  assert.match(result.sql!, /'Pusser''s & Schumann''s After Dark'/, 'apostrophes in the title are doubled, the correct escape for ordinary single-quoted literals')
+  assert.equal(result.sql!.includes("Pusser's"), false, 'an UNDOUBLED apostrophe must never appear — that would be the exact quoting-mismatch bug class this module exists to prevent')
+})
+
+test('generateNewListCreationSql: an apostrophe in creatorId (a defensive, unrealistic but never-trusted input) is also safely doubled, never breaks the literal', () => {
+  const result = generateNewListCreationSql({ metroSlug: 'munich', listId: LIST_ID, listTitle: 'Day Trips & Big Adventures', creatorId: "o'brien-service-account", resolutions: goodResolutions() })
+  assert.equal(result.ok, true)
+  assert.match(result.sql!, /VALUES \(v_list_id, v_metro_id, 'Day Trips & Big Adventures', true, true, 'o''brien-service-account', false\)/)
+})
+
+test('generateNewListCreationSql: an empty resolved set still generates valid, safe SQL — list creation runs, no INSERT into list_items, postflight expects 0', () => {
+  const result = generateNewListCreationSql({ metroSlug: 'munich', listId: LIST_ID, listTitle: 'Day Trips & Big Adventures', creatorId: CREATOR_ID, resolutions: [] })
+  assert.equal(result.ok, true)
+  assert.equal(result.expectedMembershipCount, 0)
+  assert.equal(result.sql!.includes('INSERT INTO public.list_items'), false)
+  assert.match(result.sql!, /IF v_count <> 0 THEN/)
 })
 
 // ---------------------------------------------------------------------------

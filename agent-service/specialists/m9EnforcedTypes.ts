@@ -179,6 +179,77 @@ export function computeM9CatalogFingerprint(items: readonly { candidateName: str
 }
 
 // ---------------------------------------------------------------------------
+// Session 4 (follow-up correction) — deterministic list identity. A genuinely
+// NEW public.lists row created from an approved concept must be identified
+// by something durable, never by its display title (title is mutable
+// presentation text an operator can rename at will, and two unrelated
+// concepts can legitimately propose the same title — see
+// m9SafeSqlIntegration.ts's own module doc for the full incident this
+// corrects: the first cut of new-list creation used a `(metro_id, title)`
+// natural-key lookup as its idempotency/identity mechanism, which a title
+// rename would have silently duplicated).
+//
+// Deliberately keyed by conceptId ALONE, never conceptFingerprint — a
+// concept's fingerprint changes on every membership/metadata drift
+// (computeM9ConceptFingerprint's own doc), so deriving the list id from it
+// would mint a NEW list identity on every ordinary membership change, which
+// is exactly backwards: "membership changes must retain the UUID."
+// conceptId already carries real, durable scope (metro + listKind +
+// normalized seedTags + editorialPromise — see computeM9ConceptId's own
+// doc) and is stable across membership/metadata/title changes by
+// construction, so it is the correct and only correct input here.
+// ---------------------------------------------------------------------------
+
+/**
+ * A fixed, arbitrary application namespace UUID for RFC 4122 UUIDv5
+ * derivation — never reused for any other deterministic-UUID purpose in
+ * this codebase, and never changed once real production list ids have been
+ * derived from it (changing it would silently re-identity every existing
+ * ENFORCED-created list). Versioned explicitly via the "v1" component
+ * hashed into the NAME below, not via this namespace constant itself — a
+ * genuine future v2 algorithm gets a new name prefix, not a new namespace,
+ * so this constant's own stability is the one thing that must never change.
+ */
+const M9_LIST_ID_NAMESPACE_V1 = 'b9c1c9a0-6b1e-4b7a-9c1a-2f7e6a1d4b21'
+
+/**
+ * RFC 4122 UUIDv5 (namespace + SHA-1), implemented directly (Node has no
+ * built-in uuidv5) — deterministic and portable: the same
+ * (namespace, name) pair always produces the same UUID, on any machine,
+ * forever, which is the exact property a stable list identity needs.
+ */
+function uuidv5(name: string, namespaceUuid: string): string {
+  const namespaceBytes = Buffer.from(namespaceUuid.replace(/-/g, ''), 'hex')
+  const nameBytes = Buffer.from(name, 'utf8')
+  const hash = createHash('sha1').update(Buffer.concat([namespaceBytes, nameBytes])).digest()
+  const bytes = Buffer.from(hash.subarray(0, 16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x50 // version 5
+  bytes[8] = (bytes[8] & 0x3f) | 0x80 // RFC 4122 variant
+  const hex = bytes.toString('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+/**
+ * The deterministic identity a genuinely NEW public.lists row created from
+ * an approved M9 concept must use — versioned explicitly ("v1" hashed into
+ * the UUIDv5 name, alongside M9_LIST_ID_NAMESPACE_V1). Pure function of
+ * conceptId alone:
+ *   - the SAME conceptId always resolves to the SAME list UUID (idempotent
+ *     creation, safe to call on every rerun).
+ *   - a title change never changes this (title plays no role in the input
+ *     at all — the concept's PROPOSED TITLE is not even a parameter here).
+ *   - a membership/metadata change never changes this (conceptFingerprint,
+ *     which DOES change on those, is deliberately NOT an input — see this
+ *     section's own module doc above).
+ *   - two DIFFERENT conceptIds — even proposing the identical title —
+ *     receive different UUIDs, because conceptId (not title) is the only
+ *     input.
+ */
+export function computeM9ListId(conceptId: string): string {
+  return uuidv5(`m9-list-id:v1:${conceptId}`, M9_LIST_ID_NAMESPACE_V1)
+}
+
+// ---------------------------------------------------------------------------
 // PHASE 1 — the discriminated ENFORCED result contract.
 // ---------------------------------------------------------------------------
 

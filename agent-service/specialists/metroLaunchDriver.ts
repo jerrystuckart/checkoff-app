@@ -88,8 +88,8 @@ import { fetchExistingProductionInventoryForReconciliation, type FetchExistingPr
 import { evaluateOutOfMarketContaminationGate } from '../playbooks/outOfMarketContamination'
 import { reconcileAgainstExistingInventory, type ExistingProductionItem, type ReconciliationResult } from '../playbooks/existingInventoryReconciliation'
 import { runM9ShadowCuration, runM9EnforcedCuration, type M9AdapterCertifiedItem, type M9ShadowComparisonArtifact } from './m9ListCurationAdapter'
-import type { M9EnforcedCurationArtifact, M9OperatorDecisionRecord, M9OperatorDecisionInput } from './m9EnforcedTypes'
-import { buildM9SafeSqlPlan, buildM9CompatibilityPlan, computeM9SqlValidationManifest, type M9SafeSqlIntegrationResult, type M9SqlValidationManifest } from './m9SafeSqlIntegration'
+import { computeM9ListId, type M9EnforcedCurationArtifact, type M9OperatorDecisionRecord, type M9OperatorDecisionInput } from './m9EnforcedTypes'
+import { buildM9SafeSqlPlan, buildM9CompatibilityPlan, computeM9SqlValidationManifest, type M9SafeSqlIntegrationResult, type M9SqlValidationManifest, type M9DeterministicListIdLookup } from './m9SafeSqlIntegration'
 import type { M9ReusedItemResolution } from './m9ReusedItemValidation'
 import type { M9ExistingListLookup } from './m9CompletedListResolution'
 import { deriveDefaultDepthTargets, DEFAULT_CATEGORY_COVERAGE_PLAN } from '../playbooks/defaultMetroManifest'
@@ -617,6 +617,16 @@ export interface MetroDriverDeps {
   resolveM9ProductionItems?: (input: { items: readonly { candidateName: string; conceptId: string }[]; metroSlug: string }) => Promise<M9ReusedItemResolution[]>
   /** Session 3, Phase 5/6, ENFORCED only: the real, one-time production list lookup for every approved concept. Same "defaults to resolving nothing" discipline as resolveM9ProductionItems — every concept comes back with existingList: null (treated as needing a new list) until a caller wires a real lookup. */
   resolveM9ProductionLists?: (input: { concepts: readonly { conceptId: string; proposedTitle: string }[]; metroSlug: string }) => Promise<M9ExistingListLookup[]>
+  /**
+   * Session 4, ENFORCED only: the real, one-time production lookup for
+   * "does a public.lists row already exist at computeM9ListId(conceptId)?"
+   * — required for buildM9SafeSqlPlan's deterministic-identity conflict
+   * check (m9SafeSqlIntegration.ts's own doc). Same "defaults to resolving
+   * nothing found" discipline as the other two resolvers above; every
+   * concept comes back with existingRowAtId: null until a caller wires a
+   * real lookup.
+   */
+  resolveM9DeterministicListIds?: (input: { concepts: readonly { conceptId: string; listId: string }[]; metroSlug: string }) => Promise<M9DeterministicListIdLookup[]>
   /** Session 3, ENFORCED only: the real metro_areas.id, when known — feeds only m9ReusedItemValidation.ts's out-of-metro check. Omit (or null) to skip that specific check, never to assume a match. */
   metroAreaId?: string | null
   /** M10: which Home cards already have an image. Omit to correctly report every required card as still needing one — Winston never fabricates image readiness. */
@@ -3883,7 +3893,19 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
       const conceptsForLookup = approvedConceptIds.map((conceptId) => ({ conceptId, proposedTitle: artifact.conceptVerdicts.find((v) => v.conceptId === conceptId)?.proposedTitle ?? conceptId }))
       const resolveItems = deps.resolveM9ProductionItems ?? (async (i: { items: readonly { candidateName: string; conceptId: string }[] }) => i.items.map((it) => ({ candidateName: it.candidateName, conceptId: it.conceptId, matchedItemIds: [] })))
       const resolveLists = deps.resolveM9ProductionLists ?? (async (i: { concepts: readonly { conceptId: string; proposedTitle: string }[] }) => i.concepts.map((c) => ({ conceptId: c.conceptId, existingList: null })))
-      const [itemResolutions, listLookups] = await Promise.all([resolveItems({ items: itemsForResolution, metroSlug }), resolveLists({ concepts: conceptsForLookup, metroSlug })])
+      // Session 4 — one real lookup per approved concept for "does a row
+      // already exist at this concept's deterministic list id?" (never
+      // title-keyed — see m9SafeSqlIntegration.ts's own doc). Defaults to
+      // resolving nothing found, same discipline as the other two
+      // resolvers above.
+      const conceptsForDeterministicIdLookup = approvedConceptIds.map((conceptId) => ({ conceptId, listId: computeM9ListId(conceptId) }))
+      const resolveDeterministicListIds =
+        deps.resolveM9DeterministicListIds ?? (async (i: { concepts: readonly { conceptId: string; listId: string }[] }) => i.concepts.map((c) => ({ conceptId: c.conceptId, existingRowAtId: null })))
+      const [itemResolutions, listLookups, deterministicListIdLookups] = await Promise.all([
+        resolveItems({ items: itemsForResolution, metroSlug }),
+        resolveLists({ concepts: conceptsForLookup, metroSlug }),
+        resolveDeterministicListIds({ concepts: conceptsForDeterministicIdLookup, metroSlug }),
+      ])
       const operatorDecisionsForCompletedList: Record<string, { resolutionAction: string; decisionText: string; decidedBy: string; decidedAt: string }> = {}
       for (const [decisionConceptId, decision] of Object.entries(state.m9OperatorDecisions ?? {})) {
         operatorDecisionsForCompletedList[decisionConceptId] = { resolutionAction: decision.resolutionAction, decisionText: decision.decisionText, decidedBy: decision.decidedBy, decidedAt: decision.decidedAt }
@@ -3896,6 +3918,14 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
         listLookups,
         operatorDecisionsByConceptId: operatorDecisionsForCompletedList,
         itemBodyByCandidateName,
+        // Session 4 — same real official-list creator id LEGACY's
+        // buildHomeListSqlPatch always uses (with the same fallback
+        // default); the actual safety gate for new-list creation is
+        // buildM9SafeSqlPlan's own validateNewListCreationApproval
+        // (fresh-fingerprint Jerry approval, zero duplicate findings,
+        // resolved items), not this id.
+        newListCreatorId: deps.officialListCreatorId ?? DEFAULT_OFFICIAL_LIST_CREATOR_ID,
+        deterministicListIdLookups,
       })
       state.m9SafeSqlPlan = safeSqlPlan
       run.state = state
