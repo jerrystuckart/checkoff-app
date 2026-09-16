@@ -107,7 +107,7 @@ import {
 import { extractCanonicalVenueOptions, resolveDefaultCanonicalVenueName, resolveConfirmedCanonicalVenueName } from '../playbooks/canonicalVenueName'
 import { evaluatePartnerPotential, type PartnerPotentialEvaluation } from '../playbooks/partnerPotential'
 import { clusterByPlaceId, buildVenueClusterReviewNotes, evaluateSameVenueClusterReviewGate, type VenueCluster } from '../playbooks/venueDuplicateDetection'
-import { analyzeCatalogVoice, evaluateOpeningVerbConcentrationAudit, type VoiceCatalogEntry } from '../playbooks/catalogVoiceDiagnostics'
+import { analyzeCatalogVoice, evaluateOpeningVerbConcentrationAudit, snapshotOpeningWordDistribution, type VoiceCatalogEntry, type OpeningWordDiversitySnapshot, type OpeningWordDiversityReport } from '../playbooks/catalogVoiceDiagnostics'
 import { evaluatePlacesCompletenessGate, type PlacesCompletenessItemInput } from '../playbooks/placesCompletenessGate'
 import { evaluateNeighborhoodCompletenessGate } from '../playbooks/neighborhoodCompletenessGate'
 import { evaluateItemNeighborhoodReferentialIntegrityGate, evaluateItemGeoMetroConsistencyGate } from '../playbooks/itemNeighborhoodIntegrityGate'
@@ -267,6 +267,10 @@ interface MetroDriverState {
   catalogVoicePassAttempted?: string[]
   /** Every item CATALOG_VOICE_PASS actually rewrote (never every item it considered — most flagged items may legitimately come back unchanged when a rewrite would weaken specificity). */
   catalogVoiceRewrites?: Array<{ candidateName: string; dominantOpeningWord: string }>
+  /** Munich fix (2026-09-16) — the ORIGINAL, pre-any-rewrite opening-word snapshot, captured once on this stage's first pass and never overwritten (so "before" always means the true starting distribution, not whatever it was on the most recent resume). Feeds state.openingWordDiversityReport's own `before`. */
+  catalogVoiceBeforeSnapshot?: OpeningWordDiversitySnapshot
+  /** Munich fix (2026-09-16) — the structured before/after opening-word report (requirement: "produce a structured report showing before and after opening-word counts"), recomputed fresh every M8.75 pass so `after` always reflects the current, real bodies. `before` is pinned to catalogVoiceBeforeSnapshot. */
+  openingWordDiversityReport?: OpeningWordDiversityReport
   /** Chief Phase 3B (item 10) — the final "what is still weak?" strategic coverage report, computed once at M10 from the frozen retained catalog. */
   strategicReport?: StrategicCoverageReport
   /** Chief Phase 3B (item 7) — filenames actually handed to deps.writeStageArtifact at M10 (empty when no writer was configured — this driver never assumes disk access it wasn't given). */
@@ -2510,7 +2514,19 @@ async function stepCatalogVoicePass(deps: MetroDriverDeps, run: PlaybookRunRecor
   const alreadyAttempted = new Set(state.catalogVoicePassAttempted ?? [])
   const toProcess = diagnostics.flaggedCandidateNames.filter((n) => !alreadyAttempted.has(n))
 
+  // Munich fix — structured before/after report. `before` is captured
+  // ONCE, on this stage's true first pass for this run, and never
+  // overwritten by a later resume; `after` is always the CURRENT
+  // distribution, so the report stays accurate even when this stage is
+  // revisited (M8_BATCH_CERTIFICATION loop-back) or when there was
+  // nothing to flag at all (before === after, itemsRewritten: 0 — an
+  // honest report that the catalog was already healthy, not an absent one).
+  const beforeSnapshot = state.catalogVoiceBeforeSnapshot ?? snapshotOpeningWordDistribution(entries)
+  state.catalogVoiceBeforeSnapshot = beforeSnapshot
+  state.openingWordDiversityReport = { before: beforeSnapshot, after: snapshotOpeningWordDistribution(entries), itemsRewritten: (state.catalogVoiceRewrites ?? []).length }
+
   if (toProcess.length === 0) {
+    run.state = state
     run.currentStage = 'METRO_FINISHER_DEEP_RESEARCH'
     return run
   }
@@ -2525,7 +2541,17 @@ async function stepCatalogVoicePass(deps: MetroDriverDeps, run: PlaybookRunRecor
     const record = certifiedByName.get(candidateName)
     attempted.add(candidateName)
     if (!record) continue
-    const dominantOpeningWord = diagnostics.dominantOpeningWords.find((w) => record.finalBody.trim().toLowerCase().startsWith(w)) ?? diagnostics.dominantOpeningWords[0] ?? ''
+    // Munich fix: an item flagged ONLY via diffuse concentration (no
+    // single word crosses the higher dominantOpeningWords bar — exactly
+    // the Munich shape) still needs a real opener name for the rewrite
+    // objective, so fall back to notableConcentrationWords before the
+    // previous, less accurate "just pick dominantOpeningWords[0]" default.
+    const dominantOpeningWord =
+      diagnostics.dominantOpeningWords.find((w) => record.finalBody.trim().toLowerCase().startsWith(w)) ??
+      diagnostics.notableConcentrationWords.find((w) => record.finalBody.trim().toLowerCase().startsWith(w)) ??
+      diagnostics.dominantOpeningWords[0] ??
+      diagnostics.notableConcentrationWords[0] ??
+      ''
     const newBody = await rewriteOneItemVoice(deps, run, candidateName, record.finalBody, record.venueName, dominantOpeningWord)
     if (newBody && newBody !== record.finalBody) {
       itemCertifications[candidateName] = { ...itemCertifications[candidateName], finalBody: newBody }
@@ -2536,6 +2562,13 @@ async function stepCatalogVoicePass(deps: MetroDriverDeps, run: PlaybookRunRecor
   state.itemCertifications = itemCertifications
   state.catalogVoicePassAttempted = [...attempted]
   state.catalogVoiceRewrites = rewrites
+  // Recompute `after` against the REAL, current (post-rewrite) bodies —
+  // the same "never report a stale pre-rewrite verdict" discipline as the
+  // M8_BATCH_CERTIFICATION loop-back below, applied to the report itself.
+  const afterEntries: VoiceCatalogEntry[] = Object.values(itemCertifications)
+    .filter((r): r is DriverItemCertificationRecord & { finalBody: string } => r.outcome === 'ITEM_CERTIFIED' && r.finalBody !== null)
+    .map((r) => ({ candidateName: r.candidateName, body: r.finalBody }))
+  state.openingWordDiversityReport = { before: beforeSnapshot, after: snapshotOpeningWordDistribution(afterEntries), itemsRewritten: rewrites.length }
   run.state = state
   // Stays on this stage until every flagged item has had its one
   // attempt (mirrors M8.5's own batching-across-resumes pattern) —

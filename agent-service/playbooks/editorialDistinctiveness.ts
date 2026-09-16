@@ -217,8 +217,25 @@ export function checkVenueQuoted(body: string, venueName: string): VenueQuotingC
 export const DEFAULT_MAX_OPENING_WORD_SHARE = 0.15
 const MIN_BATCH_SIZE_FOR_DISTRIBUTION_CHECK = 10
 
+/**
+ * Strips leading quote/punctuation characters (straight and curly, single
+ * and double) before extracting the opening word — so an atypical body
+ * that begins with a quoted venue name (e.g. `'Kunst Oase' has...`) is
+ * never misread as if the quote mark itself were part of a generic
+ * opening word. Real CheckOff bodies are written in imperative voice
+ * ("Order the...") so this is a defensive edge case, not the common
+ * path, but it's exactly the "distinguish repeated opening words from
+ * legitimate venue names or quoted text" requirement made concrete.
+ */
 function firstWordOf(body: string): string {
-  const m = body.trim().match(/^[A-Za-z']+/)
+  const stripped = body.trim().replace(/^["'“”‘’]+/, '')
+  // Internal apostrophes stay part of the word (contractions like
+  // "don't"); a BARE TRAILING apostrophe never does — that's the shape a
+  // closing quote mark takes right after a quoted venue name with no
+  // space ('Kunst Oase' has...), and without this exclusion it would
+  // silently fork into a different word bucket than the same word
+  // written without a quote.
+  const m = stripped.match(/^[A-Za-z]+(?:'[A-Za-z]+)*/)
   return m ? m[0].toLowerCase() : ''
 }
 
