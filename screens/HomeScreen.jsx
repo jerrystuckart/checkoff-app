@@ -12,12 +12,12 @@ import { supabase } from '../lib/supabase'
 import { fetchCuratedLists } from '../lib/useItems'
 import { useCrewInvite } from '../lib/useCrewInvite'
 import { useLeaderboard } from '../lib/useLeaderboard'
-import { getTierByName, getNextTier, getTierProgress } from '../lib/tiers'
+import { getTierByName } from '../lib/tiers'
 import { useTheme } from '../lib/ThemeContext'
 import ExperiencesRail from '../components/ExperiencesRail'
 import * as Sentry from '@sentry/react-native'
 import { haversineMeters } from '../lib/distance'
-import { proximitySort, formatDistanceLabel } from '../lib/proximity'
+import { proximitySort } from '../lib/proximity'
 import { getSessionDensityTier } from '../lib/densityTier'
 import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
 import { filterMaskedBonusDrops } from '../lib/bonusDrops'
@@ -756,14 +756,6 @@ async function loadNearbyRail(userId) {
     isCheckedOff: whatsGood.atPlaceItem ? checkedItemIds.has(whatsGood.atPlaceItem.id) : false,
   })
 
-  // Location denied/unavailable, or genuinely nothing nearby (empty tier) —
-  // both read as "do these anywhere" rather than a failure state. Suppressed
-  // when the user is inside a recognized Destination Hub zone: the zone
-  // banner already tells them they're somewhere specific, so the rail
-  // shouldn't contradict it with "nothing around here" copy even if the
-  // coarse item-density heuristic says this area is sparse.
-  const railShowsAnywhereCopy = !nearbyZone && (!userLocation || sessionTier?.tier === 'empty')
-
   // Monday recap trigger — fires once on mount, entirely fire-and-forget
   useEffect(() => {
     async function checkMondayRecap() {
@@ -1130,200 +1122,13 @@ async function loadNearbyRail(userId) {
       <StatusBar barStyle={STATUS_BAR} />
 
       {/* ══════════════════════════════════════════════════════════════
-          LEGACY top-of-Home — untouched, byte-identical to before the
-          2026 redesign. Renders whenever whats_good_v1 is disabled
-          (the default for every non-tester user). See the
-          whatsGood.enabled branch below for the redesigned experience.
+          Home — the single top-of-Home experience for every user,
+          authenticated or anonymous (the old flag-gated legacy branch was
+          removed; see lib/useWhatsGood.js's module doc). See
+          lib/homeHeroLayout.js for the hero-priority rule (destination >
+          at-place > none) that decides what renders here on any given load.
           ══════════════════════════════════════════════════════════════ */}
-      {!whatsGood.enabled && (
-      <>
-      <View style={styles.headerCard}>
-        <View style={styles.headerTopRow}>
-          <View style={styles.logoWrapper}>
-            <Text style={styles.logo} allowFontScaling={false}>
-              Check<Text style={styles.logoOff} allowFontScaling={false}>Off</Text>
-            </Text>
-          </View>
-
-          {/* Both sides are flexShrink: 0 — the logo must never be asked to
-              compress or truncate. On narrow screens the "This Week" pill
-              hides instead (see isNarrowHeader) so this group's natural
-              width shrinks to make room, rather than fighting the logo for
-              space or getting pushed off-screen itself. */}
-          <View style={styles.headerStatusGroup}>
-            {user && !isNarrowHeader && (
-              <TouchableOpacity
-                onPress={() => navigation.navigate('WeeklyRecap')}
-                style={styles.thisWeekBtn}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-              >
-                <Text style={styles.thisWeekBtnText}>✦ This Week</Text>
-              </TouchableOpacity>
-            )}
-            {user && userStreak >= 1 && (
-              <View style={[styles.streakPill, userStreak >= 4 && styles.streakPillActive]}>
-                <Text style={[styles.streakPillText, userStreak >= 4 && styles.streakPillTextActive]} allowFontScaling={false}>
-                  {userStreak + 'w 🔥'}
-                </Text>
-              </View>
-            )}
-            <TouchableOpacity
-              onPress={toggleTheme}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              style={styles.themeToggle}
-            >
-              <Text style={styles.themeToggleIcon}>{isDark ? '☀️' : '🌙'}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-
-        <Text style={styles.tagline} maxFontSizeMultiplier={1.0} numberOfLines={1}>
-          Stop saying "I don't know what to do."
-        </Text>
-      </View>
-
-      {/* ── Metro + Status combined row ── */}
       {(() => {
-        const tier     = getTierByName(userInsiderTier)
-        const next     = getNextTier(userInsiderTier)
-        const progress = getTierProgress(userInsiderTier, userLifetimePts)
-        const tierIdx  = ['Starter','Explorer','Local','Insider','Legend'].indexOf(userInsiderTier)
-        const DOT_COUNT = 5
-        const filledDots = tierIdx < 0 ? 1 : tierIdx + 1
-
-        const metroLabel = selectedMetro?.name?.replace(' Metro', '') ?? '—'
-        const multiMetro = metros.length > 1
-
-        function openMetroPicker() {
-          if (!multiMetro) return
-          setMetroPickerVisible(true)
-        }
-
-        return (
-          <View style={styles.metroStatusRow}>
-            {/* Left — Metro selector */}
-            <TouchableOpacity
-              onPress={openMetroPicker}
-              activeOpacity={multiMetro ? 0.7 : 1}
-              style={styles.metroSelector}
-              disabled={!multiMetro}
-            >
-              <Text style={styles.metroSelectorText}>{metroLabel}</Text>
-              {multiMetro && <Text style={styles.metroChevron}> ▾</Text>}
-            </TouchableOpacity>
-
-            {/* Right — Compact status (only when logged in) */}
-            {user && (
-              <TouchableOpacity
-                onPress={() => navigation.navigate('ProfileTab')}
-                activeOpacity={0.75}
-                style={styles.compactStatus}
-              >
-                <Text style={[styles.compactTierLabel, { color: tier.text }]}>
-                  {userInsiderTier.toUpperCase()}
-                </Text>
-                <View style={styles.compactDots}>
-                  {Array.from({ length: DOT_COUNT }).map((_, i) => (
-                    <View
-                      key={i}
-                      style={[
-                        styles.compactDot,
-                        i < filledDots
-                          ? { backgroundColor: tier.text }
-                          : { backgroundColor: BORDER },
-                      ]}
-                    />
-                  ))}
-                </View>
-              </TouchableOpacity>
-            )}
-          </View>
-        )
-      })()}
-
-      {nearbyZone && !zoneBannerDismissed && (
-        <TouchableOpacity
-          style={styles.zoneBanner}
-          onPress={() => handleDestinationZoneTap(nearbyZone)}
-          activeOpacity={0.88}
-        >
-          <TouchableOpacity
-            style={styles.zoneBannerDismiss}
-            onPress={(e) => {
-              e.stopPropagation()
-              setZoneBannerDismissed(true)
-            }}
-            hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-          >
-            <Text style={styles.zoneBannerDismissText}>✕</Text>
-          </TouchableOpacity>
-          {__DEV__ && !nearbyZone.is_active && (
-            <Text style={styles.zoneBannerDebugBadge}>DEBUG: showing inactive zone</Text>
-          )}
-          <Text style={styles.zoneBannerLabel}>YOU'RE HERE</Text>
-          <Text style={styles.zoneBannerTitle}>{nearbyZone.banner_title || nearbyZone.name}</Text>
-          {nearbyZone.banner_subtitle ? (
-            <Text style={styles.zoneBannerSub}>{nearbyZone.banner_subtitle}</Text>
-          ) : null}
-          <View style={styles.zoneBannerCTA}>
-            <Text style={styles.zoneBannerCTAText}>See the list →</Text>
-          </View>
-        </TouchableOpacity>
-      )}
-
-      {/* ── "Near you right now" rail — B1 ──
-          Ordering note: this section sits right after the zone banner
-          above and right before the seasonal card below. When nearbyZone
-          is set, that banner already rendered above, giving Hub → rail →
-          seasonal. When it isn't, the banner simply doesn't render, giving
-          rail → seasonal directly — no separate conditional needed here. */}
-      {nearbyRailItems.length > 0 && (
-        <>
-          <View style={styles.sectionHeaderBlock}>
-            <Text style={styles.sectionLabel}>Near you right now</Text>
-            <Text style={styles.sectionSub}>
-              {railShowsAnywhereCopy ? 'Do these anywhere' : 'The 5 closest things to check off'}
-            </Text>
-          </View>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.nearbyRailContent}
-          >
-            {nearbyRailItems.map(item => {
-              const distLabel = item.is_universal ? 'Anywhere' : (formatDistanceLabel(item.distM) ?? '')
-              const isRightHere = distLabel === 'right here'
-              return (
-                <TouchableOpacity
-                  key={item.id}
-                  style={styles.nearbyCard}
-                  activeOpacity={0.88}
-                  onPress={() => navigation.navigate('ItemDetail', { item })}
-                >
-                  <Text style={styles.nearbyCardBody} numberOfLines={3}>{item.body}</Text>
-                  <View style={[styles.nearbyCardTag, isRightHere && styles.nearbyCardTagHere]}>
-                    <Text style={[styles.nearbyCardTagText, isRightHere && styles.nearbyCardTagTextHere]}>
-                      {distLabel}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              )
-            })}
-          </ScrollView>
-        </>
-      )}
-
-      </>
-      )}
-      {/* ══════════════════════ end LEGACY top-of-Home ══════════════════════ */}
-
-      {/* ══════════════════════════════════════════════════════════════
-          2026 REDESIGN — behind whats_good_v1 (disabled globally; Jerry-
-          only override). See lib/homeHeroLayout.js for the hero-priority
-          rule (destination > at-place > none) that decides what renders
-          here on any given load.
-          ══════════════════════════════════════════════════════════════ */}
-      {whatsGood.enabled && (() => {
         const tier2       = getTierByName(userInsiderTier)
         const tierIdx2     = ['Starter', 'Explorer', 'Local', 'Insider', 'Legend'].indexOf(userInsiderTier)
         const filledDots2 = tierIdx2 < 0 ? 1 : tierIdx2 + 1
