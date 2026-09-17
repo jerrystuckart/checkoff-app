@@ -30,13 +30,18 @@ import React from 'react'
 import { View, Text, Image, StyleSheet } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import PressableTactile from '../PressableTactile'
-import { resolvedItemImage } from '../../lib/whatsGoodImageSource'
 import { deriveVenueAndThing } from '../../lib/whatsGoodItemPresentation'
 import { isSpecialItemPresentation } from '../../lib/whatsGoodDisplayLayout'
 import { formatDistanceLabel } from '../../lib/proximity'
 import { extractQuotedVenueFromBody } from '../../lib/itemDetailHeaderTitle'
-import { currentRotationContext } from '../../lib/rotationContext'
 import { railAccentForIndex } from '../../lib/whatsGoodRailLayout'
+// Archetype Fallback Artwork V1 (2026-09-17) — see useCardArtwork.js. Every
+// spot that used to call resolvedItemImage(item, context) directly now
+// goes through this hook instead: same `{ url }` shape for a real approved
+// photo (behavior bit-for-bit unchanged), PLUS a resolved archetype/
+// category-default illustration when there's no real photo, with its own
+// onError -> fall back to the existing no-image treatment.
+import { useCardArtwork } from './useCardArtwork'
 
 // FINAL CLEANUP BEFORE BUILD 144 — item 1: category was competing
 // visually with venue/thing on the primary card ("Bar & drinks" reads as
@@ -48,15 +53,23 @@ function metaLine(item) {
   return item?.is_universal ? null : formatDistanceLabel(item?.distM)
 }
 
-function PrimaryImageMode({ item, colors, isSpecial, venueName, thing, meta, onPress, userId }) {
+function PrimaryImageMode({ item, colors, isSpecial, venueName, thing, meta, onPress, userId, artwork }) {
   const { AMBER, ENDED_TEXT } = colors
-  const image = resolvedItemImage(item, currentRotationContext(userId))
   const accent = isSpecial ? ENDED_TEXT : AMBER
 
   return (
     <PressableTactile intensity="hero" onPress={onPress} style={[styles.primaryCard, { shadowColor: colors.SHADOW_COLOR ?? 'rgba(0,0,0,0.3)' }]}>
       <View style={styles.primaryImageWrapper}>
-        <Image source={{ uri: image.url }} style={styles.primaryImage} resizeMode="cover" />
+        <Image
+          key={artwork.url}
+          source={{ uri: artwork.url }}
+          style={styles.primaryImage}
+          resizeMode="cover"
+          onError={artwork.onError}
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+          accessibilityLabel=""
+        />
         {/* Real editorial gradient, not a flat wash — guarantees text
             contrast over any photo while still reading as premium/upscale
             rather than a muddy solid tint. */}
@@ -150,7 +163,8 @@ function SecondaryRow({ item, colors, onPress, userId }) {
   const { TEXT, CARD_ELEVATED, AMBER, ENDED_TEXT, SHADOW_COLOR } = colors
   const isSpecial = isSpecialItemPresentation(item)
   const { venueName, thing } = deriveVenueAndThing(item)
-  const image = resolvedItemImage(item, currentRotationContext(userId))
+  const artwork = useCardArtwork(item, userId)
+  const image = artwork.url ? { url: artwork.url } : null
   const accent = isSpecial ? ENDED_TEXT : AMBER
   const distLabel = item?.is_universal ? null : formatDistanceLabel(item?.distM)
   // venueName only exists for items with a real partners row — most
@@ -167,7 +181,16 @@ function SecondaryRow({ item, colors, onPress, userId }) {
       style={[styles.rowCard, { backgroundColor: CARD_ELEVATED, borderColor: `${accent}2E` }]}
     >
       {image ? (
-        <Image source={{ uri: image.url }} style={styles.rowImage} resizeMode="cover" />
+        <Image
+          key={image.url}
+          source={{ uri: image.url }}
+          style={styles.rowImage}
+          resizeMode="cover"
+          onError={artwork.onError}
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+          accessibilityLabel=""
+        />
       ) : (
         <View style={[styles.rowAccentWrap, { backgroundColor: `${accent}1F` }]}>
           <View style={[styles.rowAccentDot, { backgroundColor: accent }]} />
@@ -202,7 +225,8 @@ function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight 
   const isSpecial = isSpecialItemPresentation(item)
   const { venueName, thing } = deriveVenueAndThing(item)
   const meta = metaLine(item)
-  const image = resolvedItemImage(item, currentRotationContext(userId))
+  const artwork = useCardArtwork(item, userId)
+  const image = artwork.url ? { url: artwork.url } : null
   const accent = railAccentForIndex(index, colors, isSpecial)
   const dims = { width: cardWidth, height: cardHeight }
 
@@ -213,7 +237,16 @@ function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight 
         onPress={onPress}
         style={[styles.railCard, dims, { shadowColor: SHADOW_COLOR ?? 'rgba(0,0,0,0.3)' }]}
       >
-        <Image source={{ uri: image.url }} style={StyleSheet.absoluteFillObject} resizeMode="cover" />
+        <Image
+          key={image.url}
+          source={{ uri: image.url }}
+          style={StyleSheet.absoluteFillObject}
+          resizeMode="cover"
+          onError={artwork.onError}
+          accessibilityElementsHidden
+          importantForAccessibility="no"
+          accessibilityLabel=""
+        />
         <LinearGradient
           colors={['transparent', 'rgba(6,6,14,0.35)', 'rgba(6,6,14,0.92)']}
           locations={[0, 0.45, 1]}
@@ -280,7 +313,7 @@ export default function EditorialCard({ item, onPress, colors, variant = 'primar
   const isSpecial = isSpecialItemPresentation(item)
   const { venueName, thing } = deriveVenueAndThing(item)
   const meta = metaLine(item)
-  const image = resolvedItemImage(item, currentRotationContext(userId))
+  const artwork = useCardArtwork(item, userId)
 
   if (variant === 'row') {
     return <SecondaryRow item={item} colors={colors} onPress={onPress} userId={userId} />
@@ -290,8 +323,8 @@ export default function EditorialCard({ item, onPress, colors, variant = 'primar
     return <RailCard item={item} index={index} colors={colors} onPress={onPress} userId={userId} cardWidth={cardWidth} cardHeight={cardHeight} />
   }
 
-  if (image) {
-    return <PrimaryImageMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} userId={userId} />
+  if (artwork.url) {
+    return <PrimaryImageMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} userId={userId} artwork={artwork} />
   }
   return <PrimaryNoImageMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} />
 }

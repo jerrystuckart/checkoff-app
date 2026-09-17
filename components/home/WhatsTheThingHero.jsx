@@ -46,14 +46,22 @@ import { View, Text, Image, StyleSheet, Animated } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import PressableTactile from '../PressableTactile'
 import { isSpecialItemPresentation } from '../../lib/whatsGoodDisplayLayout'
-import { resolvedItemImage } from '../../lib/whatsGoodImageSource'
-import { currentRotationContext } from '../../lib/rotationContext'
+// Archetype Fallback Artwork V1 (2026-09-17) — see useCardArtwork.js.
+// Replaces the direct resolvedItemImage() call: same `{ url }` shape for a
+// real approved photo, plus resolved archetype/category-default artwork
+// when there's no real photo (with its own onError -> generic fallback).
+import { useCardArtwork } from './useCardArtwork'
 import { useCoverCandidateCTA } from '../../lib/useCoverCandidateCTA'
 import CoverCandidateCTA from '../CoverCandidateCTA'
 
 export default function WhatsTheThingHero({ item, navigation, colors, compact = false, userId = null }) {
   const anim = useRef(new Animated.Value(0)).current
   const showContributionCTA = useCoverCandidateCTA({ userId, item })
+  // Called unconditionally (rules-of-hooks) even though this component
+  // bails out below when item is null — useCardArtwork tolerates a null
+  // item (resolveArtworkTier -> generic tier) the same way
+  // useCoverCandidateCTA above already does.
+  const artwork = useCardArtwork(item, userId)
 
   useEffect(() => {
     anim.setValue(0)
@@ -65,7 +73,7 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
   const { TEXT, MUTED, AMBER, NAVY, CARD_ELEVATED, ENDED_BG, ENDED_BORDER, ENDED_TEXT, SHADOW_COLOR } = colors
   const isSpecial = isSpecialItemPresentation(item)
   const venueName = item.partnerName ?? null
-  const image = resolvedItemImage(item, currentRotationContext(userId))
+  const image = artwork.url ? { url: artwork.url } : null
   const showImageMode = !compact && Boolean(image)
 
   const opacity = anim
@@ -114,7 +122,16 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
       >
         {showImageMode ? (
           <View style={styles.imageWrapper}>
-            <Image source={{ uri: image.url }} style={styles.image} resizeMode="cover" />
+            <Image
+              key={image.url}
+              source={{ uri: image.url }}
+              style={styles.image}
+              resizeMode="cover"
+              onError={artwork.onError}
+              accessibilityElementsHidden
+              importantForAccessibility="no"
+              accessibilityLabel=""
+            />
             <LinearGradient
               colors={['transparent', 'rgba(6,6,14,0.4)', 'rgba(6,6,14,0.94)']}
               locations={[0, 0.4, 1]}

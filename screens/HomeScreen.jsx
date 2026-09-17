@@ -577,6 +577,12 @@ function mapRailItem(item) {
     categoryColor:       item.categories?.color_hex ?? '#888780',
     neighborhoodId:      item.neighborhoods?.id ?? null,
     neighborhoodName:    item.neighborhoods?.name ?? null,
+    // Archetype Fallback Artwork V1 (2026-09-17) — optional per-item
+    // override consumed by lib/fallbackArtSource.js's resolver (see
+    // components/home/useCardArtwork.js). Snake->camel mapping mirrors
+    // every other field in this function; null is the common case and
+    // means "use the category default archetype."
+    fallbackArtKey:      item.fallback_art_key ?? null,
   }
 }
 
@@ -588,7 +594,7 @@ async function loadNearbyRail(userId) {
       maps_lat, maps_lng, geo_radius_m, is_secret, secret_reveal_text,
       website_url, maps_query, partner_id, has_alcohol, season_tag,
       allows_personal_note, personal_prompt_label, personal_place_label,
-      active_cover_candidate_id,
+      active_cover_candidate_id, fallback_art_key,
       categories(name, color_hex),
       neighborhoods!items_neighborhood_id_fkey(id, name),
       partners!items_partner_id_fkey(business_name, photo_url)
