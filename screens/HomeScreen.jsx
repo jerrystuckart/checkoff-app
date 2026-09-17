@@ -1192,6 +1192,7 @@ async function loadNearbyRail(userId) {
               <NearYouCompact
                 items={nearYouCompactItems}
                 colors={colors}
+                userId={user?.id ?? null}
                 onItemPress={(item) => navigation.navigate('ItemDetail', { item })}
                 onSeeAllPress={() => navigation.navigate('NearbyTab')}
               />
