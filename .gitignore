@@ -58,6 +58,13 @@ supabase/.temp/
 checkoff_admin.html
 generate-apple-jwt.js
 
+# Deployment-ready binary handoff assets — produced locally by
+# scripts/build-archetype-artwork.js from approved source art that lives
+# outside the repo (~/Downloads/checkoff-home-archetype-artwork-approved/).
+# These .webp files are Storage-hosted remote assets, never bundled into
+# the app or committed to git — see docs/fallback-art-manifest.md.
+/assets-handoff/
+
 # Apple/private keys
 *.p8
 AuthKey_*.p8
