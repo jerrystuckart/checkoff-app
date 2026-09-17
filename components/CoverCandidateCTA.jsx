@@ -38,6 +38,7 @@ export default function CoverCandidateCTA({ item, navigation, colors, compact = 
         onPress={() => navigation.navigate('CoverCandidateCapture', { item })}
         style={[styles.pill, { borderColor: `${AMBER}66`, backgroundColor: `${AMBER}14` }]}
         accessibilityLabel="Take a photo to be considered for the cover"
+        accessibilityRole="button"
       >
         <Text style={styles.pillGlyph}>📷</Text>
         <Text
@@ -58,6 +59,7 @@ export default function CoverCandidateCTA({ item, navigation, colors, compact = 
       shadowColor="transparent"
       onPress={() => navigation.navigate('CoverCandidateCapture', { item })}
       style={[compact ? styles.compactWrapper : styles.wrapper, { borderColor: `${AMBER}55`, backgroundColor: `${AMBER}14` }]}
+      accessibilityRole="button"
     >
       <View style={styles.row}>
         <Text style={styles.cameraGlyph}>📷</Text>

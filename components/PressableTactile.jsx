@@ -24,7 +24,7 @@ const INTENSITY = {
   utility: { translateY: 1.5, scale: 0.99, haptic: Haptics.ImpactFeedbackStyle.Light, shadowRestOpacity: 0.16, shadowPressOpacity: 0.06, shadowRestRadius: 8, shadowRestOffset: 4 },
 }
 
-export default function PressableTactile({ children, onPress, intensity = 'utility', style, shadowColor = 'rgba(0,0,0,0.3)', disabled = false, hitSlop, accessibilityLabel }) {
+export default function PressableTactile({ children, onPress, intensity = 'utility', style, shadowColor = 'rgba(0,0,0,0.3)', disabled = false, hitSlop, accessibilityLabel, accessibilityRole }) {
   const cfg = INTENSITY[intensity] ?? INTENSITY.utility
   const anim = useRef(new Animated.Value(0)).current // 0 = rest, 1 = pressed
 
@@ -44,7 +44,7 @@ export default function PressableTactile({ children, onPress, intensity = 'utili
   }
 
   return (
-    <Pressable onPress={disabled ? undefined : onPress} onPressIn={disabled ? undefined : onPressIn} onPressOut={disabled ? undefined : onPressOut} disabled={disabled} hitSlop={hitSlop} accessibilityLabel={accessibilityLabel}>
+    <Pressable onPress={disabled ? undefined : onPress} onPressIn={disabled ? undefined : onPressIn} onPressOut={disabled ? undefined : onPressOut} disabled={disabled} hitSlop={hitSlop} accessibilityLabel={accessibilityLabel} accessibilityRole={accessibilityRole}>
       <Animated.View
         style={[
           style,

@@ -109,6 +109,30 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
 
   const eyebrowText = venueName ? `YOU'RE AT ${venueName.toUpperCase()}` : "YOU'RE HERE"
 
+  // Right Here redesign (2026-09-17) — points/difficulty metadata line.
+  // Same "+{difficulty} pts" convention already used by DiscoverScreen's
+  // row card (see screens/DiscoverScreen.jsx's ptsText) — no new points
+  // logic invented here, and deliberately NOT a duplicate "RIGHT HERE"
+  // label (that would be redundant with the eyebrow above/inside the
+  // card, per design correction).
+  const pointsLabel = `+${item.difficulty ?? 1} pts`
+
+  // "Help the next person" support copy for the Add a Photo action — must
+  // render at most once (approved design correction on the original
+  // mockup, which duplicated it). Owned here, not inside
+  // CoverCandidateCTA's shared 'pill' variant, since that variant has no
+  // other consumer today but shouldn't be forced to carry hero-specific
+  // copy either. `onImage` picks a readable-over-scrim color for the
+  // photo/archetype branches vs. the plain-surface MUTED tone elsewhere.
+  function renderAddPhotoHelper(onImage) {
+    if (!showContributionCTA) return null
+    return (
+      <Text style={[styles.addPhotoHelper, { color: onImage ? 'rgba(255,255,255,0.75)' : MUTED }]}>
+        Help the next person
+      </Text>
+    )
+  }
+
   // FINAL UI PASS BEFORE BUILD 144 — item 5: both actions get equal flex
   // (same footprint) and are hard-capped to one line via
   // adjustsFontSizeToFit (shrinks the text instead of wrapping it or
@@ -144,7 +168,9 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
       </Text>
       <Text style={styles.titleOnImage}>What's the Thing?</Text>
       <Text style={styles.bodyOnImage} numberOfLines={3}>{item.body}</Text>
+      <Text style={styles.metaOnImage}>{pointsLabel}</Text>
       {ctaRow}
+      {renderAddPhotoHelper(true)}
     </View>
   )
 
@@ -154,6 +180,8 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
         intensity={compact ? 'utility' : 'hero'}
         onPress={() => navigation.navigate('ItemDetail', { item })}
         shadowColor={SHADOW_COLOR ?? 'rgba(0,0,0,0.3)'}
+        accessibilityRole="button"
+        accessibilityLabel={venueName ? `${item.body}, at ${venueName}` : item.body}
         style={[
           compact ? styles.compactCard : styles.card,
           showPhotoLikeMode ? styles.imageCard : { backgroundColor: surface, borderColor: accentBorder },
@@ -204,7 +232,9 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
                   <Text style={[styles.specialBadgeText, { color: ENDED_TEXT }]}>✦ Secret unlocked</Text>
                 </View>
               ) : null}
+              {!compact ? <Text style={[styles.metaText, { color: MUTED }]}>{pointsLabel}</Text> : null}
               {!compact && ctaRow}
+              {!compact && renderAddPhotoHelper(false)}
             </View>
           </>
         )}
@@ -223,6 +253,15 @@ const styles = StyleSheet.create({
   eyebrowOnImage: { fontSize: 13, fontWeight: '900', letterSpacing: 0.9, marginBottom: 6, textTransform: 'uppercase' },
   titleOnImage: { color: '#fff', fontSize: 23, fontWeight: '900', marginBottom: 6 },
   bodyOnImage: { color: 'rgba(255,255,255,0.92)', fontSize: 15, fontWeight: '600', lineHeight: 21, marginBottom: 4 },
+  // Right Here redesign (2026-09-17) — points/difficulty metadata, shared
+  // shape across both photo-like and plain-surface branches. Deliberately
+  // plain text, no pill/badge chrome, so it never competes visually with
+  // the "RIGHT HERE"-style redundancy the design correction removed.
+  metaOnImage: { color: 'rgba(255,255,255,0.75)', fontSize: 12, fontWeight: '700', letterSpacing: 0.3, marginBottom: 10 },
+  metaText: { fontSize: 12, fontWeight: '700', letterSpacing: 0.3, marginTop: 2, marginBottom: 10 },
+  // "Help the next person" — renders at most once, directly under the
+  // action row, only when the Add a Photo action itself is eligible.
+  addPhotoHelper: { fontSize: 12, fontWeight: '600', marginTop: 8 },
   textBlock: { padding: 20 },
   // "You're Here" emphasis bump (real-device feedback, 2026-09-03): a
   // notch larger and slightly wider letter-spacing than before, still
@@ -239,9 +278,15 @@ const styles = StyleSheet.create({
   // footprint/height) — primary reads visually stronger via solid fill +
   // highlight sheen + shadow, secondary via the dashed/tinted treatment in
   // CoverCandidateCTA's 'pill' variant, not via being smaller.
-  ctaRow: { flexDirection: 'row', alignItems: 'stretch', marginTop: 16, gap: 10 },
+  // flexWrap: 'wrap' (Right Here redesign, 2026-09-17) — narrow devices /
+  // large Dynamic Type can push the two actions' natural content width
+  // past the available row width; wrapping lets the secondary Add a Photo
+  // pill drop to its own line instead of clipping or squeezing unreadably
+  // thin. Each pill's own minWidth (below) keeps it from being crushed to
+  // near-zero before the wrap kicks in.
+  ctaRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'stretch', marginTop: 16, gap: 10 },
   ctaPill: {
-    flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 13, borderRadius: 14, overflow: 'hidden',
+    flex: 1, minWidth: 150, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12, paddingVertical: 13, borderRadius: 14, overflow: 'hidden',
     shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.22, shadowRadius: 6, elevation: 4,
   },
   // When there's no photo pill to share the row with, the CTA fills it
