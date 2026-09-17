@@ -19,7 +19,13 @@
 export interface M9ExistingListLookup {
   conceptId: string
   /** null = no existing production list found for this concept's approved title — a genuinely new list. Never guessed; always the caller's own real one-time lookup result. */
-  existingList: { listId: string; title: string; status: 'ACTIVE' | 'COMPLETED' } | null
+  existingList: {
+    listId: string
+    title: string
+    status: 'ACTIVE' | 'COMPLETED'
+    /** Real current public.list_items membership for this list, when the caller's lookup fetched it — optional/additive (this module's own REUSE/REOPEN decision never needs it), captured for callers that do (e.g. a future membership-diff instead of blind replace). Omit, never fabricate, when the lookup didn't fetch it. */
+    memberItemIds?: readonly string[]
+  } | null
 }
 
 export interface M9CompletedListOperatorDecision {

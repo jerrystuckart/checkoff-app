@@ -107,6 +107,11 @@ function baseDeps(runStore: InstanceType<typeof InMemoryPlaybookRunStore>, overr
     resolveM9ProductionLists: async (input: { concepts: readonly { conceptId: string; proposedTitle: string }[] }) => input.concepts.map((c) => ({ conceptId: c.conceptId, existingList: null })),
     resolveM9ProductionItems: async (input: { items: readonly { candidateName: string; conceptId: string }[] }) =>
       input.items.map((it, idx) => ({ candidateName: it.candidateName, conceptId: it.conceptId, matchedItemIds: [`${String(idx).padStart(8, '0')}-0000-0000-0000-000000000000`], active: true, metroId: 'metro-munich' })),
+    // Session 5 — resolveM9DeterministicListIds now defaults to the REAL,
+    // DB-backed resolver when omitted; this safe stub keeps every test in
+    // this file (except the one below that explicitly overrides it to
+    // prove the real conflict-blocking wiring) off a real database.
+    resolveM9DeterministicListIds: async (input: { concepts: readonly { conceptId: string; listId: string }[] }) => input.concepts.map((c) => ({ conceptId: c.conceptId, existingRowAtId: null })),
     ...overrides,
   }
 }

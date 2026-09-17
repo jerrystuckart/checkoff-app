@@ -90,6 +90,7 @@ import { reconcileAgainstExistingInventory, type ExistingProductionItem, type Re
 import { runM9ShadowCuration, runM9EnforcedCuration, type M9AdapterCertifiedItem, type M9ShadowComparisonArtifact } from './m9ListCurationAdapter'
 import { computeM9ListId, type M9EnforcedCurationArtifact, type M9OperatorDecisionRecord, type M9OperatorDecisionInput } from './m9EnforcedTypes'
 import { buildM9SafeSqlPlan, buildM9CompatibilityPlan, computeM9SqlValidationManifest, type M9SafeSqlIntegrationResult, type M9SqlValidationManifest, type M9DeterministicListIdLookup } from './m9SafeSqlIntegration'
+import { resolveM9ProductionItemsReal, resolveM9ProductionListsReal, resolveM9DeterministicListIdsReal } from './m9ProductionResolvers'
 import type { M9ReusedItemResolution } from './m9ReusedItemValidation'
 import type { M9ExistingListLookup } from './m9CompletedListResolution'
 import { deriveDefaultDepthTargets, DEFAULT_CATEGORY_COVERAGE_PLAN } from '../playbooks/defaultMetroManifest'
@@ -3885,22 +3886,28 @@ async function stepM9HomeListMirror(deps: MetroDriverDeps, run: PlaybookRunRecor
     if (artifact.result.kind === 'READY') {
       // Session 3, Phase 5/6 — approved and valid is not yet SAFE TO SHIP:
       // attempt the real safe-SQL pipeline (m9SafeSqlIntegration.ts) using
-      // whatever real production resolvers the caller supplied (or the
-      // safe "resolves nothing" default when it didn't — see
-      // deps.resolveM9ProductionItems/resolveM9ProductionLists's own doc).
+      // whatever real production resolvers the caller supplied — Session 5
+      // wires the REAL, read-only, DB-backed resolvers (m9ProductionResolvers.ts)
+      // as the default, exactly the same pattern as `verify ?? readRealHomeListRows`
+      // and `fetchInventory ?? fetchExistingProductionInventoryForReconciliation`
+      // above/below in this same function: no `deps.*` override at all means
+      // the REAL production resolver runs, never a silent "resolves nothing"
+      // stand-in — ENFORCED can no longer be accidentally starved of real
+      // data by omission. A genuine query failure from any of the three
+      // propagates uncaught (same convention as fetchInventory's own call
+      // site), which stops this step — and the whole run — before
+      // state.homeListSqlPatch/state.m9SafeSqlPlan.ok is ever set, so a
+      // resolver failure can never reach executable SQL.
       const approvedConceptIds = Object.keys(artifact.finalApprovedMemberships)
       const itemsForResolution = approvedConceptIds.flatMap((conceptId) => (artifact.finalApprovedMemberships[conceptId] ?? []).map((candidateName) => ({ candidateName, conceptId })))
       const conceptsForLookup = approvedConceptIds.map((conceptId) => ({ conceptId, proposedTitle: artifact.conceptVerdicts.find((v) => v.conceptId === conceptId)?.proposedTitle ?? conceptId }))
-      const resolveItems = deps.resolveM9ProductionItems ?? (async (i: { items: readonly { candidateName: string; conceptId: string }[] }) => i.items.map((it) => ({ candidateName: it.candidateName, conceptId: it.conceptId, matchedItemIds: [] })))
-      const resolveLists = deps.resolveM9ProductionLists ?? (async (i: { concepts: readonly { conceptId: string; proposedTitle: string }[] }) => i.concepts.map((c) => ({ conceptId: c.conceptId, existingList: null })))
-      // Session 4 — one real lookup per approved concept for "does a row
-      // already exist at this concept's deterministic list id?" (never
-      // title-keyed — see m9SafeSqlIntegration.ts's own doc). Defaults to
-      // resolving nothing found, same discipline as the other two
-      // resolvers above.
+      const resolveItems = deps.resolveM9ProductionItems ?? ((i: { items: readonly { candidateName: string; conceptId: string }[]; metroSlug: string }) => resolveM9ProductionItemsReal(i, itemBodyByCandidateName))
+      const resolveLists = deps.resolveM9ProductionLists ?? ((i: { concepts: readonly { conceptId: string; proposedTitle: string }[]; metroSlug: string }) => resolveM9ProductionListsReal(i))
+      // One real lookup per approved concept for "does a row already exist
+      // at this concept's deterministic list id?" (never title-keyed — see
+      // m9SafeSqlIntegration.ts's own doc).
       const conceptsForDeterministicIdLookup = approvedConceptIds.map((conceptId) => ({ conceptId, listId: computeM9ListId(conceptId) }))
-      const resolveDeterministicListIds =
-        deps.resolveM9DeterministicListIds ?? (async (i: { concepts: readonly { conceptId: string; listId: string }[] }) => i.concepts.map((c) => ({ conceptId: c.conceptId, existingRowAtId: null })))
+      const resolveDeterministicListIds = deps.resolveM9DeterministicListIds ?? ((i: { concepts: readonly { conceptId: string; listId: string }[]; metroSlug: string }) => resolveM9DeterministicListIdsReal(i))
       const [itemResolutions, listLookups, deterministicListIdLookups] = await Promise.all([
         resolveItems({ items: itemsForResolution, metroSlug }),
         resolveLists({ concepts: conceptsForLookup, metroSlug }),

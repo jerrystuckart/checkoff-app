@@ -125,6 +125,16 @@ function baseDeps(runStore: InstanceType<typeof InMemoryPlaybookRunStore>, overr
     flagshipListTitle: 'Fall 2026 — Test Metro',
     now: () => '2026-09-14T00:00:00.000Z',
     m9CurationMode: 'ENFORCED' as const,
+    // Session 5 — resolveM9ProductionItems/Lists/DeterministicListIds now
+    // default to the REAL, DB-backed resolvers (m9ProductionResolvers.ts)
+    // when omitted, same convention as verifyHomeListRows above. This file
+    // doesn't test the safe-SQL stage at all — every override here just
+    // keeps tests that happen to reach it (e.g. reaching READY) from ever
+    // touching a real database, matching verifyHomeListRows's own existing
+    // "no DB access in tests" discipline.
+    resolveM9ProductionItems: async (input: { items: readonly { candidateName: string; conceptId: string }[] }) => input.items.map((it) => ({ candidateName: it.candidateName, conceptId: it.conceptId, matchedItemIds: [] })),
+    resolveM9ProductionLists: async (input: { concepts: readonly { conceptId: string; proposedTitle: string }[] }) => input.concepts.map((c) => ({ conceptId: c.conceptId, existingList: null })),
+    resolveM9DeterministicListIds: async (input: { concepts: readonly { conceptId: string; listId: string }[] }) => input.concepts.map((c) => ({ conceptId: c.conceptId, existingRowAtId: null })),
     ...overrides,
   }
 }

@@ -72,6 +72,14 @@ function baseDeps(runStore: InstanceType<typeof InMemoryPlaybookRunStore>, overr
     now: () => '2026-09-15T00:00:00.000Z',
     m9CurationMode: 'ENFORCED' as const,
     metroAreaId: 'metro-a',
+    // Session 5 — resolveM9ProductionItems/Lists/DeterministicListIds now
+    // default to the REAL, DB-backed resolvers when omitted. This file's
+    // own tests already override items/lists per-test (via cleanResolvers()
+    // and their own resolveM9ProductionLists); resolveM9DeterministicListIds
+    // runs for EVERY approved concept regardless of REUSE vs CREATE_NEW, so
+    // it needs a safe default here too, even though none of this file's
+    // tests exercise CREATE_NEW.
+    resolveM9DeterministicListIds: async (input: { concepts: readonly { conceptId: string; listId: string }[] }) => input.concepts.map((c) => ({ conceptId: c.conceptId, existingRowAtId: null })),
     ...overrides,
   }
 }

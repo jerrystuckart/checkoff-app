@@ -83,6 +83,16 @@ function baseDeps(runStore: InstanceType<typeof InMemoryPlaybookRunStore>, overr
     flagshipListTitle: 'Fall 2026 — Test Metro',
     now: () => '2026-09-15T00:00:00.000Z',
     m9CurationMode: 'ENFORCED' as const,
+    // Session 5 — these three now default to the REAL, DB-backed resolvers
+    // (m9ProductionResolvers.ts) when omitted, same convention as
+    // verifyHomeListRows above. The first test in this file ("with no
+    // production resolvers wired") specifically wants to exercise the
+    // "nothing resolves" case WITHOUT touching a real database — these
+    // safe stub defaults preserve that intent; tests further down still
+    // override individual ones with their own richer fakes via `...overrides`.
+    resolveM9ProductionItems: async (input: { items: readonly { candidateName: string; conceptId: string }[] }) => input.items.map((it) => ({ candidateName: it.candidateName, conceptId: it.conceptId, matchedItemIds: [] })),
+    resolveM9ProductionLists: async (input: { concepts: readonly { conceptId: string; proposedTitle: string }[] }) => input.concepts.map((c) => ({ conceptId: c.conceptId, existingList: null })),
+    resolveM9DeterministicListIds: async (input: { concepts: readonly { conceptId: string; listId: string }[] }) => input.concepts.map((c) => ({ conceptId: c.conceptId, existingRowAtId: null })),
     ...overrides,
   }
 }
