@@ -4,22 +4,41 @@ Documentation/config only — no binary assets are included or referenced
 here as bundled files. Every entry's `status` is `pending`: none of these
 `.webp` files exist in Storage yet. This manifest is the source of truth
 for what Engineering/Design need to produce and upload; the runtime
-registry (validation + category defaults + URL construction) lives in
-`lib/fallbackArtSource.js` and must be kept in sync with this list by hand
-if either changes.
+registry — including the authoritative per-key `status` (`pending` |
+`available`), in `ARCHETYPE_STATUS` — lives in `lib/fallbackArtSource.js`.
+**`lib/fallbackArtSource.js` is the single source of truth for status.**
+This manifest's `status` column is generated from/kept in sync with that
+object by hand whenever either changes; if they ever disagree, the code
+wins.
+
+## Asset specification (corrected 2026-09-17 — previous "1600×1200" figure was wrong)
 
 - Bucket: `checkoff-images` (public)
-- Path convention: `item-fallbacks/<version>/<key>.webp`
+- Path convention: `item-fallbacks/<version>/<key>.webp` (versioned
+  folder, unchanged — see "Rollback"/version-bump note below)
 - Current version: `v1` (see `FALLBACK_ART_VERSION` in `lib/fallbackArtSource.js`)
-- Format: WebP, sRGB
-- Recommended dimensions: 1600×1200 (4:3) source, exported so it still
-  crops cleanly under `resizeMode="cover"` at both the hero aspect ratio
-  (~4:3, `WhatsTheThingHero`'s image mode) and the narrower rail/row
-  aspect ratios (`EditorialCard`'s `rail`/`row` variants) — keep the
-  focal subject centered with generous margin, since edges get cropped
-  differently per layout variant.
-- No text/typography baked into the artwork — cards layer real RN `Text`
-  on top via the existing gradient scrim.
+- **Master dimensions: 1600 × 1000 px**
+- **Aspect ratio: 8:5 (1.6:1)**
+- Format: WebP
+- Color space: sRGB
+- No embedded text, logos, labels, or business branding of any kind —
+  cards layer real RN `Text` on top via the existing gradient scrim.
+- **Main visual interest/focal subject must sit in the right 40–45% of
+  the frame.** The left 55% must stay dark, restrained, and text-safe —
+  that's where the overlay eyebrow/title/body text renders, so it needs
+  to read clearly over the image with only the standard scrim, not
+  because the image itself is already busy there.
+- Must tolerate crops from **roughly 1.45:1 up to 1.7:1** under
+  `resizeMode="cover"` — the same master gets cropped differently across
+  `WhatsTheThingHero`'s dominant hero, `EditorialCard`'s `primary`
+  variant, and its narrower `rail`/`row` variants. Keep the right-side
+  focal subject with enough margin that none of those crops clip it.
+- **This one landscape (8:5) master does not cover every future surface.**
+  A future portrait or square placement (e.g. a full-bleed Item Detail
+  header, a square social/share card) will very likely need its own
+  derivative crop or a separate master — do not assume the 1600×1000
+  landscape master is sufficient for a layout that hasn't been designed
+  yet.
 
 | key | intended experience family | category defaults that resolve to it | storage path | status |
 |---|---|---|---|---|
@@ -46,6 +65,73 @@ if either changes.
 | sports | Athletic/field/court scene | Sports | item-fallbacks/v1/sports.webp | pending |
 | wellness | Spa / calm, soft light | Spa & self-care | item-fallbacks/v1/wellness.webp | pending |
 | local_oddity | Quirky/offbeat local curiosity, playful framing | Misc | item-fallbacks/v1/local_oddity.webp | pending |
+
+## How a key becomes `available` (Approach A)
+
+The client-side resolver (`lib/fallbackArtSource.js`'s `resolveFallbackArt`,
+consumed by `lib/artworkResolution.js`'s `resolveArtworkTier`) only ever
+returns a remote URL for a key whose `ARCHETYPE_STATUS` entry is
+`'available'`. Every key defaults to `'pending'`, which resolves straight
+to the generic graphic treatment with **no network request attempted at
+all** — there is no 404 round-trip for artwork that doesn't exist yet.
+
+To activate one key once its `.webp` is real:
+
+1. Upload + validate the asset (see "Upload procedure" and "Validation
+   procedure" below).
+2. In `lib/fallbackArtSource.js`, flip that one key's entry in
+   `ARCHETYPE_STATUS` from `'pending'` to `'available'`.
+3. Update this manifest's status column for that key to match (generated
+   from/kept in sync with step 2 by hand).
+4. Ship that JS change through the normal build/OTA pipeline (see
+   "Deployment order" below for when it's safe to do so relative to the
+   `fallback_art_key` migration).
+
+No other file needs to change, and no component (`ArchetypeArtwork.jsx`,
+`EditorialCard.jsx`, `WhatsTheThingHero.jsx`) needs to be touched — they
+all read the resolved `url`/`status` through `useCardArtwork` /
+`resolveArtworkTier`, never the registry directly.
+
+## Deployment order (production — NOT performed by this task)
+
+This task only builds/hardens the client-side resolution + rendering
+logic and this documentation. Applying any of the following steps against
+a real database or Storage bucket is explicitly out of scope here. The
+safe order, once artwork and a migration exist:
+
+1. Upload final approved artwork to the versioned public Storage paths
+   (`checkoff-images/item-fallbacks/v1/<key>.webp`).
+2. Validate every public asset URL (see "Validation procedure" below).
+3. Apply the nullable `fallback_art_key` migration
+   (`supabase/migrations/20260917_items_fallback_art_key.sql`).
+4. Confirm existing production binaries still function — the column is
+   additive/nullable, so older installed builds that don't know about
+   `fallback_art_key` keep working unaffected.
+5. Test the new JavaScript (this resolver + these components) against the
+   now-migrated schema.
+6. Populate a small number of test-item `fallback_art_key` overrides, if
+   desired (see "Activating one archetype on a single test item" below).
+7. Publish an OTA update only after device QA of that build.
+8. Expand overrides gradually from there.
+
+**Explicit warnings:**
+
+- **(a)** The OTA/build containing code that *queries* `fallback_art_key`
+  must **NOT** be published before step 3 (the DB column existing) — a
+  query against a column that doesn't exist yet will error for every
+  client that receives that update early.
+- **(b)** The migration itself (step 3) is backward-compatible on its own
+  — the column is nullable with no default and no backfill, so it is safe
+  to apply ahead of the OTA in step 7; existing/older clients that have
+  never heard of the column are entirely unaffected by its existence.
+- **(c)** A key's artwork must be uploaded, validated, AND marked
+  `'available'` (see "How a key becomes available" above) before it is
+  activated on any item — activating a `fallback_art_key` value whose
+  registry status is still `'pending'` produces no unnecessary 404s
+  precisely because Approach A never attempts the request, but it also
+  means the item will keep showing the generic treatment until the status
+  flip ships, which can look like "nothing happened" if that step is
+  forgotten.
 
 ## Upload procedure (when artwork is ready — NOT performed by this task)
 

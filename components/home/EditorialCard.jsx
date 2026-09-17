@@ -42,6 +42,14 @@ import { railAccentForIndex } from '../../lib/whatsGoodRailLayout'
 // category-default illustration when there's no real photo, with its own
 // onError -> fall back to the existing no-image treatment.
 import { useCardArtwork } from './useCardArtwork'
+// Hardening pass (2026-09-17) — the single shared renderer for the
+// archetype tier: layers the resolved remote archetype image UNDER a dark
+// scrim, ON TOP of the existing generic decorative background (extracted
+// below as *NoImageBackground), so a no-photo item with an archetype key
+// never shows a blank/broken state while the remote asset loads. The
+// 'photo' tier (a real approved image) is untouched — it keeps using a
+// plain <Image>, exactly as before this pass.
+import ArchetypeArtwork from './ArchetypeArtwork'
 
 // FINAL CLEANUP BEFORE BUILD 144 — item 1: category was competing
 // visually with venue/thing on the primary card ("Bar & drinks" reads as
@@ -51,6 +59,62 @@ import { useCardArtwork } from './useCardArtwork'
 // just the chevron, and the card is cleaner for it.
 function metaLine(item) {
   return item?.is_universal ? null : formatDistanceLabel(item?.distM)
+}
+
+// Shared overlay text block for the primary card's "something photo-like
+// is behind this" modes (a real approved photo, OR a loaded/loading
+// archetype scrim) — factored out so PrimaryImageMode and
+// PrimaryArchetypeMode render byte-identical text markup instead of two
+// copies that could drift.
+function PrimaryOverlayText({ isSpecial, venueName, thing, meta, accent }) {
+  return (
+    <>
+      {isSpecial && (
+        <View style={[styles.specialBadge, { backgroundColor: 'rgba(122,77,179,0.9)' }]}>
+          <Text style={styles.specialBadgeText}>✦ SECRET</Text>
+        </View>
+      )}
+      <View style={styles.primaryOverlayText}>
+        {venueName ? <Text style={styles.overlayVenue} numberOfLines={1}>{venueName}</Text> : null}
+        <Text style={styles.overlayThing} numberOfLines={2}>{thing}</Text>
+        {/* REAL-DEVICE FOLLOW-UP (2026-09-03): the large "See the thing"
+            CTA button was redundant — the card already tells the user
+            what the thing is, and the whole card is tappable. Replaced
+            with an understated disclosure footer (meta + chevron). */}
+        <View style={styles.overlayFooter}>
+          {meta ? <Text style={styles.overlayMeta} numberOfLines={1}>{meta}</Text> : <View />}
+          <Text style={[styles.footerChevron, { color: accent }]}>→</Text>
+        </View>
+      </View>
+    </>
+  )
+}
+
+// The primary no-image card's decorative background ONLY (gradient wash +
+// the three layered accent shapes) — no text. Extracted so it can serve
+// double duty as the pure-generic PrimaryNoImageMode's background AND as
+// the generic base layer ArchetypeArtwork renders underneath a loading/
+// pending/failed archetype image, per the layering contract in
+// ArchetypeArtwork.jsx. Same visual either way — the generic treatment
+// never looks different depending on why it's the thing being shown.
+function PrimaryNoImageBackground({ colors, isSpecial }) {
+  const { CARD_ELEVATED, AMBER, ENDED_BG, ENDED_TEXT } = colors
+  const accent = isSpecial ? ENDED_TEXT : AMBER
+  const surface = isSpecial ? ENDED_BG : CARD_ELEVATED
+
+  return (
+    <>
+      <LinearGradient
+        colors={[surface, `${accent}14`]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFillObject}
+      />
+      <View style={styles.noImageWashOuter(accent)} pointerEvents="none" />
+      <View style={styles.noImageWashInner(accent)} pointerEvents="none" />
+      <View style={styles.noImageAccentBar(accent)} pointerEvents="none" />
+    </>
+  )
 }
 
 function PrimaryImageMode({ item, colors, isSpecial, venueName, thing, meta, onPress, userId, artwork }) {
@@ -78,23 +142,32 @@ function PrimaryImageMode({ item, colors, isSpecial, venueName, thing, meta, onP
           locations={[0, 0.45, 1]}
           style={StyleSheet.absoluteFillObject}
         />
-        {isSpecial && (
-          <View style={[styles.specialBadge, { backgroundColor: 'rgba(122,77,179,0.9)' }]}>
-            <Text style={styles.specialBadgeText}>✦ SECRET</Text>
-          </View>
-        )}
-        <View style={styles.primaryOverlayText}>
-          {venueName ? <Text style={styles.overlayVenue} numberOfLines={1}>{venueName}</Text> : null}
-          <Text style={styles.overlayThing} numberOfLines={2}>{thing}</Text>
-          {/* REAL-DEVICE FOLLOW-UP (2026-09-03): the large "See the thing"
-              CTA button was redundant — the card already tells the user
-              what the thing is, and the whole card is tappable. Replaced
-              with an understated disclosure footer (meta + chevron). */}
-          <View style={styles.overlayFooter}>
-            {meta ? <Text style={styles.overlayMeta} numberOfLines={1}>{meta}</Text> : <View />}
-            <Text style={[styles.footerChevron, { color: accent }]}>→</Text>
-          </View>
-        </View>
+        <PrimaryOverlayText isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} accent={accent} />
+      </View>
+    </PressableTactile>
+  )
+}
+
+// Archetype tier for the primary card — no real approved photo, but a
+// valid + available (Approach A) archetype resolved. Same footprint/text
+// treatment as PrimaryImageMode, but the background goes through
+// ArchetypeArtwork so the generic decorative treatment (PrimaryNoImageBackground)
+// is always visible underneath immediately, with the remote archetype
+// image + scrim layered on top only once it loads.
+function PrimaryArchetypeMode({ item, colors, isSpecial, venueName, thing, meta, onPress, artwork }) {
+  const { AMBER, ENDED_TEXT } = colors
+  const accent = isSpecial ? ENDED_TEXT : AMBER
+
+  return (
+    <PressableTactile intensity="hero" onPress={onPress} style={[styles.primaryCard, { shadowColor: colors.SHADOW_COLOR ?? 'rgba(0,0,0,0.3)' }]}>
+      <View style={styles.primaryImageWrapper}>
+        <ArchetypeArtwork
+          url={artwork.url}
+          onError={artwork.onError}
+          renderGenericFallback={() => <PrimaryNoImageBackground colors={colors} isSpecial={isSpecial} />}
+          style={StyleSheet.absoluteFillObject}
+        />
+        <PrimaryOverlayText isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} accent={accent} />
       </View>
     </PressableTactile>
   )
@@ -112,24 +185,15 @@ function PrimaryImageMode({ item, colors, isSpecial, venueName, thing, meta, onP
 //     promoted to the accent color (amber/purple), not quiet MUTED gray —
 //     "more intentional use of amber/navy/purple," not just a CTA color
 function PrimaryNoImageMode({ item, colors, isSpecial, venueName, thing, meta, onPress }) {
-  const { TEXT, MUTED, CARD_ELEVATED, AMBER, ENDED_BG, ENDED_TEXT } = colors
+  const { TEXT, MUTED, AMBER, ENDED_TEXT } = colors
   const accent = isSpecial ? ENDED_TEXT : AMBER
-  const surface = isSpecial ? ENDED_BG : CARD_ELEVATED
 
   return (
     <PressableTactile intensity="hero" onPress={onPress} style={[styles.primaryCard, styles.primaryCardBordered, { borderColor: `${accent}33`, shadowColor: colors.SHADOW_COLOR ?? 'rgba(0,0,0,0.3)' }]}>
-      <LinearGradient
-        colors={[surface, `${accent}14`]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={StyleSheet.absoluteFillObject}
-      />
       {/* Three layered shapes at different geometries — reads as a
           designed, asymmetric composition rather than a flat card with a
           decorative circle. */}
-      <View style={styles.noImageWashOuter(accent)} pointerEvents="none" />
-      <View style={styles.noImageWashInner(accent)} pointerEvents="none" />
-      <View style={styles.noImageAccentBar(accent)} pointerEvents="none" />
+      <PrimaryNoImageBackground colors={colors} isSpecial={isSpecial} />
       <View style={styles.noImageTextBlock}>
         {isSpecial && (
           <View style={[styles.specialBadgeInline, { borderColor: accent }]}>
@@ -164,7 +228,6 @@ function SecondaryRow({ item, colors, onPress, userId }) {
   const isSpecial = isSpecialItemPresentation(item)
   const { venueName, thing } = deriveVenueAndThing(item)
   const artwork = useCardArtwork(item, userId)
-  const image = artwork.url ? { url: artwork.url } : null
   const accent = isSpecial ? ENDED_TEXT : AMBER
   const distLabel = item?.is_universal ? null : formatDistanceLabel(item?.distM)
   // venueName only exists for items with a real partners row — most
@@ -172,6 +235,11 @@ function SecondaryRow({ item, colors, onPress, userId }) {
   // note). Try the same quoted-venue extraction from body before falling
   // back to the item hook, or "Order the..." leaks into the teaser here too.
   const teaserLabel = venueName || extractQuotedVenueFromBody(item?.body) || thing
+  const rowAccentDot = () => (
+    <View style={[styles.rowAccentWrap, { backgroundColor: `${accent}1F` }]}>
+      <View style={[styles.rowAccentDot, { backgroundColor: accent }]} />
+    </View>
+  )
 
   return (
     <PressableTactile
@@ -180,10 +248,10 @@ function SecondaryRow({ item, colors, onPress, userId }) {
       shadowColor={SHADOW_COLOR ?? 'rgba(0,0,0,0.3)'}
       style={[styles.rowCard, { backgroundColor: CARD_ELEVATED, borderColor: `${accent}2E` }]}
     >
-      {image ? (
+      {artwork.isPhoto ? (
         <Image
-          key={image.url}
-          source={{ uri: image.url }}
+          key={artwork.url}
+          source={{ uri: artwork.url }}
           style={styles.rowImage}
           resizeMode="cover"
           onError={artwork.onError}
@@ -191,10 +259,16 @@ function SecondaryRow({ item, colors, onPress, userId }) {
           importantForAccessibility="no"
           accessibilityLabel=""
         />
+      ) : artwork.isArchetype ? (
+        <ArchetypeArtwork
+          url={artwork.url}
+          onError={artwork.onError}
+          renderGenericFallback={rowAccentDot}
+          gradient={false}
+          style={styles.rowImage}
+        />
       ) : (
-        <View style={[styles.rowAccentWrap, { backgroundColor: `${accent}1F` }]}>
-          <View style={[styles.rowAccentDot, { backgroundColor: accent }]} />
-        </View>
+        rowAccentDot()
       )}
       <View style={styles.rowTextBlock}>
         {isSpecial && <Text style={[styles.rowSpecialTag, { color: ENDED_TEXT }]}>✦ SECRET</Text>}
@@ -220,17 +294,61 @@ function SecondaryRow({ item, colors, onPress, userId }) {
 // palette in DiscoverScreen.jsx), not a new color system. A secret item
 // always gets the purple "special" treatment regardless of index — that
 // signal takes priority over the position-based cycle.
+// Rail no-image decorative background only (no text) — same extraction
+// pattern as PrimaryNoImageBackground above, reused both by the pure
+// generic rail card and as ArchetypeArtwork's generic base layer for the
+// rail archetype tier.
+function RailNoImageBackground({ colors, isSpecial, accent }) {
+  const { CARD_ELEVATED, ENDED_BG } = colors
+  const surface = isSpecial ? ENDED_BG : CARD_ELEVATED
+  return (
+    <>
+      <LinearGradient
+        colors={[surface, `${accent}18`]}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 1 }}
+        style={StyleSheet.absoluteFillObject}
+      />
+      <View style={styles.railWashOuter(accent)} pointerEvents="none" />
+      <View style={styles.railWashInner(accent)} pointerEvents="none" />
+      <View style={styles.railAccentBar(accent)} pointerEvents="none" />
+    </>
+  )
+}
+
+// Shared "something photo-like is behind this" overlay text for the rail
+// card — same reasoning as PrimaryOverlayText above (real photo and
+// loaded/loading archetype scrim render identical text markup).
+function RailOverlayText({ isSpecial, venueName, thing, meta, accent }) {
+  return (
+    <>
+      {isSpecial && (
+        <View style={[styles.railSpecialBadge, { backgroundColor: 'rgba(122,77,179,0.9)' }]}>
+          <Text style={styles.railSpecialBadgeText}>✦ SECRET</Text>
+        </View>
+      )}
+      <View style={styles.railOverlayText}>
+        {venueName ? <Text style={styles.railOverlayVenue} numberOfLines={1}>{venueName}</Text> : null}
+        <Text style={styles.railOverlayThing} numberOfLines={2}>{thing}</Text>
+        <View style={styles.railFooter}>
+          {meta ? <Text style={styles.railOverlayMeta} numberOfLines={1}>{meta}</Text> : <View />}
+          <Text style={[styles.railChevron, { color: accent }]}>→</Text>
+        </View>
+      </View>
+    </>
+  )
+}
+
 function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight }) {
   const { TEXT, MUTED, CARD_ELEVATED, ENDED_BG, SHADOW_COLOR } = colors
   const isSpecial = isSpecialItemPresentation(item)
   const { venueName, thing } = deriveVenueAndThing(item)
   const meta = metaLine(item)
   const artwork = useCardArtwork(item, userId)
-  const image = artwork.url ? { url: artwork.url } : null
   const accent = railAccentForIndex(index, colors, isSpecial)
   const dims = { width: cardWidth, height: cardHeight }
 
-  if (image) {
+  if (artwork.isPhoto) {
     return (
       <PressableTactile
         intensity="hero"
@@ -238,8 +356,8 @@ function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight 
         style={[styles.railCard, dims, { shadowColor: SHADOW_COLOR ?? 'rgba(0,0,0,0.3)' }]}
       >
         <Image
-          key={image.url}
-          source={{ uri: image.url }}
+          key={artwork.url}
+          source={{ uri: artwork.url }}
           style={StyleSheet.absoluteFillObject}
           resizeMode="cover"
           onError={artwork.onError}
@@ -252,39 +370,36 @@ function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight 
           locations={[0, 0.45, 1]}
           style={StyleSheet.absoluteFillObject}
         />
-        {isSpecial && (
-          <View style={[styles.railSpecialBadge, { backgroundColor: 'rgba(122,77,179,0.9)' }]}>
-            <Text style={styles.railSpecialBadgeText}>✦ SECRET</Text>
-          </View>
-        )}
-        <View style={styles.railOverlayText}>
-          {venueName ? <Text style={styles.railOverlayVenue} numberOfLines={1}>{venueName}</Text> : null}
-          <Text style={styles.railOverlayThing} numberOfLines={2}>{thing}</Text>
-          <View style={styles.railFooter}>
-            {meta ? <Text style={styles.railOverlayMeta} numberOfLines={1}>{meta}</Text> : <View />}
-            <Text style={[styles.railChevron, { color: accent }]}>→</Text>
-          </View>
-        </View>
+        <RailOverlayText isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} accent={accent} />
       </PressableTactile>
     )
   }
 
-  const surface = isSpecial ? ENDED_BG : CARD_ELEVATED
+  if (artwork.isArchetype) {
+    return (
+      <PressableTactile
+        intensity="hero"
+        onPress={onPress}
+        style={[styles.railCard, dims, { shadowColor: SHADOW_COLOR ?? 'rgba(0,0,0,0.3)' }]}
+      >
+        <ArchetypeArtwork
+          url={artwork.url}
+          onError={artwork.onError}
+          renderGenericFallback={() => <RailNoImageBackground colors={colors} isSpecial={isSpecial} accent={accent} />}
+          style={StyleSheet.absoluteFillObject}
+        />
+        <RailOverlayText isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} accent={accent} />
+      </PressableTactile>
+    )
+  }
+
   return (
     <PressableTactile
       intensity="hero"
       onPress={onPress}
       style={[styles.railCard, styles.railCardBordered, dims, { borderColor: `${accent}33`, shadowColor: SHADOW_COLOR ?? 'rgba(0,0,0,0.3)' }]}
     >
-      <LinearGradient
-        colors={[surface, `${accent}18`]}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-        style={StyleSheet.absoluteFillObject}
-      />
-      <View style={styles.railWashOuter(accent)} pointerEvents="none" />
-      <View style={styles.railWashInner(accent)} pointerEvents="none" />
-      <View style={styles.railAccentBar(accent)} pointerEvents="none" />
+      <RailNoImageBackground colors={colors} isSpecial={isSpecial} accent={accent} />
       <View style={styles.railTextBlock}>
         {isSpecial && (
           <View style={[styles.railSpecialInline, { borderColor: accent }]}>
@@ -323,8 +438,11 @@ export default function EditorialCard({ item, onPress, colors, variant = 'primar
     return <RailCard item={item} index={index} colors={colors} onPress={onPress} userId={userId} cardWidth={cardWidth} cardHeight={cardHeight} />
   }
 
-  if (artwork.url) {
+  if (artwork.isPhoto) {
     return <PrimaryImageMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} userId={userId} artwork={artwork} />
+  }
+  if (artwork.isArchetype) {
+    return <PrimaryArchetypeMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} artwork={artwork} />
   }
   return <PrimaryNoImageMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} />
 }

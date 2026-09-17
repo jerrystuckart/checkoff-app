@@ -51,8 +51,29 @@ import { isSpecialItemPresentation } from '../../lib/whatsGoodDisplayLayout'
 // real approved photo, plus resolved archetype/category-default artwork
 // when there's no real photo (with its own onError -> generic fallback).
 import { useCardArtwork } from './useCardArtwork'
+// Hardening pass (2026-09-17) — see components/home/ArchetypeArtwork.jsx
+// and EditorialCard.jsx's identical usage. Used only for the dominant
+// (non-compact) archetype tier below; the real-photo tier keeps its
+// existing plain <Image>, untouched.
+import ArchetypeArtwork from './ArchetypeArtwork'
 import { useCoverCandidateCTA } from '../../lib/useCoverCandidateCTA'
 import CoverCandidateCTA from '../CoverCandidateCTA'
+
+// The dominant (non-compact) no-image hero's decorative background ONLY
+// (surface fill + the special-item glow wash) — no text. Mirrors the
+// existing generic-tier background exactly, extracted so it can also
+// serve as ArchetypeArtwork's generic base layer for the archetype tier,
+// per the layering contract in components/home/ArchetypeArtwork.jsx.
+function HeroNoImageBackground({ colors, isSpecial }) {
+  const { CARD_ELEVATED, ENDED_BG, ENDED_TEXT } = colors
+  const surface = isSpecial ? ENDED_BG : CARD_ELEVATED
+  return (
+    <>
+      <View style={[StyleSheet.absoluteFillObject, { backgroundColor: surface }]} />
+      {isSpecial ? <View style={[styles.glowWash, { backgroundColor: ENDED_TEXT }]} pointerEvents="none" /> : null}
+    </>
+  )
+}
 
 export default function WhatsTheThingHero({ item, navigation, colors, compact = false, userId = null }) {
   const anim = useRef(new Animated.Value(0)).current
@@ -73,8 +94,11 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
   const { TEXT, MUTED, AMBER, NAVY, CARD_ELEVATED, ENDED_BG, ENDED_BORDER, ENDED_TEXT, SHADOW_COLOR } = colors
   const isSpecial = isSpecialItemPresentation(item)
   const venueName = item.partnerName ?? null
-  const image = artwork.url ? { url: artwork.url } : null
-  const showImageMode = !compact && Boolean(image)
+  // Compact mode never shows a photo-style background of either kind
+  // (real photo or archetype) — unchanged from before this pass.
+  const showImageMode = !compact && artwork.isPhoto
+  const showArchetypeMode = !compact && artwork.isArchetype
+  const showPhotoLikeMode = showImageMode || showArchetypeMode
 
   const opacity = anim
   const scale = anim.interpolate({ inputRange: [0, 1], outputRange: [0.97, 1] })
@@ -109,6 +133,21 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
     </View>
   )
 
+  // Shared overlay text for both "something photo-like is behind this"
+  // modes (a real approved photo, OR a loaded/loading archetype scrim) —
+  // identical markup either way, same reasoning as EditorialCard's
+  // PrimaryOverlayText/RailOverlayText.
+  const imageTextBlock = (
+    <View style={styles.imageTextBlock}>
+      <Text style={[styles.eyebrowOnImage, { color: isSpecial ? '#D9C4F5' : '#FFD98C' }]} allowFontScaling={false}>
+        {eyebrowText}
+      </Text>
+      <Text style={styles.titleOnImage}>What's the Thing?</Text>
+      <Text style={styles.bodyOnImage} numberOfLines={3}>{item.body}</Text>
+      {ctaRow}
+    </View>
+  )
+
   return (
     <Animated.View style={[compact ? styles.compactWrapper : styles.wrapper, { opacity, transform: [{ scale }] }]}>
       <PressableTactile
@@ -117,14 +156,14 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
         shadowColor={SHADOW_COLOR ?? 'rgba(0,0,0,0.3)'}
         style={[
           compact ? styles.compactCard : styles.card,
-          showImageMode ? styles.imageCard : { backgroundColor: surface, borderColor: accentBorder },
+          showPhotoLikeMode ? styles.imageCard : { backgroundColor: surface, borderColor: accentBorder },
         ]}
       >
         {showImageMode ? (
           <View style={styles.imageWrapper}>
             <Image
-              key={image.url}
-              source={{ uri: image.url }}
+              key={artwork.url}
+              source={{ uri: artwork.url }}
               style={styles.image}
               resizeMode="cover"
               onError={artwork.onError}
@@ -137,14 +176,17 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
               locations={[0, 0.4, 1]}
               style={StyleSheet.absoluteFillObject}
             />
-            <View style={styles.imageTextBlock}>
-              <Text style={[styles.eyebrowOnImage, { color: isSpecial ? '#D9C4F5' : '#FFD98C' }]} allowFontScaling={false}>
-                {eyebrowText}
-              </Text>
-              <Text style={styles.titleOnImage}>What's the Thing?</Text>
-              <Text style={styles.bodyOnImage} numberOfLines={3}>{item.body}</Text>
-              {ctaRow}
-            </View>
+            {imageTextBlock}
+          </View>
+        ) : showArchetypeMode ? (
+          <View style={styles.imageWrapper}>
+            <ArchetypeArtwork
+              url={artwork.url}
+              onError={artwork.onError}
+              renderGenericFallback={() => <HeroNoImageBackground colors={colors} isSpecial={isSpecial} />}
+              style={StyleSheet.absoluteFillObject}
+            />
+            {imageTextBlock}
           </View>
         ) : (
           <>
