@@ -35,10 +35,11 @@ import * as Location from 'expo-location'
 import { isAtPlace } from '../lib/whatsGoodAtPlace'
 import { useCoverCandidateCTA } from '../lib/useCoverCandidateCTA'
 import CoverCandidateCTA from '../components/CoverCandidateCTA'
-import { resolvedItemImage } from '../lib/whatsGoodImageSource'
-import { currentRotationContext } from '../lib/rotationContext'
 import { fetchActiveCoverImageUrl, fetchDisplayEligibleImagePool } from '../lib/coverCandidates'
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
+import DetailArtwork from '../components/itemDetail/DetailArtwork'
+import { buildInviteMessage } from '../lib/inviteMessage'
+import { extractQuotedVenueFromBody } from '../lib/itemDetailHeaderTitle'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
@@ -521,17 +522,38 @@ export default function ItemDetailScreen({ route, navigation }) {
     }
   }
 
-  function inviteMessage() {
-    const listPart = listTitle ? ` on the "${listTitle}" CheckOff list` : ''
-    const joinUrl  = listInviteCode
-      ? `https://getcheckoff.com/join/${listInviteCode}`
-      : 'https://getcheckoff.com'
-    const callToAction = listInviteCode
-      ? `Want to do it together? Download CheckOff and join my list: ${joinUrl}`
-      : `Want to do it together? Download CheckOff: ${joinUrl}`
-    return `Hey! I'm trying to check off "${item?.body}"${listPart}. ${callToAction}`
+  // "Do This Together" invitation copy (Item Detail redesign, 2026-09-18) —
+  // venue is whatever is ACTUALLY populated for this item: item.partnerName
+  // when a real partners row exists, otherwise the same quoted-venue
+  // extraction from item.body that the nav header title already uses (see
+  // lib/itemDetailHeaderTitle.js) — never a fabricated field. Message text
+  // itself is built by the pure lib/inviteMessage.js helper; this function
+  // just resolves venue + preserves existing list-mode URL behavior
+  // unchanged (no item-specific URL is wired in as the default yet — see
+  // buildItemDeepLinkUrl's own doc comment for why).
+  function inviteVenue() {
+    if (typeof item?.partnerName === 'string' && item.partnerName.trim().length > 0) {
+      return item.partnerName.trim()
+    }
+    return extractQuotedVenueFromBody(item?.body)
   }
 
+  function inviteMessage() {
+    return buildInviteMessage({
+      itemBody: item?.body,
+      venue: inviteVenue(),
+      listInviteCode,
+    })
+  }
+
+  // Item Detail Redesign (2026-09-18) — un-check confirmation gate. Purely
+  // a UI gate in front of the existing delete branch inside
+  // performCheckOff() below: the check-in data model, season/window
+  // scoping, and fan-out logic are all untouched, byte-for-byte identical
+  // to before this pass. Also the single call site for the new
+  // 'item_checkoff_tap' analytics event (fires on every tap, regardless of
+  // which direction the toggle goes, matching the existing tap-level
+  // granularity of directions_click/url_click/dare_click).
   async function handleCheckOff() {
     if (!userId) {
       Alert.alert('Sign in first', 'You need an account to check off items.', [
@@ -541,6 +563,24 @@ export default function ItemDetailScreen({ route, navigation }) {
       return
     }
 
+    trackEvent('item_checkoff_tap', { itemId: item?.id, listId })
+
+    if (checked) {
+      Alert.alert(
+        'Un-check this item?',
+        'This removes your check-in for this item.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Un-check', style: 'destructive', onPress: () => { performCheckOff() } },
+        ]
+      )
+      return
+    }
+
+    await performCheckOff()
+  }
+
+  async function performCheckOff() {
     // Started here, before the list-item lookup and geofence check (both of
     // which can take seconds on slow network/GPS — checkGeoFence alone races
     // a 6s GPS timeout), so the button shows its spinner the instant the
@@ -770,6 +810,31 @@ export default function ItemDetailScreen({ route, navigation }) {
   }
 
   // ── Nearby mode: add item to a specific list ─────────────
+  // Extracted from the old "On Your List" primary button's onPress
+  // (Item Detail Redesign, 2026-09-18) — identical logic, now triggered
+  // from the compact utility row chip instead of a dedicated large button.
+  function openListPicker() {
+    if (!userId) {
+      Alert.alert('Sign in first', 'You need an account to save items.', [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Sign in', onPress: () => navigation.navigate('SignIn') },
+      ])
+      return
+    }
+    if (userLists.length === 0) {
+      Alert.alert(
+        'No lists yet',
+        'Create a list first to track what you do.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Create a list', onPress: () => navigation.navigate('CreateList') },
+        ]
+      )
+      return
+    }
+    setShowListPicker(true)
+  }
+
   async function addToList(targetListId, targetListTitle) {
     if (!userId || !item?.id) return
     setAddingToList(true)
@@ -836,6 +901,11 @@ export default function ItemDetailScreen({ route, navigation }) {
   }
 
   // ── Nearby mode: check off item that's already on a list ──
+  // See handleCheckOff's own comment above — same un-check confirmation
+  // gate and 'item_checkoff_tap' analytics call, applied to the Nearby-mode
+  // path. performNearbyDone() below is byte-for-byte the original
+  // handleNearbyDone body (minus the sign-in check, now owned by this
+  // wrapper), untouched.
   async function handleNearbyDone() {
     if (!userId) {
       Alert.alert('Sign in first', 'You need an account to check off items.', [
@@ -845,6 +915,24 @@ export default function ItemDetailScreen({ route, navigation }) {
       return
     }
 
+    trackEvent('item_checkoff_tap', { itemId: item?.id })
+
+    if (checked) {
+      Alert.alert(
+        'Un-check this item?',
+        'This removes your check-in for this item.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Un-check', style: 'destructive', onPress: () => { performNearbyDone() } },
+        ]
+      )
+      return
+    }
+
+    await performNearbyDone()
+  }
+
+  async function performNearbyDone() {
     // itemOnListId (if set) means this item is already on one of the
     // user's own lists — use that list context. Otherwise this is a
     // standalone check-in: valid on its own, no list required (product
@@ -1229,7 +1317,6 @@ export default function ItemDetailScreen({ route, navigation }) {
 
   const ring = item.ring_weight ?? 0
   const ringColor = RING_COLORS[ring] ?? RING_COLORS[0]
-  const itemDetailImage = resolvedItemImage(resolvedItem, currentRotationContext(userId))
   const hasLoc = item.maps_query || ((item.maps_lat ?? item.mapsLat) && (item.maps_lng ?? item.mapsLng))
   const hasWeb = !!item.website_url
   const isPartner = !!item.partner_id
@@ -1246,15 +1333,16 @@ export default function ItemDetailScreen({ route, navigation }) {
       contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
       showsVerticalScrollIndicator={false}
     >
-      {/* FINAL UI PASS BEFORE BUILD 144 — item 2: the top area is either
-          the real selected image, or (only when no cover exists AND the
-          user is physically eligible) an intentional contribution CTA —
-          never a dead empty placeholder. When there's no image and the
-          user isn't eligible to submit one, this area renders nothing at
-          all; the tag/headline card below is real content, not a gap. */}
-      {itemDetailImage ? (
-        <Image source={{ uri: itemDetailImage.url }} style={styles.itemImage} resizeMode="cover" />
-      ) : showCoverContributionCTA ? (
+      {/* Item Detail Redesign (2026-09-18) — hero always renders now:
+          approved photo -> archetype fallback -> generic treatment (see
+          components/itemDetail/DetailArtwork.jsx), never a blank area.
+          The community-cover contribution CTA is unaffected — its own
+          eligibility (lib/coverCandidateEligibility.js, unchanged) already
+          excludes items that already have an approved photo, so it only
+          ever shows for the archetype/generic cases, now layered under
+          the hero rather than replacing it. */}
+      <DetailArtwork item={resolvedItem} userId={userId} colors={colors} style={styles.heroWrap} />
+      {showCoverContributionCTA ? (
         <View style={styles.topContributionWrap}>
           <Text style={styles.coverContributionTitle}>Help locals see the thing</Text>
           <CoverCandidateCTA item={resolvedItem} navigation={navigation} colors={colors} compact />
@@ -1306,128 +1394,115 @@ export default function ItemDetailScreen({ route, navigation }) {
       </View>
 
       {/* ── Nearby mode: Add to list + I've done this ── */}
+      {/* Item Detail Redesign (2026-09-18) — the old giant "On Your List"
+          button is gone from this primary action position (per the
+          approved design). Its underlying capability — attaching a
+          standalone item to one of the user's own lists — still exists,
+          just as a small chip further below in the compact utility row
+          (openListPicker), never gating check-off itself either way. */}
       {isNearbyMode ? (
         <View style={styles.nearbyActionWrap}>
-          <TouchableOpacity
-            style={styles.nearbyAddBtn}
-            onPress={() => {
-              if (!userId) {
-                Alert.alert('Sign in first', 'You need an account to save items.', [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: 'Sign in', onPress: () => navigation.navigate('SignIn') },
-                ])
-                return
-              }
-              if (userLists.length === 0) {
-                Alert.alert(
-                  'No lists yet',
-                  'Create a list first to track what you do.',
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Create a list', onPress: () => navigation.navigate('CreateList') },
-                  ]
-                )
-                return
-              }
-              setShowListPicker(true)
-            }}
-            activeOpacity={0.85}
-          >
-            <Text style={styles.nearbyAddBtnText}>
-              {itemOnListId ? '✓ On your list' : '+ Add to a list'}
-            </Text>
-          </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.nearbyDoneBtn, checked && styles.nearbyDoneBtnChecked]}
             onPress={handleNearbyDone}
             disabled={saving}
             activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel={checked ? `${item.body}, done — tap to un-check` : `Mark ${item.body} as done`}
+            accessibilityState={{ checked, disabled: saving, busy: saving }}
           >
             {saving ? (
-              <ActivityIndicator color={checked ? NAVY : '#fff'} />
+              <ActivityIndicator color={checked ? '#fff' : NAVY} />
             ) : (
               <Text style={[styles.nearbyDoneBtnText, checked && styles.nearbyDoneBtnTextChecked]}>
-                {checked ? '✓ Done this!' : "I've done this"}
+                {checked ? 'DONE ✓' : "I'VE DONE THIS"}
               </Text>
             )}
           </TouchableOpacity>
         </View>
       ) : (
         /* ── List mode: standard check-off ── */
-        <>
-          <TouchableOpacity
-            style={[styles.checkBtn, checked && styles.checkBtnDone]}
-            onPress={handleCheckOff}
-            disabled={saving}
-            activeOpacity={0.85}
-          >
-            {saving ? (
-              <ActivityIndicator color={checked ? NAVY : '#fff'} />
-            ) : (
-              <>
-                <Text style={[styles.checkBtnIcon, checked && styles.checkBtnIconDone]}>
-                  {checked ? '✓' : '○'}
-                </Text>
-                <Text style={[styles.checkBtnText, checked && styles.checkBtnTextDone]}>
-                  {checked ? 'Checked off!' : 'Check this off'}
-                </Text>
-              </>
-            )}
-          </TouchableOpacity>
-
-          {checked && (
-            <Text style={styles.checkedSub}>Tap again to un-check · your crew can see this</Text>
+        <TouchableOpacity
+          style={[styles.checkBtn, checked && styles.checkBtnDone]}
+          onPress={handleCheckOff}
+          disabled={saving}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel={checked ? `${item.body}, done — tap to un-check` : `Mark ${item.body} as done`}
+          accessibilityState={{ checked, disabled: saving, busy: saving }}
+        >
+          {saving ? (
+            <ActivityIndicator color={checked ? '#fff' : NAVY} />
+          ) : (
+            <>
+              <Text style={[styles.checkBtnIcon, checked && styles.checkBtnIconDone]}>
+                {checked ? '✓' : '○'}
+              </Text>
+              <Text style={[styles.checkBtnText, checked && styles.checkBtnTextDone]}>
+                {checked ? 'DONE ✓' : "I'VE DONE THIS"}
+              </Text>
+            </>
           )}
-        </>
+        </TouchableOpacity>
       )}
 
+      {/* Item Detail Redesign (2026-09-18) — one compact utility row.
+          Directions/Website keep the exact existing hasLoc/hasWeb
+          conditionals (unchanged). Photo Check-in remains equally visible
+          in both the incomplete and completed states — it was never
+          gated on `checked` before this pass either, just folded in here
+          instead of its own oversized tile alongside the removed Dare
+          entry point (see the Dare business-logic comment still further
+          down: the feature/screen itself is untouched, only this
+          oversized default entry point is gone, superseded by the "Do
+          This Together" card below). Gets the stronger outline per the
+          approved visual language. */}
       {userId && (
-        <View style={styles.quickRow}>
+        <View style={styles.utilityRow}>
+          {hasLoc && (
+            <TouchableOpacity
+              style={styles.utilityBtn}
+              onPress={openDirections}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Get directions"
+            >
+              <Text style={styles.utilityBtnIcon}>⌖</Text>
+              <Text style={styles.utilityBtnText}>Directions</Text>
+            </TouchableOpacity>
+          )}
+          {hasWeb && (
+            <TouchableOpacity
+              style={styles.utilityBtn}
+              onPress={openWebsite}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Visit website"
+            >
+              <Text style={styles.utilityBtnIcon}>↗</Text>
+              <Text style={styles.utilityBtnText}>Website</Text>
+            </TouchableOpacity>
+          )}
+          {isNearbyMode && (
+            <TouchableOpacity
+              style={styles.utilityBtn}
+              onPress={openListPicker}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel={itemOnListId ? 'On your list' : 'Add to a list'}
+              accessibilityState={{ selected: !!itemOnListId }}
+            >
+              <Text style={styles.utilityBtnIcon}>{itemOnListId ? '✓' : '+'}</Text>
+              <Text style={styles.utilityBtnText}>{itemOnListId ? 'On your list' : 'Add to list'}</Text>
+            </TouchableOpacity>
+          )}
           <TouchableOpacity
-            style={styles.quickBtn}
+            style={[styles.utilityBtn, styles.utilityBtnEmphasis]}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Photo check-in"
             onPress={async () => {
-              // Resolved effective list context, not the raw listId param —
-              // works whether opened from a list, Nearby, or the Home rail.
-              // DareScreen's own business rule (recipient must share and be
-              // a member of the same non-official list) is unchanged; this
-              // just makes sure it's always handed a real listId instead of
-              // sometimes null.
-              let dareListId = listId ?? Object.keys(itemOnListIds)[0] ?? null
-
-              if (!dareListId) {
-                const resolvedListItemId = await getOrCreateListItemId(item?.id, userId)
-                if (resolvedListItemId) {
-                  const { data } = await supabase
-                    .from('list_items')
-                    .select('list_id')
-                    .eq('id', resolvedListItemId)
-                    .maybeSingle()
-                  dareListId = data?.list_id ?? null
-                }
-              }
-
-              if (!dareListId) {
-                // Dares need a shared list (DareScreen's own business rule —
-                // recipient must be a member of the same non-official list).
-                // This is a Dare-specific requirement, not a check-off one:
-                // checking the item off itself never requires a list.
-                Alert.alert('Add this to a shared list first', 'Dares need a list you and your friend both belong to.')
-                return
-              }
-
-              trackEvent('dare_click', { itemId: item.id })
-              navigation.navigate('Dare', { item, listId: dareListId })
-            }}
-          >
-            <Text style={styles.quickBtnIcon}>😈</Text>
-            <Text style={styles.quickBtnText}>Dare a friend</Text>
-            <Text style={styles.quickBtnSub}>Make it more fun</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.quickBtn}
-            onPress={async () => {
+              trackEvent('photo_checkin_tap', { itemId: item?.id, listId })
               // Resolves to a joined-list context if one exists; null
               // otherwise — a standalone photo check-in is valid on its
               // own, no list required (product decision, 2026-08).
@@ -1443,40 +1518,35 @@ export default function ItemDetailScreen({ route, navigation }) {
               })
             }}
           >
-            <Text style={styles.quickBtnIcon}>📷</Text>
-            <Text style={styles.quickBtnText}>Photo check-in</Text>
-            <Text style={styles.quickBtnSub}>Capture the moment</Text>
+            <Text style={styles.utilityBtnIcon}>◎</Text>
+            <Text style={styles.utilityBtnText}>Photo check-in</Text>
           </TouchableOpacity>
         </View>
       )}
 
-      {(hasLoc || hasWeb) && (
-        <View style={styles.actionRow}>
-          {hasLoc && (
-            <TouchableOpacity style={styles.actionBtn} onPress={openDirections} activeOpacity={0.8}>
-              <Text style={styles.actionBtnIcon}>⌖</Text>
-              <Text style={styles.actionBtnText}>Get directions</Text>
-            </TouchableOpacity>
-          )}
-          {hasWeb && (
-            <TouchableOpacity style={styles.actionBtn} onPress={openWebsite} activeOpacity={0.8}>
-              <Text style={styles.actionBtnIcon}>↗</Text>
-              <Text style={styles.actionBtnText}>Visit website</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      )}
-
+      {/* Item Detail Redesign (2026-09-18) — ONE refined "Do This
+          Together" card replaces both the old oversized Dare-a-Friend
+          tile and the old separate, larger invite section. Product
+          decision: the Dare feature/screen/logic itself is NOT deleted
+          (see the old Dare quick-action business logic that used
+          to live here — DareScreen, completeDare, dareListId resolution
+          are all untouched elsewhere in this codebase), only its
+          default, oversized entry point on Detail is gone — fully
+          superseded by this card, per the approved design's explicit
+          instruction. dare_click no longer fires from Detail's default
+          UI as a result; that's expected, not a regression. */}
       <View style={styles.inviteCard}>
         <View style={styles.inviteHeaderRow}>
           <View style={styles.inviteHeaderLeft}>
-            <Text style={styles.inviteTitle}>Do this together</Text>
-            <Text style={styles.inviteSub}>
-              Invite a friend — they'll get a link to download the app and join your list.
-            </Text>
+            <Text style={styles.inviteTitle}>DO THIS TOGETHER</Text>
           </View>
 
-          <TouchableOpacity style={styles.editChannelsBtn} onPress={openChannelPicker}>
+          <TouchableOpacity
+            style={styles.editChannelsBtn}
+            onPress={openChannelPicker}
+            accessibilityRole="button"
+            accessibilityLabel="Edit invitation message channels"
+          >
             <Text style={styles.editChannels}>Edit</Text>
           </TouchableOpacity>
         </View>
@@ -1486,6 +1556,19 @@ export default function ItemDetailScreen({ route, navigation }) {
           <Text style={styles.smsPreviewText}>{inviteMessage()}</Text>
         </View>
 
+        <TouchableOpacity
+          style={styles.inviteSoloBtn}
+          onPress={() => {
+            trackEvent('invite_item_tap', { itemId: item?.id, listId })
+            openNativeShare()
+          }}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Invite someone"
+        >
+          <Text style={styles.inviteSoloBtnText}>Invite someone</Text>
+        </TouchableOpacity>
+
         <View style={styles.channelRow}>
           {displayChannels.map(key => {
             const ch = CHANNELS[key]
@@ -1494,8 +1577,13 @@ export default function ItemDetailScreen({ route, navigation }) {
               <TouchableOpacity
                 key={key}
                 style={[styles.channelBtn, { backgroundColor: ch.color }]}
-                onPress={() => shareVia(key)}
+                onPress={() => {
+                  trackEvent('invite_item_tap', { itemId: item?.id, listId })
+                  shareVia(key)
+                }}
                 activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel={`Invite via ${ch.label}`}
               >
                 <Text style={[styles.channelBtnText, { color: ch.textColor ?? '#fff' }]}>
                   {ch.label}
@@ -1506,8 +1594,13 @@ export default function ItemDetailScreen({ route, navigation }) {
 
           <TouchableOpacity
             style={styles.moreBtn}
-            onPress={openNativeShare}
+            onPress={() => {
+              trackEvent('invite_item_tap', { itemId: item?.id, listId })
+              openNativeShare()
+            }}
             activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityLabel="More sharing options"
           >
             <Text style={styles.moreBtnText}>More ···</Text>
           </TouchableOpacity>
@@ -1815,11 +1908,16 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     fontSize: 14,
   },
 
-  itemImage: {
+  // Item Detail Redesign (2026-09-18) — full-bleed hero (photo/archetype/
+  // generic, via components/itemDetail/DetailArtwork.jsx), not a card
+  // thumbnail. Deliberately no borderWidth — "no heavy border around the
+  // hero" per the approved visual language.
+  heroWrap: {
     width: '100%',
-    height: 220,
+    height: 260,
     borderRadius: 24,
     marginBottom: 16,
+    overflow: 'hidden',
   },
 
   itemCard: {
@@ -1881,13 +1979,13 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
   },
 
 
-  // ── Nearby mode styles ──
+  // ── Nearby mode styles ── incomplete=amber, completed=green, matching
+  // the list-mode checkBtn/checkBtnDone treatment (Item Detail Redesign,
+  // 2026-09-18) — both theme tokens, no hardcoded literals.
   nearbyActionWrap: { gap: 10, marginBottom: 16 },
-  nearbyAddBtn: { backgroundColor: CARD, borderRadius: 14, paddingVertical: 16, alignItems: 'center', borderWidth: 1.5, borderColor: AMBER },
-  nearbyAddBtnText: { fontSize: 15, fontWeight: '800', color: AMBER },
-  nearbyDoneBtn: { backgroundColor: '#243045', borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
+  nearbyDoneBtn: { backgroundColor: AMBER, borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
   nearbyDoneBtnChecked: { backgroundColor: GREEN },
-  nearbyDoneBtnText: { fontSize: 15, fontWeight: '800', color: '#fff' },
+  nearbyDoneBtnText: { fontSize: 15, fontWeight: '800', color: NAVY },
   nearbyDoneBtnTextChecked: { color: '#fff' },
   listPickerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end', zIndex: 100 },
   listPickerCard: { backgroundColor: CARD, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40, gap: 8 },
@@ -1901,8 +1999,13 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
   listPickerCancel: { alignItems: 'center', paddingVertical: 14, marginTop: 4 },
   listPickerCancelText: { fontSize: 15, color: MUTED, fontWeight: '600' },
 
+  // Item Detail Redesign (2026-09-18) — incomplete state is amber
+  // ("I'VE DONE THIS"), completed state is green ("DONE ✓") — the approved
+  // visual language. Text/icon colors flip to NAVY on the amber
+  // (incomplete) state for contrast, staying white on the green
+  // (completed) state.
   checkBtn: {
-    backgroundColor: NAVY,
+    backgroundColor: AMBER,
     borderRadius: 24,
     paddingVertical: 20,
     paddingHorizontal: 24,
@@ -1912,104 +2015,77 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     gap: 10,
     marginBottom: 8,
     borderWidth: 1,
-    borderColor: NAVY,
+    borderColor: AMBER,
   },
 
   checkBtnDone: {
-    backgroundColor: AMBER,
-    borderColor: AMBER,
+    backgroundColor: GREEN,
+    borderColor: GREEN,
   },
 
   checkBtnIcon: {
     fontSize: 20,
-    color: '#fff',
+    color: NAVY,
   },
 
   checkBtnIconDone: {
-    color: NAVY,
+    color: '#fff',
   },
 
   checkBtnText: {
     fontSize: 18,
     fontWeight: '800',
-    color: '#fff',
-  },
-
-  checkBtnTextDone: {
     color: NAVY,
   },
 
-  checkedSub: {
-    fontSize: 11,
-    color: MUTED,
-    textAlign: 'center',
-    marginBottom: 16,
-    fontWeight: '600',
+  checkBtnTextDone: {
+    color: '#fff',
   },
 
-  quickRow: {
+  // Item Detail Redesign (2026-09-18) — one compact utility row replaces
+  // the old oversized Dare/Photo quickRow tiles and the separate
+  // Directions/Website actionRow. Directions/Website/Photo Check-in (and,
+  // if ever wired in, Save/Saved) are all equal-weight compact buttons
+  // here, each hidden individually when its own data isn't available
+  // (hasLoc/hasWeb), same conditional pattern as before — just restyled
+  // into one row instead of two separate ones.
+  utilityRow: {
     flexDirection: 'row',
-    gap: 10,
-    marginBottom: 16,
-  },
-
-  quickBtn: {
-    flex: 1,
-    backgroundColor: CARD,
-    borderRadius: 22,
-    paddingVertical: 18,
-    paddingHorizontal: 12,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: BORDER,
-  },
-
-  quickBtnIcon: {
-    fontSize: 28,
-    marginBottom: 8,
-  },
-
-  quickBtnText: {
-    fontSize: 14,
-    color: TEXT,
-    fontWeight: '800',
-    textAlign: 'center',
-    marginBottom: 4,
-  },
-
-  quickBtnSub: {
-    fontSize: 12,
-    color: MUTED,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-
-  actionRow: {
-    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
     marginBottom: 20,
   },
 
-  actionBtn: {
+  utilityBtn: {
     flex: 1,
+    minWidth: 100,
     backgroundColor: SOFT,
-    borderRadius: 22,
-    paddingVertical: 20,
+    borderRadius: 18,
+    paddingVertical: 16,
     alignItems: 'center',
-    gap: 8,
+    gap: 6,
     borderWidth: 1.2,
     borderColor: BORDER,
   },
 
-  actionBtnIcon: {
-    fontSize: 22,
+  // Photo Check-in gets the stronger outline per the approved visual
+  // language (warm-cream in dark mode / deep-navy in light mode — BORDER
+  // is already themed to exactly that in lib/ThemeContext.js).
+  utilityBtnEmphasis: {
+    borderWidth: 1.5,
+    borderColor: BORDER,
+  },
+
+  utilityBtnIcon: {
+    fontSize: 20,
     color: BLUE,
   },
 
-  actionBtnText: {
-    fontSize: 14,
+  utilityBtnText: {
+    fontSize: 13,
     color: TEXT,
     fontWeight: '800',
+    textAlign: 'center',
   },
 
   inviteCard: {
@@ -2055,10 +2131,24 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     fontWeight: '700',
   },
 
-  inviteSub: {
-    fontSize: 13,
-    color: MUTED,
-    lineHeight: 19,
+  // Item Detail Redesign (2026-09-18) — the single "Invite someone"
+  // primary action on the refined "DO THIS TOGETHER" card (replaces the
+  // old giant Dare-a-Friend tile and the old separate, larger invite
+  // section — this is the one card both were superseded by). The existing
+  // channel-specific row + native "More" share below remain as secondary,
+  // preserving the existing sharing mechanism unchanged.
+  inviteSoloBtn: {
+    backgroundColor: AMBER,
+    borderRadius: 18,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginBottom: 14,
+  },
+
+  inviteSoloBtnText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: NAVY,
   },
 
   smsPreview: {

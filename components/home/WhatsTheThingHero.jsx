@@ -117,22 +117,6 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
   // card, per design correction).
   const pointsLabel = `+${item.difficulty ?? 1} pts`
 
-  // "Help the next person" support copy for the Add a Photo action — must
-  // render at most once (approved design correction on the original
-  // mockup, which duplicated it). Owned here, not inside
-  // CoverCandidateCTA's shared 'pill' variant, since that variant has no
-  // other consumer today but shouldn't be forced to carry hero-specific
-  // copy either. `onImage` picks a readable-over-scrim color for the
-  // photo/archetype branches vs. the plain-surface MUTED tone elsewhere.
-  function renderAddPhotoHelper(onImage) {
-    if (!showContributionCTA) return null
-    return (
-      <Text style={[styles.addPhotoHelper, { color: onImage ? 'rgba(255,255,255,0.75)' : MUTED }]}>
-        Help the next person
-      </Text>
-    )
-  }
-
   // FINAL UI PASS BEFORE BUILD 144 — item 5: both actions get equal flex
   // (same footprint) and are hard-capped to one line via
   // adjustsFontSizeToFit (shrinks the text instead of wrapping it or
@@ -170,7 +154,6 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
       <Text style={styles.bodyOnImage} numberOfLines={3}>{item.body}</Text>
       <Text style={styles.metaOnImage}>{pointsLabel}</Text>
       {ctaRow}
-      {renderAddPhotoHelper(true)}
     </View>
   )
 
@@ -234,7 +217,6 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
               ) : null}
               {!compact ? <Text style={[styles.metaText, { color: MUTED }]}>{pointsLabel}</Text> : null}
               {!compact && ctaRow}
-              {!compact && renderAddPhotoHelper(false)}
             </View>
           </>
         )}
@@ -259,9 +241,6 @@ const styles = StyleSheet.create({
   // the "RIGHT HERE"-style redundancy the design correction removed.
   metaOnImage: { color: 'rgba(255,255,255,0.75)', fontSize: 12, fontWeight: '700', letterSpacing: 0.3, marginBottom: 10 },
   metaText: { fontSize: 12, fontWeight: '700', letterSpacing: 0.3, marginTop: 2, marginBottom: 10 },
-  // "Help the next person" — renders at most once, directly under the
-  // action row, only when the Add a Photo action itself is eligible.
-  addPhotoHelper: { fontSize: 12, fontWeight: '600', marginTop: 8 },
   textBlock: { padding: 20 },
   // "You're Here" emphasis bump (real-device feedback, 2026-09-03): a
   // notch larger and slightly wider letter-spacing than before, still

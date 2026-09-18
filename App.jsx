@@ -53,6 +53,7 @@ import BrowseListsScreen       from './screens/BrowseListsScreen'
 import CuratedListPreviewScreen from './screens/CuratedListPreviewScreen'
 import DeepLinkListResolverScreen from './screens/DeepLinkListResolverScreen'
 import DeepLinkExperienceResolverScreen from './screens/DeepLinkExperienceResolverScreen'
+import DeepLinkItemResolverScreen from './screens/DeepLinkItemResolverScreen'
 import CreatorProfileScreen        from './screens/CreatorProfileScreen'
 import CreatorListScreen           from './screens/CreatorListScreen'
 import DestinationsScreen          from './screens/DestinationsScreen'
@@ -190,6 +191,11 @@ function HomeStack() {
       <Stack.Screen
         name="DeepLinkExperienceResolver"
         component={DeepLinkExperienceResolverScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="DeepLinkItemResolver"
+        component={DeepLinkItemResolverScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen
@@ -561,6 +567,12 @@ function App() {
                         path: 'experience',
                         parse: {
                           tag: (tag) => tag,
+                        },
+                      },
+                      DeepLinkItemResolver: {
+                        path: 'item/:id',
+                        parse: {
+                          id: (id) => id,
                         },
                       },
                       DeepLinkCreatorResolver: {
