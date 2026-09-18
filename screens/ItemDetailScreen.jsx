@@ -1518,7 +1518,6 @@ export default function ItemDetailScreen({ route, navigation }) {
               })
             }}
           >
-            <Text style={styles.utilityBtnIcon}>◎</Text>
             <Text style={styles.utilityBtnText}>Photo check-in</Text>
           </TouchableOpacity>
         </View>
