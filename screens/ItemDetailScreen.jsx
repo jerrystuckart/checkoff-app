@@ -43,6 +43,7 @@ import { buildInviteMessage, buildInviteAskLine } from '../lib/inviteMessage'
 import { extractQuotedVenueFromBody } from '../lib/itemDetailHeaderTitle'
 import { useSavedItems } from '../lib/SavedItemsContext'
 import BookmarkIcon from '../components/BookmarkIcon'
+import { deriveTitlePresentation } from '../lib/detailTitlePresentation'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
@@ -53,6 +54,15 @@ const RED = '#D85A30'
 
 const RING_COLORS = ['#1D9E75', '#378ADD', '#BA7517', '#D85A30']
 const RING_LABELS = ['Core', 'Near', 'Metro', 'Destination']
+
+// Item Detail Corrective Pass (2026-09-18) — the hero's localized
+// left-to-right scrim falloff, shared by both theme's HERO_SCRIM_* color
+// stops (lib/ThemeContext.js). Strong at x=0 (behind the text column),
+// dropping steeply through 0.2, and fully clear (opacity 0) by 0.42 — well
+// inside the "clear before the right 35-45%" requirement — then staying
+// clear all the way to x=1 so the artwork's focal subject on the right
+// never gets any dark wash.
+const HERO_GRADIENT_LOCATIONS = [0, 0.2, 0.42, 1]
 
 const CHANNELS = {
   sms: {
@@ -1277,18 +1287,21 @@ export default function ItemDetailScreen({ route, navigation }) {
   // new/fabricated field, item.difficulty always has this exact fallback.
   const heroPointsLabel = `+${item.difficulty ?? 1} pts`
 
-  // Long-title rule (Goal 1): the hero title always clamps to 2 lines via
-  // numberOfLines={2} — chosen because it fits comfortably within the
-  // 240dp hero height cap alongside the pill row above it and the venue
-  // line below it, while still showing the great majority of real item
-  // bodies in full (most run well under 60 characters). When body text IS
-  // unusually long (> HERO_VENUE_OVERFLOW_THRESHOLD), a 2-line title
-  // already visually fills the hero's left column, so venue/neighborhood
-  // moves to a compact single line immediately below the hero card
-  // instead of being dropped or crowded — never a second giant card, and
-  // never silently missing.
-  const HERO_VENUE_OVERFLOW_THRESHOLD = 60
-  const venueOverflowsHero = (item.body ?? '').length > HERO_VENUE_OVERFLOW_THRESHOLD
+  // Item Detail Corrective Pass (2026-09-18) — Goal 2: the old hard
+  // numberOfLines={2} clamp truncated real item bodies mid-word/mid-
+  // thought (e.g. "Find the door disguised as a painti…"), losing the
+  // actual point of the experience. deriveTitlePresentation (pure,
+  // unit-tested in lib/detailTitlePresentation.test.js) now decides, from
+  // the body's length alone, how much of it fits inside the hero's 4-line
+  // budget at a tier-appropriate font size, and — only for the rare body
+  // that still doesn't fit — where to make a clean, word-boundary split so
+  // the remainder can render as a compact continuation below the hero.
+  // Venue/neighborhood moves to that same below-hero slot only when the
+  // title itself needed the continuation — title takes priority over
+  // metadata when space is tight, but metadata is never dropped when the
+  // title fits fine.
+  const titlePresentation = deriveTitlePresentation(item.body)
+  const venueOverflowsHero = titlePresentation.hasContinuation
 
   const displayChannels = userChannels.filter((c, i, a) => {
     if (c === 'imessage') return !a.includes('sms')
@@ -1325,11 +1338,29 @@ export default function ItemDetailScreen({ route, navigation }) {
           the artwork's focal subject (the archetype asset convention's own
           right 40-45%) stays visible on the right while text reads clearly
           on the left. */}
-      <View style={styles.heroCard}>
+      <View style={[styles.heroCard, { maxHeight: titlePresentation.heroHeightHint }]}>
         <DetailArtwork item={resolvedItem} userId={userId} colors={colors} style={StyleSheet.absoluteFillObject} />
+        {/* Localized left-to-right scrim (Item Detail Corrective Pass,
+            2026-09-18) — replaces the prior version of this same gradient,
+            which used only 3 stops (0 / 0.55 / 1) and stayed at 0.45
+            opacity all the way to the 55% mark, so roughly half the
+            artwork's width read as dimmed regardless of where the text
+            actually sat. This version is strongest at x=0 (behind the
+            text), then falls off steeply and is fully clear by
+            HERO_GRADIENT_LOCATIONS' third stop (0.42) — comfortably inside
+            the "clear well before the right 35-45%" requirement — so the
+            artwork's focal subject on the right stays fully colorful.
+            Root cause of the OLD "whole image looks dark" bug wasn't only
+            this gradient's own shallow falloff — see DetailArtwork.jsx's
+            own comment on why ArchetypeArtwork's separate, full-width
+            top-to-bottom scrim (gradient={false} there now) was stacking
+            with this one. HERO_SCRIM_STRONG/SOFT/CLEAR are theme tokens
+            (lib/ThemeContext.js) — light mode uses a lower peak opacity
+            and a warm-navy base rather than dark mode's near-black
+            values. */}
         <LinearGradient
-          colors={['rgba(6,6,14,0.82)', 'rgba(6,6,14,0.45)', 'rgba(6,6,14,0.06)']}
-          locations={[0, 0.55, 1]}
+          colors={[colors.HERO_SCRIM_STRONG, colors.HERO_SCRIM_SOFT, colors.HERO_SCRIM_CLEAR, colors.HERO_SCRIM_CLEAR]}
+          locations={HERO_GRADIENT_LOCATIONS}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 0 }}
           style={StyleSheet.absoluteFillObject}
@@ -1370,7 +1401,12 @@ export default function ItemDetailScreen({ route, navigation }) {
             )}
           </View>
 
-          <Text style={styles.heroTitle} numberOfLines={2}>{item.body}</Text>
+          <Text
+            style={[styles.heroTitle, { fontSize: titlePresentation.heroFontSize, lineHeight: titlePresentation.heroLineHeight }]}
+            numberOfLines={titlePresentation.heroNumberOfLines}
+          >
+            {titlePresentation.heroLines}
+          </Text>
 
           {!venueOverflowsHero && item.neighborhoodName ? (
             <Text style={styles.heroVenue} numberOfLines={1}>{item.neighborhoodName}</Text>
@@ -1385,12 +1421,32 @@ export default function ItemDetailScreen({ route, navigation }) {
         </View>
       </View>
 
-      {/* Compact continuation line (Goal 1's documented escape hatch) —
-          only rendered for the unusually long bodies where the hero
-          title's own 2-line clamp would otherwise crowd out venue/
-          neighborhood text. Never a second giant card. */}
-      {venueOverflowsHero && item.neighborhoodName ? (
-        <Text style={styles.heroVenueContinuation}>{item.neighborhoodName}</Text>
+      {/* Compact continuation block (Goal 2's documented escape hatch) —
+          only rendered for the rare body that doesn't fit even at its
+          tier's font size within the hero's 4-line budget
+          (titlePresentation.hasContinuation). Never a second giant card —
+          just the remaining title text (a clean word-boundary split off
+          titlePresentation.heroLines, computed in
+          lib/detailTitlePresentation.js — never a duplicated word, never
+          an ellipsis) followed by venue/neighborhood if present. Hidden
+          from the accessibility tree: heroContent's own grouped
+          accessibilityLabel above already announces the COMPLETE body
+          (titlePresentation.accessibilityLabel === item.body) exactly
+          once, so this visible-only block must not expose a second,
+          overlapping announcement of the same text. */}
+      {venueOverflowsHero ? (
+        <View
+          style={styles.heroContinuationWrap}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        >
+          {titlePresentation.continuationText ? (
+            <Text style={styles.heroTitleContinuation}>{titlePresentation.continuationText}</Text>
+          ) : null}
+          {item.neighborhoodName ? (
+            <Text style={styles.heroVenueContinuation}>{item.neighborhoodName}</Text>
+          ) : null}
+        </View>
       ) : null}
 
       {showCoverContributionCTA ? (
@@ -1470,21 +1526,24 @@ export default function ItemDetailScreen({ route, navigation }) {
         </TouchableOpacity>
       </View>
 
-      {/* Item Detail Corrective Pass (2026-09-18) — Goal 2 fix: Directions/
-          Website/Save only (Photo Check-in moved to the primary row above
-          — Goal 2 addendum — and the old list-membership chip removed
-          entirely — Goal 3). Save is pinned to the trailing/rightmost slot
-          via `marginLeft: 'auto'` on a `flexDirection: 'row',
-          justifyContent: 'flex-start'` container — the idiomatic RN/CSS
-          way to get "always last, others pack naturally before it"
-          without hardcoding empty spacer slots for the 1-2 sibling cases.
-          This is the actual fix for the reported bug: the OLD utilityRow
-          gave every action (Directions/Website/Save/Photo/Add-to-list)
-          equal `flex: 1` sizing in a flexWrap row, so Save's rendered
-          x-position packed differently depending on how many conditional
-          siblings preceded it. Save's own position here never depends on
-          hasLoc/hasWeb — only its LEFT neighbors' presence changes, never
-          its own alignment rule. */}
+      {/* Item Detail Corrective Pass (2026-09-18) — Goal 3 fix: the prior
+          pass's marginLeft-auto pin on Save was structurally correct
+          (Save always rendered trailing) but, per physical-device
+          screenshots, produced a large awkward empty gap whenever Website
+          or Directions was absent — `auto` margin reserves whatever space
+          those siblings WOULD have used rather than letting the remaining
+          controls actually fill the row. Fixed here by giving every
+          VISIBLE control `flex: 1` (utilityBtn) inside a plain
+          `flexDirection: 'row'` container, rendering ONLY the
+          actually-present controls, with NO placeholder/invisible spacer
+          elements. flex:1 on however many siblings are actually present
+          naturally produces "N equal-width controls filling the row" —
+          Directions+Website+Save fill it as three, Directions+Save (or
+          Website+Save) as two, Save alone fills it completely — all
+          without any index/hasLoc/hasWeb-based positioning logic. Save
+          stays the always-last, always-rightmost control purely because
+          it is the last one written in this JSX, not because of any
+          margin trick. */}
       {userId && (
         <View style={styles.utilityRow}>
           {hasLoc && (
@@ -1511,12 +1570,13 @@ export default function ItemDetailScreen({ route, navigation }) {
               <Text style={styles.utilityBtnText}>Website</Text>
             </TouchableOpacity>
           )}
-          {/* Save — ALWAYS the trailing element, regardless of whether
-              Directions/Website rendered above. marginLeft: 'auto' is what
-              guarantees this; it is not computed from hasLoc/hasWeb or
-              from any index into a conditionally-filtered array. */}
+          {/* Save — always rendered last among the present controls, so it
+              is always the trailing/rightmost one. No marginLeft-auto trick,
+              no separate "Save" style variant — it gets the exact same
+              utilityBtn flex:1 treatment as Directions/Website, so it
+              never looks different whether it's alone or accompanied. */}
           <TouchableOpacity
-            style={[styles.utilityBtn, styles.utilityBtnSave]}
+            style={styles.utilityBtn}
             onPress={() => toggleSaved(item.id, navigation)}
             activeOpacity={0.8}
             accessibilityRole="button"
@@ -1900,12 +1960,14 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
   // tagRow + 2-3-line title + location, ~140-160dp more) — ~400-420dp
   // combined before this pass. aspectRatio 8:5 (1.6) sizes the hero from
   // the available width (roughly 350dp at typical phone content width ->
-  // ~219dp tall); maxHeight 240 is an explicit ceiling for wider
-  // viewports/tablets so the hero can never re-balloon back toward the
-  // old combined height — the concrete bug this pass fixes. Deliberately
-  // no borderWidth — "no heavy border around the hero" per the approved
-  // visual language, unchanged from the prior pass. Radius 24 matches
-  // this app's own established primary-card convention (see
+  // ~219dp tall); maxHeight is now driven per-render from
+  // titlePresentation.heroHeightHint (lib/detailTitlePresentation.js) —
+  // 240/260/300dp for short/medium/long titles, 320dp only for the rare
+  // title that needs a below-hero continuation — this literal 240 is only
+  // the style's own fallback default. Deliberately no borderWidth — "no
+  // heavy border around the hero" per the approved visual language,
+  // unchanged from the prior pass. Radius 24 matches this app's own
+  // established primary-card convention (see
   // components/home/WhatsTheThingHero.jsx's imageCard: borderRadius 24).
   heroCard: {
     width: '100%',
@@ -1917,17 +1979,17 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     backgroundColor: NAVY,
   },
 
-  // Content sits on the left ~62% of the hero, overlaid on the left-to-
-  // right scrim added in the render (not inside DetailArtwork/
-  // ArchetypeArtwork — see the render's own comment on why). Anchored
-  // toward the bottom of the hero (justifyContent: flex-end) so it reads
-  // as a caption block over the art, same convention as
-  // WhatsTheThingHero's own on-image text layer.
+  // Content sits on the left ~72% of the hero (within the task's 68-74%
+  // band), overlaid on the localized left-to-right scrim added in the
+  // render (not inside DetailArtwork/ArchetypeArtwork — see the render's
+  // own comment on why). Anchored toward the bottom of the hero
+  // (justifyContent: flex-end) so it reads as a caption block over the
+  // art, same convention as WhatsTheThingHero's own on-image text layer.
   heroContent: {
     flex: 1,
     justifyContent: 'flex-end',
     padding: 18,
-    maxWidth: '68%',
+    maxWidth: '72%',
   },
 
   heroPillRow: {
@@ -1951,16 +2013,17 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     color: '#fff',
   },
 
-  // Long-title rule (Goal 1) — clamped to 2 lines via numberOfLines={2}
-  // in the render, so this style only owns the visual weight, matching
-  // the prior itemBody's own size/weight (kept identical on purpose —
-  // same editorial-headline treatment, just relocated and recolored for
-  // the dark scrim it now sits on).
+  // Title readability rule (Goal 2) — fontSize/lineHeight are now
+  // overridden per-render from titlePresentation.heroFontSize/
+  // heroLineHeight (lib/detailTitlePresentation.js); this style only owns
+  // the weight/color/spacing that don't vary by tier — same editorial-
+  // headline treatment as before this pass, just no longer a single fixed
+  // size for every title length.
   heroTitle: {
-    fontSize: 21,
+    fontSize: 22,
     fontWeight: '800',
     color: '#fff',
-    lineHeight: 26,
+    lineHeight: 27,
     marginBottom: 4,
   },
 
@@ -1982,14 +2045,28 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     color: 'rgba(255,255,255,0.75)',
   },
 
-  // Escape hatch for unusually long bodies (Goal 1) — a single compact
-  // line immediately below the hero card, never a second giant card.
+  // Escape hatch for the rare title that doesn't fit even at its tier's
+  // font size within the hero's 4-line budget (Goal 2) — a single compact
+  // block immediately below the hero card, never a second giant card.
+  // Hidden from the accessibility tree in the render (heroContent's own
+  // grouped label already announces the complete body once).
+  heroContinuationWrap: {
+    marginTop: -8,
+    marginBottom: 16,
+  },
+
+  heroTitleContinuation: {
+    fontSize: 15,
+    color: TEXT,
+    fontWeight: '700',
+    lineHeight: 20,
+    marginBottom: 4,
+  },
+
   heroVenueContinuation: {
     fontSize: 13,
     color: MUTED,
     fontWeight: '600',
-    marginTop: -10,
-    marginBottom: 16,
   },
 
   // Contribution CTA now lives in the TOP area (see the render above) —
@@ -2077,23 +2154,35 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     textAlign: 'center',
   },
 
-  // Item Detail Corrective Pass (2026-09-18) — Goal 2 fix: Directions/
-  // Website/Save only now (Photo Check-in moved to primaryActionRow above;
-  // "Add to list"/"On your list" removed — Goal 3). flexDirection: 'row'
-  // with NO flexWrap and NO flex:1 packing on Save specifically — that
-  // flex:1-in-a-flexWrap-row pattern was the actual bug (Save's rendered
-  // position shifted with however many siblings preceded it). Directions/
-  // Website keep compact, content-sized chips; Save gets marginLeft:
-  // 'auto' (see utilityBtnSave below) so it is ALWAYS the trailing
-  // element regardless of how many of its left siblings render.
+  // Item Detail Corrective Pass (2026-09-18) — Goal 3 fix: Directions/
+  // Website/Save only (Photo Check-in lives in primaryActionRow above;
+  // "Add to list"/"On your list" removed). Every VISIBLE control gets
+  // `flex: 1` (see utilityBtn below) inside this plain
+  // `flexDirection: 'row'` container, with only the actually-present
+  // controls rendered (no placeholder/spacer elements) — flex:1 on
+  // however many siblings exist naturally fills the row proportionally,
+  // whether that's three controls, two, or Save alone. flexWrap is kept
+  // (mirroring primaryActionRow's own established flex:1 + minWidth +
+  // flexWrap pattern above) purely as a Dynamic-Type safety valve — at
+  // ordinary text sizes these always fit on one row; only very large
+  // Dynamic Type stacks them, still in the same Directions -> Website ->
+  // Save order since that's just JSX order, never index-based.
   utilityRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     alignItems: 'center',
     gap: 10,
     marginBottom: 20,
   },
 
+  // flex:1 + minWidth is what replaces the prior marginLeft-auto fix —
+  // every present control (Directions/Website/Save) gets this exact same
+  // style, so none of them ever looks different depending on how many of
+  // its siblings are present. Save is the trailing/rightmost control
+  // purely because it's written last in the JSX above, never because of
+  // any index/hasLoc/hasWeb-based positioning rule here.
   utilityBtn: {
+    flex: 1,
     minWidth: 100,
     backgroundColor: SOFT,
     borderRadius: 18,
@@ -2103,17 +2192,6 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     gap: 6,
     borderWidth: 1.2,
     borderColor: BORDER,
-  },
-
-  // THE fix for the Save-position bug: pins Save to the trailing/
-  // rightmost slot in utilityRow's plain flexDirection:'row' regardless
-  // of whether Directions and/or Website rendered before it — the
-  // idiomatic RN/CSS way to get "always last, others pack naturally
-  // before it" without hardcoding empty spacer slots for the 1-2-sibling
-  // cases. Never computed from hasLoc/hasWeb or from an index into a
-  // conditionally-filtered array.
-  utilityBtnSave: {
-    marginLeft: 'auto',
   },
 
   utilityBtnIcon: {
@@ -2132,10 +2210,16 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
   // "DO THIS TOGETHER" card itself. No permanent message preview, no
   // permanent Edit button, no permanent channel grid — those all moved
   // into inviteChannelSheet below, reached only via inviteSoloBtn.
+  // Item Detail Corrective Pass (2026-09-18) — Goal 6: modest vertical-
+  // density tightening (padding 18->16, inviteTitle's bottom margin 6->4,
+  // inviteAsk's bottom margin 14->10). Card structure/copy/single-action
+  // shape are unchanged — inviteSoloBtn below still keeps its full
+  // paddingVertical: 16 (~50pt tall with its text), comfortably above the
+  // ~44pt touch-target floor.
   inviteCard: {
     backgroundColor: CARD,
     borderRadius: 28,
-    padding: 18,
+    padding: 16,
     marginBottom: 16,
     borderWidth: 1.2,
     borderColor: BORDER,
@@ -2145,14 +2229,14 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     fontSize: 18,
     fontWeight: '800',
     color: TEXT,
-    marginBottom: 6,
+    marginBottom: 4,
   },
 
   inviteAsk: {
     fontSize: 14,
     color: MUTED,
     lineHeight: 20,
-    marginBottom: 14,
+    marginBottom: 10,
   },
 
   // Reused inside inviteChannelSheet (below) for its own title + "Edit"

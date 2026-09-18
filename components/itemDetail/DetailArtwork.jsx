@@ -75,11 +75,30 @@ export default function DetailArtwork({ item, userId = null, colors, style }) {
 
   return (
     <View style={style}>
+      {/* Item Detail Corrective Pass (2026-09-18) — root cause of the
+          "whole hero is dark" bug: ArchetypeArtwork's own `gradient` prop
+          (true by default) applies a FIXED top-to-bottom scrim that's
+          uniform across the full width, reaching ~0.92 opacity at the
+          bottom — the same band the hero's own bottom-anchored text sits
+          in (see heroContent's justifyContent: 'flex-end' in
+          ItemDetailScreen.jsx). Stacked with the new localized
+          left-to-right scrim ItemDetailScreen.jsx renders on top of this
+          component, the bottom of the image stayed dark across its ENTIRE
+          width regardless of the horizontal falloff — defeating the "right
+          ~35-45% stays colorful" goal. Passing gradient={false} here
+          removes that redundant full-width vertical scrim; Detail now
+          supplies its own single, localized scrim directly in
+          ItemDetailScreen.jsx's heroCard render instead. This only toggles
+          the scrim flag ArchetypeArtwork already exposes for exactly this
+          per-caller choice (row/compact thumbnails already pass false) —
+          it does not touch resolveArtworkTier, useCardArtwork, or any
+          load/failure/fallback behavior in either this file or
+          ArchetypeArtwork.jsx. */}
       <ArchetypeArtwork
         url={effectiveUrl}
         onError={onError}
         renderGenericFallback={() => <DetailGenericBackground colors={colors} />}
-        gradient
+        gradient={false}
         resizeMode="cover"
         style={StyleSheet.absoluteFillObject}
       />
