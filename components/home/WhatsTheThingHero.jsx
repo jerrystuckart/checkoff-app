@@ -42,10 +42,12 @@
 //      readable over any photo, CTA row moves onto the scrim.
 
 import React, { useEffect, useRef } from 'react'
-import { View, Text, Image, StyleSheet, Animated } from 'react-native'
+import { View, Text, Image, Pressable, StyleSheet, Animated } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import PressableTactile from '../PressableTactile'
 import { isSpecialItemPresentation } from '../../lib/whatsGoodDisplayLayout'
+import { useSavedItems } from '../../lib/SavedItemsContext'
+import BookmarkIcon from '../BookmarkIcon'
 // Archetype Fallback Artwork V1 (2026-09-17) — see useCardArtwork.js.
 // Replaces the direct resolvedItemImage() call: same `{ url }` shape for a
 // real approved photo, plus resolved archetype/category-default artwork
@@ -78,6 +80,17 @@ function HeroNoImageBackground({ colors, isSpecial }) {
 export default function WhatsTheThingHero({ item, navigation, colors, compact = false, userId = null }) {
   const anim = useRef(new Animated.Value(0)).current
   const showContributionCTA = useCoverCandidateCTA({ userId, item })
+  // Saved Items V1 (2026-09-18) — only in the dominant (non-compact) mode.
+  // The compact mode's ctaRow/photo-pill action row is already tight on
+  // narrow devices (see ctaRow's own flexWrap comment above) — Check It
+  // Off and Add a Photo are the approved dominant actions there, and a
+  // fourth competing element in that already-crowded row risks exactly
+  // the clutter the approved Right Here redesign explicitly avoided. The
+  // dominant card has real unused space in its top-right corner (away
+  // from the eyebrow/title/body/CTA column, which is bottom-anchored or
+  // left-aligned in every mode), so the bookmark sits there instead —
+  // never inside or adjacent to the CTA row.
+  const { isSaved, toggleSaved } = useSavedItems()
   // Called unconditionally (rules-of-hooks) even though this component
   // bails out below when item is null — useCardArtwork tolerates a null
   // item (resolveArtworkTier -> generic tier) the same way
@@ -220,6 +233,23 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
             </View>
           </>
         )}
+        {/* Rendered last (after every mode's own text/CTA content) so a
+            screen reader reaches "You're here" / "What's the Thing?" /
+            body / points / Check It Off first — the bookmark never jumps
+            the reading order ahead of that content, even though it's
+            visually pinned to the top-right corner. */}
+        {!compact && (
+          <Pressable
+            onPress={() => toggleSaved(item.id, navigation)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={styles.saveToggle}
+            accessibilityRole="button"
+            accessibilityState={{ selected: isSaved(item.id) }}
+            accessibilityLabel={isSaved(item.id) ? `Remove ${item.body} from Saved` : `Save ${item.body}`}
+          >
+            <BookmarkIcon filled={isSaved(item.id)} color={showPhotoLikeMode ? '#fff' : accentText} size={18} />
+          </Pressable>
+        )}
       </PressableTactile>
     </Animated.View>
   )
@@ -274,6 +304,10 @@ const styles = StyleSheet.create({
   ctaPillHighlight: { position: 'absolute', top: 0, left: 0, right: 0, height: '50%', backgroundColor: 'rgba(255,255,255,0.22)' },
   ctaPillText: { fontSize: 15, fontWeight: '800', letterSpacing: 0.2 },
   glowWash: { position: 'absolute', top: -50, right: -50, width: 180, height: 180, borderRadius: 90, opacity: 0.14 },
+  // Saved Items V1 (2026-09-18) — corner overlay, deliberately far from
+  // ctaRow (which is bottom-anchored / below the text block in every
+  // mode) so it never competes with Check It Off / Add a Photo.
+  saveToggle: { position: 'absolute', top: 12, right: 12, padding: 8, borderRadius: 999 },
 
   compactWrapper: { marginHorizontal: 16, marginTop: 18 },
   compactCard: { borderRadius: 16, borderWidth: 1.5, flexDirection: 'row', alignItems: 'center' },

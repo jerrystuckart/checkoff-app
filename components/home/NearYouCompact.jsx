@@ -28,7 +28,7 @@ import React from 'react'
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 import EditorialCard from './EditorialCard'
 
-export default function NearYouCompact({ items, onItemPress, onSeeAllPress, colors, userId = null }) {
+export default function NearYouCompact({ items, onItemPress, onSeeAllPress, colors, userId = null, navigation = null }) {
   if (!items || items.length === 0) return null
   const { TEXT, MUTED } = colors
   const [featured, ...rest] = items
@@ -43,6 +43,7 @@ export default function NearYouCompact({ items, onItemPress, onSeeAllPress, colo
         variant="primary"
         colors={colors}
         userId={userId}
+        navigation={navigation}
         onPress={() => onItemPress(featured)}
       />
 
@@ -55,6 +56,7 @@ export default function NearYouCompact({ items, onItemPress, onSeeAllPress, colo
               variant="row"
               colors={colors}
               userId={userId}
+              navigation={navigation}
               onPress={() => onItemPress(item)}
             />
           ))}

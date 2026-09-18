@@ -27,9 +27,11 @@
 // TouchableOpacity opacity-fade.
 
 import React from 'react'
-import { View, Text, Image, StyleSheet } from 'react-native'
+import { View, Text, Image, Pressable, StyleSheet } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import PressableTactile from '../PressableTactile'
+import { useSavedItems } from '../../lib/SavedItemsContext'
+import BookmarkIcon from '../BookmarkIcon'
 import { deriveVenueAndThing } from '../../lib/whatsGoodItemPresentation'
 import { isSpecialItemPresentation } from '../../lib/whatsGoodDisplayLayout'
 import { formatDistanceLabel } from '../../lib/proximity'
@@ -59,6 +61,39 @@ import ArchetypeArtwork from './ArchetypeArtwork'
 // just the chevron, and the card is cleaner for it.
 function metaLine(item) {
   return item?.is_universal ? null : formatDistanceLabel(item?.distM)
+}
+
+// Saved Items V1 (2026-09-18) — the shared bookmark control for every
+// EditorialCard variant (primary/row/rail). Rendered as a genuinely
+// separate Pressable (not an absolutely-positioned plain View sitting
+// inside the card's own PressableTactile touchable) — RN's touch
+// responder system resolves a tap to the MOST SPECIFIC Pressable under
+// the finger, so this nested Pressable's onPress does not bubble up to
+// the outer card's onPress, matching the existing precedent already
+// established by CoverCandidateCTA's 'pill' variant nested inside
+// WhatsTheThingHero's own outer card Pressable (see that file's own
+// comment). The card itself stays fully navigable via its own tap target
+// everywhere outside this control's hit area.
+//
+// Reads only from the shared useSavedItems() Set — never issues its own
+// Supabase query, so no per-card database call is added anywhere this is
+// used.
+function SaveToggle({ item, navigation, style, color = '#fff', size = 16 }) {
+  const { isSaved, toggleSaved } = useSavedItems()
+  const saved = isSaved(item?.id)
+  const title = item?.body ?? ''
+  return (
+    <Pressable
+      onPress={() => toggleSaved(item?.id, navigation)}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      style={[styles.saveToggle, style]}
+      accessibilityRole="button"
+      accessibilityState={{ selected: saved }}
+      accessibilityLabel={saved ? `Remove ${title} from Saved` : `Save ${title}`}
+    >
+      <BookmarkIcon filled={saved} color={color} size={size} />
+    </Pressable>
+  )
 }
 
 // Shared overlay text block for the primary card's "something photo-like
@@ -117,7 +152,7 @@ function PrimaryNoImageBackground({ colors, isSpecial }) {
   )
 }
 
-function PrimaryImageMode({ item, colors, isSpecial, venueName, thing, meta, onPress, userId, artwork }) {
+function PrimaryImageMode({ item, colors, isSpecial, venueName, thing, meta, onPress, userId, artwork, navigation }) {
   const { AMBER, ENDED_TEXT } = colors
   const accent = isSpecial ? ENDED_TEXT : AMBER
 
@@ -143,6 +178,12 @@ function PrimaryImageMode({ item, colors, isSpecial, venueName, thing, meta, onP
           style={StyleSheet.absoluteFillObject}
         />
         <PrimaryOverlayText isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} accent={accent} />
+        {/* Rendered after the overlay text in JSX/tree order (even though
+            it's visually positioned in the top-right corner via absolute
+            styling) so a screen reader's reading order reaches the
+            venue/thing/meta content first — the bookmark control never
+            jumps ahead of it. */}
+        <SaveToggle item={item} navigation={navigation} style={styles.saveTogglePrimary} color="#fff" size={18} />
       </View>
     </PressableTactile>
   )
@@ -154,7 +195,7 @@ function PrimaryImageMode({ item, colors, isSpecial, venueName, thing, meta, onP
 // ArchetypeArtwork so the generic decorative treatment (PrimaryNoImageBackground)
 // is always visible underneath immediately, with the remote archetype
 // image + scrim layered on top only once it loads.
-function PrimaryArchetypeMode({ item, colors, isSpecial, venueName, thing, meta, onPress, artwork }) {
+function PrimaryArchetypeMode({ item, colors, isSpecial, venueName, thing, meta, onPress, artwork, navigation }) {
   const { AMBER, ENDED_TEXT } = colors
   const accent = isSpecial ? ENDED_TEXT : AMBER
 
@@ -168,6 +209,7 @@ function PrimaryArchetypeMode({ item, colors, isSpecial, venueName, thing, meta,
           style={StyleSheet.absoluteFillObject}
         />
         <PrimaryOverlayText isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} accent={accent} />
+        <SaveToggle item={item} navigation={navigation} style={styles.saveTogglePrimary} color="#fff" size={18} />
       </View>
     </PressableTactile>
   )
@@ -184,7 +226,7 @@ function PrimaryArchetypeMode({ item, colors, isSpecial, venueName, thing, meta,
 //   - a colored accent rule under the venue label + the venue itself
 //     promoted to the accent color (amber/purple), not quiet MUTED gray —
 //     "more intentional use of amber/navy/purple," not just a CTA color
-function PrimaryNoImageMode({ item, colors, isSpecial, venueName, thing, meta, onPress }) {
+function PrimaryNoImageMode({ item, colors, isSpecial, venueName, thing, meta, onPress, navigation }) {
   const { TEXT, MUTED, AMBER, ENDED_TEXT } = colors
   const accent = isSpecial ? ENDED_TEXT : AMBER
 
@@ -212,6 +254,7 @@ function PrimaryNoImageMode({ item, colors, isSpecial, venueName, thing, meta, o
           <Text style={[styles.footerChevron, { color: accent }]}>→</Text>
         </View>
       </View>
+      <SaveToggle item={item} navigation={navigation} style={styles.saveTogglePrimary} color={accent} size={18} />
     </PressableTactile>
   )
 }
@@ -223,7 +266,7 @@ function PrimaryNoImageMode({ item, colors, isSpecial, venueName, thing, meta, o
 // The user taps to discover the actual thing on Item Detail. Falls back
 // to a short, single-line clamp of the thing text only when there's no
 // meaningful venue name to show instead (universal items, etc).
-function SecondaryRow({ item, colors, onPress, userId }) {
+function SecondaryRow({ item, colors, onPress, userId, navigation }) {
   const { TEXT, CARD_ELEVATED, AMBER, ENDED_TEXT, SHADOW_COLOR } = colors
   const isSpecial = isSpecialItemPresentation(item)
   const { venueName, thing } = deriveVenueAndThing(item)
@@ -275,6 +318,7 @@ function SecondaryRow({ item, colors, onPress, userId }) {
         <Text style={[styles.rowVenue, { color: TEXT }]} numberOfLines={1}>{teaserLabel}</Text>
         {distLabel ? <Text style={[styles.rowMeta, { color: TEXT, opacity: 0.5 }]} numberOfLines={1}>{distLabel}</Text> : null}
       </View>
+      <SaveToggle item={item} navigation={navigation} style={styles.saveToggleRow} color={accent} size={15} />
       <Text style={[styles.rowChevron, { color: accent }]}>→</Text>
     </PressableTactile>
   )
@@ -339,7 +383,7 @@ function RailOverlayText({ isSpecial, venueName, thing, meta, accent }) {
   )
 }
 
-function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight }) {
+function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight, navigation }) {
   const { TEXT, MUTED, CARD_ELEVATED, ENDED_BG, SHADOW_COLOR } = colors
   const isSpecial = isSpecialItemPresentation(item)
   const { venueName, thing } = deriveVenueAndThing(item)
@@ -371,6 +415,7 @@ function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight 
           style={StyleSheet.absoluteFillObject}
         />
         <RailOverlayText isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} accent={accent} />
+        <SaveToggle item={item} navigation={navigation} style={styles.saveToggleRail} color="#fff" size={14} />
       </PressableTactile>
     )
   }
@@ -389,6 +434,7 @@ function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight 
           style={StyleSheet.absoluteFillObject}
         />
         <RailOverlayText isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} accent={accent} />
+        <SaveToggle item={item} navigation={navigation} style={styles.saveToggleRail} color="#fff" size={14} />
       </PressableTactile>
     )
   }
@@ -418,11 +464,12 @@ function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight 
           <Text style={[styles.railChevron, { color: accent }]}>→</Text>
         </View>
       </View>
+      <SaveToggle item={item} navigation={navigation} style={styles.saveToggleRail} color={accent} size={14} />
     </PressableTactile>
   )
 }
 
-export default function EditorialCard({ item, onPress, colors, variant = 'primary', userId = null, index = 0, cardWidth, cardHeight }) {
+export default function EditorialCard({ item, onPress, colors, variant = 'primary', userId = null, index = 0, cardWidth, cardHeight, navigation = null }) {
   if (!item) return null
 
   const isSpecial = isSpecialItemPresentation(item)
@@ -431,20 +478,20 @@ export default function EditorialCard({ item, onPress, colors, variant = 'primar
   const artwork = useCardArtwork(item, userId)
 
   if (variant === 'row') {
-    return <SecondaryRow item={item} colors={colors} onPress={onPress} userId={userId} />
+    return <SecondaryRow item={item} colors={colors} onPress={onPress} userId={userId} navigation={navigation} />
   }
 
   if (variant === 'rail') {
-    return <RailCard item={item} index={index} colors={colors} onPress={onPress} userId={userId} cardWidth={cardWidth} cardHeight={cardHeight} />
+    return <RailCard item={item} index={index} colors={colors} onPress={onPress} userId={userId} cardWidth={cardWidth} cardHeight={cardHeight} navigation={navigation} />
   }
 
   if (artwork.isPhoto) {
-    return <PrimaryImageMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} userId={userId} artwork={artwork} />
+    return <PrimaryImageMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} userId={userId} artwork={artwork} navigation={navigation} />
   }
   if (artwork.isArchetype) {
-    return <PrimaryArchetypeMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} artwork={artwork} />
+    return <PrimaryArchetypeMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} artwork={artwork} navigation={navigation} />
   }
-  return <PrimaryNoImageMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} />
+  return <PrimaryNoImageMode item={item} colors={colors} isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} onPress={onPress} navigation={navigation} />
 }
 
 const styles = StyleSheet.create({
@@ -477,6 +524,15 @@ const styles = StyleSheet.create({
   overlayFooter: { marginTop: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   noImageFooter: { marginTop: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   footerChevron: { fontSize: 16, fontWeight: '900', marginLeft: 10 },
+
+  // Saved Items V1 (2026-09-18) — shared bookmark-control hit area. A
+  // plain View style (the touch handling itself lives on the wrapping
+  // Pressable in SaveToggle) with enough padding for a practical ~44pt
+  // touch target via hitSlop rather than visually inflating the icon.
+  saveToggle: { padding: 8, borderRadius: 999 },
+  saveTogglePrimary: { position: 'absolute', top: 10, right: 10 },
+  saveToggleRail: { position: 'absolute', top: 6, right: 6, padding: 6 },
+  saveToggleRow: { paddingHorizontal: 4 },
 
   rowCard: { borderRadius: 18, borderWidth: 1.5, overflow: 'hidden', flexDirection: 'row', alignItems: 'center', paddingRight: 14 },
   rowImage: { width: 64, height: 64 },

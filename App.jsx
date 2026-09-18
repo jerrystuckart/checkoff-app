@@ -23,6 +23,7 @@ import { View, Text, StyleSheet } from 'react-native'
 import { useAuth }             from './lib/useAuth'
 import { useOnboarding }      from './lib/useOnboarding'
 import { ThemeProvider }      from './lib/ThemeContext'
+import { SavedItemsProvider } from './lib/SavedItemsContext'
 import { useNotifications }   from './lib/useNotifications'
 import { useCandidateVisitTracking } from './lib/visitDetection/candidateVisitTracker'
 import { useVersionCheck }    from './hooks/useVersionCheck'
@@ -65,6 +66,7 @@ import SecretRevealScreen       from './screens/SecretRevealScreen'
 import PastListsScreen          from './screens/PastListsScreen'
 import WeeklyRecapScreen        from './screens/WeeklyRecapScreen'
 import InsiderAccessScreen      from './screens/InsiderAccessScreen'
+import SavedItemsScreen         from './screens/SavedItemsScreen'
 import { resolveItemDetailHeaderTitle } from './lib/itemDetailHeaderTitle'
 
 const Stack = createNativeStackNavigator()
@@ -394,6 +396,11 @@ function ListsStack() {
         component={SavedCrewScreen}
         options={{ title: 'Your crew', headerShown: false }}
       />
+      <Stack.Screen
+        name="SavedItems"
+        component={SavedItemsScreen}
+        options={{ title: 'Saved' }}
+      />
     </Stack.Navigator>
   )
 }
@@ -624,7 +631,9 @@ function App() {
 function AppWithTheme() {
   return (
     <ThemeProvider>
-      <App />
+      <SavedItemsProvider>
+        <App />
+      </SavedItemsProvider>
     </ThemeProvider>
   )
 }

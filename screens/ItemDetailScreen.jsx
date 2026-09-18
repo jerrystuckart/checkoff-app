@@ -40,6 +40,8 @@ import PostCheckoffSheet from '../components/PostCheckoffSheet'
 import DetailArtwork from '../components/itemDetail/DetailArtwork'
 import { buildInviteMessage } from '../lib/inviteMessage'
 import { extractQuotedVenueFromBody } from '../lib/itemDetailHeaderTitle'
+import { useSavedItems } from '../lib/SavedItemsContext'
+import BookmarkIcon from '../components/BookmarkIcon'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
@@ -180,6 +182,7 @@ export default function ItemDetailScreen({ route, navigation }) {
 
   const [checked, setChecked] = useState(item?.checked ?? false)
   const [saving, setSaving] = useState(false)
+  const { isSaved, toggleSaved } = useSavedItems()
   const [userId, setUserId] = useState(null)
   const [userChannels, setUserChannels] = useState(DEFAULT_CHANNELS)
   const [showChannelPicker, setShowChannelPicker] = useState(false)
@@ -1483,6 +1486,23 @@ export default function ItemDetailScreen({ route, navigation }) {
               <Text style={styles.utilityBtnText}>Website</Text>
             </TouchableOpacity>
           )}
+          {/* Saved Items V1 (2026-09-18) — third compact utility action,
+              added to the existing Directions/Website row per the approved
+              Detail hierarchy (no new section). Optimistic toggle comes
+              for free from useSavedItems(); the sign-in prompt for a
+              logged-out tap is handled inside the shared hook itself
+              (same copy/mechanism as handleCheckOff's own Alert above). */}
+          <TouchableOpacity
+            style={styles.utilityBtn}
+            onPress={() => toggleSaved(item.id, navigation)}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityState={{ selected: isSaved(item.id) }}
+            accessibilityLabel={isSaved(item.id) ? `Remove ${item.body} from Saved` : `Save ${item.body}`}
+          >
+            <BookmarkIcon filled={isSaved(item.id)} color={AMBER} size={18} />
+            <Text style={styles.utilityBtnText}>{isSaved(item.id) ? 'Saved' : 'Save'}</Text>
+          </TouchableOpacity>
           {isNearbyMode && (
             <TouchableOpacity
               style={styles.utilityBtn}

@@ -55,6 +55,7 @@ export default function WhatsGoodDiscovery({ items, navigation, colors, userId =
             userId={userId}
             cardWidth={cardWidth}
             cardHeight={RAIL_CARD_HEIGHT}
+            navigation={navigation}
             onPress={() => navigation.navigate('ItemDetail', { item })}
           />
         ))}

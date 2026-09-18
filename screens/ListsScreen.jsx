@@ -12,6 +12,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { useTheme } from '../lib/ThemeContext'
+import { useSavedItems } from '../lib/SavedItemsContext'
+import BookmarkIcon from '../components/BookmarkIcon'
 
 const LIST_ACCENT_COLORS = ['#F5A623', '#7A4DB3', '#2E7D8C', '#2E6B3E', '#C0674A', '#378ADD']
 
@@ -54,6 +56,15 @@ export default function ListsScreen({ navigation }) {
   const [userId, setUserId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [personalLists, setPersonalLists] = useState([])
+  // Saved Items V1 (2026-09-18) — the pinned "Saved" destination reads
+  // its count straight off the already-loaded savedItemIds Set (zero
+  // extra query). Logged-out handling mirrors this screen's existing
+  // precedent: the whole Lists tab already gates on `!userId` and shows
+  // a sign-in prompt instead of any list content (see the early return
+  // below) — so "Saved" is simply part of that same signed-in-only
+  // content, never rendered while logged out, rather than a separately
+  // routed sign-in prompt.
+  const { savedItemIds } = useSavedItems()
   const [memberMap, setMemberMap] = useState({})
   const [joinedOfficial, setJoinedOfficial] = useState([])
 
@@ -226,6 +237,31 @@ export default function ListsScreen({ navigation }) {
       contentContainerStyle={{ padding: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 32 }}
       showsVerticalScrollIndicator={false}
     >
+      {/* Saved Items V1 (2026-09-18) — a virtual/system entry, NOT a
+          `public.lists` row: never inserted into `lists`/`list_items`, so
+          it structurally can't enter normal list-limit/count/ranking/
+          analytics logic (that logic all keys off rows actually read from
+          `lists`). No rename/delete/share/invite/reorder controls are
+          rendered for it — not just hidden, they simply don't exist in
+          this entry's markup, since those controls don't apply to
+          something that isn't a real list. */}
+      <TouchableOpacity
+        style={styles.savedEntry}
+        onPress={() => navigation.navigate('SavedItems')}
+        activeOpacity={0.85}
+        accessibilityRole="button"
+        accessibilityLabel={`Saved, ${savedItemIds.size} item${savedItemIds.size === 1 ? '' : 's'}`}
+      >
+        <View style={styles.savedEntryIconWrap}>
+          <BookmarkIcon filled color={AMBER} size={18} />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.listTitle}>Saved</Text>
+          <Text style={styles.listMeta}>{savedItemIds.size} item{savedItemIds.size === 1 ? '' : 's'}</Text>
+        </View>
+        <Text style={styles.listChevron}>→</Text>
+      </TouchableOpacity>
+
       <View style={styles.headerRow}>
         <Text style={styles.screenTitle}>Your lists</Text>
         <TouchableOpacity
@@ -383,6 +419,23 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, CARD_URGENT 
       fontSize: 14,
       color: '#A16A00',
       fontWeight: '800',
+    },
+
+    savedEntry: {
+      backgroundColor: CARD,
+      borderRadius: 18,
+      padding: 16,
+      marginBottom: 16,
+      flexDirection: 'row',
+      alignItems: 'center',
+      borderWidth: 1.5,
+      borderColor: AMBER,
+      gap: 12,
+    },
+    savedEntryIconWrap: {
+      width: 32,
+      alignItems: 'center',
+      justifyContent: 'center',
     },
 
     listCard: {
