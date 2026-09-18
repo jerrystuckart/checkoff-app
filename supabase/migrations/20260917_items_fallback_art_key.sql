@@ -17,10 +17,11 @@
 --     exactly the "no explicit override, use the category default"
 --     behavior the resolver already treats NULL as.
 --
--- NOT APPLIED — this migration file is created only, per task
--- instructions. It has not been run against any local or production
--- database. See docs/fallback-art-manifest.md (or the PR/report that
--- introduced this file) for the apply + rollback procedure.
+-- Applied to the CheckOff production Supabase project (uggusbbswybyplypkbxz)
+-- on 2026-09-18 via `supabase db query --linked -f <this file>` (scoped to
+-- this file only, not `db push` — see docs/fallback-art-manifest.md's
+-- "Deployment log" for why). Verified: column exists, nullable, no
+-- default, 0 rows backfilled. See that doc for rollback procedure.
 --
 -- RLS: items already has RLS policies scoped to existing columns/roles;
 -- adding a nullable column changes no policy and requires no new grant.
