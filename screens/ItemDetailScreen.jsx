@@ -17,6 +17,7 @@ import {
 } from 'react-native'
 import Clipboard from '@react-native-clipboard/clipboard'
 import * as Haptics from 'expo-haptics'
+import { LinearGradient } from 'expo-linear-gradient'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
@@ -38,7 +39,7 @@ import CoverCandidateCTA from '../components/CoverCandidateCTA'
 import { fetchActiveCoverImageUrl, fetchDisplayEligibleImagePool } from '../lib/coverCandidates'
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
 import DetailArtwork from '../components/itemDetail/DetailArtwork'
-import { buildInviteMessage } from '../lib/inviteMessage'
+import { buildInviteMessage, buildInviteAskLine } from '../lib/inviteMessage'
 import { extractQuotedVenueFromBody } from '../lib/itemDetailHeaderTitle'
 import { useSavedItems } from '../lib/SavedItemsContext'
 import BookmarkIcon from '../components/BookmarkIcon'
@@ -207,12 +208,22 @@ export default function ItemDetailScreen({ route, navigation }) {
 
   // Nearby mode — shown when no listId, item came from Nearby tab
   const isNearbyMode = !listId
+  // userLists / itemOnListId stay — they feed performNearbyDone's
+  // resolveCheckOffAttachment call (real check-off business logic, see its
+  // own comment below), NOT a rendered "Add to list" control. The rendered
+  // control itself (Item Detail Corrective Pass, 2026-09-18) was removed —
+  // list membership is managed from the Lists tab now (a24148d's
+  // ListsScreen/SavedItemsScreen). itemOnListIds and the picker-only
+  // showListPicker/addingToList state existed solely to grey out rows in
+  // that now-removed picker UI, so they're removed along with it.
   const [userLists, setUserLists] = useState([])
-  const [showListPicker, setShowListPicker] = useState(false)
-  const [addingToList, setAddingToList] = useState(false)
   const [itemOnListId, setItemOnListId] = useState(null) // listItemId if item is on any user list
-  const [itemOnListIds, setItemOnListIds] = useState({}) // { listId: listItemId } for all lists
   const [listInviteCode, setListInviteCode] = useState(null)
+  // Item Detail Corrective Pass (2026-09-18) — "Invite someone" opens this
+  // on-demand channel sheet rather than the old permanently-inline channel
+  // grid. Reuses the exact existing CHANNELS/shareVia/openNativeShare
+  // logic below, just moved behind a tap.
+  const [showInviteChannels, setShowInviteChannels] = useState(false)
 
   useEffect(() => {
     loadUser()
@@ -430,7 +441,6 @@ export default function ItemDetailScreen({ route, navigation }) {
     if (isStale()) return
 
     setItemOnListId(null)
-    setItemOnListIds({})
 
     if (listId) {
       // List-mode: item?.listItemId / getOrCreateListItemId (called
@@ -466,11 +476,11 @@ export default function ItemDetailScreen({ route, navigation }) {
 
     if (isStale()) return
     if (existing?.length) {
-      // Build map of listId → listItemId for greying out in picker
-      const map = {}
-      existing.forEach(li => { map[li.list_id] = li.id })
-      setItemOnListIds(map)
-      // Set first match as the listItemId for "I've done this" button
+      // Set first match as the listItemId for "I've done this" button —
+      // this is the ONLY consumer of `existing` now that the "Add to
+      // list"/"On your list" picker UI (which used to grey out rows here
+      // via a listId->listItemId map) is gone (Item Detail Corrective
+      // Pass, 2026-09-18). List membership is managed from the Lists tab.
       setItemOnListId(existing[0].id)
     }
   }
@@ -547,6 +557,16 @@ export default function ItemDetailScreen({ route, navigation }) {
       venue: inviteVenue(),
       listInviteCode,
     })
+  }
+
+  // Item Detail Corrective Pass (2026-09-18) — the short "ask" line shown
+  // on the compact "DO THIS TOGETHER" card itself (no body quote, no URL —
+  // that fuller text is reserved for the actual shared message via
+  // inviteMessage() above). Calls the same buildInviteAskLine() the pure
+  // helper's own buildInviteMessage() uses internally, so the visible copy
+  // and the shared copy's "ask" line can never drift apart.
+  function inviteAskLine() {
+    return buildInviteAskLine({ venue: inviteVenue() })
   }
 
   // Item Detail Redesign (2026-09-18) — un-check confirmation gate. Purely
@@ -812,96 +832,21 @@ export default function ItemDetailScreen({ route, navigation }) {
     }
   }
 
-  // ── Nearby mode: add item to a specific list ─────────────
-  // Extracted from the old "On Your List" primary button's onPress
-  // (Item Detail Redesign, 2026-09-18) — identical logic, now triggered
-  // from the compact utility row chip instead of a dedicated large button.
-  function openListPicker() {
-    if (!userId) {
-      Alert.alert('Sign in first', 'You need an account to save items.', [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Sign in', onPress: () => navigation.navigate('SignIn') },
-      ])
-      return
-    }
-    if (userLists.length === 0) {
-      Alert.alert(
-        'No lists yet',
-        'Create a list first to track what you do.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Create a list', onPress: () => navigation.navigate('CreateList') },
-        ]
-      )
-      return
-    }
-    setShowListPicker(true)
-  }
-
-  async function addToList(targetListId, targetListTitle) {
-    if (!userId || !item?.id) return
-    setAddingToList(true)
-    try {
-      // Get current max sort_order on the list
-      const { data: existing } = await supabase
-        .from('list_items')
-        .select('sort_order')
-        .eq('list_id', targetListId)
-        .order('sort_order', { ascending: false })
-        .limit(1)
-
-      const nextOrder = (existing?.[0]?.sort_order ?? 0) + 1
-
-      const { data: newItem, error } = await supabase
-        .from('list_items')
-        .insert({ 
-          list_id: targetListId, 
-          item_id: item.id, 
-          sort_order: nextOrder,
-          added_by: userId,  
-        })
-        .select('id')
-        .single()
-
-      if (error) {
-        // Already on the list — just navigate there
-        if (error.code === '23505') {
-          setShowListPicker(false)
-          navigation.navigate('List', { listId: targetListId, title: targetListTitle })
-          return
-        }
-        throw error
-      }
-
-      setItemOnListId(newItem.id)
-      setItemOnListIds(prev => ({ ...prev, [targetListId]: newItem.id }))
-      setShowListPicker(false)
-
-      // Refresh `checked` before the alert shows. Check-off is now global
-      // by item_id (this item may already be checked via a different
-      // list) — without this, `checked` can still be showing its stale
-      // pre-add value when the user taps "I've done this" next, and
-      // handleNearbyDone()'s checked-based toggle would then run the
-      // DELETE branch instead of INSERT, wiping every check-in for this
-      // item (not just this list's). Refreshing here means the button
-      // correctly reads "✓ Done this!" already if that's true, instead of
-      // silently toggling it off on the next tap.
-      await loadCheckedState(userId)
-
-      Alert.alert(
-        'Added to list ✓',
-        `"${item.body}" has been added to "${targetListTitle}". Go check it off!`,
-        [
-          { text: 'Stay here', style: 'cancel' },
-          { text: 'Go to list', onPress: () => navigation.navigate('List', { listId: targetListId, title: targetListTitle }) },
-        ]
-      )
-    } catch (e) {
-      Alert.alert('Could not add', e.message)
-    } finally {
-      setAddingToList(false)
-    }
-  }
+  // Item Detail Corrective Pass (2026-09-18) — the old "openListPicker"/
+  // "addToList" pair (formerly triggered from a compact "Add to
+  // list"/"On your list" utility chip) has been removed along with that
+  // chip's rendered UI (Goal 3: no legacy list-membership control remains
+  // on Detail, in any mode). List membership is now managed exclusively
+  // from the Lists tab (a24148d's ListsScreen/SavedItemsScreen). The
+  // underlying capability this removed function used to expose — adding
+  // an item to a user's own list via a `list_items` insert — is untouched
+  // and still lives on ListScreen.jsx's own "add item to list" flow;
+  // nothing here deleted that capability from the codebase, only its
+  // now-redundant second entry point on Detail. `itemOnListId` (derived by
+  // refreshItemListContext above) is NOT part of this removal — it is
+  // real check-off business logic (resolveCheckOffAttachment's list
+  // context for a standalone Nearby check-off), not UI, and stays exactly
+  // as before.
 
   // ── Nearby mode: check off item that's already on a list ──
   // See handleCheckOff's own comment above — same un-check confirmation
@@ -1318,11 +1263,32 @@ export default function ItemDetailScreen({ route, navigation }) {
     )
   }
 
+  // Item Detail Corrective Pass (2026-09-18) — ONE shared derivation of
+  // what to render (Goal 6), computed once here and fed to the single
+  // hero/primary/utility/invite structure below. Nothing here differs
+  // between list mode and Nearby mode — only the tap BEHAVIOR (which
+  // handler fires) branches on `isNearbyMode`, never the visual shape.
   const ring = item.ring_weight ?? 0
   const ringColor = RING_COLORS[ring] ?? RING_COLORS[0]
   const hasLoc = item.maps_query || ((item.maps_lat ?? item.mapsLat) && (item.maps_lng ?? item.mapsLng))
   const hasWeb = !!item.website_url
   const isPartner = !!item.partner_id
+  // Same +N pts convention as WhatsTheThingHero.jsx's pointsLabel — not a
+  // new/fabricated field, item.difficulty always has this exact fallback.
+  const heroPointsLabel = `+${item.difficulty ?? 1} pts`
+
+  // Long-title rule (Goal 1): the hero title always clamps to 2 lines via
+  // numberOfLines={2} — chosen because it fits comfortably within the
+  // 240dp hero height cap alongside the pill row above it and the venue
+  // line below it, while still showing the great majority of real item
+  // bodies in full (most run well under 60 characters). When body text IS
+  // unusually long (> HERO_VENUE_OVERFLOW_THRESHOLD), a 2-line title
+  // already visually fills the hero's left column, so venue/neighborhood
+  // moves to a compact single line immediately below the hero card
+  // instead of being dropped or crowded — never a second giant card, and
+  // never silently missing.
+  const HERO_VENUE_OVERFLOW_THRESHOLD = 60
+  const venueOverflowsHero = (item.body ?? '').length > HERO_VENUE_OVERFLOW_THRESHOLD
 
   const displayChannels = userChannels.filter((c, i, a) => {
     if (c === 'imessage') return !a.includes('sms')
@@ -1336,15 +1302,97 @@ export default function ItemDetailScreen({ route, navigation }) {
       contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 32 }]}
       showsVerticalScrollIndicator={false}
     >
-      {/* Item Detail Redesign (2026-09-18) — hero always renders now:
-          approved photo -> archetype fallback -> generic treatment (see
-          components/itemDetail/DetailArtwork.jsx), never a blank area.
-          The community-cover contribution CTA is unaffected — its own
-          eligibility (lib/coverCandidateEligibility.js, unchanged) already
-          excludes items that already have an approved photo, so it only
-          ever shows for the archetype/generic cases, now layered under
-          the hero rather than replacing it. */}
-      <DetailArtwork item={resolvedItem} userId={userId} colors={colors} style={styles.heroWrap} />
+      {/* Item Detail Corrective Pass (2026-09-18) — Goal 1: ONE combined
+          editorial hero card (artwork + content), replacing the prior
+          separate full-bleed artwork block + separate title/tag card
+          (which together consumed ~420dp before this pass: heroWrap's
+          260dp + itemCard's own padding/tagRow/2-3-line title/location —
+          the explicit bug this pass fixes). The new heroCard below caps at
+          240dp (roughly 8:5 at typical phone content width, e.g. ~350dp
+          wide / 1.6 ratio ≈ 219dp, so the 240dp cap is a ceiling for wider
+          viewports, not the everyday height) plus, only for unusually long
+          bodies, one compact continuation line beneath it — materially
+          shorter in the common case, never taller than before.
+          DetailArtwork itself is untouched (same contract, same
+          photo->archetype->generic priority via useCardArtwork/
+          ArchetypeArtwork/resolveArtworkTier) — only WHERE it's composed
+          changes: it now fills this single rounded, border-less hero
+          container as an absolute-fill background layer, with a new
+          left-to-right scrim (added here, not inside DetailArtwork/
+          ArchetypeArtwork, since ArchetypeArtwork's own built-in gradient
+          is a fixed top-to-bottom treatment for bottom-anchored text on
+          other cards — its contract is intentionally left unchanged) so
+          the artwork's focal subject (the archetype asset convention's own
+          right 40-45%) stays visible on the right while text reads clearly
+          on the left. */}
+      <View style={styles.heroCard}>
+        <DetailArtwork item={resolvedItem} userId={userId} colors={colors} style={StyleSheet.absoluteFillObject} />
+        <LinearGradient
+          colors={['rgba(6,6,14,0.82)', 'rgba(6,6,14,0.45)', 'rgba(6,6,14,0.06)']}
+          locations={[0, 0.55, 1]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={StyleSheet.absoluteFillObject}
+          pointerEvents="none"
+        />
+
+        {/* Accessibility: one grouped element reading title -> venue ->
+            meta in order, rather than a screen reader hitting each
+            absolutely-laid-out overlay Text separately. Decorative
+            artwork above is already hidden from the tree by
+            ArchetypeArtwork's own accessibilityElementsHidden. */}
+        <View
+          style={styles.heroContent}
+          accessible
+          accessibilityLabel={[
+            item.body,
+            !venueOverflowsHero ? item.neighborhoodName : null,
+            heroPointsLabel,
+            item.dist_label ?? item.distance_label ?? null,
+          ].filter(Boolean).join('. ')}
+          importantForAccessibility="no-hide-descendants"
+        >
+          <View style={styles.heroPillRow}>
+            <View style={[styles.heroPill, { borderColor: 'rgba(255,255,255,0.4)' }]}>
+              <Text style={[styles.heroPillText, { color: ringColor }]}>
+                {RING_LABELS[ring] ?? 'Core'}
+              </Text>
+            </View>
+            {item.categoryName && (
+              <View style={[styles.heroPill, { borderColor: 'rgba(255,255,255,0.4)' }]}>
+                <Text style={styles.heroPillText}>{item.categoryName}</Text>
+              </View>
+            )}
+            {isPartner && (
+              <View style={[styles.heroPill, { borderColor: 'rgba(255,255,255,0.4)' }]}>
+                <Text style={[styles.heroPillText, { color: AMBER }]}>Partner</Text>
+              </View>
+            )}
+          </View>
+
+          <Text style={styles.heroTitle} numberOfLines={2}>{item.body}</Text>
+
+          {!venueOverflowsHero && item.neighborhoodName ? (
+            <Text style={styles.heroVenue} numberOfLines={1}>{item.neighborhoodName}</Text>
+          ) : null}
+
+          <View style={styles.heroMetaRow}>
+            <Text style={styles.heroMetaText}>{heroPointsLabel}</Text>
+            {(item.dist_label ?? item.distance_label) ? (
+              <Text style={styles.heroMetaText}>· {item.dist_label ?? item.distance_label}</Text>
+            ) : null}
+          </View>
+        </View>
+      </View>
+
+      {/* Compact continuation line (Goal 1's documented escape hatch) —
+          only rendered for the unusually long bodies where the hero
+          title's own 2-line clamp would otherwise crowd out venue/
+          neighborhood text. Never a second giant card. */}
+      {venueOverflowsHero && item.neighborhoodName ? (
+        <Text style={styles.heroVenueContinuation}>{item.neighborhoodName}</Text>
+      ) : null}
+
       {showCoverContributionCTA ? (
         <View style={styles.topContributionWrap}>
           <Text style={styles.coverContributionTitle}>Help locals see the thing</Text>
@@ -1352,82 +1400,20 @@ export default function ItemDetailScreen({ route, navigation }) {
         </View>
       ) : null}
 
-      <View style={styles.itemCard}>
-        <View style={styles.tagRow}>
-          <View style={[styles.tag, { backgroundColor: `${ringColor}18`, borderColor: `${ringColor}33` }]}>
-            <Text style={[styles.tagText, { color: ringColor }]}>
-              {RING_LABELS[ring] ?? 'Core'}
-            </Text>
-          </View>
-
-          {item.categoryName && (
-            <View
-              style={[
-                styles.tag,
-                {
-                  backgroundColor: `${item.categoryColor ?? '#888'}18`,
-                  borderColor: `${item.categoryColor ?? '#888'}33`,
-                },
-              ]}
-            >
-              <Text style={[styles.tagText, { color: item.categoryColor ?? '#888' }]}>
-                {item.categoryName}
-              </Text>
-            </View>
-          )}
-
-          {isPartner && (
-            <View style={[styles.tag, { backgroundColor: '#FFF2DE', borderColor: '#F3D1A0' }]}>
-              <Text style={[styles.tagText, { color: AMBER }]}>Partner</Text>
-            </View>
-          )}
-
-          {item.season_tag && (
-            <View style={[styles.tag, { backgroundColor: '#F6F1E9', borderColor: '#E7DED1' }]}>
-              <Text style={[styles.tagText, { color: MUTED }]}>{item.season_tag}</Text>
-            </View>
-          )}
-        </View>
-
-        <Text style={styles.itemBody}>{item.body}</Text>
-
-        {item.neighborhoodName && (
-          <Text style={styles.locationLabel}>{item.neighborhoodName}</Text>
-        )}
-      </View>
-
-      {/* ── Nearby mode: Add to list + I've done this ── */}
-      {/* Item Detail Redesign (2026-09-18) — the old giant "On Your List"
-          button is gone from this primary action position (per the
-          approved design). Its underlying capability — attaching a
-          standalone item to one of the user's own lists — still exists,
-          just as a small chip further below in the compact utility row
-          (openListPicker), never gating check-off itself either way. */}
-      {isNearbyMode ? (
-        <View style={styles.nearbyActionWrap}>
-          <TouchableOpacity
-            style={[styles.nearbyDoneBtn, checked && styles.nearbyDoneBtnChecked]}
-            onPress={handleNearbyDone}
-            disabled={saving}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel={checked ? `${item.body}, done — tap to un-check` : `Mark ${item.body} as done`}
-            accessibilityState={{ checked, disabled: saving, busy: saving }}
-          >
-            {saving ? (
-              <ActivityIndicator color={checked ? '#fff' : NAVY} />
-            ) : (
-              <Text style={[styles.nearbyDoneBtnText, checked && styles.nearbyDoneBtnTextChecked]}>
-                {checked ? 'DONE ✓' : "I'VE DONE THIS"}
-              </Text>
-            )}
-          </TouchableOpacity>
-        </View>
-      ) : (
-        /* ── List mode: standard check-off ── */
+      {/* Item Detail Corrective Pass (2026-09-18) — Goal 6: ONE shared
+          primary-action structure across list and Nearby mode. Both
+          branches render the exact same primaryActionRow shape (Done/
+          DONE ✓ button + Photo Check-in, side by side) — only the Done
+          button's onPress handler differs by mode (handleNearbyDone vs
+          handleCheckOff), never the visual hierarchy. The old dedicated
+          list-membership button (formerly a two-word "Add to" + "list"/
+          "On your" + "list" toggle) that used to occupy this primary
+          position in Nearby mode is gone (Goal 3) — that capability lives
+          only in the Lists tab now. */}
+      <View style={styles.primaryActionRow}>
         <TouchableOpacity
-          style={[styles.checkBtn, checked && styles.checkBtnDone]}
-          onPress={handleCheckOff}
+          style={[styles.primaryDoneBtn, checked && styles.primaryDoneBtnChecked]}
+          onPress={isNearbyMode ? handleNearbyDone : handleCheckOff}
           disabled={saving}
           activeOpacity={0.85}
           accessibilityRole="button"
@@ -1437,29 +1423,68 @@ export default function ItemDetailScreen({ route, navigation }) {
           {saving ? (
             <ActivityIndicator color={checked ? '#fff' : NAVY} />
           ) : (
-            <>
-              <Text style={[styles.checkBtnIcon, checked && styles.checkBtnIconDone]}>
-                {checked ? '✓' : '○'}
-              </Text>
-              <Text style={[styles.checkBtnText, checked && styles.checkBtnTextDone]}>
-                {checked ? 'DONE ✓' : "I'VE DONE THIS"}
-              </Text>
-            </>
+            <Text style={[styles.primaryDoneBtnText, checked && styles.primaryDoneBtnTextChecked]}>
+              {checked ? 'DONE ✓' : "I'VE DONE THIS"}
+            </Text>
           )}
         </TouchableOpacity>
-      )}
 
-      {/* Item Detail Redesign (2026-09-18) — one compact utility row.
-          Directions/Website keep the exact existing hasLoc/hasWeb
-          conditionals (unchanged). Photo Check-in remains equally visible
-          in both the incomplete and completed states — it was never
-          gated on `checked` before this pass either, just folded in here
-          instead of its own oversized tile alongside the removed Dare
-          entry point (see the Dare business-logic comment still further
-          down: the feature/screen itself is untouched, only this
-          oversized default entry point is gone, superseded by the "Do
-          This Together" card below). Gets the stronger outline per the
-          approved visual language. */}
+        {/* Photo Check-in is a PRIMARY action (side by side with Done),
+            not a utility action — Item Detail Corrective Pass addendum,
+            2026-09-18. It must never move into the utilityRow below.
+            Gets the stronger outline per the approved visual language.
+            Same list-context resolution as before this pass
+            (item?.listItemId ?? itemOnListId, falling back to
+            getOrCreateListItemId) — untouched business logic, only its
+            container moved. */}
+        <TouchableOpacity
+          style={styles.primaryPhotoBtn}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Photo check-in"
+          onPress={async () => {
+            if (!userId) {
+              Alert.alert('Sign in first', 'You need an account to check off items.', [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Sign in', onPress: () => navigation.navigate('SignIn') },
+              ])
+              return
+            }
+            trackEvent('photo_checkin_tap', { itemId: item?.id, listId })
+            // Resolves to a joined-list context if one exists; null
+            // otherwise — a standalone photo check-in is valid on its
+            // own, no list required (product decision, 2026-08).
+            let listItemId = item?.listItemId ?? itemOnListId
+
+            if (!listItemId) {
+              listItemId = await getOrCreateListItemId(item?.id, userId)
+            }
+
+            navigation.navigate('PhotoCheckIn', {
+              item: { ...item, is_secret: item.is_secret ?? item.isSecret ?? false },
+              listItemId: listItemId ?? null,
+            })
+          }}
+        >
+          <Text style={styles.primaryPhotoBtnText}>Photo check-in</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Item Detail Corrective Pass (2026-09-18) — Goal 2 fix: Directions/
+          Website/Save only (Photo Check-in moved to the primary row above
+          — Goal 2 addendum — and the old list-membership chip removed
+          entirely — Goal 3). Save is pinned to the trailing/rightmost slot
+          via `marginLeft: 'auto'` on a `flexDirection: 'row',
+          justifyContent: 'flex-start'` container — the idiomatic RN/CSS
+          way to get "always last, others pack naturally before it"
+          without hardcoding empty spacer slots for the 1-2 sibling cases.
+          This is the actual fix for the reported bug: the OLD utilityRow
+          gave every action (Directions/Website/Save/Photo/Add-to-list)
+          equal `flex: 1` sizing in a flexWrap row, so Save's rendered
+          x-position packed differently depending on how many conditional
+          siblings preceded it. Save's own position here never depends on
+          hasLoc/hasWeb — only its LEFT neighbors' presence changes, never
+          its own alignment rule. */}
       {userId && (
         <View style={styles.utilityRow}>
           {hasLoc && (
@@ -1486,14 +1511,12 @@ export default function ItemDetailScreen({ route, navigation }) {
               <Text style={styles.utilityBtnText}>Website</Text>
             </TouchableOpacity>
           )}
-          {/* Saved Items V1 (2026-09-18) — third compact utility action,
-              added to the existing Directions/Website row per the approved
-              Detail hierarchy (no new section). Optimistic toggle comes
-              for free from useSavedItems(); the sign-in prompt for a
-              logged-out tap is handled inside the shared hook itself
-              (same copy/mechanism as handleCheckOff's own Alert above). */}
+          {/* Save — ALWAYS the trailing element, regardless of whether
+              Directions/Website rendered above. marginLeft: 'auto' is what
+              guarantees this; it is not computed from hasLoc/hasWeb or
+              from any index into a conditionally-filtered array. */}
           <TouchableOpacity
-            style={styles.utilityBtn}
+            style={[styles.utilityBtn, styles.utilityBtnSave]}
             onPress={() => toggleSaved(item.id, navigation)}
             activeOpacity={0.8}
             accessibilityRole="button"
@@ -1503,83 +1526,30 @@ export default function ItemDetailScreen({ route, navigation }) {
             <BookmarkIcon filled={isSaved(item.id)} color={AMBER} size={18} />
             <Text style={styles.utilityBtnText}>{isSaved(item.id) ? 'Saved' : 'Save'}</Text>
           </TouchableOpacity>
-          {isNearbyMode && (
-            <TouchableOpacity
-              style={styles.utilityBtn}
-              onPress={openListPicker}
-              activeOpacity={0.8}
-              accessibilityRole="button"
-              accessibilityLabel={itemOnListId ? 'On your list' : 'Add to a list'}
-              accessibilityState={{ selected: !!itemOnListId }}
-            >
-              <Text style={styles.utilityBtnIcon}>{itemOnListId ? '✓' : '+'}</Text>
-              <Text style={styles.utilityBtnText}>{itemOnListId ? 'On your list' : 'Add to list'}</Text>
-            </TouchableOpacity>
-          )}
-          <TouchableOpacity
-            style={[styles.utilityBtn, styles.utilityBtnEmphasis]}
-            activeOpacity={0.8}
-            accessibilityRole="button"
-            accessibilityLabel="Photo check-in"
-            onPress={async () => {
-              trackEvent('photo_checkin_tap', { itemId: item?.id, listId })
-              // Resolves to a joined-list context if one exists; null
-              // otherwise — a standalone photo check-in is valid on its
-              // own, no list required (product decision, 2026-08).
-              let listItemId = item?.listItemId ?? itemOnListId
-
-              if (!listItemId) {
-                listItemId = await getOrCreateListItemId(item?.id, userId)
-              }
-
-              navigation.navigate('PhotoCheckIn', {
-                item: { ...item, is_secret: item.is_secret ?? item.isSecret ?? false },
-                listItemId: listItemId ?? null,
-              })
-            }}
-          >
-            <Text style={styles.utilityBtnText}>Photo check-in</Text>
-          </TouchableOpacity>
         </View>
       )}
 
-      {/* Item Detail Redesign (2026-09-18) — ONE refined "Do This
-          Together" card replaces both the old oversized Dare-a-Friend
-          tile and the old separate, larger invite section. Product
-          decision: the Dare feature/screen/logic itself is NOT deleted
-          (see the old Dare quick-action business logic that used
-          to live here — DareScreen, completeDare, dareListId resolution
-          are all untouched elsewhere in this codebase), only its
-          default, oversized entry point on Detail is gone — fully
-          superseded by this card, per the approved design's explicit
-          instruction. dare_click no longer fires from Detail's default
-          UI as a result; that's expected, not a regression. */}
+      {/* Item Detail Corrective Pass (2026-09-18) — Goal 4: ONE compact
+          "DO THIS TOGETHER" card, the same in every mode. Replaces the
+          previously-always-inline message preview, always-inline "Edit"
+          button, and always-inline channel grid (which is what was
+          actually still rendering the "legacy UI leaks through" bug — see
+          the final report's Goal 4 root-cause section) with just a title,
+          the short venue-aware ask copy, and a single "Invite someone"
+          action. Tapping it opens the channel chooser (showInviteChannels
+          below) rather than that chooser being permanently on the page.
+          The Dare feature/screen/logic itself is untouched elsewhere in
+          this codebase — only its old oversized default entry point on
+          Detail, already gone before this pass, stays gone. */}
       <View style={styles.inviteCard}>
-        <View style={styles.inviteHeaderRow}>
-          <View style={styles.inviteHeaderLeft}>
-            <Text style={styles.inviteTitle}>DO THIS TOGETHER</Text>
-          </View>
-
-          <TouchableOpacity
-            style={styles.editChannelsBtn}
-            onPress={openChannelPicker}
-            accessibilityRole="button"
-            accessibilityLabel="Edit invitation message channels"
-          >
-            <Text style={styles.editChannels}>Edit</Text>
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.smsPreview}>
-          <Text style={styles.smsPreviewLabel}>Message preview</Text>
-          <Text style={styles.smsPreviewText}>{inviteMessage()}</Text>
-        </View>
+        <Text style={styles.inviteTitle}>DO THIS TOGETHER</Text>
+        <Text style={styles.inviteAsk}>{inviteAskLine()}</Text>
 
         <TouchableOpacity
           style={styles.inviteSoloBtn}
           onPress={() => {
             trackEvent('invite_item_tap', { itemId: item?.id, listId })
-            openNativeShare()
+            setShowInviteChannels(true)
           }}
           activeOpacity={0.85}
           accessibilityRole="button"
@@ -1587,44 +1557,96 @@ export default function ItemDetailScreen({ route, navigation }) {
         >
           <Text style={styles.inviteSoloBtnText}>Invite someone</Text>
         </TouchableOpacity>
+      </View>
 
-        <View style={styles.channelRow}>
-          {displayChannels.map(key => {
-            const ch = CHANNELS[key]
-            if (!ch) return null
-            return (
+      {/* On-demand channel chooser (Goal 4) — the existing channel-
+          specific tiles + native "More" share, and the message preview,
+          all reused byte-for-byte from before this pass, just moved from
+          permanently inline into this Modal, reached only via "Invite
+          someone" above. The channel-preference "Edit" control (the old
+          always-visible button's real purpose) is reachable from inside
+          here instead of inline on the page. */}
+      <Modal
+        visible={showInviteChannels}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowInviteChannels(false)}
+      >
+        <View style={styles.inviteChannelOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFillObject}
+            activeOpacity={1}
+            onPress={() => setShowInviteChannels(false)}
+          />
+          <View style={styles.inviteChannelSheet}>
+            <View style={styles.inviteHeaderRow}>
+              <Text style={styles.inviteChannelTitle}>Invite via</Text>
               <TouchableOpacity
-                key={key}
-                style={[styles.channelBtn, { backgroundColor: ch.color }]}
+                style={styles.editChannelsBtn}
+                onPress={() => {
+                  setShowInviteChannels(false)
+                  openChannelPicker()
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Edit invitation message channels"
+              >
+                <Text style={styles.editChannels}>Edit</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.smsPreview}>
+              <Text style={styles.smsPreviewLabel}>Message preview</Text>
+              <Text style={styles.smsPreviewText}>{inviteMessage()}</Text>
+            </View>
+
+            <View style={styles.channelRow}>
+              {displayChannels.map(key => {
+                const ch = CHANNELS[key]
+                if (!ch) return null
+                return (
+                  <TouchableOpacity
+                    key={key}
+                    style={[styles.channelBtn, { backgroundColor: ch.color }]}
+                    onPress={() => {
+                      trackEvent('invite_item_tap', { itemId: item?.id, listId })
+                      shareVia(key)
+                      setShowInviteChannels(false)
+                    }}
+                    activeOpacity={0.85}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Invite via ${ch.label}`}
+                  >
+                    <Text style={[styles.channelBtnText, { color: ch.textColor ?? '#fff' }]}>
+                      {ch.label}
+                    </Text>
+                  </TouchableOpacity>
+                )
+              })}
+
+              <TouchableOpacity
+                style={styles.moreBtn}
                 onPress={() => {
                   trackEvent('invite_item_tap', { itemId: item?.id, listId })
-                  shareVia(key)
+                  openNativeShare()
+                  setShowInviteChannels(false)
                 }}
                 activeOpacity={0.85}
                 accessibilityRole="button"
-                accessibilityLabel={`Invite via ${ch.label}`}
+                accessibilityLabel="More sharing options"
               >
-                <Text style={[styles.channelBtnText, { color: ch.textColor ?? '#fff' }]}>
-                  {ch.label}
-                </Text>
+                <Text style={styles.moreBtnText}>More ···</Text>
               </TouchableOpacity>
-            )
-          })}
+            </View>
 
-          <TouchableOpacity
-            style={styles.moreBtn}
-            onPress={() => {
-              trackEvent('invite_item_tap', { itemId: item?.id, listId })
-              openNativeShare()
-            }}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel="More sharing options"
-          >
-            <Text style={styles.moreBtnText}>More ···</Text>
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.inviteChannelCancel}
+              onPress={() => setShowInviteChannels(false)}
+            >
+              <Text style={styles.inviteChannelCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      </Modal>
 
       {isPartner && (
         <View style={styles.partnerCard}>
@@ -1750,61 +1772,6 @@ export default function ItemDetailScreen({ route, navigation }) {
       )}
     </ScrollView>
 
-    {/* ── Nearby: List picker modal ── */}
-    {showListPicker && (
-      <View style={styles.listPickerOverlay}>
-        <TouchableOpacity
-          style={StyleSheet.absoluteFillObject}
-          onPress={() => setShowListPicker(false)}
-          activeOpacity={1}
-        />
-        <View style={styles.listPickerCard}>
-          <Text style={styles.listPickerTitle}>Add to which list?</Text>
-          <Text style={styles.listPickerSub}>Pick a list to add this item to</Text>
-
-          {userLists.map(l => {
-            const alreadyHasItem = !!itemOnListIds[l.id]
-            return (
-              <TouchableOpacity
-                key={l.id}
-                style={[
-                  styles.listPickerRow,
-                  alreadyHasItem && styles.listPickerRowDisabled,
-                ]}
-                onPress={() => !alreadyHasItem && addToList(l.id, l.title)}
-                disabled={addingToList || alreadyHasItem}
-                activeOpacity={alreadyHasItem ? 1 : 0.85}
-              >
-                <View style={{ flex: 1 }}>
-                  <Text style={[
-                    styles.listPickerRowTitle,
-                    alreadyHasItem && { color: MUTED },
-                  ]}>
-                    {l.title}
-                  </Text>
-                  <Text style={styles.listPickerRowSub}>
-                    {alreadyHasItem ? '✓ Already on this list' : ''}
-                  </Text>
-                </View>
-                {alreadyHasItem
-                  ? <Text style={{ fontSize: 16, color: MUTED }}>✓</Text>
-                  : addingToList
-                    ? <ActivityIndicator color={AMBER} size="small" />
-                    : <Text style={styles.listPickerChevron}>→</Text>
-                }
-              </TouchableOpacity>
-            )
-          })}
-
-          <TouchableOpacity
-            style={styles.listPickerCancel}
-            onPress={() => setShowListPicker(false)}
-          >
-            <Text style={styles.listPickerCancelText}>Cancel</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    )}
       <Modal
         visible={!!memoryModal}
         transparent
@@ -1927,55 +1894,102 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     fontSize: 14,
   },
 
-  // Item Detail Redesign (2026-09-18) — full-bleed hero (photo/archetype/
-  // generic, via components/itemDetail/DetailArtwork.jsx), not a card
-  // thumbnail. Deliberately no borderWidth — "no heavy border around the
-  // hero" per the approved visual language.
-  heroWrap: {
+  // Item Detail Corrective Pass (2026-09-18) — Goal 1: ONE combined
+  // editorial hero card (artwork + overlaid content), replacing the prior
+  // separate full-bleed heroWrap (260dp) + separate itemCard (padding +
+  // tagRow + 2-3-line title + location, ~140-160dp more) — ~400-420dp
+  // combined before this pass. aspectRatio 8:5 (1.6) sizes the hero from
+  // the available width (roughly 350dp at typical phone content width ->
+  // ~219dp tall); maxHeight 240 is an explicit ceiling for wider
+  // viewports/tablets so the hero can never re-balloon back toward the
+  // old combined height — the concrete bug this pass fixes. Deliberately
+  // no borderWidth — "no heavy border around the hero" per the approved
+  // visual language, unchanged from the prior pass. Radius 24 matches
+  // this app's own established primary-card convention (see
+  // components/home/WhatsTheThingHero.jsx's imageCard: borderRadius 24).
+  heroCard: {
     width: '100%',
-    height: 260,
+    aspectRatio: 8 / 5,
+    maxHeight: 240,
     borderRadius: 24,
     marginBottom: 16,
     overflow: 'hidden',
+    backgroundColor: NAVY,
   },
 
-  itemCard: {
-    backgroundColor: CARD,
-    borderRadius: 28,
-    padding: 20,
-    marginBottom: 16,
-    borderWidth: 1.2,
-    borderColor: BORDER,
+  // Content sits on the left ~62% of the hero, overlaid on the left-to-
+  // right scrim added in the render (not inside DetailArtwork/
+  // ArchetypeArtwork — see the render's own comment on why). Anchored
+  // toward the bottom of the hero (justifyContent: flex-end) so it reads
+  // as a caption block over the art, same convention as
+  // WhatsTheThingHero's own on-image text layer.
+  heroContent: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    padding: 18,
+    maxWidth: '68%',
   },
 
-  tagRow: {
+  heroPillRow: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 6,
     flexWrap: 'wrap',
-    marginBottom: 14,
+    marginBottom: 8,
   },
 
-  tag: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
+  heroPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderRadius: 999,
     borderWidth: 1,
+    backgroundColor: 'rgba(255,255,255,0.14)',
   },
 
-  tagText: {
-    fontSize: 11,
+  heroPillText: {
+    fontSize: 10,
     fontWeight: '700',
+    color: '#fff',
   },
 
-  // FINAL UI PASS BEFORE BUILD 144 — item 1: was 30/40 (a billboard, not a
-  // headline) — dropped to a strong editorial-headline size that still
-  // dominates the card without eating the viewport on long copy.
-  itemBody: {
+  // Long-title rule (Goal 1) — clamped to 2 lines via numberOfLines={2}
+  // in the render, so this style only owns the visual weight, matching
+  // the prior itemBody's own size/weight (kept identical on purpose —
+  // same editorial-headline treatment, just relocated and recolored for
+  // the dark scrim it now sits on).
+  heroTitle: {
     fontSize: 21,
     fontWeight: '800',
-    color: TEXT,
-    lineHeight: 27,
-    marginBottom: 8,
+    color: '#fff',
+    lineHeight: 26,
+    marginBottom: 4,
+  },
+
+  heroVenue: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.85)',
+    marginBottom: 6,
+  },
+
+  heroMetaRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+
+  heroMetaText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: 'rgba(255,255,255,0.75)',
+  },
+
+  // Escape hatch for unusually long bodies (Goal 1) — a single compact
+  // line immediately below the hero card, never a second giant card.
+  heroVenueContinuation: {
+    fontSize: 13,
+    color: MUTED,
+    fontWeight: '600',
+    marginTop: -10,
+    marginBottom: 16,
   },
 
   // Contribution CTA now lives in the TOP area (see the render above) —
@@ -1991,108 +2005,115 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     marginBottom: 4,
   },
 
-  locationLabel: {
-    fontSize: 13,
-    color: MUTED,
-    fontWeight: '600',
+  // Item Detail Corrective Pass (2026-09-18) — Goal 2 addendum: Done/
+  // DONE ✓ and Photo Check-in are PRIMARY actions, side by side in one
+  // shared row/container across both list and Nearby mode (Goal 6 — same
+  // structure, only the Done button's handler differs by mode). flex:1 +
+  // minWidth reuses this screen's own existing flexWrap+minWidth
+  // responsive pattern (already established for utilityBtn below) so the
+  // two buttons sit at ~50% width each on ordinary phone widths and stack
+  // (in the same order) only when a narrow width or large Dynamic Type
+  // makes that necessary — never a fixed pixel width that would just clip
+  // instead of reflowing.
+  primaryActionRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 8,
   },
 
-
-  // ── Nearby mode styles ── incomplete=amber, completed=green, matching
-  // the list-mode checkBtn/checkBtnDone treatment (Item Detail Redesign,
-  // 2026-09-18) — both theme tokens, no hardcoded literals.
-  nearbyActionWrap: { gap: 10, marginBottom: 16 },
-  nearbyDoneBtn: { backgroundColor: AMBER, borderRadius: 14, paddingVertical: 16, alignItems: 'center' },
-  nearbyDoneBtnChecked: { backgroundColor: GREEN },
-  nearbyDoneBtnText: { fontSize: 15, fontWeight: '800', color: NAVY },
-  nearbyDoneBtnTextChecked: { color: '#fff' },
-  listPickerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end', zIndex: 100 },
-  listPickerCard: { backgroundColor: CARD, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40, gap: 8 },
-  listPickerTitle: { fontSize: 18, fontWeight: '800', color: TEXT, marginBottom: 4 },
-  listPickerSub: { fontSize: 13, color: MUTED, marginBottom: 12 },
-  listPickerRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, paddingHorizontal: 16, backgroundColor: SOFT_2, borderRadius: 14, borderWidth: 1, borderColor: BORDER, marginBottom: 8 },
-  listPickerRowDisabled: { opacity: 0.5, backgroundColor: '#F4F0EC' },
-  listPickerRowTitle: { fontSize: 15, fontWeight: '700', color: TEXT },
-  listPickerRowSub: { fontSize: 11, color: MUTED, marginTop: 2 },
-  listPickerChevron: { fontSize: 18, color: MUTED },
-  listPickerCancel: { alignItems: 'center', paddingVertical: 14, marginTop: 4 },
-  listPickerCancelText: { fontSize: 15, color: MUTED, fontWeight: '600' },
-
-  // Item Detail Redesign (2026-09-18) — incomplete state is amber
-  // ("I'VE DONE THIS"), completed state is green ("DONE ✓") — the approved
-  // visual language. Text/icon colors flip to NAVY on the amber
-  // (incomplete) state for contrast, staying white on the green
-  // (completed) state.
-  checkBtn: {
+  primaryDoneBtn: {
+    flex: 1,
+    minWidth: 150,
     backgroundColor: AMBER,
     borderRadius: 24,
     paddingVertical: 20,
-    paddingHorizontal: 24,
+    paddingHorizontal: 16,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 10,
-    marginBottom: 8,
     borderWidth: 1,
     borderColor: AMBER,
   },
 
-  checkBtnDone: {
+  primaryDoneBtnChecked: {
     backgroundColor: GREEN,
     borderColor: GREEN,
   },
 
-  checkBtnIcon: {
-    fontSize: 20,
-    color: NAVY,
-  },
-
-  checkBtnIconDone: {
-    color: '#fff',
-  },
-
-  checkBtnText: {
-    fontSize: 18,
+  primaryDoneBtnText: {
+    fontSize: 16,
     fontWeight: '800',
     color: NAVY,
+    textAlign: 'center',
   },
 
-  checkBtnTextDone: {
+  primaryDoneBtnTextChecked: {
     color: '#fff',
   },
 
-  // Item Detail Redesign (2026-09-18) — one compact utility row replaces
-  // the old oversized Dare/Photo quickRow tiles and the separate
-  // Directions/Website actionRow. Directions/Website/Photo Check-in (and,
-  // if ever wired in, Save/Saved) are all equal-weight compact buttons
-  // here, each hidden individually when its own data isn't available
-  // (hasLoc/hasWeb), same conditional pattern as before — just restyled
-  // into one row instead of two separate ones.
+  // Photo Check-in keeps the stronger outline per the approved visual
+  // language (warm-cream in dark mode / deep-navy in light mode — BORDER
+  // is already themed to exactly that in lib/ThemeContext.js), now sized
+  // to match primaryDoneBtn's own footprint since they're side by side.
+  primaryPhotoBtn: {
+    flex: 1,
+    minWidth: 150,
+    backgroundColor: SOFT,
+    borderRadius: 24,
+    paddingVertical: 20,
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: BORDER,
+  },
+
+  primaryPhotoBtnText: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: TEXT,
+    textAlign: 'center',
+  },
+
+  // Item Detail Corrective Pass (2026-09-18) — Goal 2 fix: Directions/
+  // Website/Save only now (Photo Check-in moved to primaryActionRow above;
+  // "Add to list"/"On your list" removed — Goal 3). flexDirection: 'row'
+  // with NO flexWrap and NO flex:1 packing on Save specifically — that
+  // flex:1-in-a-flexWrap-row pattern was the actual bug (Save's rendered
+  // position shifted with however many siblings preceded it). Directions/
+  // Website keep compact, content-sized chips; Save gets marginLeft:
+  // 'auto' (see utilityBtnSave below) so it is ALWAYS the trailing
+  // element regardless of how many of its left siblings render.
   utilityRow: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
+    alignItems: 'center',
     gap: 10,
     marginBottom: 20,
   },
 
   utilityBtn: {
-    flex: 1,
     minWidth: 100,
     backgroundColor: SOFT,
     borderRadius: 18,
     paddingVertical: 16,
+    paddingHorizontal: 14,
     alignItems: 'center',
     gap: 6,
     borderWidth: 1.2,
     borderColor: BORDER,
   },
 
-  // Photo Check-in gets the stronger outline per the approved visual
-  // language (warm-cream in dark mode / deep-navy in light mode — BORDER
-  // is already themed to exactly that in lib/ThemeContext.js).
-  utilityBtnEmphasis: {
-    borderWidth: 1.5,
-    borderColor: BORDER,
+  // THE fix for the Save-position bug: pins Save to the trailing/
+  // rightmost slot in utilityRow's plain flexDirection:'row' regardless
+  // of whether Directions and/or Website rendered before it — the
+  // idiomatic RN/CSS way to get "always last, others pack naturally
+  // before it" without hardcoding empty spacer slots for the 1-2-sibling
+  // cases. Never computed from hasLoc/hasWeb or from an index into a
+  // conditionally-filtered array.
+  utilityBtnSave: {
+    marginLeft: 'auto',
   },
 
   utilityBtnIcon: {
@@ -2107,6 +2128,10 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     textAlign: 'center',
   },
 
+  // Item Detail Corrective Pass (2026-09-18) — Goal 4: the compact
+  // "DO THIS TOGETHER" card itself. No permanent message preview, no
+  // permanent Edit button, no permanent channel grid — those all moved
+  // into inviteChannelSheet below, reached only via inviteSoloBtn.
   inviteCard: {
     backgroundColor: CARD,
     borderRadius: 28,
@@ -2116,24 +2141,53 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     borderColor: BORDER,
   },
 
-  inviteHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 12,
-    gap: 12,
-  },
-
-  inviteHeaderLeft: {
-    flex: 1,
-  },
-
   inviteTitle: {
     fontSize: 18,
     fontWeight: '800',
     color: TEXT,
     marginBottom: 6,
   },
+
+  inviteAsk: {
+    fontSize: 14,
+    color: MUTED,
+    lineHeight: 20,
+    marginBottom: 14,
+  },
+
+  // Reused inside inviteChannelSheet (below) for its own title + "Edit"
+  // row — same row shape the old always-visible card header used.
+  inviteHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 12,
+  },
+
+  inviteChannelTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: TEXT,
+  },
+
+  inviteChannelOverlay: {
+    position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
+    zIndex: 100,
+  },
+
+  inviteChannelSheet: {
+    backgroundColor: CARD,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 24,
+    paddingBottom: 40,
+  },
+
+  inviteChannelCancel: { alignItems: 'center', paddingVertical: 14, marginTop: 4 },
+  inviteChannelCancelText: { fontSize: 15, color: MUTED, fontWeight: '600' },
 
   editChannelsBtn: {
     paddingHorizontal: 16,
