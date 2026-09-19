@@ -40,7 +40,6 @@ import { fetchActiveCoverImageUrl, fetchDisplayEligibleImagePool } from '../lib/
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
 import DetailArtwork from '../components/itemDetail/DetailArtwork'
 import { buildInviteMessage, buildInviteAskLine } from '../lib/inviteMessage'
-import { extractQuotedVenueFromBody } from '../lib/itemDetailHeaderTitle'
 import { useSavedItems } from '../lib/SavedItemsContext'
 import BookmarkIcon from '../components/BookmarkIcon'
 import { deriveTitlePresentation } from '../lib/detailTitlePresentation'
@@ -545,38 +544,35 @@ export default function ItemDetailScreen({ route, navigation }) {
     }
   }
 
-  // "Do This Together" invitation copy (Item Detail redesign, 2026-09-18) —
-  // venue is whatever is ACTUALLY populated for this item: item.partnerName
-  // when a real partners row exists, otherwise the same quoted-venue
-  // extraction from item.body that the nav header title already uses (see
-  // lib/itemDetailHeaderTitle.js) — never a fabricated field. Message text
-  // itself is built by the pure lib/inviteMessage.js helper; this function
-  // just resolves venue + preserves existing list-mode URL behavior
-  // unchanged (no item-specific URL is wired in as the default yet — see
-  // buildItemDeepLinkUrl's own doc comment for why).
-  function inviteVenue() {
-    if (typeof item?.partnerName === 'string' && item.partnerName.trim().length > 0) {
-      return item.partnerName.trim()
-    }
-    return extractQuotedVenueFromBody(item?.body)
-  }
-
+  // "Do This Together" invitation copy (Item Detail redesign, 2026-09-18;
+  // final copy corrected 2026-09-19) — the approved message leads with the
+  // conversational opening, then the item's own COMPLETE body in quotes
+  // (never truncated, never a separate "at {venue}" framing — item.body
+  // already carries the venue naturally), then "You in?", then the
+  // item-specific URL on its own line. Message text itself is built by the
+  // pure lib/inviteMessage.js helper; this function just supplies the raw
+  // itemBody/itemId + preserves existing list-mode URL fallback (used only
+  // when itemId is missing/malformed — see buildItemDeepLinkUrl).
   function inviteMessage() {
     return buildInviteMessage({
       itemBody: item?.body,
-      venue: inviteVenue(),
+      itemId: item?.id,
       listInviteCode,
     })
   }
 
-  // Item Detail Corrective Pass (2026-09-18) — the short "ask" line shown
-  // on the compact "DO THIS TOGETHER" card itself (no body quote, no URL —
-  // that fuller text is reserved for the actual shared message via
-  // inviteMessage() above). Calls the same buildInviteAskLine() the pure
-  // helper's own buildInviteMessage() uses internally, so the visible copy
-  // and the shared copy's "ask" line can never drift apart.
+  // Item Detail Corrective Pass (2026-09-18; copy corrected 2026-09-19) —
+  // the short "ask" line shown on the compact "DO THIS TOGETHER" card
+  // itself: a safely-clamped preview of the SAME conversational opening +
+  // quoted body + "You in?" used in the real shared message (no URL shown
+  // inline on the card — the URL is appended only when actually sharing).
+  // Calls the same buildInviteAskLine() the pure helper exports, so the
+  // visible card copy and the shared message's opening can never drift
+  // apart; only this preview may be visually clamped for card compactness,
+  // never the actual shared text (see inviteMessage() above, which is
+  // never truncated).
   function inviteAskLine() {
-    return buildInviteAskLine({ venue: inviteVenue() })
+    return buildInviteAskLine({ itemBody: item?.body })
   }
 
   // Item Detail Redesign (2026-09-18) — un-check confirmation gate. Purely
