@@ -1,8 +1,51 @@
+// Lists Landing Redesign (2026-09-19) — the Lists tab's personal collection
+// hub, restyled to match the visual/product language shipped by the Home,
+// Nearby, and Item Detail redesigns (midnight navy dark mode / warm cream
+// type / amber accents / raised CARD_ELEVATED surfaces / restrained glow),
+// while preserving every real behavior the pre-redesign screen had:
+// fetching (list_members -> lists, official vs. personal split, crew
+// membership/handles), create-list navigation, delete/leave with their
+// existing confirmations, and the Saved Items V1 virtual destination.
+//
+// What changed vs. the pre-redesign screen:
+//   - A single virtualized FlatList (via lib/listsSections.js's
+//     buildListsRows) replaces the plain ScrollView — no behavior change,
+//     just proper virtualization for a screen that can grow with many
+//     lists.
+//   - Presentation is now owned by components/lists/* (ListsHeader,
+//     SavedCollectionCard, ListCollectionCard) instead of inline markup —
+//     this screen owns data/handlers only, matching this app's established
+//     hook/screen-owns-policy, component-owns-presentation split.
+//   - list.hero_image_url is now selected (zero extra query — same
+//     list_members->lists embedded select) so a list WITH a real cover
+//     image (the same column ListScreen.jsx's own header already reads)
+//     shows it; one without falls back to a code-native accent panel.
+//   - A real "More options" button per personal-list card gives the
+//     existing delete/leave actions a discoverable, accessible entry point
+//     alongside the pre-existing onLongPress (kept, unchanged) — same
+//     handlers, same Alert-based confirmations, nothing new is destructive.
+//   - Section label is "Your Lists" (not "In Progress") — this screen has
+//     no genuine per-list completion-progress data (that lives in
+//     ListScreen.jsx, keyed off check_ins + each list's own season window,
+//     and isn't safely reproducible here without a second, list-detail-
+//     duplicating query); labeling it "in progress" would fabricate a
+//     meaning the data doesn't support, so this redesign deliberately
+//     doesn't add a progress query or that label.
+//
+// Signed-out state: the ListsTab is entirely hidden from the bottom tab
+// bar when signed out (App.jsx's `tabBarButton: isSignedIn ? undefined :
+// () => null`), so this screen's own !userId branch below is structurally
+// unreachable via normal navigation. It's kept (functionally as-is, just
+// restyled) rather than removed, in case some future entry point reaches
+// this screen directly while signed out — but no new elaborate signed-out
+// UI was built for what is, today, dead-in-practice code per the task's
+// own instruction.
+
 import React, { useState, useCallback, useMemo } from 'react'
 import {
   View,
   Text,
-  ScrollView,
+  FlatList,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
@@ -13,9 +56,11 @@ import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { useTheme } from '../lib/ThemeContext'
 import { useSavedItems } from '../lib/SavedItemsContext'
-import BookmarkIcon from '../components/BookmarkIcon'
-
-const LIST_ACCENT_COLORS = ['#F5A623', '#7A4DB3', '#2E7D8C', '#2E6B3E', '#C0674A', '#378ADD']
+import { trackEvent } from '../lib/trackEvent'
+import { buildListsRows } from '../lib/listsSections'
+import ListsHeader from '../components/lists/ListsHeader'
+import SavedCollectionCard from '../components/lists/SavedCollectionCard'
+import ListCollectionCard from '../components/lists/ListCollectionCard'
 
 function calDaysLeft(endsAt) {
   if (!endsAt) return null
@@ -49,24 +94,19 @@ function isUrgent(endsAt, withinDays = 7) {
 export default function ListsScreen({ navigation }) {
   const insets = useSafeAreaInsets()
   const { colors } = useTheme()
-  const { BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, CARD_URGENT } = colors
-  const styles = useMemo(() => createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, CARD_URGENT }),
-    [BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, CARD_URGENT])
+  const { AMBER } = colors
+  const styles = useMemo(() => createStyles({ colors }), [colors])
 
   const [userId, setUserId] = useState(null)
   const [loading, setLoading] = useState(true)
   const [personalLists, setPersonalLists] = useState([])
-  // Saved Items V1 (2026-09-18) — the pinned "Saved" destination reads
-  // its count straight off the already-loaded savedItemIds Set (zero
-  // extra query). Logged-out handling mirrors this screen's existing
-  // precedent: the whole Lists tab already gates on `!userId` and shows
-  // a sign-in prompt instead of any list content (see the early return
-  // below) — so "Saved" is simply part of that same signed-in-only
-  // content, never rendered while logged out, rather than a separately
-  // routed sign-in prompt.
+  // Saved Items V1 (2026-09-18) — the pinned "Saved" destination reads its
+  // count straight off the already-loaded savedItemIds Set (zero extra
+  // query). See screens/SavedItemsScreen.jsx / lib/SavedItemsContext.js.
   const { savedItemIds } = useSavedItems()
   const [memberMap, setMemberMap] = useState({})
   const [joinedOfficial, setJoinedOfficial] = useState([])
+  const [loadError, setLoadError] = useState(false)
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -78,12 +118,15 @@ export default function ListsScreen({ navigation }) {
       return
     }
     setUserId(user.id)
+    setLoadError(false)
 
     try {
-      const { data: memberLists } = await supabase
+      const { data: memberLists, error: memberErr } = await supabase
         .from('list_members')
-        .select('lists(id, title, starts_at, ends_at, is_public, is_official, creator_id, cover_emoji, checkoff_creator_id, is_featured_eligible)')
+        .select('lists(id, title, starts_at, ends_at, is_public, is_official, creator_id, cover_emoji, checkoff_creator_id, is_featured_eligible, hero_image_url)')
         .eq('user_id', user.id)
+
+      if (memberErr) throw memberErr
 
       const all = (memberLists ?? []).map(m => m.lists).filter(Boolean)
       const personal = all.filter(l => !l.is_official && !isEnded(l.ends_at))
@@ -133,12 +176,19 @@ export default function ListsScreen({ navigation }) {
       })))
     } catch (e) {
       console.error('ListsScreen load error:', e?.message ?? e)
+      setLoadError(true)
+      setPersonalLists([])
+      setJoinedOfficial([])
     } finally {
       setLoading(false)
     }
   }, [])
 
   useFocusEffect(useCallback(() => { load() }, [load]))
+
+  useFocusEffect(useCallback(() => {
+    trackEvent('lists_tab_view')
+  }, []))
 
   async function deleteList(list) {
     const { count } = await supabase
@@ -209,6 +259,89 @@ export default function ListsScreen({ navigation }) {
     ])
   }
 
+  function handleListAction(list) {
+    if (list.creator_id === userId) {
+      deleteList(list)
+    } else {
+      leaveList(list)
+    }
+  }
+
+  function openMore(list) {
+    trackEvent('list_overflow_opened', { listId: list.id })
+    handleListAction(list)
+  }
+
+  function openList(list) {
+    navigation.navigate('List', { listId: list.id, title: list.title })
+  }
+
+  function handleCreate() {
+    trackEvent('list_create_initiated')
+    navigation.navigate('CreateList')
+  }
+
+  const rows = useMemo(
+    () => buildListsRows({ personalLists, joinedOfficial }),
+    [personalLists, joinedOfficial]
+  )
+
+  const renderItem = useCallback(({ item: row }) => {
+    switch (row.type) {
+      case 'saved':
+        return (
+          <SavedCollectionCard
+            count={savedItemIds.size}
+            onPress={() => navigation.navigate('SavedItems')}
+            colors={colors}
+          />
+        )
+      case 'header':
+        return <Text style={styles.sectionTitle}>{row.title}</Text>
+      case 'empty-personal':
+        return (
+          <TouchableOpacity
+            style={styles.emptyListCard}
+            onPress={handleCreate}
+            activeOpacity={0.88}
+            accessibilityRole="button"
+            accessibilityLabel="Start your first list"
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.emptyListTitle}>Start your first list</Text>
+              <Text style={styles.emptyListSub}>
+                Pick items, invite your crew, and see who checks off the most.
+              </Text>
+            </View>
+            <Text style={styles.emptyListArrow}>→</Text>
+          </TouchableOpacity>
+        )
+      case 'list': {
+        const { list, official } = row
+        const crewMembers = official ? [] : (memberMap[list.id] ?? [])
+        return (
+          <ListCollectionCard
+            list={list}
+            official={official}
+            timeLeftText={list.ends_at ? timeLeft(list.ends_at) : null}
+            isUrgent={!official && isUrgent(list.ends_at)}
+            crewMembers={crewMembers}
+            onPress={() => openList(list)}
+            onLongPress={official ? undefined : () => handleListAction(list)}
+            onMore={official ? undefined : () => openMore(list)}
+            onAddCrew={() => navigation.navigate('SavedCrew', { list })}
+            colors={colors}
+          />
+        )
+      }
+      default:
+        return null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedItemIds, memberMap, colors, styles, navigation, userId])
+
+  const keyExtractor = useCallback((row) => row.key, [])
+
   if (loading) {
     return (
       <View style={[styles.container, styles.center]}>
@@ -231,155 +364,44 @@ export default function ListsScreen({ navigation }) {
     )
   }
 
-  return (
-    <ScrollView
-      style={styles.container}
-      contentContainerStyle={{ padding: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 32 }}
-      showsVerticalScrollIndicator={false}
-    >
-      {/* Saved Items V1 (2026-09-18) — a virtual/system entry, NOT a
-          `public.lists` row: never inserted into `lists`/`list_items`, so
-          it structurally can't enter normal list-limit/count/ranking/
-          analytics logic (that logic all keys off rows actually read from
-          `lists`). No rename/delete/share/invite/reorder controls are
-          rendered for it — not just hidden, they simply don't exist in
-          this entry's markup, since those controls don't apply to
-          something that isn't a real list. */}
-      <TouchableOpacity
-        style={styles.savedEntry}
-        onPress={() => navigation.navigate('SavedItems')}
-        activeOpacity={0.85}
-        accessibilityRole="button"
-        accessibilityLabel={`Saved, ${savedItemIds.size} item${savedItemIds.size === 1 ? '' : 's'}`}
-      >
-        <View style={styles.savedEntryIconWrap}>
-          <BookmarkIcon filled color={AMBER} size={18} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.listTitle}>Saved</Text>
-          <Text style={styles.listMeta}>{savedItemIds.size} item{savedItemIds.size === 1 ? '' : 's'}</Text>
-        </View>
-        <Text style={styles.listChevron}>→</Text>
-      </TouchableOpacity>
-
-      <View style={styles.headerRow}>
-        <Text style={styles.screenTitle}>Your lists</Text>
+  if (loadError) {
+    return (
+      <View style={[styles.container, styles.center, { paddingHorizontal: 24 }]}>
+        <Text style={styles.errorTitle}>Couldn't load your lists</Text>
+        <Text style={styles.errorSub}>Check your connection and try again.</Text>
         <TouchableOpacity
-          style={styles.createNewBtn}
-          onPress={() => navigation.navigate('CreateList')}
-          activeOpacity={0.85}
+          style={styles.retryBtn}
+          onPress={load}
+          activeOpacity={0.88}
+          accessibilityRole="button"
+          accessibilityLabel="Retry loading your lists"
         >
-          <Text style={styles.createNewBtnText}>+ New list</Text>
+          <Text style={styles.retryBtnText}>Retry</Text>
         </TouchableOpacity>
       </View>
+    )
+  }
 
-      {personalLists.length === 0 ? (
-        <TouchableOpacity
-          style={styles.emptyListCard}
-          onPress={() => navigation.navigate('CreateList')}
-          activeOpacity={0.88}
-        >
-          <Text style={styles.emptyListEmoji}>📋</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.emptyListTitle}>Start your first list</Text>
-            <Text style={styles.emptyListSub}>
-              Pick items, invite your crew, and see who checks off the most.
-            </Text>
-          </View>
-          <Text style={styles.emptyListArrow}>→</Text>
-        </TouchableOpacity>
-      ) : (
-        <>
-          {personalLists.map(list => {
-            const crewMembers = memberMap[list.id] ?? []
-            const isFeaturedCreatorList = !!list.creatorHandle && !!list.is_featured_eligible
-            const accent = isFeaturedCreatorList ? '#F5A623' : LIST_ACCENT_COLORS[list.id.charCodeAt(0) % 6]
-            return (
-              <TouchableOpacity
-                key={list.id}
-                style={[styles.listCard, isUrgent(list.ends_at) && styles.listCardUrgent, isFeaturedCreatorList && styles.listCardCreator]}
-                onPress={() => navigation.navigate('List', { listId: list.id, title: list.title })}
-                onLongPress={() => {
-                  if (list.creator_id === userId) {
-                    deleteList(list)
-                  } else {
-                    leaveList(list)
-                  }
-                }}
-                activeOpacity={0.85}
-              >
-                <View style={[styles.listAccent, { backgroundColor: accent, borderColor: accent }]} />
-
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.listTitle}>{list.title}</Text>
-                  {isFeaturedCreatorList ? (
-                    <Text style={styles.listCreatorByline}>by @{list.creatorHandle}</Text>
-                  ) : null}
-                  <View style={styles.listMetaRow}>
-                    {list.ends_at ? (
-                      <Text style={[styles.listMeta, isUrgent(list.ends_at) && styles.listMetaUrgent]}>
-                        {timeLeft(list.ends_at)}
-                      </Text>
-                    ) : (
-                      <Text style={styles.listMeta}>Open-ended</Text>
-                    )}
-                    {crewMembers.length > 0 && (
-                      <View style={styles.crewAvatarStack}>
-                        {crewMembers.map(m => (
-                          <View key={m.id} style={styles.crewAvatarMini}>
-                            <Text style={styles.crewAvatarMiniText}>{m.initial}</Text>
-                          </View>
-                        ))}
-                      </View>
-                    )}
-                  </View>
-                </View>
-
-                <View style={styles.listCardRight}>
-                  {list.memberCount > 1 && (
-                    <TouchableOpacity
-                      style={styles.addCrewBtn}
-                      onPress={() => navigation.navigate('SavedCrew', { list })}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Text style={styles.addCrewBtnText}>+ Crew</Text>
-                    </TouchableOpacity>
-                  )}
-                  <Text style={styles.listChevron}>→</Text>
-                </View>
-              </TouchableOpacity>
-            )
-          })}
-
-          <Text style={styles.deleteHint}>Long-press a list to delete or leave it</Text>
-        </>
-      )}
-
-      {joinedOfficial.length > 0 && (
-        <>
-          <Text style={[styles.screenTitle, styles.sectionSpacer]}>Joined lists</Text>
-          {joinedOfficial.map(list => (
-            <TouchableOpacity
-              key={list.id}
-              style={styles.officialRow}
-              onPress={() => navigation.navigate('List', { listId: list.id, title: list.title })}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.officialEmoji}>{list.cover_emoji ?? '📋'}</Text>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.listTitle}>{list.title}</Text>
-                <Text style={styles.listMeta}>{list.ends_at ? timeLeft(list.ends_at) : 'Open-ended'}</Text>
-              </View>
-              <Text style={styles.listChevron}>→</Text>
-            </TouchableOpacity>
-          ))}
-        </>
-      )}
-    </ScrollView>
+  return (
+    <FlatList
+      style={styles.container}
+      data={rows}
+      keyExtractor={keyExtractor}
+      renderItem={renderItem}
+      ListHeaderComponent={<ListsHeader onCreate={handleCreate} colors={colors} />}
+      ListFooterComponent={
+        personalLists.length > 0 ? (
+          <Text style={styles.deleteHint}>Long-press a list, or tap ⋯, to delete or leave it</Text>
+        ) : null
+      }
+      contentContainerStyle={{ padding: 20, paddingTop: insets.top + 16, paddingBottom: insets.bottom + 32 }}
+      showsVerticalScrollIndicator={false}
+    />
   )
 }
 
-function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, CARD_URGENT }) {
+function createStyles({ colors }) {
+  const { BG, TEXT, MUTED, AMBER, SOFT } = colors
   return StyleSheet.create({
     container: {
       flex: 1,
@@ -390,157 +412,14 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, CARD_URGENT 
       justifyContent: 'center',
     },
 
-    headerRow: {
-      flexDirection: 'row',
-      justifyContent: 'space-between',
-      alignItems: 'center',
-      marginBottom: 16,
-    },
-    screenTitle: {
-      fontSize: 22,
-      fontWeight: '800',
-      color: TEXT,
-    },
-    sectionSpacer: {
-      marginTop: 24,
-      marginBottom: 12,
-      fontSize: 16,
-    },
-
-    createNewBtn: {
-      backgroundColor: SOFT,
-      borderRadius: 999,
-      paddingHorizontal: 14,
-      paddingVertical: 8,
-      borderWidth: 1,
-      borderColor: '#E8C98E',
-    },
-    createNewBtnText: {
-      fontSize: 14,
-      color: '#A16A00',
-      fontWeight: '800',
-    },
-
-    savedEntry: {
-      backgroundColor: CARD,
-      borderRadius: 18,
-      padding: 16,
-      marginBottom: 16,
-      flexDirection: 'row',
-      alignItems: 'center',
-      borderWidth: 1.5,
-      borderColor: AMBER,
-      gap: 12,
-    },
-    savedEntryIconWrap: {
-      width: 32,
-      alignItems: 'center',
-      justifyContent: 'center',
-    },
-
-    listCard: {
-      backgroundColor: CARD,
-      borderRadius: 18,
-      padding: 16,
+    sectionTitle: {
+      fontSize: 13,
+      fontWeight: '900',
+      letterSpacing: 0.6,
+      textTransform: 'uppercase',
+      color: MUTED,
+      marginTop: 4,
       marginBottom: 10,
-      flexDirection: 'row',
-      alignItems: 'center',
-      borderWidth: 1,
-      borderColor: BORDER,
-      gap: 12,
-    },
-    listCardUrgent: {
-      borderColor: 'rgba(245,166,35,0.5)',
-      backgroundColor: CARD_URGENT,
-    },
-    listCardCreator: {
-      borderColor: 'rgba(245,166,35,0.35)',
-    },
-
-    listAccent: {
-      width: 8,
-      alignSelf: 'stretch',
-      borderRadius: 999,
-      backgroundColor: SOFT,
-    },
-
-    listTitle: {
-      fontSize: 15,
-      color: TEXT,
-      fontWeight: '800',
-      flex: 1,
-    },
-    listCreatorByline: {
-      fontSize: 12,
-      color: '#F5A623',
-      fontWeight: '600',
-      marginTop: 2,
-      marginBottom: 2,
-    },
-
-    listMetaRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      marginTop: 4,
-      flexWrap: 'wrap',
-    },
-    listMeta: {
-      fontSize: 12,
-      color: MUTED,
-      marginTop: 4,
-      fontWeight: '600',
-    },
-    listMetaUrgent: {
-      color: AMBER,
-      fontWeight: '800',
-    },
-
-    crewAvatarStack: {
-      flexDirection: 'row',
-      gap: -6,
-    },
-    crewAvatarMini: {
-      width: 20, height: 20, borderRadius: 10,
-      backgroundColor: SOFT,
-      alignItems: 'center', justifyContent: 'center',
-      borderWidth: 1, borderColor: '#F0D29D',
-      marginRight: -6,
-    },
-    crewAvatarMiniText: {
-      fontSize: 9, fontWeight: '800', color: '#A16A00',
-    },
-
-    listCardRight: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 8,
-      flexShrink: 0,
-    },
-    addCrewBtn: {
-      backgroundColor: SOFT,
-      borderRadius: 999,
-      paddingHorizontal: 10,
-      paddingVertical: 5,
-      borderWidth: 1,
-      borderColor: '#E8C98E',
-    },
-    addCrewBtnText: {
-      fontSize: 11, fontWeight: '800', color: '#A16A00',
-    },
-    listChevron: {
-      fontSize: 17,
-      color: MUTED,
-      fontWeight: '700',
-    },
-
-    deleteHint: {
-      fontSize: 12,
-      color: MUTED,
-      textAlign: 'center',
-      marginTop: 6,
-      marginBottom: 8,
-      fontWeight: '600',
     },
 
     emptyListCard: {
@@ -550,27 +429,22 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, CARD_URGENT 
       backgroundColor: SOFT,
       borderRadius: 20,
       padding: 18,
-      marginBottom: 20,
+      marginBottom: 10,
       borderWidth: 1.5,
       borderColor: AMBER,
     },
-    emptyListEmoji: { fontSize: 28 },
     emptyListTitle: { fontSize: 15, fontWeight: '800', color: TEXT, marginBottom: 3 },
     emptyListSub:   { fontSize: 12, color: MUTED, lineHeight: 17, fontWeight: '500' },
     emptyListArrow: { fontSize: 18, color: AMBER, fontWeight: '800' },
 
-    officialRow: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      gap: 12,
-      backgroundColor: CARD,
-      borderRadius: 18,
-      padding: 16,
-      marginBottom: 10,
-      borderWidth: 1,
-      borderColor: BORDER,
+    deleteHint: {
+      fontSize: 12,
+      color: MUTED,
+      textAlign: 'center',
+      marginTop: 8,
+      marginBottom: 4,
+      fontWeight: '600',
     },
-    officialEmoji: { fontSize: 22 },
 
     signedOutWrap: {
       alignItems: 'center',
@@ -598,6 +472,32 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, CARD_URGENT 
     },
     signInBtnText: {
       fontSize: 15,
+      fontWeight: '800',
+      color: '#1A1A2E',
+    },
+
+    errorTitle: {
+      fontSize: 17,
+      fontWeight: '800',
+      color: TEXT,
+      marginBottom: 8,
+      textAlign: 'center',
+    },
+    errorSub: {
+      fontSize: 14,
+      color: MUTED,
+      textAlign: 'center',
+      lineHeight: 20,
+      marginBottom: 20,
+    },
+    retryBtn: {
+      backgroundColor: AMBER,
+      borderRadius: 14,
+      paddingVertical: 12,
+      paddingHorizontal: 28,
+    },
+    retryBtnText: {
+      fontSize: 14,
       fontWeight: '800',
       color: '#1A1A2E',
     },
