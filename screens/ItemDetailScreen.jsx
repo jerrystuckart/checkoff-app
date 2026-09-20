@@ -234,6 +234,18 @@ export default function ItemDetailScreen({ route, navigation }) {
   // logic below, just moved behind a tap.
   const [showInviteChannels, setShowInviteChannels] = useState(false)
 
+  // Item Detail Corrective Pass (2026-09-19) — Goal 2: the rare "extreme"
+  // title tier (lib/detailTitlePresentation.js) offers a "Read full thing"
+  // action that opens this modal with the complete, untruncated item body.
+  // Reset on item change (mirroring DetailArtwork.jsx's own photoFailed
+  // reset on item?.id, for the same reason: this is local UI state tied to
+  // ONE specific item, and must never carry over silently when the user
+  // navigates from one Detail screen instance to the next item).
+  const [showFullBodyModal, setShowFullBodyModal] = useState(false)
+  useEffect(() => {
+    setShowFullBodyModal(false)
+  }, [item?.id])
+
   useEffect(() => {
     loadUser()
   }, [])
@@ -1283,21 +1295,19 @@ export default function ItemDetailScreen({ route, navigation }) {
   // new/fabricated field, item.difficulty always has this exact fallback.
   const heroPointsLabel = `+${item.difficulty ?? 1} pts`
 
-  // Item Detail Corrective Pass (2026-09-18) — Goal 2: the old hard
+  // Item Detail Corrective Pass (2026-09-18/19) — Goal 2: the old hard
   // numberOfLines={2} clamp truncated real item bodies mid-word/mid-
   // thought (e.g. "Find the door disguised as a painti…"), losing the
-  // actual point of the experience. deriveTitlePresentation (pure,
-  // unit-tested in lib/detailTitlePresentation.test.js) now decides, from
-  // the body's length alone, how much of it fits inside the hero's 4-line
-  // budget at a tier-appropriate font size, and — only for the rare body
-  // that still doesn't fit — where to make a clean, word-boundary split so
-  // the remainder can render as a compact continuation below the hero.
-  // Venue/neighborhood moves to that same below-hero slot only when the
-  // title itself needed the continuation — title takes priority over
-  // metadata when space is tight, but metadata is never dropped when the
-  // title fits fine.
+  // actual point of the experience. A later pass's below-hero
+  // "continuation" fix then introduced its OWN bug (a title splitting into
+  // a hero fragment plus an orphaned fragment below it — see physical-
+  // device screenshots). deriveTitlePresentation (pure, unit-tested in
+  // lib/detailTitlePresentation.test.js) now always renders the title
+  // entirely inside the hero — never below it — expanding the hero's own
+  // text-safe area and line allowance for longer bodies, and only for the
+  // rare "extreme" outlier truncating (with a deliberate ellipsis) and
+  // exposing a "Read full thing" action to a modal with the complete body.
   const titlePresentation = deriveTitlePresentation(item.body)
-  const venueOverflowsHero = titlePresentation.hasContinuation
 
   const displayChannels = userChannels.filter((c, i, a) => {
     if (c === 'imessage') return !a.includes('sms')
@@ -1373,7 +1383,7 @@ export default function ItemDetailScreen({ route, navigation }) {
           accessible
           accessibilityLabel={[
             item.body,
-            !venueOverflowsHero ? item.neighborhoodName : null,
+            item.neighborhoodName,
             heroPointsLabel,
             item.dist_label ?? item.distance_label ?? null,
           ].filter(Boolean).join('. ')}
@@ -1404,7 +1414,27 @@ export default function ItemDetailScreen({ route, navigation }) {
             {titlePresentation.heroLines}
           </Text>
 
-          {!venueOverflowsHero && item.neighborhoodName ? (
+          {/* Extreme-tier-only escape hatch (Item Detail Corrective Pass,
+              2026-09-19) — visually secondary, inside the hero itself
+              (never a second block below it). Opens a modal with the
+              complete, untruncated body — heroContent's own grouped
+              accessibilityLabel above already announces that same
+              complete body once, so this control's own label names the
+              action, not the text it reveals. */}
+          {titlePresentation.showFullTextAction ? (
+            <TouchableOpacity
+              style={styles.heroReadFullBtn}
+              onPress={() => setShowFullBodyModal(true)}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Read full thing"
+              accessibilityHint="Opens the complete description in a sheet"
+            >
+              <Text style={styles.heroReadFullBtnText}>Read full thing</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {item.neighborhoodName ? (
             <Text style={styles.heroVenue} numberOfLines={1}>{item.neighborhoodName}</Text>
           ) : null}
 
@@ -1417,33 +1447,50 @@ export default function ItemDetailScreen({ route, navigation }) {
         </View>
       </View>
 
-      {/* Compact continuation block (Goal 2's documented escape hatch) —
-          only rendered for the rare body that doesn't fit even at its
-          tier's font size within the hero's 4-line budget
-          (titlePresentation.hasContinuation). Never a second giant card —
-          just the remaining title text (a clean word-boundary split off
-          titlePresentation.heroLines, computed in
-          lib/detailTitlePresentation.js — never a duplicated word, never
-          an ellipsis) followed by venue/neighborhood if present. Hidden
-          from the accessibility tree: heroContent's own grouped
-          accessibilityLabel above already announces the COMPLETE body
-          (titlePresentation.accessibilityLabel === item.body) exactly
-          once, so this visible-only block must not expose a second,
-          overlapping announcement of the same text. */}
-      {venueOverflowsHero ? (
-        <View
-          style={styles.heroContinuationWrap}
-          accessibilityElementsHidden
-          importantForAccessibility="no-hide-descendants"
-        >
-          {titlePresentation.continuationText ? (
-            <Text style={styles.heroTitleContinuation}>{titlePresentation.continuationText}</Text>
-          ) : null}
-          {item.neighborhoodName ? (
-            <Text style={styles.heroVenueContinuation}>{item.neighborhoodName}</Text>
-          ) : null}
+      {/* Full-body modal (Item Detail Corrective Pass, 2026-09-19) — the
+          extreme tier's only escape hatch, reached via the in-hero "Read
+          full thing" action above. Renders titlePresentation.fullText
+          verbatim — the exact, complete original item body, never
+          re-truncated or paraphrased. Follows this app's own established
+          Modal + bottom-sheet pattern (see the "Invite via" sheet just
+          below, and components/PostCheckoffSheet.jsx) rather than a new
+          one. The sheet's own ScrollView may scroll for an exceptionally
+          long body — it is the HERO itself that must never nest a
+          scrolling region, and this modal is entirely outside the hero. */}
+      <Modal
+        visible={showFullBodyModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowFullBodyModal(false)}
+        statusBarTranslucent
+      >
+        <View style={styles.fullBodyOverlay}>
+          <TouchableOpacity
+            style={StyleSheet.absoluteFillObject}
+            activeOpacity={1}
+            onPress={() => setShowFullBodyModal(false)}
+          />
+          <View style={styles.fullBodySheet}>
+            <View style={styles.handleWrap}>
+              <View style={styles.handle} />
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              <Text style={styles.fullBodyText} accessibilityRole="header">
+                {titlePresentation.fullText}
+              </Text>
+            </ScrollView>
+            <TouchableOpacity
+              style={styles.fullBodyCloseBtn}
+              onPress={() => setShowFullBodyModal(false)}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Close"
+            >
+              <Text style={styles.fullBodyCloseBtnText}>Close</Text>
+            </TouchableOpacity>
+          </View>
         </View>
-      ) : null}
+      </Modal>
 
       {showCoverContributionCTA ? (
         <View style={styles.topContributionWrap}>
@@ -1950,7 +1997,7 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     fontSize: 14,
   },
 
-  // Item Detail Corrective Pass (2026-09-18) — Goal 1: ONE combined
+  // Item Detail Corrective Pass (2026-09-18/19) — Goal 1: ONE combined
   // editorial hero card (artwork + overlaid content), replacing the prior
   // separate full-bleed heroWrap (260dp) + separate itemCard (padding +
   // tagRow + 2-3-line title + location, ~140-160dp more) — ~400-420dp
@@ -1958,12 +2005,15 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
   // the available width (roughly 350dp at typical phone content width ->
   // ~219dp tall); maxHeight is now driven per-render from
   // titlePresentation.heroHeightHint (lib/detailTitlePresentation.js) —
-  // 240/260/300dp for short/medium/long titles, 320dp only for the rare
-  // title that needs a below-hero continuation — this literal 240 is only
-  // the style's own fallback default. Deliberately no borderWidth — "no
-  // heavy border around the hero" per the approved visual language,
-  // unchanged from the prior pass. Radius 24 matches this app's own
-  // established primary-card convention (see
+  // 240/280dp for short/medium titles, up to the firm
+  // HERO_MAX_HEIGHT_DP cap (420dp) for long/extreme titles — this literal
+  // 240 is only the style's own fallback default. The 2026-09-19 pass
+  // removed the prior below-hero "continuation" escape hatch entirely: a
+  // long title now always grows the hero itself (bounded by that same firm
+  // cap) rather than spilling a second text block underneath it.
+  // Deliberately no borderWidth — "no heavy border around the hero" per
+  // the approved visual language, unchanged from the prior pass. Radius 24
+  // matches this app's own established primary-card convention (see
   // components/home/WhatsTheThingHero.jsx's imageCard: borderRadius 24).
   heroCard: {
     width: '100%',
@@ -2041,28 +2091,78 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     color: 'rgba(255,255,255,0.75)',
   },
 
-  // Escape hatch for the rare title that doesn't fit even at its tier's
-  // font size within the hero's 4-line budget (Goal 2) — a single compact
-  // block immediately below the hero card, never a second giant card.
-  // Hidden from the accessibility tree in the render (heroContent's own
-  // grouped label already announces the complete body once).
-  heroContinuationWrap: {
-    marginTop: -8,
-    marginBottom: 16,
+  // "Read full thing" action (Item Detail Corrective Pass, 2026-09-19) —
+  // the extreme tier's only escape hatch, INSIDE the hero itself (never a
+  // second text block below it, replacing the prior pass's now-removed
+  // below-hero continuation styles). Deliberately visually secondary
+  // (small, muted-amber, low-emphasis) — the title itself stays the
+  // dominant element even in this rare tier.
+  heroReadFullBtn: {
+    alignSelf: 'flex-start',
+    paddingVertical: 3,
+    marginBottom: 6,
   },
 
-  heroTitleContinuation: {
-    fontSize: 15,
-    color: TEXT,
-    fontWeight: '700',
-    lineHeight: 20,
-    marginBottom: 4,
-  },
-
-  heroVenueContinuation: {
+  heroReadFullBtnText: {
     fontSize: 13,
+    fontWeight: '700',
+    color: AMBER,
+    textDecorationLine: 'underline',
+  },
+
+  // Full-body modal (Item Detail Corrective Pass, 2026-09-19) — same
+  // overlay/sheet/handle convention as the "Invite via" sheet just below
+  // (inviteChannelOverlay/inviteChannelSheet) and components/
+  // PostCheckoffSheet.jsx's own sheet, rather than a new modal pattern.
+  fullBodyOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+
+  fullBodySheet: {
+    backgroundColor: CARD,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingTop: 4,
+    paddingHorizontal: 24,
+    paddingBottom: 36,
+    maxHeight: '75%',
+  },
+
+  handleWrap: {
+    paddingVertical: 12,
+    alignItems: 'center',
+  },
+
+  handle: {
+    width: 64,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: BORDER,
+  },
+
+  // The complete, untruncated body, rendered verbatim — never re-truncated
+  // or paraphrased. accessibilityRole="header" gives assistive tech a
+  // sensible entry point into the sheet's content.
+  fullBodyText: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: TEXT,
+    lineHeight: 24,
+    paddingBottom: 12,
+  },
+
+  fullBodyCloseBtn: {
+    alignItems: 'center',
+    paddingVertical: 14,
+    marginTop: 4,
+  },
+
+  fullBodyCloseBtnText: {
+    fontSize: 15,
     color: MUTED,
-    fontWeight: '600',
+    fontWeight: '700',
   },
 
   // Contribution CTA now lives in the TOP area (see the render above) —

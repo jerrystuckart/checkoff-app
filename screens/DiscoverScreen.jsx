@@ -30,13 +30,33 @@ import NearbyResultRow from '../components/nearby/NearbyResultRow'
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
 
-// Below this content width, the search module's passive "Using your
-// current location..." line no longer fits beside the input without
-// clipping/compressing it — it wraps to its own line below instead. A
-// width check (not a hardcoded per-device name) so it naturally adapts to
-// large Dynamic Type/narrow devices/split-screen, not just a fixed phone
-// model list.
-const SEARCH_META_INLINE_MIN_WIDTH = 380
+// Nearby search layout fix (2026-09-19) — physical-device QA showed the
+// search placeholder visibly truncating to "Search nearby exp..." on real
+// phones. Root cause: with the ORIGINAL 380dp threshold below, `metaInline`
+// was true on every common phone width (iPhone SE/mini: 375dp — just under
+// 380, so already wrapped; but the standard/Plus/Pro/Pro Max line all sit
+// at 390-430dp, all >= 380) — so the "inline" branch, which lays the
+// search row and the passive location-status row out as ROW SIBLINGS
+// inside one shared flexDirection:'row' searchModule (see searchModule/
+// searchRow/searchMetaRow below), was the branch actually running on
+// ordinary phones. searchRow is flex:1 and searchMetaRow is not, so the
+// fixed-width meta text ("Using your current location • Up to 100 mi")
+// claimed real estate first, squeezing the TextInput's available width
+// down to where its placeholder clipped.
+//
+// Fix: raise the threshold well above any realistic PHONE portrait width
+// (the widest current model, iPhone Pro Max, is ~430dp; large Dynamic Type
+// only widens individual glyphs, not the viewport) so every ordinary phone
+// width takes the stacked (column) branch — search input on its own full-
+// width first line, passive status text on a quieter second line below it,
+// inside the same bordered surface (searchModuleWrap/searchMetaRowWrapped)
+// — by construction, not as a coincidence of who wins the row's flex
+// tug-of-war. Only a genuinely wide layout (tablet-class, >=600dp) keeps
+// the inline single-row presentation, where there's demonstrably enough
+// room for both. Still a width check via useWindowDimensions() (not a
+// hardcoded per-device name), so it naturally adapts to any actual
+// viewport width rather than a fixed phone model list.
+const SEARCH_META_INLINE_MIN_WIDTH = 600
 
 // NOTE: ring_weight (an admin-set content classification, also shown as a
 // text chip on ItemDetailScreen/PartnerPreviewScreen) is still carried
