@@ -24,6 +24,7 @@ import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { isItemInSeason } from '../lib/seasonFilter'
 import { useWhatsGood } from '../lib/useWhatsGood'
 import { useCurrentLocation } from '../lib/currentLocation'
+import { resolveHomeMetro } from '../lib/metroSelection'
 import { attachActiveCoverImages, attachDisplayEligibleImagePools } from '../lib/coverCandidates'
 import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
 import { deriveHomeHeroLayout } from '../lib/homeHeroLayout'
@@ -37,6 +38,14 @@ import WhatsTheThingHero from '../components/home/WhatsTheThingHero'
 import WhatsGoodDiscovery from '../components/home/WhatsGoodDiscovery'
 
 const PURPLE = '#7A4DB3'
+
+// Persisted key for the user's last EXPLICIT metro choice (via the city
+// picker / switchMetro below) — see resolveHomeMetro in
+// lib/resolveDefaultMetro.js for the full precedence this enforces. An
+// explicit choice here always wins over a fresh GPS-based nearest-metro
+// calculation on the next app open; it is never silently overwritten by
+// location resolution.
+const SELECTED_METRO_SLUG_KEY = 'checkoff_selected_metro_slug'
 
 // Per-list ACCENT COLOR (not a gradient) for the "More [Metro] lists" rail
 // — used only when a list has no hero_image_url set. A photo + the shared
@@ -176,8 +185,11 @@ export default function HomeScreen({ navigation }) {
     setUser(authUser)
 
     try {
-      // Fetch metros and the Next 10 banner in parallel — banner never blocks the screen
-      const [{ data: metroData }, { data: n10Data }] = await Promise.all([
+      // Fetch metros, the Next 10 banner, and any persisted EXPLICIT metro
+      // choice in parallel — banner never blocks the screen, and the
+      // persisted choice (if present) short-circuits the GPS lookup below
+      // entirely, per resolveHomeMetro's precedence.
+      const [{ data: metroData }, { data: n10Data }, persistedSlug] = await Promise.all([
         supabase
           .from('metro_areas')
           .select('id, name, state, slug, center_lat, center_lng')
@@ -189,95 +201,116 @@ export default function HomeScreen({ navigation }) {
           .eq('audience_group', 'the-next-10')
           .eq('is_active', true)
           .maybeSingle(),
+        AsyncStorage.getItem(SELECTED_METRO_SLUG_KEY).catch(() => null),
       ])
 
       setNextTenList(n10Data ?? null)
       setMetros(metroData ?? [])
+      const metros = metroData ?? []
 
-      let defaultMetro = null
-      try {
-        const locationResult = await Promise.race([
-          (async () => {
-            const { status } = await Location.requestForegroundPermissionsAsync()
-            if (status !== 'granted') return null
-            const pos = await Location.getCurrentPositionAsync({
-              accuracy: Location.Accuracy.Low,
-            })
-            return { latitude: pos.coords.latitude, longitude: pos.coords.longitude }
-          })(),
-          new Promise(resolve => setTimeout(() => resolve(null), 3000)),
-        ])
+      let locationResult = null
+      let locationState = 'unavailable'
 
-        if (locationResult !== null) {
-          const { latitude: uLat, longitude: uLng } = locationResult
-          const metros = metroData ?? []
-          // Pick the metro whose center_lat/center_lng is closest to the user.
-          // Falls back to name-match if center coords are missing (e.g. during migration).
-          const metrosWithCoords = metros.filter(m => m.center_lat != null && m.center_lng != null)
-          if (metrosWithCoords.length > 0) {
-            defaultMetro = metrosWithCoords.reduce((closest, m) => {
-              const dLat = uLat - m.center_lat, dLng = uLng - m.center_lng
-              const distSq = dLat * dLat + dLng * dLng
-              const cLat = uLat - closest.center_lat, cLng = uLng - closest.center_lng
-              const closestSq = cLat * cLat + cLng * cLng
-              return distSq < closestSq ? m : closest
-            })
+      // Only bother with GPS at all if there's no explicit prior choice —
+      // an explicit selection wins regardless of location, so skip the
+      // location round-trip (and its own up-to-8s wait) entirely in that
+      // case. NOTE: nothing here special-cases network/connectivity type —
+      // expo-location's permission + fix acquisition works independently
+      // of whether the device has cellular data (WiFi-only/airplane-mode-
+      // with-WiFi devices still get GPS/WiFi-positioning fixes); a device
+      // being WiFi-only must never be treated as "no location."
+      if (!persistedSlug) {
+        try {
+          const { status } = await Location.requestForegroundPermissionsAsync()
+          if (status === 'granted') {
+            // Waits for a real fix before giving up — matches
+            // lib/currentLocation.js's own 8s device-fetch timeout so a
+            // slower (e.g. WiFi-positioning-only, no cellular assist) GPS
+            // fix isn't mistaken for "unavailable" and doesn't trigger an
+            // early fallback. The `loading` state stays true for this
+            // whole window, so the screen shows a loading state rather
+            // than jumping to a default while this is in flight.
+            locationResult = await Promise.race([
+              (async () => {
+                const pos = await Location.getCurrentPositionAsync({
+                  accuracy: Location.Accuracy.Low,
+                })
+                return { latitude: pos.coords.latitude, longitude: pos.coords.longitude }
+              })(),
+              new Promise(resolve => setTimeout(() => resolve(null), 8000)),
+            ])
+            locationState = locationResult ? 'ready' : 'unavailable'
           } else {
-            defaultMetro = uLat < 37
-              ? metros.find(m => m.name.includes('Phoenix'))
-              : metros.find(m => m.name.includes('Milwaukee'))
+            // Permission denied — genuinely unavailable, not pending, no
+            // point waiting further.
+            locationState = 'unavailable'
           }
-
-          // Check destination zones — only if GPS was already granted.
-          // In dev/simulator builds, skip the is_active filter so inactive
-          // zones can be tested before going live — production builds
-          // (__DEV__ === false) always get real is_active = true zones only.
-          try {
-            let zoneQuery = supabase
-              .from('destination_zones')
-              // destinations(hero_image_url) added for the 2026 redesign's
-              // DestinationHero — additive only, legacy zoneBanner ignores
-              // it. Investigate + Restore Destination Hub Hero (2026-09-03):
-              // this previously (incorrectly) embedded curated_lists
-              // (hero_image_url), a column that does not exist on
-              // curated_lists at all — the embed made the WHOLE query
-              // throw a 400, silently swallowed by the catch below, so
-              // nearbyZone never got set regardless of any admin toggle.
-              // The Destination's hero image actually lives on
-              // destinations.hero_image_url (see the admin tool's
-              // Destinations tab image upload) — destination_zones has
-              // exactly one FK to destinations, so no embed hint is needed.
-              .select('id, name, slug, banner_title, banner_subtitle, center_lat, center_lng, radius_km, destination_id, is_active, curated_list_id, destinations(hero_image_url)')
-            if (!__DEV__) {
-              zoneQuery = zoneQuery.eq('is_active', true)
-            }
-            const { data: zones } = await zoneQuery
-
-            const hit = (zones ?? []).find(z =>
-              haversineMeters(uLat, uLng, z.center_lat, z.center_lng) <= z.radius_km * 1000
-            )
-
-            if (hit) {
-              // Dismissal is session-only (zoneBannerDismissed local state) —
-              // no persisted flag to check here, so the banner always shows
-              // on a fresh cold launch while the user is still in range.
-              if (__DEV__ && !hit.is_active) {
-                console.log('[DEBUG] destination zone bypass — showing INACTIVE zone in dev build:', hit.name, hit.id)
-              }
-              setNearbyZone(hit)
-            }
-          } catch (e) {
-            /* zone check optional */
-          }
+        } catch (e) {
+          /* GPS optional */
+          locationState = 'unavailable'
         }
-      } catch (e) {
-        /* GPS optional */
       }
 
-      if (!defaultMetro) {
-        defaultMetro = (metroData ?? []).find(m => m.name.includes('Phoenix')) ?? metroData?.[0]
+      // Single precedence-aware resolution: explicit persisted choice wins,
+      // else real nearest-active-metro by distance, else the metro-blind
+      // fallback. See lib/resolveDefaultMetro.js — this replaces the old
+      // hardcoded Phoenix/Milwaukee-by-latitude special case entirely.
+      const { metro: defaultMetro } = resolveHomeMetro({
+        persistedSlug,
+        metros,
+        location: locationResult,
+        locationState,
+      })
+
+      // Destination zone check — only meaningful with a real fix, and only
+      // when we actually looked one up (skipped entirely for an explicit
+      // persisted metro choice, same as above).
+      if (locationResult) {
+        const { latitude: uLat, longitude: uLng } = locationResult
+        try {
+          let zoneQuery = supabase
+            .from('destination_zones')
+            // destinations(hero_image_url) added for the 2026 redesign's
+            // DestinationHero — additive only, legacy zoneBanner ignores
+            // it. Investigate + Restore Destination Hub Hero (2026-09-03):
+            // this previously (incorrectly) embedded curated_lists
+            // (hero_image_url), a column that does not exist on
+            // curated_lists at all — the embed made the WHOLE query
+            // throw a 400, silently swallowed by the catch below, so
+            // nearbyZone never got set regardless of any admin toggle.
+            // The Destination's hero image actually lives on
+            // destinations.hero_image_url (see the admin tool's
+            // Destinations tab image upload) — destination_zones has
+            // exactly one FK to destinations, so no embed hint is needed.
+            .select('id, name, slug, banner_title, banner_subtitle, center_lat, center_lng, radius_km, destination_id, is_active, curated_list_id, destinations(hero_image_url)')
+          if (!__DEV__) {
+            zoneQuery = zoneQuery.eq('is_active', true)
+          }
+          const { data: zones } = await zoneQuery
+
+          const hit = (zones ?? []).find(z =>
+            haversineMeters(uLat, uLng, z.center_lat, z.center_lng) <= z.radius_km * 1000
+          )
+
+          if (hit) {
+            // Dismissal is session-only (zoneBannerDismissed local state) —
+            // no persisted flag to check here, so the banner always shows
+            // on a fresh cold launch while the user is still in range.
+            if (__DEV__ && !hit.is_active) {
+              console.log('[DEBUG] destination zone bypass — showing INACTIVE zone in dev build:', hit.name, hit.id)
+            }
+            setNearbyZone(hit)
+          }
+        } catch (e) {
+          /* zone check optional */
+        }
       }
 
+      // A 'fallback' resolution (location genuinely denied/unavailable, no
+      // persisted choice) is intentionally NOT persisted as if it were an
+      // explicit choice — it's whatever the shared fallback picks this
+      // session, and a later real location fix or explicit pick can still
+      // supersede it. Only switchMetro() (an actual user action) persists.
       if (defaultMetro) {
         setSelectedMetro(defaultMetro)
         await loadForMetro(defaultMetro.id, authUser?.id, defaultMetro.slug)
@@ -683,6 +716,17 @@ async function loadNearbyRail(userId) {
 
   async function switchMetro(metro) {
     setSelectedMetro(metro)
+    // Persist the explicit choice so it wins over GPS-based resolution on
+    // every future app open (see SELECTED_METRO_SLUG_KEY / resolveHomeMetro)
+    // — an intentional user override must stick until they change it again.
+    const slug = metro?.slug ?? metro?.name?.toLowerCase().replace(/\s+metro/i, '').trim()
+    if (slug) {
+      try {
+        await AsyncStorage.setItem(SELECTED_METRO_SLUG_KEY, slug)
+      } catch (e) {
+        /* persistence optional — selection still works for this session */
+      }
+    }
     await loadForMetro(metro.id, user?.id, metro.slug)
   }
 
