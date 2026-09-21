@@ -14,7 +14,7 @@ global.ErrorUtils?.setGlobalHandler?.((error, isFatal) => {
 })
 
 import React, { useEffect, useState } from 'react'
-import { NavigationContainer } from '@react-navigation/native'
+import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
@@ -29,6 +29,7 @@ import { useCandidateVisitTracking } from './lib/visitDetection/candidateVisitTr
 import { useVersionCheck }    from './hooks/useVersionCheck'
 import ErrorBoundary          from './components/ErrorBoundary'
 import UpdatePromptModal      from './components/UpdatePromptModal'
+import UpdateRestartBanner    from './components/UpdateRestartBanner'
 import OnboardingScreen       from './screens/OnboardingScreen'
 import ListSummaryScreen      from './screens/ListSummaryScreen'
 import HomeScreen              from './screens/HomeScreen'
@@ -512,6 +513,18 @@ function App() {
   useNotifications(userId)
   useCandidateVisitTracking(userId)
 
+  // OTA Update Restart Banner (2026-09-20) — tracks the active route name
+  // so UpdateRestartBanner can defer itself on unsafe screens (see
+  // lib/updateBannerVisibility.js). This is the first place App.jsx tracks
+  // the current route; no pre-existing analytics route-tracker was found
+  // to reuse, so a plain useNavigationContainerRef + onStateChange/onReady
+  // pair (React Navigation's documented pattern for this) is used here.
+  const navigationRef = useNavigationContainerRef()
+  const [currentRouteName, setCurrentRouteName] = useState(null)
+  function syncCurrentRouteName() {
+    setCurrentRouteName(navigationRef.getCurrentRoute()?.name ?? null)
+  }
+
 
   // Show splash for a minimum of 2 seconds AND until auth resolves —
   // whichever takes longer. Reduced from 3s for snappier first-launch feel.
@@ -552,6 +565,9 @@ function App() {
           <SplashScreen />
         ) : (
           <NavigationContainer
+            ref={navigationRef}
+            onReady={syncCurrentRouteName}
+            onStateChange={syncCurrentRouteName}
             linking={{
               prefixes: [
                 'checkoff://',
@@ -621,6 +637,7 @@ function App() {
             config={updateConfig}
             onDismiss={dismissSoftUpdate}
           />
+          <UpdateRestartBanner currentRouteName={currentRouteName} />
           </NavigationContainer>
         )}
       </SafeAreaProvider>
