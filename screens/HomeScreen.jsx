@@ -94,6 +94,14 @@ export default function HomeScreen({ navigation }) {
   const [metros, setMetros] = useState([])
   const [metroPickerVisible, setMetroPickerVisible] = useState(false)
   const [selectedMetro, setSelectedMetro] = useState(null)
+  // Set when resolveHomeMetro returns reason: 'needs_selection' — no
+  // explicit persisted choice AND location denied/unavailable/timed out.
+  // Distinct from the initial loading window: `loading` covers "still
+  // figuring out what to show," this covers "figured it out — there is
+  // genuinely no metro to show until the user picks one." Never a reason
+  // to silently render any metro's (e.g. Phoenix's) content — see the
+  // render guard below and switchMetro(), the only thing that clears it.
+  const [needsMetroSelection, setNeedsMetroSelection] = useState(false)
   const [season, setSeason] = useState(null)
   // Resolved inside loadForMetro (keyed on the metroId param directly, NOT
   // selectedMetro state — loadForMetro can run before setSelectedMetro's
@@ -252,10 +260,15 @@ export default function HomeScreen({ navigation }) {
       }
 
       // Single precedence-aware resolution: explicit persisted choice wins,
-      // else real nearest-active-metro by distance, else the metro-blind
-      // fallback. See lib/resolveDefaultMetro.js — this replaces the old
-      // hardcoded Phoenix/Milwaukee-by-latitude special case entirely.
-      const { metro: defaultMetro } = resolveHomeMetro({
+      // else real nearest-active-metro by distance, else — when location is
+      // genuinely denied/unavailable/timed out and there's no persisted
+      // choice — an explicit needs_selection state (no metro picked at
+      // all; see lib/metroSelection.js's resolveHomeMetro docstring). This
+      // replaces the old hardcoded Phoenix/Milwaukee-by-latitude special
+      // case, AND the later alphabetical-metro fallback that replaced it —
+      // that fallback was itself rejected as still being a silent,
+      // arbitrary metro default.
+      const { metro: defaultMetro, reason: metroReason } = resolveHomeMetro({
         persistedSlug,
         metros,
         location: locationResult,
@@ -306,14 +319,18 @@ export default function HomeScreen({ navigation }) {
         }
       }
 
-      // A 'fallback' resolution (location genuinely denied/unavailable, no
-      // persisted choice) is intentionally NOT persisted as if it were an
-      // explicit choice — it's whatever the shared fallback picks this
-      // session, and a later real location fix or explicit pick can still
-      // supersede it. Only switchMetro() (an actual user action) persists.
+      // A 'needs_selection' resolution (location genuinely denied/
+      // unavailable/timed out, no persisted choice) means NO metro is
+      // selected — not Phoenix, not any other metro. Nothing is persisted
+      // to AsyncStorage here (SELECTED_METRO_SLUG_KEY stays untouched), so
+      // a later successful location resolution or explicit user pick via
+      // switchMetro() can still resolve normally on the next app open.
+      // Surface the existing city-picker mechanism instead of guessing.
       if (defaultMetro) {
         setSelectedMetro(defaultMetro)
         await loadForMetro(defaultMetro.id, authUser?.id, defaultMetro.slug)
+      } else if (metroReason === 'needs_selection') {
+        setNeedsMetroSelection(true)
       }
     } catch (e) {
       console.warn('HomeScreen init error:', e.message)
@@ -716,6 +733,9 @@ async function loadNearbyRail(userId) {
 
   async function switchMetro(metro) {
     setSelectedMetro(metro)
+    // An actual user pick always resolves the needs_selection state, same
+    // as any other explicit choice.
+    setNeedsMetroSelection(false)
     // Persist the explicit choice so it wins over GPS-based resolution on
     // every future app open (see SELECTED_METRO_SLUG_KEY / resolveHomeMetro)
     // — an intentional user override must stick until they change it again.
@@ -1140,6 +1160,43 @@ async function loadNearbyRail(userId) {
     return (
       <View style={styles.center}>
         <ActivityIndicator color={AMBER} size="large" />
+      </View>
+    )
+  }
+
+  // No persisted choice AND location denied/unavailable/timed out — there
+  // is genuinely no metro to show. Render an honest "choose your city"
+  // prompt rather than falling through to the normal render below, which
+  // reads selectedMetro?.name via `?? 'Phoenix'`/`?? 'your city'` fallbacks
+  // in a few places (see metroDisplayName) — those are fine as display-only
+  // labels once a real metro is loading, but must never be reached with no
+  // metro selected at all, since that would effectively show Phoenix's
+  // branding with none of its actual content loaded. Reuses the existing
+  // CityPickerModal / switchMetro() mechanism used everywhere else in this
+  // screen for manual metro changes — no new picker UI.
+  if (needsMetroSelection && !selectedMetro) {
+    return (
+      <View style={styles.center}>
+        <StatusBar barStyle={STATUS_BAR} />
+        <Text style={{ color: TEXT, fontSize: 18, fontWeight: '600', textAlign: 'center', paddingHorizontal: 32 }}>
+          Choose your city
+        </Text>
+        <Text style={{ color: MUTED, fontSize: 14, textAlign: 'center', paddingHorizontal: 32, marginTop: 8, marginBottom: 20 }}>
+          We couldn't find your location. Pick a city to see local lists and events.
+        </Text>
+        <TouchableOpacity
+          onPress={() => setMetroPickerVisible(true)}
+          style={{ backgroundColor: AMBER, paddingVertical: 12, paddingHorizontal: 24, borderRadius: 24 }}
+        >
+          <Text style={{ color: '#1a1a1a', fontWeight: '700', fontSize: 15 }}>Choose your city</Text>
+        </TouchableOpacity>
+        <CityPickerModal
+          visible={metroPickerVisible}
+          metros={metros}
+          colors={colors}
+          onSelect={(metro) => { setMetroPickerVisible(false); switchMetro(metro) }}
+          onClose={() => setMetroPickerVisible(false)}
+        />
       </View>
     )
   }
