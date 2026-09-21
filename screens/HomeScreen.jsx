@@ -17,7 +17,6 @@ import { useTheme } from '../lib/ThemeContext'
 import ExperiencesRail from '../components/ExperiencesRail'
 import * as Sentry from '@sentry/react-native'
 import { haversineMeters } from '../lib/distance'
-import { proximitySort } from '../lib/proximity'
 import { getSessionDensityTier } from '../lib/densityTier'
 import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
 import { filterMaskedBonusDrops } from '../lib/bonusDrops'
@@ -29,6 +28,7 @@ import { attachActiveCoverImages, attachDisplayEligibleImagePools } from '../lib
 import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
 import { deriveHomeHeroLayout } from '../lib/homeHeroLayout'
 import { selectNearYouCompactRows } from '../lib/nearYouCompact'
+import { selectHomeNearbyCandidates } from '../lib/homeNearYou'
 import { fetchAllRows } from '../lib/supabasePagination'
 import CompactHomeHeader from '../components/home/CompactHomeHeader'
 import DestinationHero from '../components/home/DestinationHero'
@@ -860,19 +860,23 @@ async function loadNearbyRail(userId) {
     return () => { cancelled = true }
   }, [userLocation])
 
-  // Nearest 5 unchecked items — recomputed (no re-fetch) whenever location or
-  // the session tier resolves, so a late GPS fix or tier still re-sorts the
-  // already-loaded candidate pool. Home config: universal included, no
-  // distance cap, interleaved by density tier.
+  // Nearest 5 unchecked items — recomputed (no re-fetch) whenever location
+  // resolves/changes, so a late GPS fix (or a real trip to a new metro)
+  // re-sorts the already-loaded candidate pool against the CURRENT fix, not
+  // whatever was available at mount. FIX (2026-09-21): this used to call
+  // proximitySort directly with includeUniversal:true/maxDistance:null/
+  // interleave:true — deliberately mixing in generic, no-coordinate
+  // Universal items as "Near You," and (via proximitySort's null-location
+  // fallback branch) showing that same generic pool, entirely unsorted,
+  // during the window before GPS resolves. selectHomeNearbyCandidates
+  // (lib/homeNearYou.js) gives Home the same hasUsableCoordinates +
+  // MAX_NEARBY_RADIUS_M guarantees Nearby already has, and returns an
+  // honest empty list (no fallback filler) while userLocation is still
+  // pending — see that module's doc for the full before/after.
   const nearbyRailItems = useMemo(() => {
-    const { items: sorted } = proximitySort(rawNearbyItems, userLocation, {
-      includeUniversal: true,
-      maxDistance: null,
-      interleave: true,
-      tier: sessionTier?.tier ?? null,
-    })
+    const sorted = selectHomeNearbyCandidates(rawNearbyItems, userLocation)
     return sorted.filter(item => !checkedItemIds.has(item.id)).slice(0, 5)
-  }, [rawNearbyItems, userLocation, sessionTier, checkedItemIds])
+  }, [rawNearbyItems, userLocation, checkedItemIds])
 
   // What's Good V1 / "What's the Thing" — behind the `whats_good_v1`
   // feature flag (disabled globally). Now reads the same shared
