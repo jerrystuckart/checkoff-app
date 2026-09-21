@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react'
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity,
   StyleSheet, StatusBar, ActivityIndicator, Alert,
@@ -24,7 +24,7 @@ import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { isItemInSeason } from '../lib/seasonFilter'
 import { useWhatsGood } from '../lib/useWhatsGood'
 import { useCurrentLocation } from '../lib/currentLocation'
-import { resolveHomeMetro } from '../lib/metroSelection'
+import { resolveHomeMetro, nearestMetroWithinBoundary } from '../lib/metroSelection'
 import { attachActiveCoverImages, attachDisplayEligibleImagePools } from '../lib/coverCandidates'
 import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
 import { deriveHomeHeroLayout } from '../lib/homeHeroLayout'
@@ -219,55 +219,64 @@ export default function HomeScreen({ navigation }) {
       let locationResult = null
       let locationState = 'unavailable'
 
-      // Only bother with GPS at all if there's no explicit prior choice —
-      // an explicit selection wins regardless of location, so skip the
-      // location round-trip (and its own up-to-8s wait) entirely in that
-      // case. NOTE: nothing here special-cases network/connectivity type —
-      // expo-location's permission + fix acquisition works independently
-      // of whether the device has cellular data (WiFi-only/airplane-mode-
-      // with-WiFi devices still get GPS/WiFi-positioning fixes); a device
-      // being WiFi-only must never be treated as "no location."
-      if (!persistedSlug) {
-        try {
-          const { status } = await Location.requestForegroundPermissionsAsync()
-          if (status === 'granted') {
-            // Waits for a real fix before giving up — matches
-            // lib/currentLocation.js's own 8s device-fetch timeout so a
-            // slower (e.g. WiFi-positioning-only, no cellular assist) GPS
-            // fix isn't mistaken for "unavailable" and doesn't trigger an
-            // early fallback. The `loading` state stays true for this
-            // whole window, so the screen shows a loading state rather
-            // than jumping to a default while this is in flight.
-            locationResult = await Promise.race([
-              (async () => {
-                const pos = await Location.getCurrentPositionAsync({
-                  accuracy: Location.Accuracy.Low,
-                })
-                return { latitude: pos.coords.latitude, longitude: pos.coords.longitude }
-              })(),
-              new Promise(resolve => setTimeout(() => resolve(null), 8000)),
-            ])
-            locationState = locationResult ? 'ready' : 'unavailable'
-          } else {
-            // Permission denied — genuinely unavailable, not pending, no
-            // point waiting further.
-            locationState = 'unavailable'
-          }
-        } catch (e) {
-          /* GPS optional */
+      // ALWAYS attempt a real GPS fix now, even when a persisted explicit
+      // choice already exists — this used to be skipped entirely
+      // whenever persistedSlug was set (an explicit selection "wins
+      // regardless of location," so the round-trip was considered
+      // pointless). That was the actual mechanism behind the Munich
+      // field-test bug: a device with an old persisted Vienna/Phoenix
+      // slug never even checked live location on a later app open, so
+      // resolveHomeMetro's new location-wins-when-ready precedence (see
+      // lib/metroSelection.js) had nothing to compare against and the
+      // stale slug won by default every time. NOTE: nothing here special-
+      // cases network/connectivity type — expo-location's permission +
+      // fix acquisition works independently of whether the device has
+      // cellular data (WiFi-only/airplane-mode-with-WiFi devices still get
+      // GPS/WiFi-positioning fixes); a device being WiFi-only must never
+      // be treated as "no location."
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync()
+        if (status === 'granted') {
+          // Waits for a real fix before giving up — matches
+          // lib/currentLocation.js's own 8s device-fetch timeout so a
+          // slower (e.g. WiFi-positioning-only, no cellular assist) GPS
+          // fix isn't mistaken for "unavailable" and doesn't trigger an
+          // early fallback. The `loading` state stays true for this
+          // whole window, so the screen shows a loading state rather
+          // than jumping to a default while this is in flight.
+          locationResult = await Promise.race([
+            (async () => {
+              const pos = await Location.getCurrentPositionAsync({
+                accuracy: Location.Accuracy.Low,
+              })
+              return { latitude: pos.coords.latitude, longitude: pos.coords.longitude }
+            })(),
+            new Promise(resolve => setTimeout(() => resolve(null), 8000)),
+          ])
+          locationState = locationResult ? 'ready' : 'unavailable'
+        } else {
+          // Permission denied — genuinely unavailable, not pending, no
+          // point waiting further.
           locationState = 'unavailable'
         }
+      } catch (e) {
+        /* GPS optional */
+        locationState = 'unavailable'
       }
 
-      // Single precedence-aware resolution: explicit persisted choice wins,
-      // else real nearest-active-metro by distance, else — when location is
-      // genuinely denied/unavailable/timed out and there's no persisted
+      // Single precedence-aware resolution: a genuinely 'ready' live
+      // location within an active metro's boundary wins first (even over a
+      // persisted choice for a DIFFERENT metro — the Munich fix), else the
+      // explicit persisted choice wins, else — when location is genuinely
+      // pending/denied/unavailable/timed out and there's no persisted
       // choice — an explicit needs_selection state (no metro picked at
       // all; see lib/metroSelection.js's resolveHomeMetro docstring). This
       // replaces the old hardcoded Phoenix/Milwaukee-by-latitude special
-      // case, AND the later alphabetical-metro fallback that replaced it —
-      // that fallback was itself rejected as still being a silent,
-      // arbitrary metro default.
+      // case, the later alphabetical-metro fallback that replaced it, AND
+      // the "explicit choice always wins regardless of location" rule that
+      // replaced THAT — each was rejected in turn as still being a silent,
+      // arbitrary (or, for the "always wins" rule, permanently stale)
+      // metro default.
       const { metro: defaultMetro, reason: metroReason } = resolveHomeMetro({
         persistedSlug,
         metros,
@@ -329,6 +338,21 @@ export default function HomeScreen({ navigation }) {
       if (defaultMetro) {
         setSelectedMetro(defaultMetro)
         await loadForMetro(defaultMetro.id, authUser?.id, defaultMetro.slug)
+        // Live location just won over a DIFFERENT (stale) persisted slug —
+        // update AsyncStorage to match so the stale value stops fighting
+        // every future resolution (requirement: stale persisted selections
+        // are cleared/updated automatically, no reinstall/manual-clear
+        // needed). Only writes when something actually changed, and only
+        // ever overwrites with the metro real GPS just resolved to — never
+        // an arbitrary/guessed value.
+        if (metroReason === 'nearest' && persistedSlug &&
+            String(persistedSlug).toLowerCase() !== (defaultMetro.slug ?? '').toLowerCase()) {
+          try {
+            await AsyncStorage.setItem(SELECTED_METRO_SLUG_KEY, defaultMetro.slug)
+          } catch (e) {
+            /* persistence optional — resolution still correct for this session */
+          }
+        }
       } else if (metroReason === 'needs_selection') {
         setNeedsMetroSelection(true)
       }
@@ -774,6 +798,55 @@ async function loadNearbyRail(userId) {
   useEffect(() => {
     refreshUserLocation(false)
   }, []) // eslint-disable-line
+
+  // Foreground-return / travel re-check for the HOME metro (distinct from
+  // the proximity-only rail above) — lib/currentLocation.js's own AppState
+  // listener already refreshes the shared userLocation automatically on a
+  // background->foreground transition (subject to its 5-minute staleness
+  // policy), so this effect just needs to react whenever that shared fix
+  // changes: if it now resolves (within MAX_METRO_BOUNDARY_M) to a
+  // DIFFERENT active metro than the one currently selected, physical
+  // location wins per resolveHomeMetro's precedence, same as at cold
+  // start (case 1) — the user has genuinely traveled, so update Home/
+  // What's Good's metro and refresh the persisted slug to match, rather
+  // than leaving them anchored to wherever they were when the app was
+  // last opened.
+  //
+  // Only triggers on a CHANGE in the physically-nearest metro (tracked via
+  // lastResolvedNearestMetroIdRef), never merely on nearest !== selectedMetro
+  // — that distinction is what keeps a same-session manual City Picker pick
+  // (requirement: session-scoped remote browsing must not be fought against
+  // mid-session) intact: picking Vienna while physically in Munich makes
+  // nearest !== selectedMetro on every subsequent location tick, but nearest
+  // itself (Munich) hasn't changed, so this effect stays quiet. It only acts
+  // when the user has genuinely moved to a new physical metro since the last
+  // time this ran — including mid-session, matching how Nearby/Right Here
+  // already track real position live.
+  //
+  // Guarded on metros/selectedMetro already being loaded so this only ever
+  // fires as a RE-check after init()'s own first resolution, never racing
+  // it. No extra hysteresis margin beyond the boundary cutoff itself —
+  // every active metro in this dataset (Phoenix/Milwaukee/Denver/Vienna/
+  // Munich/Florence) is hundreds to thousands of km from every other one,
+  // so ordinary GPS jitter (tens of meters) cannot flip the nearest-metro
+  // result near a boundary the way it could for two closely-spaced metros;
+  // if metros are ever launched close enough together for that to become a
+  // real risk, add a margin then.
+  const lastResolvedNearestMetroIdRef = useRef(null)
+  useEffect(() => {
+    if (!userLocation || metros.length === 0 || !selectedMetro) return
+    const nearest = nearestMetroWithinBoundary(userLocation, metros)
+    if (!nearest) return
+    const nearestChanged = lastResolvedNearestMetroIdRef.current !== null &&
+      lastResolvedNearestMetroIdRef.current !== nearest.id
+    lastResolvedNearestMetroIdRef.current = nearest.id
+    if (!nearestChanged || nearest.id === selectedMetro.id) return
+    setSelectedMetro(nearest)
+    loadForMetro(nearest.id, user?.id, nearest.slug)
+    AsyncStorage.setItem(SELECTED_METRO_SLUG_KEY, nearest.slug).catch(() => {
+      /* persistence optional — resolution still correct for this session */
+    })
+  }, [userLocation, metros, selectedMetro, user])
 
   // Density tier for the "Near you right now" rail — session-cached by
   // getSessionDensityTier, computed against the full item candidate set
