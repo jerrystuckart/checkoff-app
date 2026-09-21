@@ -13,14 +13,27 @@ import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { useCoverCandidateCTA } from '../lib/useCoverCandidateCTA'
 import CoverCandidateCTA from './CoverCandidateCTA'
 
-const coverContributionColors = { TEXT, MUTED, BORDER, AMBER }
-
 const AMBER  = '#F5A623'
 const NAVY   = '#0F0F1E'
 const CARD   = '#1A1A2E'
 const TEXT   = '#E8E6DF'
 const MUTED  = 'rgba(255,255,255,0.5)'
 const BORDER = 'rgba(255,255,255,0.1)'
+
+// Passed to CoverCandidateCTA's `colors` prop for the camera-row CTA below
+// (Community Cover Photos "Great checkoff..." prompt). This sheet's surface
+// is a fixed dark NAVY regardless of the app's light/dark theme setting (no
+// useTheme() in this file, by design — same pattern as the rest of this
+// component), so these are cream/light-on-dark tokens, not theme-aware
+// ones. IMPORTANT: must be declared AFTER the TEXT/MUTED/BORDER/AMBER
+// consts above — this was previously declared before them (a TDZ/ordering
+// bug), which meant every property here silently evaluated to `undefined`.
+// CoverCandidateCTA's compact camera-row text then got `color: undefined`,
+// which React Native Text falls back to its own default (black) rather
+// than inheriting anything — invisible against this sheet's dark NAVY
+// background on both iOS and Android. This ordering fix alone restores the
+// intended cream/amber colors; no new color literal or theme token needed.
+const coverContributionColors = { TEXT, MUTED, BORDER, AMBER }
 
 const SAME_VENUE_RADIUS_M = 40
 
