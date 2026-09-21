@@ -889,6 +889,12 @@ async function loadNearbyRail(userId) {
     userId: user?.id ?? null,
     rawNearbyItems,
     homeRailItemIds,
+    // 2026-09-21 follow-up field fix — the CURRENT authoritative resolved
+    // metro (kept in sync with lib/metroSelection.js's
+    // nearestMetroWithinBoundary() by the effect above), so the session
+    // cache can be invalidated on resolved-metro-identity mismatch, not
+    // merely raw GPS distance. See lib/whatsGoodSessionCache.js.
+    currentMetroId: selectedMetro?.id ?? null,
     navigation,
   })
 
