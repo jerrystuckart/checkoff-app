@@ -765,7 +765,8 @@ export default function ItemDetailScreen({ route, navigation }) {
             const { data: existingRows } = await verifyQuery
             if (existingRows?.length) {
               setChecked(true)
-              setPostCheckoffData({ itemId: item?.id, listItemId, userId, item })
+              trackEvent('checkoff_completed', { itemId: item?.id, listId })
+              setPostCheckoffData({ itemId: item?.id, listItemId, userId, item, pointsAwarded })
             } else {
               Alert.alert('Could not check off', 'Something went wrong — please try again.')
             }
@@ -789,7 +790,8 @@ export default function ItemDetailScreen({ route, navigation }) {
         // Sheet only presents once the insert is confirmed — never before,
         // so a slow/failed write can't show a false "Checked off" moment.
         setChecked(true)
-        setPostCheckoffData({ itemId: item?.id, listItemId, userId, item })
+        trackEvent('checkoff_completed', { itemId: item?.id, listId })
+        setPostCheckoffData({ itemId: item?.id, listItemId, userId, item, pointsAwarded })
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
         supabase.functions.invoke('update-streak', {
           body: { user_id: userId },
@@ -1027,7 +1029,8 @@ export default function ItemDetailScreen({ route, navigation }) {
         // slow/failed/collided write can't show a false "Checked off"
         // moment.
         setChecked(true)
-        setPostCheckoffData({ itemId: item?.id, listItemId, userId, item })
+        trackEvent('checkoff_completed', { itemId: item?.id, listId })
+        setPostCheckoffData({ itemId: item?.id, listItemId, userId, item, pointsAwarded })
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
         supabase.functions.invoke('update-streak', {
           body: { user_id: userId },

@@ -11,6 +11,7 @@ import { formatDistanceLabel } from '../lib/proximity'
 import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
 import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { useCoverCandidateCTA } from '../lib/useCoverCandidateCTA'
+import { derivePayoffLines } from '../lib/postCheckoffPayoff'
 import CoverCandidateCTA from './CoverCandidateCTA'
 
 const AMBER  = '#F5A623'
@@ -54,7 +55,13 @@ function seasonWordFromTitle(title) {
  *
  * @param {object|null} data - null hides the sheet. Non-null shape:
  *   { itemId, listItemId, userId, item: { body, maps_lat/mapsLat,
- *     maps_lng/mapsLng, is_universal/isUniversal, neighborhood_id } }
+ *     maps_lng/mapsLng, is_universal/isUniversal, neighborhood_id },
+ *     pointsAwarded }
+ *   pointsAwarded is the already-computed check_ins.points_awarded value
+ *   for THIS check-in (difficulty * point_multiplier), threaded through by
+ *   the caller at insert time — optional; omit or pass a non-positive/
+ *   non-finite value and the points line simply won't render (never a
+ *   fabricated placeholder).
  *   Callers set this at the moment of the tap, before the insert resolves —
  *   that's what "fires the proximity queries on tap" means in practice,
  *   since this component's own effect starts every query the instant it
@@ -400,6 +407,11 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
 
   if (!data) return null
 
+  // Synchronously available at open (already computed by the caller at
+  // insert time) — shown immediately, no need to wait for the async
+  // loading phase below.
+  const payoff = derivePayoffLines({ pointsAwarded: data.pointsAwarded })
+
   const myScore = rankEntries.find(e => e.userId === data.userId)?.score ?? 0
   const participants = rankEntries.filter(e => (e.score ?? 0) > 0).length
   const rankEligible = phase === 'ready' && myScore > 0 && participants >= 10
@@ -478,7 +490,8 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
             <View style={styles.handle} />
           </View>
 
-          <Text style={styles.title}>✓ Checked off</Text>
+          <Text style={styles.title}>You did the thing</Text>
+          {payoff.pointsLabel ? <Text style={styles.pointsText}>{payoff.pointsLabel}</Text> : null}
           {countLabel ? <Text style={styles.countText}>{countLabel}</Text> : null}
           {rankLabel ? <Text style={styles.rankText}>{rankLabel}</Text> : null}
 
@@ -596,6 +609,13 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     color: TEXT,
     textAlign: 'center',
+  },
+  pointsText: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: AMBER,
+    textAlign: 'center',
+    marginTop: 8,
   },
   countText: {
     fontSize: 15,
