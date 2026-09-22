@@ -1394,7 +1394,14 @@ async function loadNearbyRail(userId) {
               />
             )}
 
-            <WhatsGoodDiscovery items={whatsGood.items} navigation={navigation} colors={colors} userId={user?.id ?? null} />
+            <WhatsGoodDiscovery
+              items={whatsGood.items}
+              navigation={navigation}
+              colors={colors}
+              userId={user?.id ?? null}
+              coverageMode={whatsGood.coverageMode}
+              onExploreCities={multiMetro2 ? openMetroPicker2 : null}
+            />
           </View>
         )
       })()}

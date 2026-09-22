@@ -21,13 +21,40 @@
 import React from 'react'
 import { View, Text, ScrollView, StyleSheet, useWindowDimensions } from 'react-native'
 import EditorialCard from './EditorialCard'
+import UnsupportedLocationCard from './UnsupportedLocationCard'
 import { computeRailCardWidth } from '../../lib/whatsGoodRailLayout'
+import { COVERAGE_MODE } from '../../lib/whatsGoodCoverageMode'
 
 const SECTION_HORIZONTAL_PADDING = 16
 const RAIL_CARD_HEIGHT = 190
 const RAIL_CARD_GAP = 12
 
-export default function WhatsGoodDiscovery({ items, navigation, colors, userId = null }) {
+/**
+ * @param {string} [coverageMode]  Phase 4 (2026-09-22) — lib/useWhatsGood.js's
+ *   `coverageMode`. When it's UNSUPPORTED (a real, resolved location outside
+ *   every supported metro), this renders UnsupportedLocationCard instead of
+ *   either silently returning null or showing unlabeled Universal items in
+ *   the ordinary "What's Good" rail — see lib/unsupportedLocationCard.js.
+ *   Every other coverage mode (including omitted/undefined, for any caller
+ *   not yet passing it) falls through to the pre-existing rail behavior,
+ *   completely unchanged.
+ * @param {(() => void)|null} [onExploreCities]  Passed straight through to
+ *   UnsupportedLocationCard — see its own doc.
+ */
+export default function WhatsGoodDiscovery({ items, navigation, colors, userId = null, coverageMode = null, onExploreCities = null }) {
+  if (coverageMode === COVERAGE_MODE.UNSUPPORTED) {
+    return (
+      <UnsupportedLocationCard
+        coverageMode={coverageMode}
+        items={items}
+        navigation={navigation}
+        colors={colors}
+        userId={userId}
+        onExploreCities={onExploreCities}
+      />
+    )
+  }
+
   if (!items || items.length === 0) return null
   const { TEXT } = colors
   const { width: windowWidth } = useWindowDimensions()
