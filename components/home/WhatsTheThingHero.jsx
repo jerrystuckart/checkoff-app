@@ -1,9 +1,9 @@
-// Home 2026 — "What's the Thing?" as a true at-place STATE CHANGE, rebuilt
+// Home 2026 — "Here's the Thing" as a true at-place STATE CHANGE, rebuilt
 // with real tactile weight for the "make Home feel powerful" pass. Two
 // modes:
 //   dominant (default) — the primary hero when no destination is active
-//     (see lib/homeHeroLayout.js). "YOU'RE AT {venue}" / "What's the
-//     Thing?" / item body, each its own visual element, plus an explicit
+//     (see lib/homeHeroLayout.js). "YOU'RE AT {venue}" / "HERE'S THE
+//     THING" / item body, each its own visual element, plus an explicit
 //     tactile CTA pill (not just whole-card-tap).
 //   compact — folded into the secondary slot when a Destination hero is
 //     already occupying the primary spot, so the page never stacks two
@@ -25,7 +25,7 @@
 // REAL-DEVICE FOLLOW-UP (2026-09-03):
 //   1. The standalone full-width CoverCandidateCTA card below the hero
 //      made the at-place state too tall — the photo action now sits
-//      inline, next to "Check it off", as CoverCandidateCTA's new 'pill'
+//      inline, next to the primary CTA, as CoverCandidateCTA's new 'pill'
 //      variant (nested Pressable inside the outer card; RN routes touch to
 //      the most specific handler, so this doesn't fight the whole-card tap).
 //      Eligibility (lib/coverCandidateEligibility.js) already excludes
@@ -33,21 +33,40 @@
 //      this pill disappears on its own — no extra logic needed here.
 //   2. "YOU'RE HERE" bumped up one step in size/letter-spacing for a
 //      stronger "CheckOff knows I'm here" moment, still clearly
-//      subordinate to "What's the Thing?".
+//      subordinate to the item body (see Right Here Hero redesign below).
 //   3. New image-capable dominant mode: when the item has a real resolved
 //      image (a selected community cover, or a future item/venue photo),
 //      the hero renders as a full-bleed photo canvas with a real gradient
 //      scrim (same LinearGradient approach as EditorialCard's primary
 //      image card) instead of a small fixed-height thumbnail — text stays
 //      readable over any photo, CTA row moves onto the scrim.
+//
+// RIGHT HERE HERO REDESIGN (Phase 2/5, 2026-09-22): recentered the card on
+// the specific action rather than location confirmation. "YOU'RE HERE" /
+// "YOU'RE AT {venue}" stays confirmation-only; "HERE'S THE THING" is a
+// short kicker label (a statement, not a question); the item body is now
+// the single largest, boldest text in the card (see title/body style
+// comments below); the CTA reads "I DID THE THING" and still only
+// launches ItemDetail (unchanged — this card never mutates anything
+// itself). A one-time AsyncStorage-backed explainer (see
+// lib/useRightHereExplainer.js) explains the card the first time it's
+// seen, with a persistent "ⓘ" toggle to re-reveal it afterward.
 
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { View, Text, Image, Pressable, StyleSheet, Animated } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import PressableTactile from '../PressableTactile'
 import { isSpecialItemPresentation } from '../../lib/whatsGoodDisplayLayout'
 import { useSavedItems } from '../../lib/SavedItemsContext'
 import BookmarkIcon from '../BookmarkIcon'
+// Right Here Hero redesign (Phase 2/5, 2026-09-22) — "HERE'S THE THING"
+// copy pass: the card's job is to launch the specific action at this venue
+// (tap -> ItemDetail, which owns the actual geofence check + mutation),
+// not to confirm location. See lib/rightHereHeroLogic.js for the pure
+// decision helpers this file uses (explainer auto-show, view-event dedupe).
+import { useRightHereExplainer } from '../../lib/useRightHereExplainer'
+import { shouldFireRightHereViewed } from '../../lib/rightHereHeroLogic'
+import { trackEvent } from '../../lib/trackEvent'
 // Archetype Fallback Artwork V1 (2026-09-17) — see useCardArtwork.js.
 // Replaces the direct resolvedItemImage() call: same `{ url }` shape for a
 // real approved photo, plus resolved archetype/category-default artwork
@@ -97,10 +116,40 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
   // useCoverCandidateCTA above already does.
   const artwork = useCardArtwork(item, userId)
 
+  // Right Here Hero redesign (Phase 2/5) — one-time explainer state. Called
+  // unconditionally (rules-of-hooks), same reasoning as useCardArtwork
+  // above: this hook tolerates rendering before `item` exists.
+  const { hasSeenExplainer, dismissExplainer, checkingExplainer } = useRightHereExplainer()
+  const [explainerOpen, setExplainerOpen] = useState(false)
+  const lastViewedItemIdRef = useRef(null)
+
   useEffect(() => {
     anim.setValue(0)
     Animated.timing(anim, { toValue: 1, duration: 350, useNativeDriver: true }).start()
   }, [item?.id, anim])
+
+  // Auto-open the explainer exactly once, the first time this device ever
+  // sees the Right Here hero (compact/folded mode never triggers it — see
+  // shouldFireRightHereViewed's compact guard below for the same reasoning
+  // applied to the analytics event).
+  useEffect(() => {
+    if (!compact && !checkingExplainer && !hasSeenExplainer) {
+      setExplainerOpen(true)
+    }
+  }, [compact, checkingExplainer, hasSeenExplainer])
+
+  // Phase 7 analytics — 'right_here_viewed' fires once per distinct
+  // at-place item in dominant mode, guarded locally via a ref rather than
+  // extending trackEvent.js's own DEBOUNCED_TYPES set (see
+  // lib/rightHereHeroLogic.js's comment on shouldFireRightHereViewed for
+  // why: that set is a time-based per-subject cooldown, not a "once per
+  // item currently shown" guard).
+  useEffect(() => {
+    if (shouldFireRightHereViewed({ compact, itemId: item?.id, lastFiredItemId: lastViewedItemIdRef.current })) {
+      lastViewedItemIdRef.current = item.id
+      trackEvent('right_here_viewed', { itemId: item.id })
+    }
+  }, [compact, item?.id])
 
   if (!item) return null
 
@@ -121,6 +170,47 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
   const accentText = isSpecial ? ENDED_TEXT : AMBER
 
   const eyebrowText = venueName ? `YOU'RE AT ${venueName.toUpperCase()}` : "YOU'RE HERE"
+
+  // Right Here Hero redesign (Phase 2/5) — the primary message is now a
+  // statement ("HERE'S THE THING"), not a question, per product spec.
+  // "You're here" stays confirmation-only and visually subordinate (see
+  // the eyebrow/title style sizing below — body is the dominant element).
+  const primaryMessage = "HERE'S THE THING"
+
+  // Right Here Hero redesign (Phase 2/5) — one-time explainer copy + the
+  // small persistent "i" affordance that re-reveals it on demand after the
+  // first dismissal (no other discoverable surface exists for this today —
+  // see final report). Dominant mode only: the compact/folded row has no
+  // room for it and already omits the CTA entirely.
+  const explainerOnPress = () => {
+    if (explainerOpen) {
+      setExplainerOpen(false)
+      if (!hasSeenExplainer) dismissExplainer()
+    } else {
+      setExplainerOpen(true)
+    }
+  }
+  const renderExplainerToggle = (onImage) => (
+    <Pressable
+      onPress={explainerOnPress}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      style={styles.explainerToggle}
+      accessibilityRole="button"
+      accessibilityLabel={explainerOpen ? 'Hide explanation' : 'What is this?'}
+    >
+      <Text style={[styles.explainerToggleText, { color: onImage ? 'rgba(255,255,255,0.85)' : MUTED }]}>ⓘ</Text>
+    </Pressable>
+  )
+  const renderExplainerBanner = (onImage) => (
+    explainerOpen ? (
+      <Pressable onPress={explainerOnPress} style={[styles.explainerBanner, onImage ? styles.explainerBannerOnImage : { backgroundColor: surface, borderColor: accentBorder }]}>
+        <Text style={[styles.explainerBannerText, { color: onImage ? '#fff' : TEXT }]}>
+          CheckOff shows you the specific thing worth doing at each place.
+        </Text>
+        <Text style={[styles.explainerBannerDismiss, { color: onImage ? 'rgba(255,255,255,0.75)' : MUTED }]}>Got it</Text>
+      </Pressable>
+    ) : null
+  )
 
   // Right Here redesign (2026-09-17) — points/difficulty metadata line.
   // Same "+{difficulty} pts" convention already used by DiscoverScreen's
@@ -145,7 +235,7 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
           adjustsFontSizeToFit
           minimumFontScale={0.8}
         >
-          Check it off →
+          I DID THE THING
         </Text>
       </View>
       {showContributionCTA && (
@@ -160,11 +250,15 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
   // PrimaryOverlayText/RailOverlayText.
   const imageTextBlock = (
     <View style={styles.imageTextBlock}>
-      <Text style={[styles.eyebrowOnImage, { color: isSpecial ? '#D9C4F5' : '#FFD98C' }]} allowFontScaling={false}>
-        {eyebrowText}
-      </Text>
-      <Text style={styles.titleOnImage}>What's the Thing?</Text>
-      <Text style={styles.bodyOnImage} numberOfLines={3}>{item.body}</Text>
+      <View style={styles.eyebrowRow}>
+        <Text style={[styles.eyebrowOnImage, { color: isSpecial ? '#D9C4F5' : '#FFD98C' }]} allowFontScaling={false}>
+          {eyebrowText}
+        </Text>
+        {!compact && renderExplainerToggle(true)}
+      </View>
+      {!compact && renderExplainerBanner(true)}
+      <Text style={styles.titleOnImage}>{primaryMessage}</Text>
+      <Text style={styles.bodyOnImage} numberOfLines={compact ? 1 : 4}>{item.body}</Text>
       <Text style={styles.metaOnImage}>{pointsLabel}</Text>
       {ctaRow}
     </View>
@@ -174,7 +268,16 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
     <Animated.View style={[compact ? styles.compactWrapper : styles.wrapper, { opacity, transform: [{ scale }] }]}>
       <PressableTactile
         intensity={compact ? 'utility' : 'hero'}
-        onPress={() => navigation.navigate('ItemDetail', { item })}
+        onPress={() => {
+          // Phase 7 analytics — the whole card is (and remains, unchanged)
+          // the single tap target that launches ItemDetail; the visible
+          // "I DID THE THING" pill is that same action's affordance, not a
+          // separately-wired control. Only dominant mode shows that pill,
+          // so only dominant-mode taps count as a primary-action tap here
+          // (compact's folded row has no CTA to represent).
+          if (!compact) trackEvent('right_here_primary_action_tapped', { itemId: item.id })
+          navigation.navigate('ItemDetail', { item })
+        }}
         shadowColor={SHADOW_COLOR ?? 'rgba(0,0,0,0.3)'}
         accessibilityRole="button"
         accessibilityLabel={venueName ? `${item.body}, at ${venueName}` : item.body}
@@ -216,11 +319,15 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
           <>
             {isSpecial && !compact ? <View style={[styles.glowWash, { backgroundColor: ENDED_TEXT }]} pointerEvents="none" /> : null}
             <View style={styles.textBlock}>
-              <Text style={[compact ? styles.compactEyebrow : styles.eyebrow, { color: accentText }]} allowFontScaling={false}>
-                {eyebrowText}
-              </Text>
-              <Text style={[compact ? styles.compactTitle : styles.title, { color: TEXT }]}>What's the Thing?</Text>
-              <Text style={[compact ? styles.compactBody : styles.body, { color: compact ? MUTED : TEXT }]} numberOfLines={compact ? 1 : 3}>
+              <View style={styles.eyebrowRow}>
+                <Text style={[compact ? styles.compactEyebrow : styles.eyebrow, { color: accentText }]} allowFontScaling={false}>
+                  {eyebrowText}
+                </Text>
+                {!compact && renderExplainerToggle(false)}
+              </View>
+              {!compact && renderExplainerBanner(false)}
+              <Text style={[compact ? styles.compactTitle : styles.title, { color: TEXT }]} numberOfLines={1}>{primaryMessage}</Text>
+              <Text style={[compact ? styles.compactBody : styles.body, { color: compact ? MUTED : TEXT }]} numberOfLines={compact ? 1 : 4}>
                 {item.body}
               </Text>
               {isSpecial && !compact ? (
@@ -234,9 +341,9 @@ export default function WhatsTheThingHero({ item, navigation, colors, compact = 
           </>
         )}
         {/* Rendered last (after every mode's own text/CTA content) so a
-            screen reader reaches "You're here" / "What's the Thing?" /
-            body / points / Check It Off first — the bookmark never jumps
-            the reading order ahead of that content, even though it's
+            screen reader reaches "You're here" / "Here's the Thing" /
+            body / points / I Did the Thing first — the bookmark never
+            jumps the reading order ahead of that content, even though it's
             visually pinned to the top-right corner. */}
         {!compact && (
           <Pressable
@@ -262,9 +369,15 @@ const styles = StyleSheet.create({
   imageWrapper: { minHeight: 280, justifyContent: 'flex-end' },
   image: { ...StyleSheet.absoluteFillObject },
   imageTextBlock: { padding: 20 },
+  // Right Here Hero redesign (Phase 2/5, 2026-09-22) — hierarchy inverted
+  // from the original pass: the item body (the actual thing to do) is now
+  // the visually dominant element, "HERE'S THE THING" is a short kicker
+  // label above it, and the eyebrow stays the smallest/quietest of the
+  // three (confirmation only, per the hard requirement that "You're here"
+  // never outweighs the body).
   eyebrowOnImage: { fontSize: 13, fontWeight: '900', letterSpacing: 0.9, marginBottom: 6, textTransform: 'uppercase' },
-  titleOnImage: { color: '#fff', fontSize: 23, fontWeight: '900', marginBottom: 6 },
-  bodyOnImage: { color: 'rgba(255,255,255,0.92)', fontSize: 15, fontWeight: '600', lineHeight: 21, marginBottom: 4 },
+  titleOnImage: { color: '#fff', fontSize: 15, fontWeight: '800', letterSpacing: 0.4, marginBottom: 6, textTransform: 'uppercase' },
+  bodyOnImage: { color: 'rgba(255,255,255,0.96)', fontSize: 19, fontWeight: '700', lineHeight: 26, marginBottom: 6 },
   // Right Here redesign (2026-09-17) — points/difficulty metadata, shared
   // shape across both photo-like and plain-surface branches. Deliberately
   // plain text, no pill/badge chrome, so it never competes visually with
@@ -273,14 +386,32 @@ const styles = StyleSheet.create({
   metaText: { fontSize: 12, fontWeight: '700', letterSpacing: 0.3, marginTop: 2, marginBottom: 10 },
   textBlock: { padding: 20 },
   // "You're Here" emphasis bump (real-device feedback, 2026-09-03): a
-  // notch larger and slightly wider letter-spacing than before, still
-  // unambiguously smaller/quieter than "What's the Thing?" below it.
+  // notch larger and slightly wider letter-spacing than the compact
+  // variant, still unambiguously smaller/quieter than the item body below
+  // it (see title/body hard-requirement comment above).
   eyebrow: { fontSize: 13, fontWeight: '900', letterSpacing: 0.9, marginBottom: 7 },
   compactEyebrow: { fontSize: 11, fontWeight: '900', letterSpacing: 0.7, marginBottom: 2 },
-  title: { fontSize: 23, fontWeight: '900', marginBottom: 6 },
-  body: { fontSize: 15, fontWeight: '600', lineHeight: 21 },
+  // Same hierarchy inversion as titleOnImage/bodyOnImage above — body is
+  // now the largest, boldest text in the card; title is a short kicker.
+  title: { fontSize: 15, fontWeight: '800', letterSpacing: 0.4, marginBottom: 6, textTransform: 'uppercase' },
+  body: { fontSize: 19, fontWeight: '700', lineHeight: 26 },
   specialBadge: { alignSelf: 'flex-start', marginTop: 12, paddingHorizontal: 10, paddingVertical: 5, borderRadius: 8, borderWidth: 1 },
   specialBadgeText: { fontSize: 11, fontWeight: '800' },
+
+  // Right Here Hero redesign (Phase 2/5) — eyebrow shares its row with the
+  // small "ⓘ" explainer toggle (a nested Pressable, same pattern as
+  // saveToggle below: RN routes touch to the most specific handler, so
+  // this doesn't fight the whole-card tap-to-navigate).
+  eyebrowRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  explainerToggle: { paddingLeft: 8, paddingVertical: 2 },
+  explainerToggleText: { fontSize: 15, fontWeight: '700' },
+  explainerBanner: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    borderRadius: 10, borderWidth: 1, paddingHorizontal: 10, paddingVertical: 8, marginBottom: 10, gap: 8,
+  },
+  explainerBannerOnImage: { backgroundColor: 'rgba(0,0,0,0.35)', borderColor: 'rgba(255,255,255,0.25)' },
+  explainerBannerText: { flex: 1, fontSize: 12, fontWeight: '600', lineHeight: 16 },
+  explainerBannerDismiss: { fontSize: 12, fontWeight: '800' },
 
   // Compact side-by-side action row (replaces the old standalone
   // full-width contribution card): both actions get equal flex (same
