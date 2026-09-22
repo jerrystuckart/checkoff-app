@@ -895,6 +895,17 @@ async function loadNearbyRail(userId) {
     // cache can be invalidated on resolved-metro-identity mismatch, not
     // merely raw GPS distance. See lib/whatsGoodSessionCache.js.
     currentMetroId: selectedMetro?.id ?? null,
+    // 2026-09-22 coverage-mode policy fix — reuses this screen's own
+    // location classification rather than duplicating it: `userLocation`
+    // present means the shared lib/currentLocation.js store already has a
+    // real fix ('ready'); `needsMetroSelection` is exactly this screen's
+    // own "location denied/unavailable AND no explicit choice" signal (see
+    // its declaration above); `selectedMetro` set with neither of those
+    // true means an explicit persisted choice is standing in for GPS
+    // ('unavailable', passed below as explicitMetroChoice so What's Good
+    // can evaluate THAT city's own coverage instead of showing nothing).
+    locationState: userLocation ? 'ready' : (selectedMetro || needsMetroSelection ? 'unavailable' : 'pending'),
+    explicitMetroChoice: selectedMetro,
     navigation,
   })
 
