@@ -36,6 +36,9 @@ import CityPickerModal from '../components/home/CityPickerModal'
 import NearYouCompact from '../components/home/NearYouCompact'
 import WhatsTheThingHero from '../components/home/WhatsTheThingHero'
 import WhatsGoodDiscovery from '../components/home/WhatsGoodDiscovery'
+import CheckInMemoryModal from '../components/CheckInMemoryModal'
+import { getMemoryFlagsForItems, getMemoryDetailForItem } from '../lib/checkInMemory'
+import { trackEvent } from '../lib/trackEvent'
 
 const PURPLE = '#7A4DB3'
 
@@ -885,6 +888,17 @@ async function loadNearbyRail(userId) {
   // Home pull-to-refresh or the 5-minute foreground-stale check updates it
   // too. No effect on existing Home Rail behavior when the flag is off.
   const homeRailItemIds = useMemo(() => nearbyRailItems.map(item => item.id), [nearbyRailItems])
+
+  // Check-In Memory Viewer (2026-09-23) — which currently-rendered Home
+  // item ids have a saved photo memory for the signed-in user, batched in
+  // ONE query (getMemoryFlagsForItems) rather than per-card. Purely
+  // additive/read-only: does not touch selection, ranking, or
+  // coverage-mode logic anywhere in this file.
+  const [homeMemoryItemIds, setHomeMemoryItemIds] = useState(() => new Set())
+  const [homeMemoryModalVisible, setHomeMemoryModalVisible] = useState(false)
+  const [homeMemoryModalLoading, setHomeMemoryModalLoading] = useState(false)
+  const [homeMemoryModalDetail, setHomeMemoryModalDetail] = useState(null)
+  const [homeMemoryModalItemBody, setHomeMemoryModalItemBody] = useState('')
   const whatsGood = useWhatsGood({
     userId: user?.id ?? null,
     rawNearbyItems,
@@ -908,6 +922,42 @@ async function loadNearbyRail(userId) {
     explicitMetroChoice: selectedMetro,
     navigation,
   })
+
+  // Check-In Memory Viewer (2026-09-23) — batch existence check over every
+  // item id currently rendered on Home (Near You + What's Good), re-run
+  // only when that id set or the user changes. Anonymous users
+  // (user?.id null) never issue this query — getMemoryFlagsForItems itself
+  // also no-ops without a userId.
+  const homeMemoryCandidateIds = useMemo(() => {
+    const ids = new Set(nearbyRailItems.map(i => String(i.id)))
+    for (const i of (whatsGood.items ?? [])) ids.add(String(i.id))
+    return Array.from(ids)
+  }, [nearbyRailItems, whatsGood.items])
+  const homeMemoryIdsKeyRef = useRef('')
+  useEffect(() => {
+    const key = `${user?.id ?? ''}:${homeMemoryCandidateIds.slice().sort().join(',')}`
+    if (key === homeMemoryIdsKeyRef.current) return
+    homeMemoryIdsKeyRef.current = key
+    if (!user?.id || homeMemoryCandidateIds.length === 0) {
+      setHomeMemoryItemIds(new Set())
+      return
+    }
+    getMemoryFlagsForItems(user.id, homeMemoryCandidateIds, { client: supabase })
+      .then(flags => setHomeMemoryItemIds(new Set(flags.keys())))
+  }, [homeMemoryCandidateIds, user?.id])
+
+  const openHomeCheckInMemory = useCallback((item) => {
+    if (!user?.id || !item?.id) return
+    trackEvent('checkin_memory_view', { itemId: item.id, listId: null })
+    setHomeMemoryModalItemBody(item.body ?? '')
+    setHomeMemoryModalDetail(null)
+    setHomeMemoryModalVisible(true)
+    setHomeMemoryModalLoading(true)
+    getMemoryDetailForItem(user.id, item.id, { client: supabase })
+      .then(setHomeMemoryModalDetail)
+      .catch(() => setHomeMemoryModalDetail(null))
+      .finally(() => setHomeMemoryModalLoading(false))
+  }, [user?.id])
 
   // Visit Reminder V1.5 — behind the separate `at_place_checkoff_reminders`
   // flag (disabled globally). Reuses whatsGood.atPlaceItem (the existing
@@ -1391,6 +1441,8 @@ async function loadNearbyRail(userId) {
                 navigation={navigation}
                 onItemPress={(item) => navigation.navigate('ItemDetail', { item })}
                 onSeeAllPress={() => navigation.navigate('NearbyTab')}
+                memoryItemIds={homeMemoryItemIds}
+                onViewMemory={openHomeCheckInMemory}
               />
             )}
 
@@ -1401,6 +1453,8 @@ async function loadNearbyRail(userId) {
               userId={user?.id ?? null}
               coverageMode={whatsGood.coverageMode}
               onExploreCities={multiMetro2 ? openMetroPicker2 : null}
+              memoryItemIds={homeMemoryItemIds}
+              onViewMemory={openHomeCheckInMemory}
             />
           </View>
         )
@@ -1853,6 +1907,15 @@ async function loadNearbyRail(userId) {
         colors={colors}
         onSelect={(metro) => { setMetroPickerVisible(false); switchMetro(metro) }}
         onClose={() => setMetroPickerVisible(false)}
+      />
+
+      <CheckInMemoryModal
+        visible={homeMemoryModalVisible}
+        onClose={() => setHomeMemoryModalVisible(false)}
+        itemBody={homeMemoryModalItemBody}
+        loading={homeMemoryModalLoading}
+        detail={homeMemoryModalDetail}
+        colors={colors}
       />
 
     </ScrollView>

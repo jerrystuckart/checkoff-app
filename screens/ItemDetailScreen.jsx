@@ -38,6 +38,8 @@ import { useCoverCandidateCTA } from '../lib/useCoverCandidateCTA'
 import CoverCandidateCTA from '../components/CoverCandidateCTA'
 import { fetchActiveCoverImageUrl, fetchDisplayEligibleImagePool } from '../lib/coverCandidates'
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
+import CheckInMemoryModal from '../components/CheckInMemoryModal'
+import { getMemoryDetailForItem, hasMemoryContent } from '../lib/checkInMemory'
 import DetailArtwork from '../components/itemDetail/DetailArtwork'
 import { buildInviteMessage, buildInviteAskLine } from '../lib/inviteMessage'
 import { useSavedItems } from '../lib/SavedItemsContext'
@@ -208,6 +210,19 @@ export default function ItemDetailScreen({ route, navigation }) {
   const [memoryPlace,  setMemoryPlace]  = useState('')
   const [memoryNote,   setMemoryNote]   = useState('')
   const [memoryError,  setMemoryError]  = useState(null)
+
+  // Check-In Memory Viewer (2026-09-23) — awareness of whether THIS item's
+  // completion already has a saved photo/memory, so a completed item stops
+  // offering "Photo check-in" as if nothing had been captured yet.
+  // memoryPhotoExists: null = not checked yet / unknown, false = checked but
+  // confirmed no photo memory exists, true = checked and a photo memory
+  // exists. A failed fetch leaves this at its last-known value rather than
+  // clearing it — per the hard rule, a memory-fetch failure must never
+  // hide the DONE state (checked stays independently tracked above).
+  const [memoryPhotoExists, setMemoryPhotoExists] = useState(null)
+  const [checkInMemoryVisible, setCheckInMemoryVisible] = useState(false)
+  const [checkInMemoryLoading, setCheckInMemoryLoading] = useState(false)
+  const [checkInMemoryDetail, setCheckInMemoryDetail] = useState(null)
   const [memorySaving, setMemorySaving] = useState(false)
   const [tierUpgrade, setTierUpgrade] = useState(null)          // { tier, newPoints }
   // Deferred until the memory modal closes, so the tier-upgrade celebration
@@ -333,6 +348,50 @@ export default function ItemDetailScreen({ route, navigation }) {
     if (checked && item?.id) cancelAtPlaceReminder(item.id)
   }, [checked, item?.id])
 
+  // Check-In Memory Viewer (2026-09-23) — once the item is confirmed
+  // checked for the signed-in user, look up whether that completion has a
+  // saved photo memory, so the primary action row can offer "View memory"
+  // instead of re-offering "Photo check-in" for an already-captured item.
+  // Runs once per (checked, item, userId) transition — not on every
+  // render. A failed fetch intentionally leaves memoryPhotoExists untouched
+  // (fail closed on the affordance only; `checked` above is unaffected).
+  useEffect(() => {
+    if (!checked || !userId || !item?.id) return
+    let cancelled = false
+    getMemoryDetailForItem(userId, item.id, {
+      preferListItemId: item?.listItemId ?? itemOnListId ?? null,
+      client: supabase,
+    })
+      .then(detail => {
+        if (cancelled) return
+        setMemoryPhotoExists(hasMemoryContent(detail))
+      })
+      .catch(() => { /* fail closed — leave memoryPhotoExists as-is */ })
+    return () => { cancelled = true }
+  }, [checked, userId, item?.id, item?.listItemId, itemOnListId])
+
+  // Fetches full memory detail only at tap time (batch existence check
+  // above is cheap; full detail — including the photo URL — is not
+  // prefetched). A failed fetch here surfaces the modal's own
+  // "details unavailable" fallback rather than crashing or silently doing
+  // nothing.
+  async function openCheckInMemory() {
+    if (!userId || !item?.id) return
+    setCheckInMemoryVisible(true)
+    setCheckInMemoryLoading(true)
+    try {
+      const detail = await getMemoryDetailForItem(userId, item.id, {
+        preferListItemId: item?.listItemId ?? itemOnListId ?? null,
+        client: supabase,
+      })
+      setCheckInMemoryDetail(detail)
+    } catch (e) {
+      setCheckInMemoryDetail(null)
+    } finally {
+      setCheckInMemoryLoading(false)
+    }
+  }
+
   // Always holds the CURRENT item's id, kept in sync by the effect just
   // below. Read by loadCheckedState/refreshItemListContext to detect when
   // their own in-flight invocation has been superseded by a newer item —
@@ -344,6 +403,14 @@ export default function ItemDetailScreen({ route, navigation }) {
   const latestItemIdRef = useRef(item?.id)
   useEffect(() => {
     latestItemIdRef.current = item?.id
+  }, [item?.id])
+
+  // Reset stale memory awareness whenever the item itself changes (e.g.
+  // chained check-offs moving to the next item) so a previous item's
+  // "has a photo memory" flag never leaks onto the next one before its own
+  // fetch above resolves.
+  useEffect(() => {
+    setMemoryPhotoExists(null)
   }, [item?.id])
 
   // Centralized secret-reveal guard — the ONLY place this decision lives.
@@ -1538,13 +1605,32 @@ export default function ItemDetailScreen({ route, navigation }) {
             Same list-context resolution as before this pass
             (item?.listItemId ?? itemOnListId, falling back to
             getOrCreateListItemId) — untouched business logic, only its
-            container moved. */}
+            container moved.
+
+            Check-In Memory Viewer (2026-09-23) — once the item is
+            confirmed DONE *and* that completion has a saved photo memory
+            (memoryPhotoExists === true), this button stops re-offering
+            "Photo check-in" (there's nothing left to capture — the user
+            already did) and instead opens the saved memory. While
+            memoryPhotoExists is still unresolved (null, fetch in flight or
+            not attempted) it falls back to the original "Photo check-in"
+            label/behavior unchanged — the safe default per the fail-closed
+            rule. Checked-without-a-photo (memoryPhotoExists === false)
+            relabels to "Add a memory" but keeps the exact same
+            PhotoCheckIn navigation underneath — same established
+            photo-contribution flow, not a new one. */}
         <TouchableOpacity
           style={styles.primaryPhotoBtn}
           activeOpacity={0.85}
           accessibilityRole="button"
-          accessibilityLabel="Photo check-in"
+          accessibilityLabel={checked && memoryPhotoExists === true ? 'View memory' : 'Photo check-in'}
           onPress={async () => {
+            if (checked && memoryPhotoExists === true) {
+              trackEvent('checkin_memory_view', { itemId: item?.id, listId })
+              openCheckInMemory()
+              return
+            }
+
             if (!userId) {
               Alert.alert('Sign in first', 'You need an account to check off items.', [
                 { text: 'Cancel', style: 'cancel' },
@@ -1568,9 +1654,20 @@ export default function ItemDetailScreen({ route, navigation }) {
             })
           }}
         >
-          <Text style={styles.primaryPhotoBtnText}>Photo check-in</Text>
+          <Text style={styles.primaryPhotoBtnText}>
+            {checked && memoryPhotoExists === true ? 'View memory' : (checked && memoryPhotoExists === false ? 'Add a memory' : 'Photo check-in')}
+          </Text>
         </TouchableOpacity>
       </View>
+
+      <CheckInMemoryModal
+        visible={checkInMemoryVisible}
+        onClose={() => setCheckInMemoryVisible(false)}
+        itemBody={item?.body}
+        loading={checkInMemoryLoading}
+        detail={checkInMemoryDetail}
+        colors={colors}
+      />
 
       {/* Item Detail Corrective Pass (2026-09-18) — Goal 3 fix: the prior
           pass's marginLeft-auto pin on Save was structurally correct

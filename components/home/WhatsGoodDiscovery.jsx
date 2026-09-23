@@ -40,8 +40,15 @@ const RAIL_CARD_GAP = 12
  *   completely unchanged.
  * @param {(() => void)|null} [onExploreCities]  Passed straight through to
  *   UnsupportedLocationCard — see its own doc.
+ * @param {Set<string>|null} [memoryItemIds]  Check-In Memory Viewer
+ *   (2026-09-23) — item ids (among `items`) the current user has a saved
+ *   photo memory for. Purely additive/presentational: only changes
+ *   whether a rail card shows a small memory badge. No effect on
+ *   selection/ranking/coverage-mode branching above.
+ * @param {((item: object) => void)|null} [onViewMemory]  Called with the
+ *   tapped item when its memory badge is pressed.
  */
-export default function WhatsGoodDiscovery({ items, navigation, colors, userId = null, coverageMode = null, onExploreCities = null }) {
+export default function WhatsGoodDiscovery({ items, navigation, colors, userId = null, coverageMode = null, onExploreCities = null, memoryItemIds = null, onViewMemory = null }) {
   if (coverageMode === COVERAGE_MODE.UNSUPPORTED) {
     return (
       <UnsupportedLocationCard
@@ -84,6 +91,8 @@ export default function WhatsGoodDiscovery({ items, navigation, colors, userId =
             cardHeight={RAIL_CARD_HEIGHT}
             navigation={navigation}
             onPress={() => navigation.navigate('ItemDetail', { item })}
+            hasMemory={!!memoryItemIds?.has(item.id)}
+            onViewMemory={onViewMemory ? () => onViewMemory(item) : null}
           />
         ))}
       </ScrollView>

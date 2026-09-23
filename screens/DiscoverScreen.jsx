@@ -26,6 +26,8 @@ import { fetchCompletedItemIds } from '../lib/nearbyCompletedItems'
 import { trackEvent } from '../lib/trackEvent'
 import CategoryTile from '../components/nearby/CategoryTile'
 import NearbyResultRow from '../components/nearby/NearbyResultRow'
+import CheckInMemoryModal from '../components/CheckInMemoryModal'
+import { getMemoryFlagsForItems, getMemoryDetailForItem } from '../lib/checkInMemory'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
@@ -168,6 +170,18 @@ export default function DiscoverScreen({ navigation, route }) {
   const [completedItemIds, setCompletedItemIds] = useState(() => new Set())
   const completedIdsKeyRef = useRef('')
 
+  // Check-In Memory Viewer (2026-09-23) — which of the currently-visible,
+  // already-completed items have a saved photo memory, plus the modal
+  // state for viewing one. Same batching discipline as completedItemIds
+  // just above: ONE query for every visible item id, re-fetched only when
+  // that id set (or the user) actually changes — never per row.
+  const [memoryItemIds, setMemoryItemIds] = useState(() => new Set())
+  const memoryIdsKeyRef = useRef('')
+  const [memoryModalVisible, setMemoryModalVisible] = useState(false)
+  const [memoryModalLoading, setMemoryModalLoading] = useState(false)
+  const [memoryModalDetail, setMemoryModalDetail] = useState(null)
+  const [memoryModalItemBody, setMemoryModalItemBody] = useState('')
+
   // Result state — either direct DB items (tag/text search) or null (use nearbyItems)
   const [tagResultItems, setTagResultItems] = useState(null)  // array|null
   const [tagMatchData, setTagMatchData]     = useState({ counts: {} })
@@ -217,6 +231,38 @@ export default function DiscoverScreen({ navigation, route }) {
     }
     fetchCompletedItemIds(discoverUserId, ids).then(setCompletedItemIds)
   }, [tagResultItems, nearbyItems, discoverUserId])
+
+  // ── Bulk memory-flag fetch — mirrors the completedItemIds effect above
+  // exactly (same id-set/user key, same re-fetch trigger). Anonymous users
+  // (discoverUserId null) never issue this query — getMemoryFlagsForItems
+  // itself also no-ops without a userId, this short-circuit just avoids
+  // the redundant call. ───────────────────────────────────────────────────
+  useEffect(() => {
+    const basePool = tagResultItems !== null ? tagResultItems : nearbyItems
+    const ids = basePool.map(i => String(i.id))
+    const key = `${discoverUserId ?? ''}:${ids.slice().sort().join(',')}`
+    if (key === memoryIdsKeyRef.current) return
+    memoryIdsKeyRef.current = key
+    if (!discoverUserId || ids.length === 0) {
+      setMemoryItemIds(new Set())
+      return
+    }
+    getMemoryFlagsForItems(discoverUserId, ids, { client: supabase })
+      .then(flags => setMemoryItemIds(new Set(flags.keys())))
+  }, [tagResultItems, nearbyItems, discoverUserId])
+
+  const openCheckInMemory = useCallback((item) => {
+    if (!discoverUserId || !item?.id) return
+    trackEvent('checkin_memory_view', { itemId: item.id, listId: null })
+    setMemoryModalItemBody(item.body ?? '')
+    setMemoryModalDetail(null)
+    setMemoryModalVisible(true)
+    setMemoryModalLoading(true)
+    getMemoryDetailForItem(discoverUserId, item.id, { client: supabase })
+      .then(setMemoryModalDetail)
+      .catch(() => setMemoryModalDetail(null))
+      .finally(() => setMemoryModalLoading(false))
+  }, [discoverUserId])
 
   // ── Post-checkin params ──────────────────────────────────────────────────
   useFocusEffect(useCallback(() => {
@@ -620,9 +666,11 @@ export default function DiscoverScreen({ navigation, route }) {
         saved={savedItemIds.has(item.id)}
         completed={!!item.checked}
         matchCount={matchCnt}
+        hasMemory={memoryItemIds.has(item.id)}
+        onViewMemory={() => openCheckInMemory(item)}
       />
     )
-  }, [tagMatchData, colors, savedItemIds, handleToggleSaved])
+  }, [tagMatchData, colors, savedItemIds, handleToggleSaved, memoryItemIds, openCheckInMemory])
 
   const keyExtractor = useCallback(item => String(item.id), [])
 
@@ -736,6 +784,15 @@ export default function DiscoverScreen({ navigation, route }) {
           }
         />
       </KeyboardAvoidingView>
+
+      <CheckInMemoryModal
+        visible={memoryModalVisible}
+        onClose={() => setMemoryModalVisible(false)}
+        itemBody={memoryModalItemBody}
+        loading={memoryModalLoading}
+        detail={memoryModalDetail}
+        colors={colors}
+      />
     </View>
   )
 }

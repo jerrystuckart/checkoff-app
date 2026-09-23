@@ -78,6 +78,28 @@ function metaLine(item) {
 // Reads only from the shared useSavedItems() Set — never issues its own
 // Supabase query, so no per-card database call is added anywhere this is
 // used.
+// Check-In Memory Viewer (2026-09-23) — a small tappable badge shown only
+// when hasMemory is true (this user already has a saved photo memory for
+// this item). Additive/optional, mirrors SaveToggle's structure exactly
+// (own Pressable, own hitSlop) so it never competes with the card's own
+// press handler. Not rendered at all when hasMemory is false/absent —
+// every existing card that doesn't pass these props is visually unchanged.
+function MemoryBadge({ item, onViewMemory, style, color = '#fff', size = 15 }) {
+  if (!onViewMemory) return null
+  const title = item?.body ?? 'item'
+  return (
+    <Pressable
+      onPress={onViewMemory}
+      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+      style={[styles.saveToggle, style]}
+      accessibilityRole="button"
+      accessibilityLabel={`View memory for ${title}`}
+    >
+      <Text style={{ color, fontSize: size, fontWeight: '900' }}>📷</Text>
+    </Pressable>
+  )
+}
+
 function SaveToggle({ item, navigation, style, color = '#fff', size = 16 }) {
   const { isSaved, toggleSaved } = useSavedItems()
   const saved = isSaved(item?.id)
@@ -266,7 +288,7 @@ function PrimaryNoImageMode({ item, colors, isSpecial, venueName, thing, meta, o
 // The user taps to discover the actual thing on Item Detail. Falls back
 // to a short, single-line clamp of the thing text only when there's no
 // meaningful venue name to show instead (universal items, etc).
-function SecondaryRow({ item, colors, onPress, userId, navigation }) {
+function SecondaryRow({ item, colors, onPress, userId, navigation, hasMemory = false, onViewMemory = null }) {
   const { TEXT, CARD_ELEVATED, AMBER, ENDED_TEXT, SHADOW_COLOR } = colors
   const isSpecial = isSpecialItemPresentation(item)
   const { venueName, thing } = deriveVenueAndThing(item)
@@ -318,6 +340,9 @@ function SecondaryRow({ item, colors, onPress, userId, navigation }) {
         <Text style={[styles.rowVenue, { color: TEXT }]} numberOfLines={1}>{teaserLabel}</Text>
         {distLabel ? <Text style={[styles.rowMeta, { color: TEXT, opacity: 0.5 }]} numberOfLines={1}>{distLabel}</Text> : null}
       </View>
+      {hasMemory && onViewMemory ? (
+        <MemoryBadge item={item} onViewMemory={onViewMemory} style={styles.saveToggleRow} color={accent} size={15} />
+      ) : null}
       <SaveToggle item={item} navigation={navigation} style={styles.saveToggleRow} color={accent} size={15} />
       <Text style={[styles.rowChevron, { color: accent }]}>→</Text>
     </PressableTactile>
@@ -383,7 +408,7 @@ function RailOverlayText({ isSpecial, venueName, thing, meta, accent }) {
   )
 }
 
-function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight, navigation }) {
+function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight, navigation, hasMemory = false, onViewMemory = null }) {
   const { TEXT, MUTED, CARD_ELEVATED, ENDED_BG, SHADOW_COLOR } = colors
   const isSpecial = isSpecialItemPresentation(item)
   const { venueName, thing } = deriveVenueAndThing(item)
@@ -415,6 +440,9 @@ function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight,
           style={StyleSheet.absoluteFillObject}
         />
         <RailOverlayText isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} accent={accent} />
+        {hasMemory && onViewMemory ? (
+          <MemoryBadge item={item} onViewMemory={onViewMemory} style={styles.memoryBadgeRail} color="#fff" size={14} />
+        ) : null}
         <SaveToggle item={item} navigation={navigation} style={styles.saveToggleRail} color="#fff" size={14} />
       </PressableTactile>
     )
@@ -434,6 +462,9 @@ function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight,
           style={StyleSheet.absoluteFillObject}
         />
         <RailOverlayText isSpecial={isSpecial} venueName={venueName} thing={thing} meta={meta} accent={accent} />
+        {hasMemory && onViewMemory ? (
+          <MemoryBadge item={item} onViewMemory={onViewMemory} style={styles.memoryBadgeRail} color="#fff" size={14} />
+        ) : null}
         <SaveToggle item={item} navigation={navigation} style={styles.saveToggleRail} color="#fff" size={14} />
       </PressableTactile>
     )
@@ -464,12 +495,15 @@ function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight,
           <Text style={[styles.railChevron, { color: accent }]}>→</Text>
         </View>
       </View>
+      {hasMemory && onViewMemory ? (
+        <MemoryBadge item={item} onViewMemory={onViewMemory} style={styles.memoryBadgeRail} color={accent} size={14} />
+      ) : null}
       <SaveToggle item={item} navigation={navigation} style={styles.saveToggleRail} color={accent} size={14} />
     </PressableTactile>
   )
 }
 
-export default function EditorialCard({ item, onPress, colors, variant = 'primary', userId = null, index = 0, cardWidth, cardHeight, navigation = null }) {
+export default function EditorialCard({ item, onPress, colors, variant = 'primary', userId = null, index = 0, cardWidth, cardHeight, navigation = null, hasMemory = false, onViewMemory = null }) {
   if (!item) return null
 
   const isSpecial = isSpecialItemPresentation(item)
@@ -477,8 +511,14 @@ export default function EditorialCard({ item, onPress, colors, variant = 'primar
   const meta = metaLine(item)
   const artwork = useCardArtwork(item, userId)
 
+  // Check-In Memory Viewer (2026-09-23) — hasMemory/onViewMemory are only
+  // wired into the 'row' variant for now (the natural attachment point
+  // for a compact already-completed card on Home; see
+  // components/home/NearYouCompact.jsx). Other variants ignore these
+  // props entirely — zero behavior change for primary/rail/archetype
+  // cards.
   if (variant === 'row') {
-    return <SecondaryRow item={item} colors={colors} onPress={onPress} userId={userId} navigation={navigation} />
+    return <SecondaryRow item={item} colors={colors} onPress={onPress} userId={userId} navigation={navigation} hasMemory={hasMemory} onViewMemory={onViewMemory} />
   }
 
   if (variant === 'rail') {
@@ -532,6 +572,9 @@ const styles = StyleSheet.create({
   saveToggle: { padding: 8, borderRadius: 999 },
   saveTogglePrimary: { position: 'absolute', top: 10, right: 10 },
   saveToggleRail: { position: 'absolute', top: 6, right: 6, padding: 6 },
+  // Check-In Memory Viewer (2026-09-23) — opposite corner from the
+  // bookmark control above so the two never overlap.
+  memoryBadgeRail: { position: 'absolute', top: 6, left: 6, padding: 6 },
   saveToggleRow: { paddingHorizontal: 4 },
 
   rowCard: { borderRadius: 18, borderWidth: 1.5, overflow: 'hidden', flexDirection: 'row', alignItems: 'center', paddingRight: 14 },

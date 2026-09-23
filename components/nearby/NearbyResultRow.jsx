@@ -34,8 +34,16 @@ import { extractQuotedVenueFromBody } from '../../lib/itemDetailHeaderTitle'
 
 const TEAL = '#1D9E75'
 
+// Check-In Memory Viewer (2026-09-23) — hasMemory/onViewMemory are
+// additive, optional props: when the current user has a saved photo
+// memory for this completed item, the existing teal completion badge
+// becomes tappable (Pressable) and opens the shared CheckInMemoryModal.
+// Nothing else about the row (title, distance, category, saved state)
+// changes. Both props default to inert so every other caller/row is
+// unaffected.
 function NearbyResultRow({
   item, colors, onPress, onToggleSaved, saved, completed, matchCount,
+  hasMemory = false, onViewMemory = null,
 }) {
   const { CARD, TEXT, MUTED, BORDER } = colors
   const catColor = item.categoryColor ?? '#888780'
@@ -105,7 +113,17 @@ function NearbyResultRow({
       </View>
 
       <View style={styles.rowRight}>
-        {completed && (
+        {completed && hasMemory && onViewMemory ? (
+          <Pressable
+            onPress={onViewMemory}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            style={styles.completedBadge}
+            accessibilityRole="button"
+            accessibilityLabel={`View memory for ${item.body ?? 'item'}`}
+          >
+            <View style={styles.completedDot} />
+          </Pressable>
+        ) : completed ? (
           <View
             style={styles.completedBadge}
             accessibilityElementsHidden
@@ -113,7 +131,7 @@ function NearbyResultRow({
           >
             <View style={styles.completedDot} />
           </View>
-        )}
+        ) : null}
         <Pressable
           onPress={onToggleSaved}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
