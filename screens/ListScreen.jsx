@@ -41,6 +41,7 @@ import { isWithinWindow } from '../lib/seasonWindow'
 import { checkGeoFence, presentGeoFenceFailure } from '../lib/geoFence'
 import { proximitySort, formatDistanceLabel } from '../lib/proximity'
 import { getSessionDensityTier } from '../lib/densityTier'
+import { isTripModeWindowOpen, DEFAULT_TRIP_MODE_GRACE_DAYS } from '../lib/tripMode'
 
 const ACCENT = '#FFB84D'
 const ACCENT_DARK = '#7A4B00'
@@ -435,9 +436,18 @@ export default function ListScreen({ route, navigation }) {
     if (!listId) return
     setMetaLoading(true)
 
+    // Trip Mode MVP (2026-09-23) — trip_mode_enabled/trip_mode_grace_days
+    // and this list's metro timezone added to this existing query (three
+    // more columns/one joined column, no new round-trip) so the trip-list
+    // surface message below can be grace-aware — see the banner's own
+    // comment (v2 fix: was previously gated on `!ended`, which has no
+    // grace-period awareness and would hide the banner the day after
+    // ends_at even though Trip Mode itself remains usable through the
+    // grace window). Never fetched or rendered globally — always scoped
+    // to THIS list's own row.
     const { data, error } = await supabase
       .from('lists')
-      .select('id, title, starts_at, ends_at, is_official, is_public, source_destination_list_id, hero_image_url')
+      .select('id, title, starts_at, ends_at, is_official, is_public, source_destination_list_id, hero_image_url, trip_mode_enabled, trip_mode_grace_days, metro_areas(timezone)')
       .eq('id', listId)
       .maybeSingle()
 
@@ -703,6 +713,15 @@ export default function ListScreen({ route, navigation }) {
   }
 
   const ended = isEnded()
+  // Trip Mode MVP (2026-09-23, v2 fix) — grace-aware window check for the
+  // trip-list banner below, mirroring ItemDetailScreen.jsx's own
+  // isTripModeWindowOpen usage exactly (same function, same shape of
+  // inputs) rather than a second/divergent implementation.
+  const tripModeBannerWindowOpen = isTripModeWindowOpen({
+    endsAt: listMeta?.ends_at ?? null,
+    graceDays: listMeta?.trip_mode_grace_days ?? DEFAULT_TRIP_MODE_GRACE_DAYS,
+    timezone: listMeta?.metro_areas?.timezone ?? 'America/Phoenix',
+  })
   // True only once we've positively confirmed the linked destination_lists
   // row is inactive (partner cancelled) — null (not yet resolved, or no
   // destination link at all) never blocks anything.
@@ -1409,6 +1428,25 @@ export default function ListScreen({ route, navigation }) {
       {listId && !ended && listMeta?.ends_at && (
         <View style={styles.endsAtRow}>
           <Text style={styles.endsAtText}>{formatEndLabel(listMeta.ends_at)}</Text>
+        </View>
+      )}
+
+      {/* Trip Mode MVP (2026-09-23, v2 fix) — additive, low-risk insertion
+          point, nowhere near the private/inline memory-viewer code
+          elsewhere in this file (openDetailModal/detailModal/detailCI/
+          PhotoWithLoader), which this pass does not touch. Only ever
+          shown when THIS list's own trip_mode_enabled is true — never a
+          global message, never shown for any other list. Gated on
+          tripModeBannerWindowOpen (grace-aware, mirrors ItemDetailScreen's
+          own isTripModeWindowOpen check exactly), NOT on `!ended` — `ended`
+          has no grace-period concept and would hide this banner the day
+          after ends_at even though Trip Mode itself remains usable through
+          the configured grace window. */}
+      {listId && listMeta?.trip_mode_enabled && tripModeBannerWindowOpen && (
+        <View style={styles.tripModeBanner}>
+          <Text style={styles.tripModeBannerText}>
+            Forgot to check something off? Trip Mode lets you add things you did during this trip.
+          </Text>
         </View>
       )}
 
@@ -2149,6 +2187,27 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, EN
     color: '#F5A623',
     textAlign: 'center',
     letterSpacing: 0.2,
+  },
+
+  // Trip Mode MVP (2026-09-23) — small, additive banner card. Uses the
+  // same CARD/BORDER/TEXT tokens as the rest of this file's cards rather
+  // than the amber ended-banner treatment (this isn't a warning), so it
+  // reads as a helpful tip, not an alert.
+  tripModeBanner: {
+    backgroundColor: CARD,
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: BORDER,
+  },
+
+  tripModeBannerText: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: TEXT,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 
   progressCard: {

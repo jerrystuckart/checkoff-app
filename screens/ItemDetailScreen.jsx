@@ -45,6 +45,9 @@ import { buildInviteMessage, buildInviteAskLine } from '../lib/inviteMessage'
 import { useSavedItems } from '../lib/SavedItemsContext'
 import BookmarkIcon from '../components/BookmarkIcon'
 import { deriveTitlePresentation } from '../lib/detailTitlePresentation'
+import { isTripModeAvailableForList, isTripModeWindowOpen, DEFAULT_TRIP_MODE_GRACE_DAYS } from '../lib/tripMode'
+import { shouldShowTripModeEntry } from '../lib/tripModeCheckOffFlow'
+import TripModeCheckOffSheet from '../components/TripModeCheckOffSheet'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
@@ -243,6 +246,17 @@ export default function ItemDetailScreen({ route, navigation }) {
   const [userLists, setUserLists] = useState([])
   const [itemOnListId, setItemOnListId] = useState(null) // listItemId if item is on any user list
   const [listInviteCode, setListInviteCode] = useState(null)
+
+  // Trip Mode MVP (2026-09-23) — list-mode-only metadata (null in Nearby
+  // mode, where isNearbyMode/tripModeAvailable/showTripModeEntry below all
+  // resolve to false naturally since tripModeListMeta never gets set).
+  // Populated by the same single `lists` query refreshItemListContext()
+  // already runs for this list's invite_code (extended below, no new
+  // round-trip), plus one small list_members existence check alongside it
+  // (same shape as screens/JoinListScreen.jsx:110-117's membership check).
+  const [tripModeListMeta, setTripModeListMeta] = useState(null) // { tripModeEnabled, graceDays, startsAt, endsAt, timezone }
+  const [isListMember, setIsListMember] = useState(false)
+  const [tripModeSheetVisible, setTripModeSheetVisible] = useState(false)
   // Item Detail Corrective Pass (2026-09-18) — "Invite someone" opens this
   // on-demand channel sheet rather than the old permanently-inline channel
   // grid. Reuses the exact existing CHANNELS/shareVia/openNativeShare
@@ -291,6 +305,68 @@ export default function ItemDetailScreen({ route, navigation }) {
   }, [])
 
   const isAtPlaceForItem = isAtPlace(item, detailUserLocation)
+
+  // Trip Mode MVP (2026-09-23) — derived, not stateful: recomputed on every
+  // render from tripModeListMeta/isListMember/isAtPlaceForItem, all of
+  // which already have their own state/effects above. `atVenue` reuses the
+  // exact same advisory, never-prompting presence signal the Community
+  // Cover Photos CTA above already computes (isAtPlaceForItem) — not a
+  // second location read, and never the real check-off authorization
+  // (that's the server trigger; see lib/tripMode.js's header). Requires
+  // item?.listItemId (list-mode's real, already-resolved list_item_id —
+  // Trip Mode has no standalone path, so with no listItemId there is
+  // nothing valid to submit and the entry point stays hidden regardless of
+  // the other conditions).
+  const tripModeWindowOpenNow = tripModeListMeta
+    ? isTripModeWindowOpen({
+        endsAt: tripModeListMeta.endsAt,
+        graceDays: tripModeListMeta.graceDays,
+        timezone: tripModeListMeta.timezone,
+      })
+    : false
+  const tripModeAvailable = isTripModeAvailableForList({
+    tripModeEnabled: tripModeListMeta?.tripModeEnabled ?? false,
+    isMember: isListMember,
+  })
+  const showTripModeEntry = !!item?.listItemId && shouldShowTripModeEntry({
+    tripModeEnabled: tripModeListMeta?.tripModeEnabled ?? false,
+    isMember: isListMember,
+    windowOpen: tripModeWindowOpenNow,
+    atVenue: isAtPlaceForItem,
+  })
+
+  // Fires once a TripModeCheckOffSheet submission is confirmed written
+  // (fresh insert or a resolved 23505 collision) — same post-success shape
+  // as performCheckOff's own success branch (PostCheckoffSheet, trackEvent,
+  // haptics, streak/points refresh, fan-out, tier-crossing check), MINUS
+  // the auto-opening personal-note memoryModal, since the sheet that just
+  // closed already offered its own "Add photo or memory" step — opening a
+  // second one immediately after would be a confusing double memory
+  // prompt. loadCheckedState() (not a manual setChecked(true)) is used to
+  // pick up the fresh DB state, since Trip Mode's window logic can differ
+  // from the plain isWithinWindow check this screen otherwise assumes.
+  async function handleTripModeSuccess({ itemId, listItemId: successListItemId, pointsAwarded, experiencedAt }) {
+    trackEvent('checkoff_completed', { itemId, listId })
+    trackEvent('trip_mode_checkoff_completed', { itemId, listId })
+    await loadCheckedState(userId)
+    setPostCheckoffData({ itemId, listItemId: successListItemId, userId, item, pointsAwarded })
+    await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+    supabase.functions.invoke('update-streak', { body: { user_id: userId } }).catch(() => {/* non-critical */})
+    const pointsBefore = await getUserLifetimePoints(userId).catch(() => 0)
+    await updateUserLifetimePoints(userId).catch(() => {})
+    if (itemId) completeDare(userId, itemId).catch(() => {})
+    if (itemId) {
+      fanOutCheckIn({
+        userId,
+        itemId,
+        excludeListItemId: successListItemId,
+        checkinMethod: 'tap',
+      }).catch(() => {})
+    }
+    checkTierCrossingForUser(userId, pointsBefore).then(({ crossedTier, newPoints }) => {
+      if (crossedTier) setTierUpgrade({ tier: crossedTier, newPoints })
+    }).catch(() => {})
+  }
 
   // Final UI Pass Before Build 144 — item 3: one image truth regardless of
   // navigation source. `item` (route.params.item) only carries
@@ -535,13 +611,37 @@ export default function ItemDetailScreen({ route, navigation }) {
       // directly by the check-off handlers) resolve list_item_id
       // themselves — nothing to derive here. Just keep this list's own
       // invite code current so share messages never reference a stale one.
-      const { data: listData } = await supabase
-        .from('lists')
-        .select('invite_code')
-        .eq('id', listId)
-        .single()
+      //
+      // Trip Mode MVP (2026-09-23) — extended (not duplicated) to also
+      // pull trip_mode_enabled/trip_mode_grace_days/starts_at/ends_at and
+      // this list's metro timezone (via metro_areas(timezone), the same
+      // column lib/tripMode.js's date-window math expects — see
+      // supabase/migrations/20260821_metro_timezone_platform_fix.sql), and
+      // alongside it a list_members existence check for the current user
+      // — same shape as screens/JoinListScreen.jsx:110-117's own
+      // membership check. Both run in parallel with the existing query,
+      // adding exactly one new round-trip (the membership check) rather
+      // than two.
+      const [{ data: listData }, { data: membershipRow }] = await Promise.all([
+        supabase
+          .from('lists')
+          .select('invite_code, trip_mode_enabled, trip_mode_grace_days, starts_at, ends_at, metro_id, metro_areas(timezone)')
+          .eq('id', listId)
+          .single(),
+        uid
+          ? supabase.from('list_members').select('id').eq('list_id', listId).eq('user_id', uid).maybeSingle()
+          : Promise.resolve({ data: null }),
+      ])
       if (isStale()) return
       setListInviteCode(listData?.invite_code ?? null)
+      setTripModeListMeta({
+        tripModeEnabled: listData?.trip_mode_enabled ?? false,
+        graceDays: listData?.trip_mode_grace_days ?? DEFAULT_TRIP_MODE_GRACE_DAYS,
+        startsAt: listData?.starts_at ?? null,
+        endsAt: listData?.ends_at ?? null,
+        timezone: listData?.metro_areas?.timezone ?? 'America/Phoenix',
+      })
+      setIsListMember(!!membershipRow)
       return
     }
 
@@ -1660,6 +1760,47 @@ export default function ItemDetailScreen({ route, navigation }) {
         </TouchableOpacity>
       </View>
 
+      {/* Trip Mode MVP (2026-09-23) — secondary/alternate action, never
+          the primary offer: only rendered when showTripModeEntry is true,
+          which requires the user to be OUTSIDE the live geofence (or
+          location unavailable) — see this screen's own showTripModeEntry
+          derivation above and lib/tripModeCheckOffFlow.js's
+          shouldShowTripModeEntry. When the user is genuinely at the venue,
+          this block simply doesn't render and primaryActionRow above is
+          the only offer, unchanged. Visually and textually distinct from
+          the live "I'VE DONE THIS"/"You are here" language on purpose —
+          never implies location was verified. */}
+      {showTripModeEntry ? (
+        <TouchableOpacity
+          style={styles.tripModeEntryBtn}
+          onPress={() => {
+            trackEvent('trip_mode_entry_tap', { itemId: item?.id, listId })
+            setTripModeSheetVisible(true)
+          }}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Check off from this trip"
+        >
+          <Text style={styles.tripModeEntryBtnText}>Check off from this trip</Text>
+        </TouchableOpacity>
+      ) : null}
+
+      <TripModeCheckOffSheet
+        visible={tripModeSheetVisible}
+        onClose={() => setTripModeSheetVisible(false)}
+        colors={colors}
+        item={item}
+        listItemId={item?.listItemId ?? null}
+        userId={userId}
+        tripWindow={{
+          startsAt: tripModeListMeta?.startsAt ?? null,
+          endsAt: tripModeListMeta?.endsAt ?? null,
+          graceDays: tripModeListMeta?.graceDays ?? DEFAULT_TRIP_MODE_GRACE_DAYS,
+          timezone: tripModeListMeta?.timezone ?? 'America/Phoenix',
+        }}
+        onSuccess={handleTripModeSuccess}
+      />
+
       <CheckInMemoryModal
         visible={checkInMemoryVisible}
         onClose={() => setCheckInMemoryVisible(false)}
@@ -2348,6 +2489,28 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     fontWeight: '800',
     color: TEXT,
     textAlign: 'center',
+  },
+
+  // Trip Mode MVP (2026-09-23) — deliberately NOT styled like
+  // primaryDoneBtn/primaryPhotoBtn above (no amber fill, no card
+  // elevation) — a plain outlined pill, visually subordinate to both,
+  // since it is always a secondary/alternate action, never the primary
+  // offer. Centered rather than side-by-side so it doesn't compete for
+  // primaryActionRow's row layout.
+  tripModeEntryBtn: {
+    alignSelf: 'center',
+    borderWidth: 1,
+    borderColor: BORDER,
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    marginBottom: 10,
+  },
+
+  tripModeEntryBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: MUTED,
   },
 
   // Item Detail Corrective Pass (2026-09-18) — Goal 3 fix: Directions/
