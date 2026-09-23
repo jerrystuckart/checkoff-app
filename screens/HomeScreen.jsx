@@ -16,6 +16,8 @@ import { getTierByName } from '../lib/tiers'
 import { useTheme } from '../lib/ThemeContext'
 import ExperiencesRail from '../components/ExperiencesRail'
 import * as Sentry from '@sentry/react-native'
+import * as Updates from 'expo-updates'
+import { clearWhatsGoodSession } from '../lib/whatsGoodSessionCache'
 import { haversineMeters } from '../lib/distance'
 import { getSessionDensityTier } from '../lib/densityTier'
 import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
@@ -119,6 +121,9 @@ export default function HomeScreen({ navigation }) {
 
   const [joinedIds, setJoinedIds] = useState(new Set())
   const [user, setUser] = useState(null)
+  // ADMIN DIAGNOSTICS PANEL (Phase 1, 2026-09-23) — gates the permanent
+  // What's Good runtime diagnostics panel (lib/whatsGoodDiagnosticsPanel.js).
+  const [isAdmin, setIsAdmin] = useState(false)
   const [curatedGroups, setCuratedGroups] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -532,7 +537,7 @@ export default function HomeScreen({ navigation }) {
           : Promise.resolve({ data: [] }),
         supabase
           .from('users')
-          .select('current_streak, lifetime_points, insider_tier')
+          .select('current_streak, lifetime_points, insider_tier, is_admin')
           .eq('id', userId)
           .single(),
       ])
@@ -540,6 +545,10 @@ export default function HomeScreen({ navigation }) {
       setUserStreak(streakRes.data?.current_streak ?? 0)
       setUserLifetimePts(streakRes.data?.lifetime_points ?? 0)
       setUserInsiderTier(streakRes.data?.insider_tier ?? 'Starter')
+      // ADMIN DIAGNOSTICS PANEL (Phase 1, 2026-09-23) — additive column on
+      // an existing query, no new request. Gates the permanent What's Good
+      // runtime diagnostics panel (see lib/whatsGoodDiagnosticsPanel.js).
+      setIsAdmin(streakRes.data?.is_admin === true)
 
       // Load crew members for each list (up to 4 avatars per list)
       if (userLists.length > 0) {
@@ -922,6 +931,47 @@ async function loadNearbyRail(userId) {
     explicitMetroChoice: selectedMetro,
     navigation,
   })
+
+  // ADMIN DIAGNOSTICS PANEL (Phase 1, 2026-09-23) — assembled entirely from
+  // values this screen (and the What's Good pipeline) already computed —
+  // no new queries. Reuses `selectedMetro` (this screen's own resolved
+  // metro, never recomputed) and `whatsGood.debug` (threaded additively
+  // through lib/useWhatsGood.js <- lib/whatsGoodOrchestrator.js <-
+  // lib/whatsGoodDataAdapter.js — see those modules' own docs). Only ever
+  // rendered when `isAdmin` is true (components/home/UnsupportedLocationCard.jsx's
+  // shouldShowDiagnostics gate) — building it unconditionally here is cheap
+  // (no I/O, just object assembly) and keeps this screen's data flow linear.
+  const whatsGoodDiagnostics = useMemo(() => ({
+    updateId: Updates.updateId ?? null,
+    channel: Updates.channel ?? null,
+    runtimeVersion: Updates.runtimeVersion ?? null,
+    // No runtime commit-hash mechanism exists anywhere in this codebase
+    // (checked app.json `extra`, eas.json, every source file) — a real gap,
+    // not a display bug. See lib/whatsGoodDiagnosticsPanel.js's doc.
+    commitHash: null,
+    metroName: selectedMetro?.name ?? null,
+    metroId: selectedMetro?.id ?? null,
+    userLocation: whatsGood.debug?.userLocation ?? userLocation ?? null,
+    locationState: whatsGood.debug?.locationState ?? null,
+    cachedSchemaVersion: whatsGood.debug?.cachedSchemaVersion ?? null,
+    cachedCoverageMode: whatsGood.debug?.cachedCoverageMode ?? null,
+    fromCache: whatsGood.debug?.fromCache ?? null,
+    preservationReason: whatsGood.debug?.preservationDecision?.reason ?? null,
+    adapterDiagnostics: whatsGood.debug?.diagnostics ?? null,
+    universalCount: whatsGood.debug?.universalCount ?? null,
+    coverageMode: whatsGood.coverageMode ?? null,
+    selectedItemIds: whatsGood.debug?.selectedItemIds ?? [],
+  }), [selectedMetro, whatsGood.debug, whatsGood.coverageMode, userLocation])
+
+  // "Refresh What's Good" (admin diagnostics panel only) — clears the
+  // session cache, then triggers the SAME refresh mechanism this screen's
+  // own pull-to-refresh already uses (refreshUserLocation(true) cascades
+  // into useWhatsGood's selection effect via the shared location store — no
+  // new refresh mechanism invented here).
+  const refreshWhatsGoodDiagnostics = useCallback(async () => {
+    await clearWhatsGoodSession()
+    await refreshUserLocation(true)
+  }, [refreshUserLocation])
 
   // Check-In Memory Viewer (2026-09-23) — batch existence check over every
   // item id currently rendered on Home (Near You + What's Good), re-run
@@ -1455,6 +1505,9 @@ async function loadNearbyRail(userId) {
               onExploreCities={multiMetro2 ? openMetroPicker2 : null}
               memoryItemIds={homeMemoryItemIds}
               onViewMemory={openHomeCheckInMemory}
+              isAdmin={isAdmin}
+              diagnostics={whatsGoodDiagnostics}
+              onRefreshWhatsGood={refreshWhatsGoodDiagnostics}
             />
           </View>
         )
