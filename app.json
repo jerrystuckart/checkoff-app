@@ -57,6 +57,7 @@
       "permissions": [
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
         "CAMERA",
         "POST_NOTIFICATIONS"
       ],
@@ -92,7 +93,13 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-location",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "CheckOff uses your location in the background to notice when you've spent real time at a place, so it can gently suggest checking it off later — even after you've left.",
+          "isAndroidBackgroundLocationEnabled": true
+        }
+      ],
       "expo-task-manager",
       "expo-apple-authentication",
       "@react-native-google-signin/google-signin",

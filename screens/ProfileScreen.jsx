@@ -366,6 +366,15 @@ export default function ProfileScreen({ navigation }) {
           <View style={styles.adminBadge}><Text style={styles.adminBadgeText}>⚙ Admin</Text></View>
         )}
         {profile?.visit_detection_tester && (
+          <TouchableOpacity
+            style={[styles.foundingBadge, { alignSelf: 'stretch', justifyContent: 'center', marginTop: 12 }]}
+            onPress={() => navigation.navigate('HomeTab', { screen: 'VisitInbox' })}
+            accessibilityRole="button"
+          >
+            <Text style={styles.foundingBadgeText}>📍 Places you may have visited</Text>
+          </TouchableOpacity>
+        )}
+        {profile?.visit_detection_tester && (
           <VisitDetectionDebugPanel userId={user?.id} />
         )}
         {/* Tier badge pill */}

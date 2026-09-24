@@ -68,6 +68,7 @@ import PastListsScreen          from './screens/PastListsScreen'
 import WeeklyRecapScreen        from './screens/WeeklyRecapScreen'
 import InsiderAccessScreen      from './screens/InsiderAccessScreen'
 import SavedItemsScreen         from './screens/SavedItemsScreen'
+import VisitInboxScreen         from './screens/VisitInboxScreen'
 import { resolveItemDetailHeaderTitle } from './lib/itemDetailHeaderTitle'
 
 const Stack = createNativeStackNavigator()
@@ -401,6 +402,11 @@ function ListsStack() {
         name="SavedItems"
         component={SavedItemsScreen}
         options={{ title: 'Saved' }}
+      />
+      <Stack.Screen
+        name="VisitInbox"
+        component={VisitInboxScreen}
+        options={{ title: 'Places you may have visited' }}
       />
     </Stack.Navigator>
   )
