@@ -36,7 +36,13 @@ function mapRow(row) {
   }
 }
 
-export default function VisitInboxScreen({ navigation }) {
+export default function VisitInboxScreen({ navigation, route }) {
+  // Deep-linked from a tapped candidate_visit_high_confidence push (see
+  // lib/useNotifications.js's navigateToVisitInbox) — when present, that
+  // specific suggestion is sorted to the top rather than shown alone, so a
+  // suggestion that expired/got confirmed elsewhere between the push firing
+  // and the tap still degrades gracefully to the normal full list.
+  const highlightId = route?.params?.candidateVisitId ?? null
   const insets = useSafeAreaInsets()
   const { colors } = useTheme()
   const { BG, CARD, TEXT, MUTED, BORDER, AMBER } = colors
@@ -77,14 +83,17 @@ export default function VisitInboxScreen({ navigation }) {
         .map(mapRow)
         .filter(Boolean)
 
-      setRows(mapped)
+      const sorted = highlightId
+        ? [...mapped].sort((a, b) => (a.candidateVisitId === highlightId ? -1 : b.candidateVisitId === highlightId ? 1 : 0))
+        : mapped
+      setRows(sorted)
     } catch (e) {
       console.warn('VisitInboxScreen load error:', e?.message ?? e)
       setRows([])
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [highlightId])
 
   useFocusEffect(useCallback(() => { load() }, [load]))
 
@@ -154,7 +163,10 @@ export default function VisitInboxScreen({ navigation }) {
         </View>
       ) : (
         rows.map(row => (
-          <View key={row.candidateVisitId} style={styles.card}>
+          <View
+            key={row.candidateVisitId}
+            style={[styles.card, row.candidateVisitId === highlightId && { borderColor: AMBER, borderWidth: 2 }]}
+          >
             <TouchableOpacity onPress={() => navigation.navigate('ItemDetail', { item: { id: row.itemId, body: row.itemBody } })}>
               <Text style={styles.itemBody}>{row.itemBody}</Text>
               {row.neighborhoodName ? <Text style={styles.itemMeta}>{row.neighborhoodName}</Text> : null}

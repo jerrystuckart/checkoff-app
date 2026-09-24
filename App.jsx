@@ -516,8 +516,6 @@ function App() {
   const { loading, isSignedIn, userId } = useAuth()
   const { needsOnboarding, completeOnboarding, checkingOnboarding } = useOnboarding()
   const { forceUpdate, softUpdate, updateConfig, dismissSoftUpdate } = useVersionCheck(userId)
-  useNotifications(userId)
-  useCandidateVisitTracking(userId)
 
   // OTA Update Restart Banner (2026-09-20) — tracks the active route name
   // so UpdateRestartBanner can defer itself on unsafe screens (see
@@ -525,7 +523,11 @@ function App() {
   // the current route; no pre-existing analytics route-tracker was found
   // to reuse, so a plain useNavigationContainerRef + onStateChange/onReady
   // pair (React Navigation's documented pattern for this) is used here.
+  // Created before useNotifications() so a tapped candidate_visit_high_confidence
+  // push (Visit Detection Stage 2) can deep-link through it.
   const navigationRef = useNavigationContainerRef()
+  useNotifications(userId, navigationRef)
+  useCandidateVisitTracking(userId)
   const [currentRouteName, setCurrentRouteName] = useState(null)
   function syncCurrentRouteName() {
     setCurrentRouteName(navigationRef.getCurrentRoute()?.name ?? null)
