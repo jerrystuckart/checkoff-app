@@ -83,9 +83,28 @@ export default function VisitInboxScreen({ navigation, route }) {
         .map(mapRow)
         .filter(Boolean)
 
+      // Hide any suggestion for an item the user has ALREADY checked off,
+      // through any path -- including one completed after this candidate
+      // visit was created (e.g. checked off live at the venue while this
+      // was still sitting unconfirmed). Matches the server-side guard in
+      // supabase/migrations/20260924_visit_detection_duplicate_guard.sql,
+      // which is the real authorization boundary -- this is a display-only
+      // mirror so the inbox doesn't offer something confirm would reject.
+      const itemIds = [...new Set(mapped.map(r => r.itemId))]
+      let alreadyCheckedOffItemIds = new Set()
+      if (itemIds.length > 0) {
+        const { data: existing } = await supabase
+          .from('check_ins')
+          .select('item_id')
+          .eq('user_id', user.id)
+          .in('item_id', itemIds)
+        alreadyCheckedOffItemIds = new Set((existing ?? []).map(r => r.item_id))
+      }
+      const withoutAlreadyDone = mapped.filter(r => !alreadyCheckedOffItemIds.has(r.itemId))
+
       const sorted = highlightId
-        ? [...mapped].sort((a, b) => (a.candidateVisitId === highlightId ? -1 : b.candidateVisitId === highlightId ? 1 : 0))
-        : mapped
+        ? [...withoutAlreadyDone].sort((a, b) => (a.candidateVisitId === highlightId ? -1 : b.candidateVisitId === highlightId ? 1 : 0))
+        : withoutAlreadyDone
       setRows(sorted)
     } catch (e) {
       console.warn('VisitInboxScreen load error:', e?.message ?? e)
