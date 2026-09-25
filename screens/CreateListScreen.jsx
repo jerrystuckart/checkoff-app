@@ -11,6 +11,7 @@ import { supabase } from '../lib/supabase'
 import { fetchCuratedListItems } from '../lib/useItems'
 import { useTheme } from '../lib/ThemeContext'
 import { backfillListCreditOnJoin } from '../lib/joinListCredit'
+import { tripModeChoiceCopy, buildTripModeUpdate } from '../lib/listTripModeSetting'
 
 const AMBER = '#F5A623'
 const NAVY  = '#1A1A2E'
@@ -465,7 +466,7 @@ export default function CreateListScreen({ navigation, route }) {
           is_official: false,
           cover_emoji: groupEmoji ?? '📋',
           invite_code: inviteCode,
-          trip_mode_enabled: tripModeEnabled,
+          ...buildTripModeUpdate(tripModeEnabled),
         })
         .select('id, title, invite_code')
         .single()
@@ -511,7 +512,7 @@ export default function CreateListScreen({ navigation, route }) {
           title: title.trim(),
           ends_at: endsAt || null,
           starts_at: todayString(),
-          trip_mode_enabled: tripModeEnabled,
+          ...buildTripModeUpdate(tripModeEnabled),
         })
         .eq('id', adoptedListId)
         .eq('creator_id', user.id)
@@ -577,7 +578,7 @@ export default function CreateListScreen({ navigation, route }) {
         ends_at: endsAt || null,
         is_public: true,
         invite_code: inviteCode,
-        trip_mode_enabled: tripModeEnabled,
+        ...buildTripModeUpdate(tripModeEnabled),
       })
       .select()
       .single()
@@ -799,11 +800,7 @@ export default function CreateListScreen({ navigation, route }) {
               <Text style={[styles.pillText, tripModeEnabled && styles.pillTextOn]}>Trip Mode</Text>
             </TouchableOpacity>
           </View>
-          <Text style={styles.hint}>
-            {tripModeEnabled
-              ? 'Trip Mode: participants can manually add experiences they did during the trip, even from somewhere else.'
-              : 'Regular: the normal rule applies — check off from the actual place.'}
-          </Text>
+          <Text style={styles.hint}>{tripModeChoiceCopy(tripModeEnabled)}</Text>
         </View>
 
         <TouchableOpacity

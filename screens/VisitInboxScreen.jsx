@@ -15,11 +15,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { useTheme } from '../lib/ThemeContext'
+import { fanOutCheckIn } from '../lib/checkInFanOut'
 import {
-  isCandidateVisitSuggestible,
   buildVisitConfirmationPayload,
   buildVisitDismissalPayload,
   formatVisitWhenLabel,
+  selectInboxRows,
 } from '../lib/visitDetection/candidateVisitConfirmation'
 
 function mapRow(row) {
@@ -74,22 +75,16 @@ export default function VisitInboxScreen({ navigation, route }) {
       if (error) throw error
 
       const mapped = (data ?? [])
-        .filter(row => isCandidateVisitSuggestible({
-          status: row.status,
-          expiresAt: row.expires_at,
-          confirmedAt: row.confirmed_at,
-          rejectedAt: row.rejected_at,
-        }))
-        .map(mapRow)
+        .map(row => {
+          const m = mapRow(row)
+          return m && { ...m, confirmedAt: row.confirmed_at, rejectedAt: row.rejected_at }
+        })
         .filter(Boolean)
 
       // Hide any suggestion for an item the user has ALREADY checked off,
       // through any path -- including one completed after this candidate
-      // visit was created (e.g. checked off live at the venue while this
-      // was still sitting unconfirmed). Matches the server-side guard in
-      // supabase/migrations/20260924_visit_detection_duplicate_guard.sql,
-      // which is the real authorization boundary -- this is a display-only
-      // mirror so the inbox doesn't offer something confirm would reject.
+      // visit was created. Display mirror of the server guard (migrations
+      // 20260924 / 20260927), which is the real boundary.
       const itemIds = [...new Set(mapped.map(r => r.itemId))]
       let alreadyCheckedOffItemIds = new Set()
       if (itemIds.length > 0) {
@@ -100,12 +95,7 @@ export default function VisitInboxScreen({ navigation, route }) {
           .in('item_id', itemIds)
         alreadyCheckedOffItemIds = new Set((existing ?? []).map(r => r.item_id))
       }
-      const withoutAlreadyDone = mapped.filter(r => !alreadyCheckedOffItemIds.has(r.itemId))
-
-      const sorted = highlightId
-        ? [...withoutAlreadyDone].sort((a, b) => (a.candidateVisitId === highlightId ? -1 : b.candidateVisitId === highlightId ? 1 : 0))
-        : withoutAlreadyDone
-      setRows(sorted)
+      setRows(selectInboxRows({ rows: mapped, checkedOffItemIds: alreadyCheckedOffItemIds, highlightId }))
     } catch (e) {
       console.warn('VisitInboxScreen load error:', e?.message ?? e)
       setRows([])
@@ -130,6 +120,9 @@ export default function VisitInboxScreen({ navigation, route }) {
       const { error } = await supabase.from('check_ins').insert(payload)
       if (error) throw error
 
+      // Same as a live check-off: mirror into any active list the user already
+      // belongs to that contains this item (points-free rows, never joins a list).
+      fanOutCheckIn({ userId: user.id, itemId: row.itemId }).catch(() => {})
       setRows(prev => prev.filter(r => r.candidateVisitId !== row.candidateVisitId))
       Alert.alert('Checked off!', `${row.itemBody} — added to your memory.`)
     } catch (e) {

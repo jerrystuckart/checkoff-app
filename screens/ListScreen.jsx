@@ -42,6 +42,8 @@ import { checkGeoFence, presentGeoFenceFailure } from '../lib/geoFence'
 import { proximitySort, formatDistanceLabel } from '../lib/proximity'
 import { getSessionDensityTier } from '../lib/densityTier'
 import { isTripModeWindowOpen, DEFAULT_TRIP_MODE_GRACE_DAYS } from '../lib/tripMode'
+import { canEditTripMode } from '../lib/listTripModeSetting'
+import ListTripModeSetting from '../components/ListTripModeSetting'
 
 const ACCENT = '#FFB84D'
 const ACCENT_DARK = '#7A4B00'
@@ -447,7 +449,7 @@ export default function ListScreen({ route, navigation }) {
     // to THIS list's own row.
     const { data, error } = await supabase
       .from('lists')
-      .select('id, title, starts_at, ends_at, is_official, is_public, source_destination_list_id, hero_image_url, trip_mode_enabled, trip_mode_grace_days, metro_areas(timezone)')
+      .select('id, title, creator_id, starts_at, ends_at, is_official, is_public, source_destination_list_id, hero_image_url, trip_mode_enabled, trip_mode_grace_days, metro_areas(timezone)')
       .eq('id', listId)
       .maybeSingle()
 
@@ -1448,6 +1450,15 @@ export default function ListScreen({ route, navigation }) {
             Forgot to check something off? Trip Mode lets you add things you did during this trip.
           </Text>
         </View>
+      )}
+
+      {listId && canEditTripMode({ listMeta, userId: currentUserId }) && (
+        <ListTripModeSetting
+          listId={listId}
+          userId={currentUserId}
+          enabled={listMeta?.trip_mode_enabled === true}
+          onChanged={(next) => setListMeta(prev => (prev ? { ...prev, trip_mode_enabled: next } : prev))}
+        />
       )}
 
       {hubDestinationId && (
