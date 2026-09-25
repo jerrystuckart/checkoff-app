@@ -65,15 +65,24 @@ export default function CreateListScreen({ navigation, route }) {
   const [searchText, setSearchText] = useState('')
   const [showDatePicker, setShowDatePicker] = useState(false)
   const [authChecked, setAuthChecked] = useState(false)
+  // Trip Mode vs Regular (2026-09-25) — per-list, owner-configurable at
+  // create/edit time. Defaults to Regular (false), matching
+  // lists.trip_mode_enabled's own column default, so every existing list
+  // this screen doesn't explicitly touch is unaffected. Munich's official
+  // list isn't created/edited through this screen at all, so it's
+  // untouched regardless.
+  const [tripModeEnabled, setTripModeEnabled] = useState(false)
 
   // If this screen was cached with an adoptedListId that no longer exists
   // (e.g. creator deleted the list then tapped the Create tab), silently
-  // reset to a fresh Step 1 rather than showing a broken edit flow.
+  // reset to a fresh Step 1 rather than showing a broken edit flow. Also
+  // loads the existing trip_mode_enabled value so editing a list doesn't
+  // silently reset its Trip Mode choice back to Regular.
   useFocusEffect(useCallback(() => {
     if (!adoptedListId) return
     supabase
       .from('lists')
-      .select('id')
+      .select('id, trip_mode_enabled')
       .eq('id', adoptedListId)
       .maybeSingle()
       .then(({ data }) => {
@@ -83,7 +92,9 @@ export default function CreateListScreen({ navigation, route }) {
             adoptedTitle: '',
             adoptedItemIds: [],
           })
+          return
         }
+        setTripModeEnabled(data.trip_mode_enabled ?? false)
       })
   }, [adoptedListId]))
 
@@ -159,6 +170,7 @@ export default function CreateListScreen({ navigation, route }) {
     setCreatedList(null)
     setSearchText('')
     setShowDatePicker(false)
+    setTripModeEnabled(false)
   }
 
   // Use local date — toISOString() returns UTC which can be the wrong
@@ -453,6 +465,7 @@ export default function CreateListScreen({ navigation, route }) {
           is_official: false,
           cover_emoji: groupEmoji ?? '📋',
           invite_code: inviteCode,
+          trip_mode_enabled: tripModeEnabled,
         })
         .select('id, title, invite_code')
         .single()
@@ -498,6 +511,7 @@ export default function CreateListScreen({ navigation, route }) {
           title: title.trim(),
           ends_at: endsAt || null,
           starts_at: todayString(),
+          trip_mode_enabled: tripModeEnabled,
         })
         .eq('id', adoptedListId)
         .eq('creator_id', user.id)
@@ -563,6 +577,7 @@ export default function CreateListScreen({ navigation, route }) {
         ends_at: endsAt || null,
         is_public: true,
         invite_code: inviteCode,
+        trip_mode_enabled: tripModeEnabled,
       })
       .select()
       .single()
@@ -766,6 +781,29 @@ export default function CreateListScreen({ navigation, route }) {
               Leave blank for an open-ended list. Today and past dates are blocked.
             </Text>
           )}
+
+          <Text style={styles.fieldLabel}>How does checking off work?</Text>
+          <View style={styles.pillRow}>
+            <TouchableOpacity
+              style={[styles.pill, !tripModeEnabled && styles.pillOn]}
+              onPress={() => setTripModeEnabled(false)}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.pillText, !tripModeEnabled && styles.pillTextOn]}>Regular</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.pill, tripModeEnabled && styles.pillOn]}
+              onPress={() => setTripModeEnabled(true)}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.pillText, tripModeEnabled && styles.pillTextOn]}>Trip Mode</Text>
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.hint}>
+            {tripModeEnabled
+              ? 'Trip Mode: participants can manually add experiences they did during the trip, even from somewhere else.'
+              : 'Regular: the normal rule applies — check off from the actual place.'}
+          </Text>
         </View>
 
         <TouchableOpacity

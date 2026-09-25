@@ -10,6 +10,7 @@ import {
   BACKGROUND_LOCATION_COPY,
 } from '../lib/visitDetection/permissions'
 import { forceRefreshGeofences } from '../lib/visitDetection/candidateVisitTracker'
+import { describeRegistrationState } from '../lib/visitDetection/registrationStateLabel'
 
 // TEMPORARY — Phase 1 pilot only. Visible exclusively to
 // users.visit_detection_tester accounts (gated by the caller, ProfileScreen).
@@ -19,7 +20,7 @@ import { forceRefreshGeofences } from '../lib/visitDetection/candidateVisitTrack
 // the recovery-flow settings section).
 export default function VisitDetectionDebugPanel({ userId }) {
   const { colors } = useTheme()
-  const { TEXT, MUTED, AMBER } = colors
+  const { TEXT, MUTED, AMBER, RED } = colors
   const [loading, setLoading] = useState(false)
   const [status, setStatus] = useState(null)
   const [lastLog, setLastLog] = useState(null)
@@ -36,7 +37,7 @@ export default function VisitDetectionDebugPanel({ userId }) {
 
       const { data: log } = await supabase
         .from('geofence_registration_log')
-        .select('refreshed_at, geofencing_started, error_message, monitored_items, excluded_items')
+        .select('refreshed_at, geofencing_started, error_message, monitored_items, excluded_items, registration_state')
         .eq('user_id', userId)
         .order('refreshed_at', { ascending: false })
         .limit(1)
@@ -84,13 +85,22 @@ export default function VisitDetectionDebugPanel({ userId }) {
 
       <Row label="Background location permission" ok={status?.hasBgPermission} color={TEXT} />
       <Row label="candidate_visit_detection flag" ok={status?.detectionEnabled} color={TEXT} />
-      <Row label="Last geofence registration succeeded" ok={lastLog?.geofencing_started} color={TEXT} />
+
+      {(() => {
+        const { label, tone } = describeRegistrationState(lastLog)
+        const toneColor = tone === 'ok' ? TEXT : tone === 'error' ? RED : tone === 'neutral' ? AMBER : MUTED
+        const toneIcon = tone === 'ok' ? '✓' : tone === 'error' ? '✕' : 'ⓘ'
+        return (
+          <Text style={[styles.row, { color: toneColor }]}>
+            {toneIcon} Last registration: {label}
+          </Text>
+        )
+      })()}
 
       {lastLog && (
         <Text style={[styles.meta, { color: MUTED }]}>
           Last refresh: {new Date(lastLog.refreshed_at).toLocaleString()} ·{' '}
           {lastLog.monitored_items?.length ?? 0} monitored, {lastLog.excluded_items?.length ?? 0} excluded
-          {lastLog.error_message ? ` · error: ${lastLog.error_message}` : ''}
         </Text>
       )}
 
