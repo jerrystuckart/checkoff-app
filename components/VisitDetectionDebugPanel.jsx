@@ -10,7 +10,9 @@ import {
   BACKGROUND_LOCATION_COPY,
 } from '../lib/visitDetection/permissions'
 import { forceRefreshGeofences } from '../lib/visitDetection/candidateVisitTracker'
+import * as Updates from 'expo-updates'
 import { describeRegistrationState } from '../lib/visitDetection/registrationStateLabel'
+import { describeClientBundle } from '../lib/visitDetection/clientBundle'
 
 // TEMPORARY — Phase 1 pilot only. Visible exclusively to
 // users.visit_detection_tester accounts (gated by the caller, ProfileScreen).
@@ -83,6 +85,15 @@ export default function VisitDetectionDebugPanel({ userId }) {
     <View style={[styles.card, { borderColor: AMBER, backgroundColor: `${AMBER}14` }]}>
       <Text style={[styles.title, { color: AMBER }]}>Visit detection debug (tester only)</Text>
 
+      {(() => {
+        const b = describeClientBundle(Updates)
+        return (
+          <Text style={[styles.meta, { color: TEXT }]}>
+            Running bundle: {b.embedded ? 'embedded (no OTA applied)' : `OTA ${b.updateId}`}{'\n'}
+            Runtime {b.runtime} · channel {b.channel}
+          </Text>
+        )
+      })()}
       <Row label="Background location permission" ok={status?.hasBgPermission} color={TEXT} />
       <Row label="candidate_visit_detection flag" ok={status?.detectionEnabled} color={TEXT} />
 

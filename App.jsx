@@ -324,6 +324,16 @@ function HomeStack() {
         component={WeeklyRecapScreen}
         options={{ title: 'This Week' }}
       />
+      {/* Must live in HomeStack: every entry point (Profile button, push tap)
+          navigates ('HomeTab', { screen: 'VisitInbox' }), and this stack also
+          owns ItemDetail, which the inbox rows open. It was previously
+          registered in ListsStack by mistake, so those navigations were
+          silently unhandled and only switched to the Home tab. */}
+      <Stack.Screen
+        name="VisitInbox"
+        component={VisitInboxScreen}
+        options={{ title: 'Places you may have visited' }}
+      />
     </Stack.Navigator>
   )
 }
@@ -402,11 +412,6 @@ function ListsStack() {
         name="SavedItems"
         component={SavedItemsScreen}
         options={{ title: 'Saved' }}
-      />
-      <Stack.Screen
-        name="VisitInbox"
-        component={VisitInboxScreen}
-        options={{ title: 'Places you may have visited' }}
       />
     </Stack.Navigator>
   )
