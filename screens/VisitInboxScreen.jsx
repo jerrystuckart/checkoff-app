@@ -1,13 +1,12 @@
-// Visit Detection Stage 2 (2026-09-23) — "Places you may have visited"
-// inbox. Tester-only for now (gated by the caller, ProfileScreen, on
-// profile.visit_detection_tester — same gate VisitDetectionDebugPanel
-// already uses). Lists a user's own candidate_visits rows that are still
-// pending a decision, lets them confirm (creates a real check-in via the
-// server-authorized verification_method='historical_visit_confirmed' path —
-// see supabase/migrations/20260923_visit_detection_stage2_confirm.sql) or
-// dismiss ("Not this time"). Never creates a check-in or awards points
-// without an explicit tap here — this screen is the only place that can
-// convert a candidate_visits row into a real check-in.
+// "Places you may have visited" — the seven-day recovery inbox. Available to
+// anyone who has a valid suggestion (Profile shows the entry when there is
+// one). Lists the user's own candidate_visits that are still pending and
+// unexpired; confirming converts one specific visit into a real check-in via
+// the server-authorized verification_method='historical_visit_confirmed' path
+// (ownership, item, status, seven-day expiry and duplicate-points rules are all
+// enforced in the database — see the 20260923/24/25/27 migrations), or the user
+// dismisses it. Never creates a check-in or awards points without an explicit
+// tap here.
 
 import React, { useCallback, useMemo, useState } from 'react'
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native'
@@ -34,6 +33,7 @@ function mapRow(row) {
     itemId: it.id,
     itemBody: it.body ?? '',
     neighborhoodName: it.neighborhoods?.name ?? null,
+    competingVenueCount: row.metadata?.competingVenueCount ?? 0,
   }
 }
 
@@ -65,7 +65,7 @@ export default function VisitInboxScreen({ navigation, route }) {
       const { data, error } = await supabase
         .from('candidate_visits')
         .select(`
-          id, status, expires_at, departure_at, confirmed_at, rejected_at,
+          id, status, expires_at, departure_at, confirmed_at, rejected_at, metadata,
           items ( id, body, neighborhoods!items_neighborhood_id_fkey ( name ) )
         `)
         .eq('user_id', user.id)
@@ -165,13 +165,13 @@ export default function VisitInboxScreen({ navigation, route }) {
     >
       <Text style={styles.screenTitle}>Places you may have visited</Text>
       <Text style={styles.screenSubtitle}>
-        Based on time spent nearby — private to you, and never checked off automatically. Confirm what's right, dismiss what isn't.
+        Based on time you spent at CheckOff places — private to you, kept for 7 days, and never checked off automatically. Confirm what's right, dismiss what isn't.
       </Text>
 
       {rows.length === 0 ? (
         <View style={styles.emptyWrap}>
           <Text style={styles.emptyTitle}>Nothing to review right now</Text>
-          <Text style={styles.emptyBody}>When we notice you spent real time somewhere on your list, it'll show up here.</Text>
+          <Text style={styles.emptyBody}>When you spend time at a CheckOff place, it shows up here for 7 days so you can check it off later — from anywhere. Turn on visit recovery in Profile to have CheckOff remember your visits.</Text>
         </View>
       ) : (
         rows.map(row => (
@@ -183,6 +183,9 @@ export default function VisitInboxScreen({ navigation, route }) {
               <Text style={styles.itemBody}>{row.itemBody}</Text>
               {row.neighborhoodName ? <Text style={styles.itemMeta}>{row.neighborhoodName}</Text> : null}
               {row.departureAt ? <Text style={styles.itemMeta}>{formatVisitWhenLabel(row.departureAt)}</Text> : null}
+              {row.competingVenueCount > 0 ? (
+                <Text style={styles.itemMeta}>Other CheckOff places are very close by — only check this off if it's the one you visited.</Text>
+              ) : null}
             </TouchableOpacity>
 
             <View style={styles.buttonRow}>

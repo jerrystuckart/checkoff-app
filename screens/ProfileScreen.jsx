@@ -15,7 +15,7 @@ import { useAuth } from '../lib/useAuth'
 import { useTheme } from '../lib/ThemeContext'
 import * as Sentry from '@sentry/react-native'
 import VisitDetectionDebugPanel from '../components/VisitDetectionDebugPanel'
-import { openVisitInbox } from '../lib/visitDetection/inboxNavigation'
+import VisitRecoverySection from '../components/VisitRecoverySection'
 
 export default function ProfileScreen({ navigation }) {
   const insets = useSafeAreaInsets()
@@ -366,15 +366,7 @@ export default function ProfileScreen({ navigation }) {
         {profile?.is_admin && (
           <View style={styles.adminBadge}><Text style={styles.adminBadgeText}>⚙ Admin</Text></View>
         )}
-        {profile?.visit_detection_tester && (
-          <TouchableOpacity
-            style={[styles.foundingBadge, { alignSelf: 'stretch', justifyContent: 'center', marginTop: 12 }]}
-            onPress={() => openVisitInbox(navigation.getParent())}
-            accessibilityRole="button"
-          >
-            <Text style={styles.foundingBadgeText}>📍 Places you may have visited</Text>
-          </TouchableOpacity>
-        )}
+        <VisitRecoverySection userId={user?.id} navigation={navigation} />
         {profile?.visit_detection_tester && (
           <VisitDetectionDebugPanel userId={user?.id} />
         )}
