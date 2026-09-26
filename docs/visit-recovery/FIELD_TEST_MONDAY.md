@@ -4,7 +4,7 @@
 
 ## Before you go (do this once you have signal, e.g. Sunday night)
 1. Force-quit and reopen the app **twice** (first launch downloads the update, second applies it).
-2. Profile → debug panel → **Running bundle** must read `OTA <id printed by me in the report>` (older `01a0dd03…` is superseded). Runtime `81dbd1f1…`, channel production.
+2. Profile → debug panel → **Running bundle** must read `OTA 01a0dd17-681a-77b1-aebd-e4ca540cc066` (the earlier `01a0dd03…` is superseded by it: it adds the iOS-callback hardening; the app downloads it on one launch and applies it on the next). Runtime `81dbd1f1…`, channel production.
 3. Profile card says **On**; Location = **Always** (Settings → CheckOff → Location).
 4. Screenshot the panel. If anything differs, stop and send me the screenshot.
 
