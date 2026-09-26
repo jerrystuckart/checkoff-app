@@ -208,7 +208,7 @@ export default function HomeScreen({ navigation }) {
       const [{ data: metroData }, { data: n10Data }, persistedSlug] = await Promise.all([
         supabase
           .from('metro_areas')
-          .select('id, name, state, slug, center_lat, center_lng')
+          .select('id, name, state, slug, center_lat, center_lng, boundary_radius_km')
           .eq('is_active', true)
           .order('name'),
         supabase
