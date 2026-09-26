@@ -1,8 +1,9 @@
--- Visit profile coverage, rule set v1 (2026-09-28). See lib/visitDetection/profileClassifier.js:
--- conservative category-level rules validated against the human-assigned labels already in
--- production (93% agreement; only 3 of 259 predictions shorter-dwell than the label; ambiguous
--- categories such as Adventure/Social/Misc are left unassigned). Inert until visit recovery is
--- switched on: nothing monitors a place for a user who has not opted in.
+-- Visit profile coverage, rule set v1 (2026-09-28). Rules: lib/visitDetection/profileClassifier.js.
+-- Hard safety properties are enforced by lib/visitDetection/profileClassifier.test.js over the whole
+-- catalog (never inactive, universal, secret, un-geocoded, metro-less, area-level, brief-stop, already-
+-- profiled or manual_only rows; the UPDATEs below also only fill empty profiles). Review counts and
+-- samples by city and category: docs/visit-recovery/profile_assignment_review.md.
+-- Inert until visit recovery is switched on: nothing monitors a place for a user who has not opted in.
 -- Reversible: UPDATE items SET visit_profile_key = NULL, visit_profile_source = NULL WHERE visit_profile_source = 'rule_v1';
 BEGIN;
 
@@ -92,7 +93,6 @@ WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   '74f1c258-eb50-45ca-b83e-325b439f25e0',
   '200b1e46-8c6e-4324-9a20-3fc290db6799',
   'a8f2298b-fc89-45c0-9e0d-60a57148b35c',
-  '9860f2be-53e3-494e-b1bc-7029c861f2bd',
   '2f2ab1df-c3a3-4b91-a8bc-906756bcf6a1',
   '7cd251c2-5c17-4e92-b1ad-bbdde2f24fbb',
   '50f7810d-fc4b-4e07-87cb-87c771fcf4c7',
@@ -182,7 +182,6 @@ WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   '7a597206-7e9f-4992-8699-f62266648ef7',
   'edebc70e-0553-45e0-8149-d82745dbefa5',
   '2a099c60-94df-41bc-8b3f-a09efcf3006c',
-  'ecf40687-62af-4ef7-845d-05ff25f20e55',
   '66925538-45e8-4108-bfec-4c9dcefcce92',
   '385fe6dc-4f2a-4269-acdf-a073360e67ee',
   'f5c2a3d4-804a-44e9-9ef2-a8691fdb45c8',
@@ -292,7 +291,6 @@ WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   '79bff7a0-7add-46d3-8de6-4a3600e929bc',
   'eca5d9d9-2bc2-4f12-8115-22bf1d92d096',
   'a160e476-fe8d-42f4-877f-779a27ffc54f',
-  'c438fb57-466d-4e30-9ba1-30036ab3949a',
   'd8f02a1b-d94b-4ce3-81a1-c9f1e7163fb2',
   '392286f3-31d7-41bf-acef-78a93b50591d',
   '550af2ec-9a95-4eb8-919f-df84eac6b580',
@@ -350,11 +348,7 @@ UPDATE items SET visit_profile_key = 'attraction', visit_profile_source = 'rule_
 WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   'ea1deb4c-ab9d-4bd1-88f5-527188487d17',
   '333291c0-8624-433d-a650-bbdf500d4acc',
-  '2c2bc759-c6d4-48ec-a934-7d0664c48cee',
   '263ccdb5-a7a6-4d30-80a8-4dbdb3fe36c7',
-  'd1cc546d-28fc-4f4d-90aa-22c983145093',
-  'd8a2c599-d05d-4829-9120-e555654a1b35',
-  '1d7419e6-3da3-49d5-8e0a-f2858e917ca8',
   '712740e0-22fa-47e4-ab94-96eb24c8d586',
   '6a7d664d-bb25-48f7-834c-72d087ec87d9',
   'ef2929f0-c042-4f24-9d40-7961dc774656',
@@ -365,7 +359,6 @@ WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   'f363c876-255b-4bd3-bfdd-2cf96195eed2',
   'e99a369c-e9db-4206-99ae-a042a944fb84',
   '66c977ad-8bd8-4144-b7a9-1f4b39c8e6c5',
-  '30cb6b1d-2b51-4cf0-ab6f-cd87251f08ba',
   '24e6743e-0eb1-42fa-a07b-4de25bc5574e',
   'a533a75c-ca7a-42ac-a99b-65094ca0bf1b',
   '8c65a12b-5162-450c-894f-c889f83af035',
@@ -430,7 +423,6 @@ WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   '20261fe5-92b6-4e76-a250-e0a31cfa7413',
   '5c4ba01d-9155-449e-a4e0-d93dc662c9cd',
   '2be72919-b658-4e6f-8dff-f5b5c2d19f54',
-  'd55d07c2-e5f8-4d56-a1ec-cfbc209c6e51',
   '5e97d93c-3d09-4a37-b85a-b21a41615603',
   '94bc5256-68a3-4b84-8f2f-a1b814e3e41b',
   '60d824e8-9f08-4470-bfaf-61c6d8fa5936',
@@ -441,13 +433,11 @@ WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   'e236cfc2-2574-47cc-b420-9e3ae11147e7',
   '56a3a6ff-aa56-4976-8df2-fc767ea08e1f',
   'a3793a81-77d0-4350-8630-eb8a27953219',
-  '605f8046-83dd-4c42-828b-be773380eb54',
   '6fd27327-926d-4509-9df5-fffa2b56c6a0',
   '4a430560-8a1d-480a-88e5-febf22eaa930',
   'e13b1014-2f0b-47e7-bd37-b79d365d5b38',
   'ff9b8ad1-a9f4-4c11-9847-0f8ce96e59b7',
   'e8612a75-c045-4178-b274-95c23d1db114',
-  '19735aa7-c202-41ae-81d2-369628510378',
   '4669e6ea-005e-48bd-a517-71b0e218be7e',
   '7ca7b56b-3aff-4c89-97fb-afb3f817e794',
   'f82e5ba2-050a-47e9-b9a0-45fd7c073e61',
@@ -463,7 +453,6 @@ WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   '7a4172c8-5df5-49cd-829d-304aa17ad06a',
   '44a254aa-5ff6-4c65-af65-01be9f1c980b',
   '4ee91d4f-dc17-4beb-9081-5c7729888a9f',
-  'cb72f969-c8d8-47a0-b5b3-f7022affa37d',
   'a4b249ed-f0bf-476a-b32c-1a0c0b82261d',
   '03c99212-8cb7-4dca-a3ba-7da37618b43a',
   '208354d9-e82b-4972-ae53-f260ec13592f',
@@ -483,7 +472,6 @@ WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   '694b9858-dbcf-4e32-aba9-ed2a2bbc9316',
   '70024913-9352-4e78-9588-1f5db9f3556e',
   '716ef3a6-5355-4e15-a8ca-6192175eacc6',
-  '7789de88-3bb0-47d6-bb5d-3504261230d9',
   '7de38a1b-e1ef-4e81-8518-b5b799f26758',
   '822f114b-ec19-4c23-8d09-33e6a1bce703',
   '897bab12-c398-405e-a749-a7bec3fe4692',
@@ -510,7 +498,6 @@ WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   'e1f92e2e-66b6-4254-b6dc-34bdcee540f6',
   'e91add97-243c-456c-8bee-5150c43a0ba8',
   'e98a6e40-5a39-4c74-a0e3-9069afcd8e23',
-  'eaa9fcfc-1a79-4918-b20e-3441171a9bf3',
   'f28dc3de-c7d9-4a4f-97ad-7969cc8dbad7',
   'f435af68-de4b-4574-8d46-a07294f7641c',
   'cce80e43-5349-4ce9-9f77-28eee9313578',
@@ -602,7 +589,6 @@ WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   'eae7157b-279f-43f9-952a-2c1be5c79509',
   'd7b1bb42-6fcf-48f9-b222-94b579425186',
   'b835b291-4107-43d3-9b56-f8f943db2637',
-  '863b4b69-15df-4f05-8cde-1b2c8403dc2c',
   '212f9be9-aa5f-4a76-af2f-8f50b143a447',
   '093a13db-ce61-45e9-96f4-da2e4557307a',
   '84f8b727-91fe-4f4e-9874-7de22a5d557f',
@@ -627,7 +613,6 @@ WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   'c970f156-a3fc-40ec-a781-e0ac0dcf2e79',
   '7e084829-b25f-46b1-93ba-6e29279f348e',
   '92cfdb7f-4591-4fde-9a25-1a9b1f78e2a9',
-  'f84a3c15-5f10-47e1-8f46-1a825d1d1d4b',
   'e70b720a-18f8-4a78-84ba-1e032f3a0f67',
   'e231a29a-0d3e-4d0b-9628-ab194171c539'
 );
@@ -655,7 +640,6 @@ WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   '0a294de2-9162-4cdd-b8da-0de548e0d5ab',
   '4db5d2c4-cbae-4c48-b89b-5ce47c2d3870',
   '75e46534-c89d-4892-801f-974d96875719',
-  'b5588e87-4755-4d23-a3fa-b0b8fd7f14c2',
   '0b3b1989-fad2-420c-8a25-7c9370ef2375',
   'fc703425-56f8-45fc-a1e3-0828be45e74c',
   'e4b41e93-9375-4973-abe4-41a91e7bf286',
@@ -900,7 +884,6 @@ WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   '832ab5b4-2b62-463e-a26c-0647751a0460',
   '1403c40a-ff7b-4dc3-9315-8547dfc874d8',
   'af51f36c-d043-4330-bda7-f8765241ce4a',
-  '54b787ec-256f-498b-9415-c7943df6506e',
   '0403e07b-f067-4993-b849-9849e8de5616',
   '8c8d6133-01aa-42d0-8408-4f497ecb7280',
   'eeff9a2f-331d-4542-be3f-b69e47c10e85',
@@ -950,7 +933,6 @@ WHERE visit_profile_key IS NULL AND NOT is_universal AND is_active AND id IN (
   '2ceff4c7-3658-486a-b2cc-efc8ba5a6d08',
   'c9c2ad88-8dc9-480c-83cb-702855746fe2',
   'a9a4accf-3f05-4b61-a516-984026c5957d',
-  'c8500323-45a3-4d6b-b4cd-e91c19f6cc64',
   'bf1333ff-ba0d-4fba-bae5-f038c1033c6c',
   '7ed5ed9a-b3e2-4a02-a9d7-54c30c52796a',
   '5d154f8c-add5-4e52-9084-ed91c8611bb4',
@@ -986,7 +968,7 @@ DO $$
 DECLARE n int;
 BEGIN
   SELECT count(*) INTO n FROM items WHERE visit_profile_source = 'rule_v1';
-  IF n <> 945 THEN RAISE EXCEPTION 'expected 945 rule_v1 assignments, found %', n; END IF;
+  IF n <> 926 THEN RAISE EXCEPTION 'expected 926 rule_v1 assignments, found %', n; END IF;
 END $$;
 
 COMMIT;

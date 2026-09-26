@@ -1,23 +1,23 @@
 // Generates supabase/migrations/20260928b_visit_profile_rule_v1.sql from a JSON
-// export of active, geocoded, non-universal items (rows: id, body, cat, prof,
-// metro, is_secret). Usage: node scripts/generate-visit-profile-migration.mjs items.json
+// export of ALL catalog items (rows: id, body, cat, prof, metro, is_active,
+// is_universal, is_secret, has_coords). Usage: node scripts/generate-visit-profile-migration.mjs items.json
 import fs from 'node:fs'
-import { classifyVisitProfile } from '../lib/visitDetection/profileClassifier.js'
+import { assignableVisitProfile } from '../lib/visitDetection/profileClassifier.js'
 
 const raw = fs.readFileSync(process.argv[2], 'utf8')
 const rows = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1)).rows
 const by = {}
 let n = 0
 for (const r of rows) {
-  if (r.prof || !r.metro || r.is_secret) continue
-  const c = classifyVisitProfile({ body: r.body, category: r.cat })
+  const c = assignableVisitProfile(r)
   if (c.profile) { (by[c.profile] ??= []).push(r.id); n++ }
 }
-let sql = `-- Visit profile coverage, rule set v1 (2026-09-28). See lib/visitDetection/profileClassifier.js:
--- conservative category-level rules validated against the human-assigned labels already in
--- production (93% agreement; only 3 of 259 predictions shorter-dwell than the label; ambiguous
--- categories such as Adventure/Social/Misc are left unassigned). Inert until visit recovery is
--- switched on: nothing monitors a place for a user who has not opted in.
+let sql = `-- Visit profile coverage, rule set v1 (2026-09-28). Rules: lib/visitDetection/profileClassifier.js.
+-- Hard safety properties are enforced by lib/visitDetection/profileClassifier.test.js over the whole
+-- catalog (never inactive, universal, secret, un-geocoded, metro-less, area-level, brief-stop, already-
+-- profiled or manual_only rows; the UPDATEs below also only fill empty profiles). Review counts and
+-- samples by city and category: docs/visit-recovery/profile_assignment_review.md.
+-- Inert until visit recovery is switched on: nothing monitors a place for a user who has not opted in.
 -- Reversible: UPDATE items SET visit_profile_key = NULL, visit_profile_source = NULL WHERE visit_profile_source = 'rule_v1';
 BEGIN;
 
@@ -37,5 +37,5 @@ END $$;
 
 COMMIT;
 `
-fs.writeFileSync(new URL('../docs/visit-recovery/visit_profile_rule_v1_NOT_APPLIED.sql', import.meta.url), sql)
+fs.writeFileSync(new URL('../supabase/migrations/20260928b_visit_profile_rule_v1.sql', import.meta.url), sql)
 console.log('assignments:', n, Object.fromEntries(Object.entries(by).map(([k, v]) => [k, v.length])))
