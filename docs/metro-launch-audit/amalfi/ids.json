@@ -1,0 +1,19 @@
+{
+ "metro": "b3e00b75-59f0-4b8f-ad3a-f6a203365821",
+ "dest": "87f92f2d-e249-403c-ab18-da56dfcf1bdd",
+ "zone": "40c2324b-a8d0-47e3-967f-5915a2ac7b0b",
+ "essentials": "fb5ed539-39ad-43c9-aae6-f6597a5ee76e",
+ "beyond": "5bb9bc06-6406-4c82-b5e7-f6d3d3129606",
+ "dlE": "ed395afd-a0cc-4b77-82fa-218d6faa8e24",
+ "dlB": "66e7ee19-a575-49cf-8b5c-ff213f202eac",
+ "neighborhoods": {
+  "pos": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "pra": "36f99ec8-4deb-4599-9e92-27845665b1ec",
+  "fur": "fc51aa8a-0c8f-4b15-8aad-64775cf56842",
+  "ama": "7c50d369-2d63-4e24-9adf-66e66a3002c6",
+  "rav": "abe03d9d-59bb-428e-a1b2-f7e4bff068e5",
+  "min": "f0568bd1-840d-4d7c-a043-65dafef402a5",
+  "cet": "6bb7fef7-d3e8-4873-a7a9-0ac1ae072d2b",
+  "vie": "a7719d53-ead3-45e7-bf44-249267f7ed99"
+ }
+}

@@ -1,0 +1,1094 @@
+[
+ {
+  "k": "adolfo",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Food & drink",
+  "body": "Ride the free red boat from Positano's harbor to a cove-side table and order mozzarella grilled on lemon leaves at 'Ristorante Da Adolfo'",
+  "mq": "Ristorante Da Adolfo, Via Laurito, 40, 84017 Positano SA, Italy",
+  "lat": 40.6223892,
+  "lng": 14.5072782,
+  "pid": "ChIJoUijgBeXOxMRayKHsUIVhIs",
+  "addr": "Via Laurito, 40, 84017 Positano SA, Italy",
+  "web": "https://daadolfo.prenota-web.it/prenotazioni/",
+  "alc": false,
+  "rec": true,
+  "d": 5,
+  "r": 150,
+  "core": [
+   "seafood",
+   "beach",
+   "italian",
+   "unique",
+   "hidden-gem"
+  ],
+  "sec": [
+   "boat",
+   "lunch",
+   "waterfront"
+  ]
+ },
+ {
+  "k": "lazagara",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Food & drink",
+  "body": "Order the Delizia al Limone in the lemon-tree garden behind the counter at 'La Zagara'",
+  "mq": "La Zagara, Via dei Mulini, 10, 84017 Positano SA, Italy",
+  "lat": 40.6295652,
+  "lng": 14.4863527,
+  "pid": "ChIJn39rOm-XOxMRUfFtSNEoScg",
+  "addr": "Via dei Mulini, 10, 84017 Positano SA, Italy",
+  "web": "https://www.lazagara.com/",
+  "alc": false,
+  "rec": true,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "dessert",
+   "bakery",
+   "cafe",
+   "local-favorite",
+   "unique"
+  ],
+  "sec": [
+   "patio",
+   "breakfast",
+   "italian"
+  ]
+ },
+ {
+  "k": "assunta",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Arts & Culture",
+  "body": "See the Byzantine Black Madonna icon beneath the majolica-tiled dome of 'Chiesa di Santa Maria Assunta'",
+  "mq": "Church of Saint Mary of the Assumption, P.za Flavio Gioia, 84017 Positano SA, Italy",
+  "lat": 40.6283811,
+  "lng": 14.4868384,
+  "pid": "ChIJoSIkncCWOxMRb3hQoKcIt7A",
+  "addr": "P.za Flavio Gioia, 84017 Positano SA, Italy",
+  "web": null,
+  "alc": false,
+  "rec": false,
+  "d": 1,
+  "r": 120,
+  "core": [
+   "church",
+   "architecture",
+   "historic",
+   "landmark",
+   "unique"
+  ],
+  "sec": [
+   "art",
+   "local-culture",
+   "history"
+  ]
+ },
+ {
+  "k": "mar",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Arts & Culture",
+  "body": "Step inside the Roman villa buried under Positano by the 79 AD eruption of Vesuvius at 'MAR Positano'",
+  "mq": "Roman Archeological Museum (Positano MAR), P.za Flavio Gioia, 7, 84017 Positano SA, Italy",
+  "lat": 40.6286808,
+  "lng": 14.4866767,
+  "pid": "ChIJm5orj3eXOxMRdbp-qtR0VNw",
+  "addr": "P.za Flavio Gioia, 7, 84017 Positano SA, Italy",
+  "web": "https://marpositano.it/",
+  "alc": false,
+  "rec": false,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "museum",
+   "history",
+   "historic",
+   "unique",
+   "hidden-gem"
+  ],
+  "sec": [
+   "art",
+   "architecture",
+   "educational"
+  ]
+ },
+ {
+  "k": "franco",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Bar & drinks",
+  "body": "Order a Franco's Fizz on the sea-hung terrace an hour before sunset at 'Franco's Bar'",
+  "mq": "Franco's Bar, Via Cristoforo Colombo, 30, 84017 Positano SA, Italy",
+  "lat": 40.6286284,
+  "lng": 14.4879612,
+  "pid": "ChIJuxunJW-XOxMRd-7kxOP4ih0",
+  "addr": "Via Cristoforo Colombo, 30, 84017 Positano SA, Italy",
+  "web": "http://francosbar.com/",
+  "alc": true,
+  "rec": true,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "cocktails",
+   "bar",
+   "sunset",
+   "views",
+   "upscale"
+  ],
+  "sec": [
+   "luxury",
+   "date-night",
+   "romantic"
+  ]
+ },
+ {
+  "k": "rallo",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Shopping",
+  "body": "Have leather sandals cut and fitted to your feet by a third-generation cobbler at 'Artigianato Rallo'",
+  "mq": "Rallo Antonio, Viale Pasitea, 58, 84017 Positano SA, Italy",
+  "lat": 40.6309848,
+  "lng": 14.485148,
+  "pid": "ChIJzxm5RG-XOxMRiyc4qbt4UHM",
+  "addr": "Viale Pasitea, 58, 84017 Positano SA, Italy",
+  "web": "http://www.artigianatorallo.com/",
+  "alc": false,
+  "rec": false,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "shopping",
+   "craft",
+   "souvenir",
+   "local",
+   "unique"
+  ],
+  "sec": [
+   "boutique",
+   "clothing",
+   "hidden-gem"
+  ]
+ },
+ {
+  "k": "spiaggia",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Travel",
+  "body": "Watch Positano's pastel houses turn gold from the pebbles of 'Spiaggia Grande' in the hour before sunset",
+  "mq": "Spiaggia di Positano Marina Grande, Via del Brigantino, 84017 Positano SA, Italy",
+  "lat": 40.6278031,
+  "lng": 14.4869629,
+  "pid": "ChIJJbN_PpiXOxMR54BkeDpk_Ps",
+  "addr": "Via del Brigantino, 84017 Positano SA, Italy",
+  "web": null,
+  "alc": false,
+  "rec": true,
+  "d": 1,
+  "r": 200,
+  "core": [
+   "beach",
+   "sunset",
+   "scenic",
+   "views",
+   "photo-op"
+  ],
+  "sec": [
+   "waterfront",
+   "instagrammable",
+   "landmark"
+  ]
+ },
+ {
+  "k": "fornillo",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Adventure",
+  "body": "Follow the cliffside path west of the harbor to swim at quieter 'Fornillo Beach'",
+  "mq": "Fornillo Beach, Fornillo Beach, Italy",
+  "lat": 40.6263545,
+  "lng": 14.4822477,
+  "pid": "ChIJeZDhvGeXOxMRtumC1QyEOpQ",
+  "addr": "Fornillo Beach, Italy",
+  "web": null,
+  "alc": false,
+  "rec": true,
+  "d": 1,
+  "r": 200,
+  "core": [
+   "beach",
+   "swimming",
+   "walking",
+   "scenic",
+   "waterfront"
+  ],
+  "sec": [
+   "outdoor",
+   "nature",
+   "local"
+  ]
+ },
+ {
+  "k": "lucibello",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Adventure",
+  "body": "Book a boat with 'Lucibello' to swim beside Li Galli, the sirens' islands once owned by Rudolf Nureyev",
+  "mq": "Boat Charter Lucibello Sas, Via Marina Grande, 84017 Positano SA, Italy",
+  "lat": 40.627754,
+  "lng": 14.4870576,
+  "pid": "ChIJ3QOeIGmXOxMRHI25GddJioI",
+  "addr": "Via Marina Grande, 84017 Positano SA, Italy",
+  "web": "https://www.lucibello.it/",
+  "alc": false,
+  "rec": false,
+  "d": 10,
+  "r": 150,
+  "core": [
+   "boat",
+   "island",
+   "swimming",
+   "adventure",
+   "scenic"
+  ],
+  "sec": [
+   "boat-tour",
+   "unique",
+   "views"
+  ]
+ },
+ {
+  "k": "pathgods",
+  "nb": "36f99ec8-4deb-4599-9e92-27845665b1ec",
+  "cat": "Adventure",
+  "body": "Hike the 'Sentiero degli Dei' from Bomerano to Nocelle, then drop down the stairs into Positano",
+  "mq": "Path of the Gods, Sentiero degli Dei, 80051 Agerola NA, Italy",
+  "lat": 40.6250847,
+  "lng": 14.5355348,
+  "pid": "ChIJ4coKSfOWOxMRR84g-JLxTp0",
+  "addr": "Sentiero degli Dei, 80051 Agerola NA, Italy",
+  "web": "https://www.cartotrekking.com/",
+  "alc": false,
+  "rec": false,
+  "d": 10,
+  "r": 1500,
+  "core": [
+   "hiking",
+   "trail",
+   "views",
+   "scenic",
+   "adventure"
+  ],
+  "sec": [
+   "moderate-hike",
+   "nature",
+   "outdoor"
+  ]
+ },
+ {
+  "k": "montepertuso",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Adventure",
+  "body": "Climb the stairs up to 'Montepertuso' and find the hole in the mountain that gave the village its name",
+  "mq": "Montepertuso, 84017 Montepertuso, SA, Italy",
+  "lat": 40.6325099,
+  "lng": 14.493076,
+  "pid": "ChIJtehEnnKXOxMRQW_dziDhCSY",
+  "addr": "84017 Montepertuso, SA, Italy",
+  "web": null,
+  "alc": false,
+  "rec": false,
+  "d": 5,
+  "r": 300,
+  "core": [
+   "walking",
+   "views",
+   "unique",
+   "hidden-gem",
+   "local-culture"
+  ],
+  "sec": [
+   "nature",
+   "exploration",
+   "local"
+  ]
+ },
+ {
+  "k": "ritrovo",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Food & drink",
+  "body": "Order the zuppa saracena, a paella-like seafood stew, at 'Il Ritrovo' in Montepertuso",
+  "mq": "Il Ritrovo, Piazza Cappella, 3, 84017 Positano SA, Italy",
+  "lat": 40.6332838,
+  "lng": 14.4927527,
+  "pid": "ChIJjdDMD22XOxMRb7rKwBYWLd4",
+  "addr": "Piazza Cappella, 3, 84017 Positano SA, Italy",
+  "web": "https://www.ilritrovo.com/",
+  "alc": false,
+  "rec": true,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "seafood",
+   "italian",
+   "restaurant",
+   "local-favorite",
+   "views"
+  ],
+  "sec": [
+   "lunch",
+   "dinner",
+   "hidden-gem"
+  ]
+ },
+ {
+  "k": "donnarosa",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Food & drink",
+  "body": "Order the black-and-white fettuccine with seafood at 'Donna Rosa' in Montepertuso",
+  "mq": "Donna Rosa, V. Gradoni, 97/99, 84017 Montepertuso SA, Italy",
+  "lat": 40.6330244,
+  "lng": 14.493074,
+  "pid": "ChIJ_RiSYnKXOxMRdL9jkpTcdWk",
+  "addr": "V. Gradoni, 97/99, 84017 Montepertuso SA, Italy",
+  "web": "http://www.drpositano.com/",
+  "alc": false,
+  "rec": true,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "pasta",
+   "seafood",
+   "italian",
+   "restaurant",
+   "local-favorite"
+  ],
+  "sec": [
+   "dinner",
+   "lunch",
+   "unique"
+  ]
+ },
+ {
+  "k": "tagliata",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Food & drink",
+  "body": "Take the free shuttle up from Positano for the fixed-price, family-style grilled-meat feast on the terraces of 'La Tagliata'",
+  "mq": "La Tagliata, Via Tagliata, 32B, 84017 Positano SA, Italy",
+  "lat": 40.6312155,
+  "lng": 14.4971152,
+  "pid": "ChIJnyb6U22XOxMRPqQQIlxuono",
+  "addr": "Via Tagliata, 32B, 84017 Positano SA, Italy",
+  "web": "https://www.latagliata.com/",
+  "alc": false,
+  "rec": true,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "farm-to-table",
+   "italian",
+   "restaurant",
+   "views",
+   "local-favorite"
+  ],
+  "sec": [
+   "dinner",
+   "unique",
+   "hidden-gem"
+  ]
+ },
+ {
+  "k": "arienzo",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Adventure",
+  "body": "Swim off the pebbles of 'Arienzo Beach', a cove west of Positano reached by steep stairs or water taxi",
+  "mq": "Arienzo Beach, Arienzo Beach, Italy",
+  "lat": 40.6267875,
+  "lng": 14.4958969,
+  "pid": "ChIJV95oyhSXOxMRxN7yxlMzDaA",
+  "addr": "Arienzo Beach, Italy",
+  "web": null,
+  "alc": false,
+  "rec": true,
+  "d": 5,
+  "r": 200,
+  "core": [
+   "beach",
+   "swimming",
+   "scenic",
+   "waterfront",
+   "hidden-gem"
+  ],
+  "sec": [
+   "outdoor",
+   "nature",
+   "local"
+  ]
+ },
+ {
+  "k": "nocelle",
+  "nb": "cc50e34b-8889-4698-8fe8-5b9387b19bfe",
+  "cat": "Adventure",
+  "body": "Climb the roughly 1,500 stone steps up to 'Nocelle', the car-free hamlet perched above Positano",
+  "mq": "Nocelle, 84017 Nocelle, SA, Italy",
+  "lat": 40.6293425,
+  "lng": 14.503268,
+  "pid": "ChIJP0CXFRGXOxMRsXndziDhCSY",
+  "addr": "84017 Nocelle, SA, Italy",
+  "web": null,
+  "alc": false,
+  "rec": false,
+  "d": 5,
+  "r": 300,
+  "core": [
+   "walking",
+   "views",
+   "hidden-gem",
+   "scenic",
+   "exploration"
+  ],
+  "sec": [
+   "local",
+   "outdoor",
+   "nature"
+  ]
+ },
+ {
+  "k": "armandino",
+  "nb": "36f99ec8-4deb-4599-9e92-27845665b1ec",
+  "cat": "Food & drink",
+  "body": "Order the tubetti with squid or lemon risotto steps from the water at 'Trattoria Da Armandino' on Marina di Praia",
+  "mq": "Trattoria Da Armandino, Via Marina di Praia, 84010 Praiano SA, Italy",
+  "lat": 40.6135409,
+  "lng": 14.5387576,
+  "pid": "ChIJD9xcIcGWOxMR91xRR_aqtfI",
+  "addr": "Via Marina di Praia, 84010 Praiano SA, Italy",
+  "web": "https://www.daarmandino.it/index.html#",
+  "alc": false,
+  "rec": true,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "seafood",
+   "pasta",
+   "italian",
+   "beach",
+   "waterfront"
+  ],
+  "sec": [
+   "local-favorite",
+   "lunch",
+   "hidden-gem"
+  ]
+ },
+ {
+  "k": "pirata",
+  "nb": "36f99ec8-4deb-4599-9e92-27845665b1ec",
+  "cat": "Bar & drinks",
+  "body": "Sip a drink at the six-seat onyx bar lit from below inside a sea cave at 'Il Pirata'",
+  "mq": "Il Pirata Ristorante, Lounge Bar, Beach Club - Praiano, Via Terramare, 84010 Praiano SA, Italy",
+  "lat": 40.6123246,
+  "lng": 14.5385992,
+  "pid": "ChIJX_vjxcaWOxMRzId7DK-_hzY",
+  "addr": "Via Terramare, 84010 Praiano SA, Italy",
+  "web": "https://www.ilpiratamalficoast.com/",
+  "alc": true,
+  "rec": true,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "bar",
+   "cocktails",
+   "lounge",
+   "cave",
+   "waterfront"
+  ],
+  "sec": [
+   "unique",
+   "hidden-gem",
+   "drinks"
+  ]
+ },
+ {
+  "k": "fjord",
+  "nb": "fc51aa8a-0c8f-4b15-8aad-64775cf56842",
+  "cat": "Adventure",
+  "body": "Walk down to the pebble beach hidden beneath the arched road bridge at 'Fiordo di Furore'",
+  "mq": "Furore Fjord, Via Marina di Praia, 84010 Furore SA, Italy",
+  "lat": 40.6146163,
+  "lng": 14.5547129,
+  "pid": "ChIJHZNLy6KWOxMRky7R0i10ybI",
+  "addr": "Via Marina di Praia, 84010 Furore SA, Italy",
+  "web": "https://www.instagram.com/fiordofurorebeach/",
+  "alc": false,
+  "rec": false,
+  "d": 1,
+  "r": 250,
+  "core": [
+   "beach",
+   "scenic",
+   "hidden-gem",
+   "swimming",
+   "nature"
+  ],
+  "sec": [
+   "photo-op",
+   "waterfront",
+   "unique"
+  ]
+ },
+ {
+  "k": "cuomo",
+  "nb": "fc51aa8a-0c8f-4b15-8aad-64775cf56842",
+  "cat": "Food & drink",
+  "body": "Taste the Furore Bianco Fiorduva, a white grown on cliffside terraces, at 'Cantine Marisa Cuomo'",
+  "mq": "Cantine Marisa Cuomo, Via Giambattista Lama, 16, 84010 Furore SA, Italy",
+  "lat": 40.6205576,
+  "lng": 14.5486442,
+  "pid": "ChIJiba0jiOUOxMR2CXzsykurq4",
+  "addr": "Via Giambattista Lama, 16, 84010 Furore SA, Italy",
+  "web": "https://www.marisacuomo.com/",
+  "alc": true,
+  "rec": false,
+  "d": 1,
+  "r": 120,
+  "core": [
+   "winery",
+   "wine",
+   "tasting",
+   "vineyard",
+   "wine-tasting"
+  ],
+  "sec": [
+   "local",
+   "scenic",
+   "unique"
+  ]
+ },
+ {
+  "k": "smeraldo",
+  "nb": "fc51aa8a-0c8f-4b15-8aad-64775cf56842",
+  "cat": "Adventure",
+  "body": "Glide into the glowing green water of the sea cave at 'Grotta dello Smeraldo' under the cliffs of Conca dei Marini",
+  "mq": "Grotta dello Smeraldo, Via Smeraldo, 33, 84010 Conca dei Marini SA, Italy",
+  "lat": 40.6150824,
+  "lng": 14.5670273,
+  "pid": "ChIJO1U7OiCUOxMRzbZo5uEs74s",
+  "addr": "Via Smeraldo, 33, 84010 Conca dei Marini SA, Italy",
+  "web": null,
+  "alc": false,
+  "rec": false,
+  "d": 5,
+  "r": 200,
+  "core": [
+   "cave",
+   "boat",
+   "scenic",
+   "adventure",
+   "unique"
+  ],
+  "sec": [
+   "boat-tour",
+   "nature",
+   "waterfront"
+  ]
+ },
+ {
+  "k": "pansa",
+  "nb": "7c50d369-2d63-4e24-9adf-66e66a3002c6",
+  "cat": "Food & drink",
+  "body": "Split a sfogliatella Santa Rosa on the cathedral square at 'Pasticceria Andrea Pansa', baking here since 1830",
+  "mq": "Pasticceria Pansa Amalfi, Piazza Duomo, 40, 84011 Amalfi SA, Italy",
+  "lat": 40.6341666,
+  "lng": 14.6027575,
+  "pid": "ChIJ9fRPa66VOxMRT7NHgkwo0NQ",
+  "addr": "Piazza Duomo, 40, 84011 Amalfi SA, Italy",
+  "web": "https://www.pasticceriapansa.it/",
+  "alc": false,
+  "rec": true,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "dessert",
+   "bakery",
+   "cafe",
+   "historic",
+   "local-favorite"
+  ],
+  "sec": [
+   "coffee",
+   "breakfast",
+   "italian"
+  ]
+ },
+ {
+  "k": "chiostro",
+  "nb": "7c50d369-2d63-4e24-9adf-66e66a3002c6",
+  "cat": "Arts & Culture",
+  "body": "Climb the cathedral steps, then wander the Moorish-arched, palm-shaded 'Chiostro del Paradiso'",
+  "mq": "Paradise Cloister, Via Salita Episcopio, 5, 84011 Amalfi SA, Italy",
+  "lat": 40.6347643,
+  "lng": 14.6031738,
+  "pid": "ChIJ8zyce66VOxMR40XBRZb-75c",
+  "addr": "Via Salita Episcopio, 5, 84011 Amalfi SA, Italy",
+  "web": "http://www.parrocchiaamalfi.com/cattedrale/chiostro-del-paradiso/",
+  "alc": false,
+  "rec": false,
+  "d": 1,
+  "r": 120,
+  "core": [
+   "architecture",
+   "historic",
+   "church",
+   "landmark",
+   "quiet"
+  ],
+  "sec": [
+   "history",
+   "art",
+   "unique"
+  ]
+ },
+ {
+  "k": "carta",
+  "nb": "7c50d369-2d63-4e24-9adf-66e66a3002c6",
+  "cat": "Arts & Culture",
+  "body": "Watch water-powered wooden hammers turn rags into handmade Amalfi paper at 'Museo della Carta'",
+  "mq": "Paper Museum, Via delle Cartiere, 23, 84011 Amalfi SA, Italy",
+  "lat": 40.6397128,
+  "lng": 14.5996453,
+  "pid": "ChIJrSB4qrqVOxMR3io9z2JxH9Y",
+  "addr": "Via delle Cartiere, 23, 84011 Amalfi SA, Italy",
+  "web": "http://www.museodellacarta.it/",
+  "alc": false,
+  "rec": false,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "museum",
+   "history",
+   "educational",
+   "interactive",
+   "unique"
+  ],
+  "sec": [
+   "craft",
+   "historic",
+   "hidden-gem"
+  ]
+ },
+ {
+  "k": "lemon",
+  "nb": "7c50d369-2d63-4e24-9adf-66e66a3002c6",
+  "cat": "Food & drink",
+  "body": "Walk the terraced lemon groves and finish with homemade limoncello at 'Amalfi Lemon Experience'",
+  "mq": "Amalfi Lemon Experience, Via delle Cartiere, 59, 84011 Amalfi SA, Italy",
+  "lat": 40.6409843,
+  "lng": 14.5970653,
+  "pid": "ChIJY6QNZ7qVOxMRDpLNLrtkNJ8",
+  "addr": "Via delle Cartiere, 59, 84011 Amalfi SA, Italy",
+  "web": "https://www.amalfilemonexperience.it/",
+  "alc": true,
+  "rec": false,
+  "d": 5,
+  "r": 150,
+  "core": [
+   "farm",
+   "tasting",
+   "local",
+   "unique",
+   "scenic"
+  ],
+  "sec": [
+   "spirits",
+   "outdoor",
+   "educational"
+  ]
+ },
+ {
+  "k": "arsenale",
+  "nb": "7c50d369-2d63-4e24-9adf-66e66a3002c6",
+  "cat": "Arts & Culture",
+  "body": "Walk beneath the medieval vaults where Amalfi's Maritime Republic built its galleys at the 'Arsenale della Repubblica'",
+  "mq": "Ancient Arsenal of the Republic of Amalfi, Largo Cesareo Console, 4, 84011 Amalfi SA, Italy",
+  "lat": 40.6338907,
+  "lng": 14.6021073,
+  "pid": "ChIJob5w0K2VOxMRvCvlIHjVUDw",
+  "addr": "Largo Cesareo Console, 4, 84011 Amalfi SA, Italy",
+  "web": "https://www.arsenalediamalfi.it/",
+  "alc": false,
+  "rec": false,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "museum",
+   "history",
+   "historic",
+   "architecture",
+   "unique"
+  ],
+  "sec": [
+   "landmark",
+   "hidden-gem",
+   "educational"
+  ]
+ },
+ {
+  "k": "rufolo",
+  "nb": "abe03d9d-59bb-428e-a1b2-f7e4bff068e5",
+  "cat": "Arts & Culture",
+  "body": "Stand on the flower-fringed terrace at 'Villa Rufolo' that inspired Wagner's magic garden in Parsifal",
+  "mq": "Villa Rufolo, Piazza Duomo, 84010 Ravello SA, Italy",
+  "lat": 40.6490143,
+  "lng": 14.6120042,
+  "pid": "ChIJb8673Z-VOxMR3IhhgAAESjk",
+  "addr": "Piazza Duomo, 84010 Ravello SA, Italy",
+  "web": "http://www.villarufolo.it/",
+  "alc": false,
+  "rec": false,
+  "d": 1,
+  "r": 120,
+  "core": [
+   "botanical-garden",
+   "historic",
+   "views",
+   "landmark",
+   "architecture"
+  ],
+  "sec": [
+   "romantic",
+   "music",
+   "scenic"
+  ]
+ },
+ {
+  "k": "cimbrone",
+  "nb": "abe03d9d-59bb-428e-a1b2-f7e4bff068e5",
+  "cat": "Arts & Culture",
+  "body": "Walk the cypress avenue to the marble-bust-lined Terrace of Infinity at 'Villa Cimbrone'",
+  "mq": "Villa Cimbrone, Via Santa Chiara, 26, 84010 Ravello SA, Italy",
+  "lat": 40.6441412,
+  "lng": 14.6110723,
+  "pid": "ChIJKx2evqCVOxMRx5wEJfjT_hw",
+  "addr": "Via Santa Chiara, 26, 84010 Ravello SA, Italy",
+  "web": "https://www.hotelvillacimbrone.com/",
+  "alc": false,
+  "rec": false,
+  "d": 1,
+  "r": 150,
+  "core": [
+   "botanical-garden",
+   "views",
+   "scenic",
+   "romantic",
+   "landmark"
+  ],
+  "sec": [
+   "photo-op",
+   "instagrammable",
+   "historic"
+  ]
+ },
+ {
+  "k": "duomoravello",
+  "nb": "abe03d9d-59bb-428e-a1b2-f7e4bff068e5",
+  "cat": "Arts & Culture",
+  "body": "Find the 12th-century bronze doors and mosaic-inlaid pulpit inside the 'Duomo di Ravello'",
+  "mq": "Duomo di ravello, Piazza Duomo, 84010 Ravello SA, Italy",
+  "lat": 40.6493836,
+  "lng": 14.6118167,
+  "pid": "ChIJqdTnAOSVOxMRY-xwBm8ZlIk",
+  "addr": "Piazza Duomo, 84010 Ravello SA, Italy",
+  "web": "https://www.ravello.com/it/attrazioni/duomo/",
+  "alc": false,
+  "rec": false,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "church",
+   "architecture",
+   "historic",
+   "landmark",
+   "art"
+  ],
+  "sec": [
+   "history",
+   "unique",
+   "quiet"
+  ]
+ },
+ {
+  "k": "mamma",
+  "nb": "abe03d9d-59bb-428e-a1b2-f7e4bff068e5",
+  "cat": "Food & drink",
+  "body": "Learn Amalfi Coast home cooking and pick lemons from the terraced garden at 'Mamma Agata' cooking school",
+  "mq": "Mamma Agata, Via S. Cosma, 9, 84010 Ravello SA, Italy",
+  "lat": 40.6432695,
+  "lng": 14.6123067,
+  "pid": "ChIJ-1VsFp2VOxMRkWWbxT2PR8w",
+  "addr": "Via S. Cosma, 9, 84010 Ravello SA, Italy",
+  "web": "http://www.mammaagata.it/",
+  "alc": false,
+  "rec": false,
+  "d": 5,
+  "r": 100,
+  "core": [
+   "cooking",
+   "culinary",
+   "learning",
+   "interactive",
+   "italian"
+  ],
+  "sec": [
+   "experience",
+   "food",
+   "educational"
+  ]
+ },
+ {
+  "k": "cumpa",
+  "nb": "abe03d9d-59bb-428e-a1b2-f7e4bff068e5",
+  "cat": "Food & drink",
+  "body": "Order the crespolini, pasta crepes rolled with prosciutto and cheese, at 'Trattoria Cumpà Cosimo'",
+  "mq": "Trattoria Pizzeria Cumpa' Cosimo, Via Roma, 44, 84010 Ravello SA, Italy",
+  "lat": 40.6505182,
+  "lng": 14.6114701,
+  "pid": "ChIJn0v50J-VOxMR0AN89IkM-gk",
+  "addr": "Via Roma, 44, 84010 Ravello SA, Italy",
+  "web": null,
+  "alc": false,
+  "rec": true,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "pasta",
+   "italian",
+   "restaurant",
+   "local-favorite",
+   "unique"
+  ],
+  "sec": [
+   "dinner",
+   "lunch",
+   "pizza"
+  ]
+ },
+ {
+  "k": "ferriere",
+  "nb": "abe03d9d-59bb-428e-a1b2-f7e4bff068e5",
+  "cat": "Adventure",
+  "body": "Hike the ferny 'Valle delle Ferriere' from Pontone to Amalfi past waterfalls and medieval ironworks ruins",
+  "mq": "Valle delle Ferriere, 84010 Scala, SA, Italy",
+  "lat": 40.6481158,
+  "lng": 14.5904097,
+  "pid": "ChIJmTYS6pGVOxMR0Ni0mUa1dNc",
+  "addr": "84010 Scala, SA, Italy",
+  "web": null,
+  "alc": false,
+  "rec": false,
+  "d": 5,
+  "r": 800,
+  "core": [
+   "hiking",
+   "trail",
+   "nature",
+   "easy-hike",
+   "scenic"
+  ],
+  "sec": [
+   "outdoor",
+   "history",
+   "hidden-gem"
+  ]
+ },
+ {
+  "k": "salderiso",
+  "nb": "f0568bd1-840d-4d7c-a043-65dafef402a5",
+  "cat": "Food & drink",
+  "body": "Order the lemon-cream Delizia al Limone at Salvatore De Riso's counter at 'Pasticceria Sal De Riso'",
+  "mq": "Pasticceria Sal De Riso, Via Roma, 80, 84010 Minori SA, Italy",
+  "lat": 40.6495294,
+  "lng": 14.627186,
+  "pid": "ChIJY28zxnKVOxMRVnO5EuZCWoE",
+  "addr": "Via Roma, 80, 84010 Minori SA, Italy",
+  "web": "http://www.salderiso.it/",
+  "alc": false,
+  "rec": true,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "dessert",
+   "bakery",
+   "cafe",
+   "local-favorite",
+   "unique"
+  ],
+  "sec": [
+   "coffee",
+   "italian",
+   "souvenir"
+  ]
+ },
+ {
+  "k": "limoni",
+  "nb": "f0568bd1-840d-4d7c-a043-65dafef402a5",
+  "cat": "Adventure",
+  "body": "Walk the stepped 'Sentiero dei Limoni' between Minori and Maiori through terraced lemon groves",
+  "mq": "Path of the Lemons, Via Torre, 84010 Minori SA, Italy",
+  "lat": 40.6495665,
+  "lng": 14.6308877,
+  "pid": "ChIJp6jL62uVOxMR_ByLIkG1qFo",
+  "addr": "Via Torre, 84010 Minori SA, Italy",
+  "web": "https://m.facebook.com/Sentiero-dei-Limoni-Path-of-Lemons-Amalfi-Coast-590816597755079/",
+  "alc": false,
+  "rec": false,
+  "d": 5,
+  "r": 700,
+  "core": [
+   "hiking",
+   "trail",
+   "easy-hike",
+   "scenic",
+   "nature"
+  ],
+  "sec": [
+   "walking",
+   "outdoor",
+   "views"
+  ]
+ },
+ {
+  "k": "olearia",
+  "nb": "f0568bd1-840d-4d7c-a043-65dafef402a5",
+  "cat": "Arts & Culture",
+  "body": "Descend into the cave-set Benedictine abbey of 'Santa Maria de Olearia' above Maiori",
+  "mq": "Santa Maria de Olearia, Strada Statale Amalfitana, 43, 84010 Maiori SA, Italy",
+  "lat": 40.6401733,
+  "lng": 14.6680365,
+  "pid": "ChIJfdMnLsjqOxMRosfv3lm9OXI",
+  "addr": "Strada Statale Amalfitana, 43, 84010 Maiori SA, Italy",
+  "web": "http://www.santamariadeolearia.com/",
+  "alc": false,
+  "rec": false,
+  "d": 1,
+  "r": 150,
+  "core": [
+   "church",
+   "cave",
+   "historic",
+   "hidden-gem",
+   "unique"
+  ],
+  "sec": [
+   "history",
+   "architecture",
+   "quiet"
+  ]
+ },
+ {
+  "k": "delfino",
+  "nb": "6bb7fef7-d3e8-4873-a7a9-0ac1ae072d2b",
+  "cat": "Food & drink",
+  "body": "Buy a bottle of colatura di alici, Cetara's amber descendant of Roman garum, at 'Delfino Battista'",
+  "mq": "Delfino Battista Cetara - Via Costiera, Corso Garibaldi, 44, 84010 Cetara SA, Italy",
+  "lat": 40.646708,
+  "lng": 14.7016151,
+  "pid": "ChIJ0brwPIbqOxMRROfsAnsAT78",
+  "addr": "Corso Garibaldi, 44, 84010 Cetara SA, Italy",
+  "web": "https://www.delfinobattistasrl.it/",
+  "alc": false,
+  "rec": false,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "food",
+   "local",
+   "souvenir",
+   "unique",
+   "italian"
+  ],
+  "sec": [
+   "shopping",
+   "seafood",
+   "historic"
+  ]
+ },
+ {
+  "k": "alconvento",
+  "nb": "6bb7fef7-d3e8-4873-a7a9-0ac1ae072d2b",
+  "cat": "Food & drink",
+  "body": "Twirl spaghetti dressed with colatura di alici inside a medieval convent at 'Al Convento'",
+  "mq": "Ristorante Al Convento Cetara, Piazza S. Francesco, 16, 84010 Cetara SA, Italy",
+  "lat": 40.647183,
+  "lng": 14.7007363,
+  "pid": "ChIJ35HnE4bqOxMRs8OgoMfwhAY",
+  "addr": "Piazza S. Francesco, 16, 84010 Cetara SA, Italy",
+  "web": "http://www.alconvento.net/",
+  "alc": false,
+  "rec": true,
+  "d": 1,
+  "r": 100,
+  "core": [
+   "pasta",
+   "seafood",
+   "italian",
+   "restaurant",
+   "historic"
+  ],
+  "sec": [
+   "unique",
+   "local-favorite",
+   "dinner"
+  ]
+ },
+ {
+  "k": "solimene",
+  "nb": "a7719d53-ead3-45e7-bf44-249267f7ed99",
+  "cat": "Arts & Culture",
+  "body": "Photograph the ceramic-shard cone facade of 'Ceramica Artistica Solimene', designed by Paolo Soleri",
+  "mq": "Ceramica Artistica Solimene Vincenzo - S.R.L., Via Madonna degli Angeli, 7, 84019 Vietri sul Mare SA, Italy",
+  "lat": 40.671187,
+  "lng": 14.7314775,
+  "pid": "ChIJE5uiI-vBOxMROIkcmrn9_mM",
+  "addr": "Via Madonna degli Angeli, 7, 84019 Vietri sul Mare SA, Italy",
+  "web": "http://www.ceramicasolimene.it/",
+  "alc": false,
+  "rec": false,
+  "d": 1,
+  "r": 120,
+  "core": [
+   "art",
+   "craft",
+   "architecture",
+   "unique",
+   "local"
+  ],
+  "sec": [
+   "shopping",
+   "souvenir",
+   "landmark"
+  ]
+ },
+ {
+  "k": "sangiovanni",
+  "nb": "a7719d53-ead3-45e7-bf44-249267f7ed99",
+  "cat": "Arts & Culture",
+  "body": "Look up at the ceramic-tiled majolica dome of 'Chiesa di San Giovanni Battista' in Vietri sul Mare",
+  "mq": "Chiesa Madre di San Giovanni Battista, Via San Giovanni, 18, 84019 Vietri sul Mare SA, Italy",
+  "lat": 40.6706691,
+  "lng": 14.7283349,
+  "pid": "ChIJQ8ew6VXBOxMRXWIk3uCWEYM",
+  "addr": "Via San Giovanni, 18, 84019 Vietri sul Mare SA, Italy",
+  "web": "https://www.diocesiamalficava.it/",
+  "alc": false,
+  "rec": false,
+  "d": 1,
+  "r": 120,
+  "core": [
+   "church",
+   "architecture",
+   "historic",
+   "art",
+   "landmark"
+  ],
+  "sec": [
+   "craft",
+   "photo-op",
+   "local-culture"
+  ]
+ }
+]
