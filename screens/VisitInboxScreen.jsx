@@ -17,7 +17,6 @@ import { useTheme } from '../lib/ThemeContext'
 import { fanOutCheckIn } from '../lib/checkInFanOut'
 import {
   buildVisitConfirmationPayload,
-  buildVisitDismissalPayload,
   formatVisitWhenLabel,
   selectInboxRows,
 } from '../lib/visitDetection/candidateVisitConfirmation'
@@ -135,11 +134,9 @@ export default function VisitInboxScreen({ navigation, route }) {
   async function handleDismiss(row) {
     setBusyId(row.candidateVisitId)
     try {
-      const { error } = await supabase
-        .from('candidate_visits')
-        .update(buildVisitDismissalPayload())
-        .eq('id', row.candidateVisitId)
+      const { data: dismissed, error } = await supabase.rpc('dismiss_candidate_visit', { p_id: row.candidateVisitId })
       if (error) throw error
+      if (dismissed === false) throw new Error('This suggestion is no longer available.')
 
       setRows(prev => prev.filter(r => r.candidateVisitId !== row.candidateVisitId))
     } catch (e) {
