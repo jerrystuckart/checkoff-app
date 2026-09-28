@@ -43,16 +43,16 @@ which screen (list vs. Nearby vs. post-checkoff suggestion vs. Home rail) and I'
 | 'Chiesa di Santa Maria Assunta' (mine, no official site) | Positano Essentials list | true | false (correct — no site) |
 | 'Latteria' (mystery batch, has website) | any list | true | true |
 
-## Unrelated finding, flagged not fixed: a catalog batch I did not create
-**23 active Amalfi Coast items were created 2026-09-27, after this session's catalog work, by an unknown
-process** — not through anything I ran. They use a different convention than the intake doc (website URLs
-carry a `?utm_source=getcheckoff.com` tracking param; most lack `google_place_id`/`formatted_address`, i.e. no
-geocoding pass yet, though `maps_query` is set for all of them). **Two of these were appended directly onto
-your official "Positano Essentials" Hub list** (sort_order 11–12, added 2026-09-27 16:30, after my last edit at
-22:18 on 9/26) — bypassing the 10-item curated set I built. I did not touch, edit, or remove any of this batch
-or its list placement — it's not mine to alter without knowing its source. You may want to check what added it.
-A 48-item personal list "Full Steins - Amalfi Coast" (your own account, `is_public=true`, created 2026-09-27)
-also exists, separate from the official Hub lists.
+## Provenance clarified by Jerry (2026-09-28, after this doc was first written)
+The 23-item batch is his own — added via his bulk-upload ChatGPT intake method, deliberately going deeper
+than this session's original 38-item pass. Not an unknown/mystery source; nothing here needed reverting.
+The 4 items appended directly onto the two official Hub lists (2 on Essentials, 2 on Beyond the Postcard,
+all four confirmed present) are his intentional editorial addition, not drift.
+
+Functionally: all 23 already pass the same audit as the rest of the catalog — every one has `maps_query`
+and a real `website_url`, so Directions/Website render correctly for all of them through the real paths
+(Hub lists, Nearby, Discover). Most don't yet have `google_place_id`/`formatted_address` — expected per his
+own documented intake convention (leave lat/lng unset at intake, geocode in a later pass), not a defect.
 
 ## Counts
 - Active Amalfi Coast items: 61 (38 mine + 23 unaccounted-for batch).
