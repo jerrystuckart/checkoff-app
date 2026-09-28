@@ -323,7 +323,15 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
 
           const { data: candidates } = await supabase
             .from('items')
-            .select('id, body, maps_lat, maps_lng, difficulty, checkin_type, neighborhood_id, is_universal')
+            // Item Detail data audit (2026-09-28) — website_url/maps_query
+            // were missing here, so Website never showed for a "nearby next"
+            // suggestion regardless of whether the item had one, and
+            // Directions silently depended on this query's own
+            // not-null-lat/lng filter rather than the maps_query fallback
+            // ItemDetailScreen also supports. ItemDetailScreen reads
+            // route.params.item directly (never re-fetches), so both fields
+            // have to be selected here to reach it at all.
+            .select('id, body, maps_lat, maps_lng, maps_query, website_url, difficulty, checkin_type, neighborhood_id, is_universal')
             .eq('is_active', true)
             .eq('is_approved', true)
             .eq('is_universal', false)

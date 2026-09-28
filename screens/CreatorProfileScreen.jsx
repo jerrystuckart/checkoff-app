@@ -105,7 +105,7 @@ export default function CreatorProfileScreen({ route, navigation }) {
               items (
                 id, body, difficulty, is_secret, secret_reveal_text,
                 maps_lat, maps_lng, geo_radius_m, is_universal,
-                checkin_type, photo_required,
+                checkin_type, photo_required, maps_query, website_url,
                 neighborhoods!items_neighborhood_id_fkey(name)
               )
             `)
@@ -426,6 +426,19 @@ export default function CreatorProfileScreen({ route, navigation }) {
                         is_universal:       item.is_universal       ?? false,
                         checkin_type:       item.checkin_type       ?? 'tap',
                         photoRequired:      item.photo_required     ?? false,
+                        // Item Detail data audit (2026-09-28) — this object was
+                        // missing maps_query and website_url entirely, which
+                        // ItemDetailScreen.jsx's hasLoc/hasWeb read directly off
+                        // route.params.item (it never re-fetches). That made
+                        // Website unconditionally hidden for every item reached
+                        // through a creator's list, and Directions unreachable
+                        // for any item relying on maps_query alone (no lat/lng
+                        // yet — the normal state for a freshly-intaken item
+                        // before its geocoding pass). This screen's own query
+                        // above (line ~250-ish) doesn't select these two columns
+                        // either — see the second half of this fix.
+                        maps_query:         item.maps_query         ?? null,
+                        website_url:        item.website_url        ?? null,
                       },
                       listId: list.id,
                       listTitle: list.title,
