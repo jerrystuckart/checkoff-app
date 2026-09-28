@@ -28,6 +28,7 @@ import { useCurrentLocation } from '../lib/currentLocation'
 import { resolveHomeMetro, nearestMetroWithinBoundary } from '../lib/metroSelection'
 import { attachActiveCoverImages, attachDisplayEligibleImagePools } from '../lib/coverCandidates'
 import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
+import HomeVisitRecoveryEntry from '../components/home/HomeVisitRecoveryEntry'
 import { deriveHomeHeroLayout } from '../lib/homeHeroLayout'
 import { selectNearYouCompactRows } from '../lib/nearYouCompact'
 import { selectHomeNearbyCandidates } from '../lib/homeNearYou'
@@ -1465,6 +1466,10 @@ async function loadNearbyRail(userId) {
               onProfilePress={() => navigation.navigate('ProfileTab')}
               showProfileStatus={Boolean(user)}
             />
+
+            {Boolean(user) && (
+              <HomeVisitRecoveryEntry userId={user.id} navigation={navigation} colors={colors} />
+            )}
 
             {heroLayout.primaryHero === 'destination' && (
               <DestinationHero

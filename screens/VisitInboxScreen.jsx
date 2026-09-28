@@ -9,7 +9,8 @@
 // tap here.
 
 import React, { useCallback, useMemo, useState } from 'react'
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Image, TextInput } from 'react-native'
+import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
@@ -51,6 +52,15 @@ export default function VisitInboxScreen({ navigation, route }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState(null)
+  // Optional photo + memory, captured before confirming (not a separate step
+  // afterward — the server's confirm authorization re-validates the linked
+  // candidate_visits row on ANY update to this check-in, including one that
+  // only changes photo/note, so a photo/note attached after the fact via a
+  // follow-up update would be rejected as "already confirmed." Attaching at
+  // confirm time avoids that entirely: both go into the same insert. No
+  // location/proximity check either way — this is explicitly for confirming
+  // a visit from anywhere, any time within the 7-day window.
+  const [attachments, setAttachments] = useState({}) // { [candidateVisitId]: { photo, note } }
 
   const load = useCallback(async () => {
     const { data: { user } } = await supabase.auth.getUser()
@@ -105,23 +115,80 @@ export default function VisitInboxScreen({ navigation, route }) {
 
   useFocusEffect(useCallback(() => { load() }, [load]))
 
+  async function pickAttachmentPhoto(candidateVisitId) {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
+    if (status !== 'granted') {
+      Alert.alert('Permission needed', 'Allow photo library access to attach a photo.')
+      return
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaType?.images ?? ImagePicker.MediaTypeOptions.Images,
+      quality: 0.7,
+    })
+    if (result.canceled || !result.assets?.[0]) return
+    setAttachments(prev => ({
+      ...prev,
+      [candidateVisitId]: { ...prev[candidateVisitId], photo: result.assets[0] },
+    }))
+  }
+
+  function setAttachmentNote(candidateVisitId, note) {
+    setAttachments(prev => ({ ...prev, [candidateVisitId]: { ...prev[candidateVisitId], note } }))
+  }
+
+  // Same upload shape as screens/PhotoCheckInScreen.jsx's submitCheckIn():
+  // arrayBuffer (not blob — blob serializes as 0 bytes over RN's bridge to
+  // Supabase Storage), same 'checkin-photos' bucket, same public-URL read.
+  async function uploadAttachmentPhoto(userId, photo) {
+    const rawExt = photo.uri.split('.').pop()?.toLowerCase() ?? 'jpg'
+    const contentExt = rawExt === 'jpg' ? 'jpeg' : rawExt
+    const filename = `${userId}/${Date.now()}.${rawExt}`
+    const response = await fetch(photo.uri)
+    const arrayBuffer = await response.arrayBuffer()
+    const { error: uploadErr } = await supabase.storage
+      .from('checkin-photos')
+      .upload(filename, arrayBuffer, { contentType: `image/${contentExt}`, upsert: false })
+    if (uploadErr) throw new Error(`Upload failed: ${uploadErr.message}`)
+    const { data: urlData } = supabase.storage.from('checkin-photos').getPublicUrl(filename)
+    return urlData?.publicUrl ?? null
+  }
+
   async function handleConfirm(row) {
     setBusyId(row.candidateVisitId)
     try {
       const { data: { user } } = await supabase.auth.getUser()
       if (!user) return
 
+      const attachment = attachments[row.candidateVisitId]
+      let photoUrl = null
+      if (attachment?.photo) {
+        try {
+          photoUrl = await uploadAttachmentPhoto(user.id, attachment.photo)
+        } catch (e) {
+          Alert.alert('Photo not attached', `${e?.message ?? 'Upload failed.'} Checking it off without the photo.`)
+        }
+      }
+
       const payload = buildVisitConfirmationPayload({
         userId: user.id,
         itemId: row.itemId,
         candidateVisitId: row.candidateVisitId,
+        photoUrl,
+        photoWidth: photoUrl ? (attachment?.photo?.width ?? null) : null,
+        photoHeight: photoUrl ? (attachment?.photo?.height ?? null) : null,
+        personalNote: attachment?.note?.trim() || null,
       })
       const { error } = await supabase.from('check_ins').insert(payload)
       if (error) throw error
 
       // Same as a live check-off: mirror into any active list the user already
       // belongs to that contains this item (points-free rows, never joins a list).
-      fanOutCheckIn({ userId: user.id, itemId: row.itemId }).catch(() => {})
+      fanOutCheckIn({ userId: user.id, itemId: row.itemId, photoUrl }).catch(() => {})
+      setAttachments(prev => {
+        const next = { ...prev }
+        delete next[row.candidateVisitId]
+        return next
+      })
       setRows(prev => prev.filter(r => r.candidateVisitId !== row.candidateVisitId))
       Alert.alert('Checked off!', `${row.itemBody} — added to your memory.`)
     } catch (e) {
@@ -185,6 +252,31 @@ export default function VisitInboxScreen({ navigation, route }) {
               ) : null}
             </TouchableOpacity>
 
+            {/* Optional, added before confirming (see handleConfirm's comment
+                for why this can't be a separate step after). */}
+            <View style={styles.attachRow}>
+              <TouchableOpacity
+                style={styles.attachPhotoBtn}
+                onPress={() => pickAttachmentPhoto(row.candidateVisitId)}
+                disabled={busyId === row.candidateVisitId}
+              >
+                {attachments[row.candidateVisitId]?.photo ? (
+                  <Image source={{ uri: attachments[row.candidateVisitId].photo.uri }} style={styles.attachThumb} />
+                ) : (
+                  <Text style={styles.attachPhotoText}>📷 Add a photo</Text>
+                )}
+              </TouchableOpacity>
+              <TextInput
+                style={styles.attachNoteInput}
+                placeholder="Add a memory (optional)"
+                placeholderTextColor={MUTED}
+                value={attachments[row.candidateVisitId]?.note ?? ''}
+                onChangeText={v => setAttachmentNote(row.candidateVisitId, v)}
+                editable={busyId !== row.candidateVisitId}
+                maxLength={280}
+              />
+            </View>
+
             <View style={styles.buttonRow}>
               <TouchableOpacity
                 style={[styles.button, styles.dismissButton]}
@@ -228,6 +320,11 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, AMBER }) {
     },
     itemBody: { fontSize: 16, color: TEXT, fontWeight: '700' },
     itemMeta: { fontSize: 12, color: MUTED, marginTop: 4, fontWeight: '600' },
+    attachRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
+    attachPhotoBtn: { width: 40, height: 40, borderRadius: 10, borderWidth: 1, borderColor: BORDER, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+    attachThumb: { width: 40, height: 40 },
+    attachPhotoText: { fontSize: 18, color: TEXT },
+    attachNoteInput: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, borderColor: BORDER, paddingHorizontal: 12, fontSize: 13, color: TEXT },
     buttonRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
     button: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
     dismissButton: { backgroundColor: 'transparent', borderWidth: 1, borderColor: BORDER },
