@@ -45,7 +45,7 @@ const DEV_PASSWORD = ''
 
 export default function SignInScreen({ navigation, route }) {
   const insets  = useSafeAreaInsets()
-  const { returnToInvite } = route?.params ?? {}
+  const { returnToInvite, returnToItem } = route?.params ?? {}
   const [email, setEmail]           = useState(DEV_EMAIL)
   const [password, setPassword]     = useState(DEV_PASSWORD)
   const [loading, setLoading]       = useState(false)
@@ -55,6 +55,17 @@ export default function SignInScreen({ navigation, route }) {
 
   function navigateAfterAuth() {
     Keyboard.dismiss()
+    // Guest Save/Check-off return trip (2026-09-28) — same nested-navigate
+    // shape as returnToInvite just below. Carries the exact item object
+    // ItemDetailScreen was already showing (it never re-fetches by id) plus
+    // pendingAction, which that screen's own effect resolves once and clears.
+    if (returnToItem?.item) {
+      const parent = navigation.getParent()
+      const params = { item: returnToItem.item, listId: returnToItem.listId ?? null, listTitle: returnToItem.listTitle ?? null, pendingAction: returnToItem.pendingAction ?? null }
+      if (parent) parent.navigate('HomeTab', { screen: 'ItemDetail', params })
+      else navigation.navigate('ItemDetail', params)
+      return
+    }
     if (returnToInvite) {
       const parent = navigation.getParent()
       if (parent) parent.navigate('HomeTab', { screen: 'JoinList', params: { invite_code: returnToInvite } })

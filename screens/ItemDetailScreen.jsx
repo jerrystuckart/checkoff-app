@@ -764,9 +764,13 @@ export default function ItemDetailScreen({ route, navigation }) {
   // granularity of directions_click/url_click/dare_click).
   async function handleCheckOff() {
     if (!userId) {
+      // Same returnToItem pattern as Save's guest prompt above — sign-in
+      // brings the visitor straight back to THIS item with pendingAction
+      // set, so the tap they meant to make actually happens instead of
+      // being lost at the sign-in screen.
       Alert.alert('Sign in first', 'You need an account to check off items.', [
         { text: 'Cancel', style: 'cancel' },
-        { text: 'Sign in', onPress: () => navigation.navigate('SignIn') },
+        { text: 'Sign in', onPress: () => navigation.navigate('SignIn', { returnToItem: { item, listId, listTitle, pendingAction: 'checkoff' } }) },
       ])
       return
     }
@@ -787,6 +791,27 @@ export default function ItemDetailScreen({ route, navigation }) {
 
     await performCheckOff()
   }
+
+  // Resumes a Save or Check-off that a guest tapped before signing in.
+  // Fires once userId actually resolves (loadUser() is async) for a
+  // pendingAction the caller — SignInScreen's returnToItem — attached to
+  // this same item's route params. pendingActionFiredRef guards against
+  // re-firing on an unrelated re-render (userId doesn't change again, but
+  // route.params could still be read fresh); the pendingAction param is
+  // cleared immediately after so navigating away and back never replays it.
+  const pendingActionFiredRef = useRef(null)
+  useEffect(() => {
+    const pendingAction = route.params?.pendingAction
+    if (!pendingAction || !userId || pendingActionFiredRef.current === pendingAction) return
+    pendingActionFiredRef.current = pendingAction
+    navigation.setParams({ pendingAction: undefined })
+    if (pendingAction === 'save') {
+      if (item?.id && !isSaved(item.id)) toggleSaved(item.id, navigation)
+    } else if (pendingAction === 'checkoff') {
+      handleCheckOff()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userId, route.params?.pendingAction])
 
   async function performCheckOff() {
     // Started here, before the list-item lookup and geofence check (both of
@@ -1828,8 +1853,14 @@ export default function ItemDetailScreen({ route, navigation }) {
           stays the always-last, always-rightmost control purely because
           it is the last one written in this JSX, not because of any
           margin trick. */}
-      {userId && (
-        <View style={styles.utilityRow}>
+      {/* Guest access fix (2026-09-28) — this row used to be gated on
+          {userId && ...} entirely, which hid Directions and Website from
+          signed-out visitors even though neither needs an account. Only
+          Save genuinely needs one (writing a saved_items row) — it stays
+          visible to guests too now, with its own onPress deciding whether
+          to prompt for sign-in, so the row's presence itself is never an
+          auth gate. */}
+      <View style={styles.utilityRow}>
           {hasLoc && (
             <TouchableOpacity
               style={styles.utilityBtn}
@@ -1861,7 +1892,22 @@ export default function ItemDetailScreen({ route, navigation }) {
               never looks different whether it's alone or accompanied. */}
           <TouchableOpacity
             style={styles.utilityBtn}
-            onPress={() => toggleSaved(item.id, navigation)}
+            onPress={() => {
+              if (!userId) {
+                // Small contextual invitation, not a hard wall — explains
+                // why (an account is what saves the place), offers sign-in,
+                // and preserves this exact item + the pending save so it
+                // completes automatically on return (see the pendingAction
+                // useEffect above handleCheckOff, and SignInScreen's
+                // returnToItem handling).
+                Alert.alert('Save this place', 'Create a free account or sign in to save places — it only takes a second.', [
+                  { text: 'Not now', style: 'cancel' },
+                  { text: 'Sign in', onPress: () => navigation.navigate('SignIn', { returnToItem: { item, listId, listTitle, pendingAction: 'save' } }) },
+                ])
+                return
+              }
+              toggleSaved(item.id, navigation)
+            }}
             activeOpacity={0.8}
             accessibilityRole="button"
             accessibilityState={{ selected: isSaved(item.id) }}
@@ -1871,7 +1917,6 @@ export default function ItemDetailScreen({ route, navigation }) {
             <Text style={styles.utilityBtnText}>{isSaved(item.id) ? 'Saved' : 'Save'}</Text>
           </TouchableOpacity>
         </View>
-      )}
 
       {/* Item Detail Corrective Pass (2026-09-18) — Goal 4: ONE compact
           "DO THIS TOGETHER" card, the same in every mode. Replaces the
