@@ -86,3 +86,64 @@ The region cap means a large move (more than about 1.4 km in Positano, farther e
 
 * Visit Inbox empty state follows reality: opted in -> "Visit recovery is on - nothing waiting" (no "turn on" text); opted in without Always location -> points to Settings; not opted in -> the original Profile prompt (`lib/visitDetection/inboxEmptyState.js`).
 * Debug panel groups the last registration: **Missing configuration** (red, names each nearby item with no profile), Monitored, Intentionally excluded, Not monitored (cap / inactive) (`lib/visitDetection/registrationRowGroups.js`).
+
+---
+
+# Follow-up (2026-09-29, later): OTA, commit 2e75f1a, nearest-19 coverage, catalog-wide readiness
+
+## OTA (published)
+iOS-only, production, runtime `81dbd1f1dac8165466982bb95e3625a76d9ea841`, update group `8838ac17-7827-4741-87ee-2155513fd933`, iOS update id `01a0ef50-9ac7-790c-b3a2-c277f6d8a946`, built from a clean worktree at commit `dc4843a` (= the last published OTA's commit `c0dcc2c` + the readiness commit; the app.json version bump 1.1.9/155 present as in earlier OTAs). Verified the manifest endpoint returns this update id for `expo-runtime-version: 81dbd1f1…` on channel `production`, and returns nothing (204) for the 1.1.8 runtime. iTunes lookup shows App Store 1.1.9 live since 2026-09-29T18:07Z; the docs (`APP_STORE_1.1.9.md`) record that binary's fingerprint as `81dbd1f1…`. Devices download on one launch and apply on the next.
+
+## What commit 2e75f1a changed, and why it moved the iOS fingerprint
+Only `app.json` (Android): removed `ACCESS_BACKGROUND_LOCATION` from `android.permissions`, and changed the `expo-location` plugin props from `isAndroidBackgroundLocationEnabled: true` to `false` plus `isAndroidForegroundServiceEnabled: false` (drops `FOREGROUND_SERVICE` and `FOREGROUND_SERVICE_LOCATION`). No JS changed.
+
+* **iOS native configuration did not change.** `expo config --type introspect` for the `ios` section is byte-identical before and after that hunk (compared in the same directory). `Info.plist`/`UIBackgroundModes` come from `ios.infoPlist`, which is untouched. The iOS binary would be identical.
+* **Why the fingerprint still moved:** `@expo/fingerprint` hashes the whole `expoConfig` (the plugin props are inside it) for every platform, so an Android-only prop edit changes the *iOS* hash (`expoConfig` source `c8baf36f -> 7035f7da`, total `81dbd1f1 -> b3f50a17`). It is a false positive for iOS.
+* **Consequence:** an OTA published from `main` computes runtime `b3f50a17…`, which no shipped iOS binary has, so it would never be delivered. The next iOS *build* from main would ship `b3f50a17…` (harmless for that build, but it becomes a new runtime with its own OTA lineage).
+* **Not reverted.** It is a correct Android-only change and was left as is. Options when convenient: keep publishing 1.1.9 OTAs from the `c0dcc2c`-based worktree until the next iOS build; or add a fingerprint ignore for Android-only plugin props so Android edits stop moving the iOS runtime. That is a build-config decision for the next binary, not done here.
+
+## Nearest-19 monitoring: what actually happens
+Facts (from `candidateVisitTracker.js`, expo-location and iOS behavior):
+
+* iOS keeps monitoring the registered regions with the app closed, and can relaunch a **system-terminated** app to deliver an enter/exit. If the user **force-quits** from the app switcher, iOS does not relaunch it for region events until CheckOff is opened again (documented in the tracker's own header). Nothing on the app side can change that.
+* The registered set is fixed at the last refresh. Refresh runs only on launch, on foreground (5-minute cooldown) and when recovery is toggled. Moving through town with the app closed keeps the original 19 venues live; venues outside that set are simply not watched until the next foreground.
+* How large is the gap (live data, eligible venues, 19th-nearest distance from a central point): Florence 354 m, Vienna 570 m, Phoenix 915 m, San Diego 1.4 km, Positano 1.4 km, Denver 1.5 km, Amalfi town 4.7 km. So in dense cities a walk of a few hundred metres leaves the covered set. This is the biggest real-world limit on detection and is independent of catalog readiness.
+* The 20th iOS region slot is intentionally spare (19 registered), so there is exactly one slot available.
+
+Why not just `startLocationUpdatesAsync`: expo-location's implementation (`EXLocationTaskConsumer.m`) starts continuous GPS updating plus significant-change, which is a large battery cost and a permanent indicator; not appropriate.
+
+**Proposal (JS-only, OTA-deliverable, no new native module): a coverage sentinel region.** Register one extra region in the same `startGeofencingAsync` call: a circle around the position used for the refresh, radius about half the distance to the 19th venue, clamped to 250 m - 1,000 m, identifier `checkoff-refresh-sentinel`, exit only. Venues then use 18 slots + 1 sentinel (still one spare). When iOS reports the sentinel exit (it can relaunch the terminated app), the geofence task takes a fresh fix, re-ranks and re-registers the nearest 18 + a new sentinel, then returns. Safeguards kept unchanged: the sentinel never creates presence sessions or candidates; venue enter/exit handling, fresh-fix exit re-check, server-owned clock, dwell thresholds, confidence, daily cap and 7-day expiry are untouched; a re-registration re-delivers `enter` for the venue the user is inside, which `shouldSendEnter` already dedupes; the venue the user is currently inside is always the nearest and stays registered. Also needed: cache the ranked candidate list on the device (30 km window, re-rank locally) so a background refresh does not re-download the whole ~2,200-row catalog each time, and a 60 s minimum between re-registrations. Not built yet: it changes live detection behavior and needs a field test in a dense city (Florence) before rollout; this is the recommended next piece of work. Limits: needs "Always" location; not effective after a force-quit.
+
+## Reviewed catalog readiness across active metros
+Three migrations applied after the Amalfi work:
+
+* `20260929d_munich_verified_coordinates.sql`: 134 active Munich items had only a `maps_query`. Places (New) text search per item, every result classified with the Winston `classifyPlacesMatch`; 93 EXACT within 30 km auto-accepted, 25 more accepted after reading name+address (spelling or word-order variants and day-trip venues within 35 km), giving **118 coordinates set**. The trigger then classified the 99 with a confident rule. Rejected as wrong entity/not a venue (left without coordinates): `Standl 11` (Places returned a Lidl), `Fisch Maier`, `Neues Rathaus` (returned a bar in the building), `BROY`, `Munich Distillers`, `Cine Español`, `Königs Musik-Express`, `Beerencafé Hofreiter`, `Hexenhäusl`, `King Loui`, `Kloster Fürstenfeld Bräustüberl`, `Undosa` (closed). `Tollwood Winter Festival`, `Oide Wiesn`, `Teufelsrad` are seasonal events with no standing venue -> intentional exclusions.
+* `20260929e_reviewed_profile_choices.sql`: all **310** remaining items the rule declined were read and decided: 79 attraction, 46 outdoor, 35 event, 18 bar, 10 restaurant, 3 retail, **119 manual_only** (trails, loops, greenways, drives, rides and boat trips, dated festivals and recurring meetups, road trips, and anything without one place). Source `curated_2026-09-29`.
+
+Coverage by metro (active placeable items = ready + intentionally excluded + incomplete; universal and secret-without-profile are not placeable; ready = coordinates + live non-manual profile):
+
+| Metro | Placeable | Ready | Intentionally excluded | Incomplete | Inactive |
+|---|---|---|---|---|---|
+| Phoenix | 293 | 264 | 29 | 0 | 51 |
+| San Diego | 257 | 250 | 7 | 0 | 2 |
+| Denver | 208 | 187 | 21 | 0 | 4 |
+| Vienna | 207 | 199 | 8 | 0 | 1 |
+| Munich | 199 | 178 | 9 | **12** (no verified venue match yet) | 21 |
+| Tucson | 168 | 148 | 20 | 0 | 24 |
+| Milwaukee | 116 | 96 | 20 | 0 | 54 |
+| Green Bay | 100 | 94 | 6 | 0 | 0 |
+| Florence | 89 | 88 | 1 | 0 | 7 |
+| Amalfi Coast | 61 | 49 | 12 | 0 | 2 |
+| No metro (Willcox etc.) | 28 | 19 | 9 | 0 | 46 |
+| **Total** | **1,726** | **1,572** | **142** | **12** | |
+
+The 12 Munich items are the only rows that are visibly `incomplete` (they need coordinates from a human-verified venue). Ready is 91% of placeable.
+
+## The guard and its uses (verified)
+* Explicit exclusions are accepted: an item inserted with `visit_profile_key = 'manual_only'` and no coordinates reads `intentionally_excluded`; an unknown key is rejected by the foreign key; an undecided item with coordinates (Adventure) stays `incomplete / profile` (tested in a rolled-back transaction).
+* One rule set: the database trigger + `item_visit_readiness` are the source of truth. The admin's `visitReadiness()` gives the same answer for all 2,230 live items (0 mismatches). Winston's generated SQL reads the same view (`is_secret, visit_profile_key, visit_profile_source, ...` insert tagged `winston_v1`, fail-closed postflight). The CSV import scripts read the same view for their report, and `checkoff_import_csv.js` now accepts an optional `visit_profile_key` column (including `manual_only`) tagged `csv_import`.
+
+## Three separate questions, three separate answers
+1. **Catalog readiness** (data): done as above. 1,572 items are eligible, 142 deliberately excluded, 12 incomplete.
+2. **Device registration** (does a phone actually register regions): Jerry's device, build `01a0e9f8`, refreshed at 00:32 Rome: `ok_monitored`, geofencing started, **19 monitored**, exclusions exactly as predicted (30 over the cap, 12 manual_only, 2 inactive), no errors. This is one device, one place.
+3. **Actual visit detection** (does a real dwell at a venue become a suggestion): **not yet demonstrated for Amalfi.** The only end-to-end proof is the Florence visit on Sept 28. It needs a real stay at a monitored Positano venue followed by an exit and a candidate row. Until then the rollout is not complete. Also outside catalog readiness: the nearest-19 coverage gap and the force-quit limitation above.
