@@ -9,7 +9,7 @@
 // tap here.
 
 import React, { useCallback, useMemo, useState } from 'react'
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Image, TextInput } from 'react-native'
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Image, TextInput, Linking } from 'react-native'
 import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useFocusEffect } from '@react-navigation/native'
@@ -21,6 +21,9 @@ import {
   formatVisitWhenLabel,
   selectInboxRows,
 } from '../lib/visitDetection/candidateVisitConfirmation'
+import { describeEmptyInbox } from '../lib/visitDetection/inboxEmptyState'
+import { fetchOptIn } from '../lib/visitDetection/recoverySettings'
+import { hasBackgroundLocationPermission } from '../lib/visitDetection/permissions'
 
 function mapRow(row) {
   const it = row.items
@@ -52,6 +55,8 @@ export default function VisitInboxScreen({ navigation, route }) {
   const [rows, setRows] = useState([])
   const [loading, setLoading] = useState(true)
   const [busyId, setBusyId] = useState(null)
+  // Drives the empty-state copy: whether recovery is actually on and can see visits.
+  const [emptyState, setEmptyState] = useState({ optedIn: false, hasBackgroundPermission: false })
   // Optional photo + memory, captured before confirming (not a separate step
   // afterward — the server's confirm authorization re-validates the linked
   // candidate_visits row on ANY update to this check-in, including one that
@@ -71,6 +76,11 @@ export default function VisitInboxScreen({ navigation, route }) {
     }
     setLoading(true)
     try {
+      const [optedIn, hasBackgroundPermission] = await Promise.all([
+        fetchOptIn(user.id).catch(() => false),
+        hasBackgroundLocationPermission().catch(() => false),
+      ])
+      setEmptyState({ optedIn, hasBackgroundPermission })
       const { data, error } = await supabase
         .from('candidate_visits')
         .select(`
@@ -233,10 +243,20 @@ export default function VisitInboxScreen({ navigation, route }) {
       </Text>
 
       {rows.length === 0 ? (
-        <View style={styles.emptyWrap}>
-          <Text style={styles.emptyTitle}>Nothing to review right now</Text>
-          <Text style={styles.emptyBody}>When you spend time at a CheckOff place, it shows up here for 7 days so you can check it off later — from anywhere. Turn on visit recovery in Profile to have CheckOff remember your visits.</Text>
-        </View>
+        (() => {
+          const empty = describeEmptyInbox(emptyState)
+          return (
+            <View style={styles.emptyWrap}>
+              <Text style={styles.emptyTitle}>{empty.title}</Text>
+              <Text style={styles.emptyBody}>{empty.body}</Text>
+              {empty.action === 'open_settings' ? (
+                <TouchableOpacity onPress={async () => { try { await Linking.openURL('app-settings:') } catch {} }}>
+                  <Text style={[styles.emptyBody, { color: AMBER, fontWeight: '700', marginTop: 12 }]}>Open Settings</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          )
+        })()
       ) : (
         rows.map(row => (
           <View

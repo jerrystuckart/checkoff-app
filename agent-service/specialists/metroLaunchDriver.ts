@@ -3008,12 +3008,12 @@ function buildHomeListSqlPatch(
       lines.push('  INSERT INTO public.items (')
       lines.push('    body, category_id, neighborhood_id, checkin_type, maps_query,')
       lines.push('    is_universal, is_active, is_approved, is_recurring, difficulty,')
-      lines.push('    photo_required, has_alcohol, is_secret, visit_profile_key,')
+      lines.push('    photo_required, has_alcohol, is_secret, visit_profile_key, visit_profile_source,')
       lines.push('    google_place_id, formatted_address, maps_lat, maps_lng, geo_location, geo_radius_m, website_url')
       lines.push('  ) VALUES (')
       lines.push(`    ${sqlQuote(item.body)}, v_category_id, v_neighborhood_id, ${sqlQuote(item.checkinType)}, ${sqlQuote(item.mapsQuery)},`)
       lines.push(`    false, true, true, false, ${item.difficulty},`)
-      lines.push(`    ${item.photoRequired}, ${item.hasAlcohol}, ${item.isSecret}, ${item.visitProfileKey === null ? 'NULL' : sqlQuote(item.visitProfileKey)},`)
+      lines.push(`    ${item.photoRequired}, ${item.hasAlcohol}, ${item.isSecret}, ${item.visitProfileKey === null ? 'NULL' : sqlQuote(item.visitProfileKey)}, ${item.visitProfileKey === null ? 'NULL' : "'winston_v1'"},`)
       lines.push(
         `    ${item.googlePlaceId === null ? 'NULL' : sqlQuote(item.googlePlaceId)}, ${item.formattedAddress === null ? 'NULL' : sqlQuote(item.formattedAddress)}, ${item.lat ?? 'NULL'}, ${item.lng ?? 'NULL'}, ${hasGeo ? `ST_SetSRID(ST_MakePoint(${item.lng}, ${item.lat}), 4326)` : 'NULL'}, ${item.geoRadiusM ?? 'NULL'}, ${item.websiteUrl === null ? 'NULL' : sqlQuote(item.websiteUrl)}`
       )
@@ -3086,6 +3086,17 @@ function buildHomeListSqlPatch(
     lines.push(
       `  IF v_match_count < ${expectedNeighborhoodCount} THEN RAISE EXCEPTION 'postflight: expected at least % canonical neighborhood(s) for metro %, found %', ${expectedNeighborhoodCount}, ${sqlQuote(metroSlug)}, v_match_count; END IF;`
     )
+  }
+  if (newItems.length > 0) {
+    // Visit-detection readiness (2026-09-29): an item is only monitored on phones with coordinates AND a visit profile.
+    // The insert above gives every item a profile (Winston's own determination, or the database intake trigger's
+    // conservative rule when this pipeline had none). A geocoded item that still has NO profile is a defect, so it
+    // aborts the package; an item Places could not place (no coordinates) is allowed but named, never silent.
+    lines.push('  -- Visit-detection readiness postflight')
+    lines.push(`  SELECT count(*) INTO v_match_count FROM public.item_visit_readiness WHERE metro_slug = ${sqlQuote(metroSlug)} AND readiness = 'incomplete' AND has_coords AND visit_profile_key IS NULL AND body IN (${newItems.map((i) => sqlQuote(i.body)).join(', ')});`)
+    lines.push(`  IF v_match_count > 0 THEN RAISE EXCEPTION 'postflight: % newly created geocoded item(s) have no visit_profile_key, so they would never be monitored — assign a profile (or manual_only) before applying', v_match_count; END IF;`)
+    lines.push(`  SELECT count(*) INTO v_match_count FROM public.item_visit_readiness WHERE metro_slug = ${sqlQuote(metroSlug)} AND readiness = 'incomplete' AND NOT has_coords AND body IN (${newItems.map((i) => sqlQuote(i.body)).join(', ')});`)
+    lines.push(`  IF v_match_count > 0 THEN RAISE NOTICE 'visit detection: % newly created item(s) have no coordinates and will not be monitored until geocoded (see item_visit_readiness)', v_match_count; END IF;`)
   }
   lines.push('END $$;')
   lines.push('COMMIT;')

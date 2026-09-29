@@ -296,6 +296,19 @@ test('driveMetroLaunch (Chief Phase 2AN): the generated package is a single atom
   assert.equal(doBlockCount, 1, 'exactly one DO $$ block — every RAISE EXCEPTION anywhere in it aborts the whole transaction, never just that statement')
 })
 
+test('driveMetroLaunch (visit-detection intake): new items carry a profile source and the package fails closed on a geocoded item with no profile', async () => {
+  const run = await runFullDriver({}, 'item-creation-visit-readiness-test')
+  const state = run.state as { homeListSqlPatch?: string }
+  const sql = state.homeListSqlPatch ?? ''
+  assert.match(sql, /is_secret, visit_profile_key, visit_profile_source,/, 'the items INSERT names visit_profile_source')
+  assert.match(sql, /Visit-detection readiness postflight/)
+  assert.match(sql, /FROM public\.item_visit_readiness WHERE metro_slug = '[^']+' AND readiness = 'incomplete' AND has_coords AND visit_profile_key IS NULL/)
+  assert.match(sql, /RAISE EXCEPTION 'postflight: % newly created geocoded item\(s\) have no visit_profile_key/)
+  assert.match(sql, /RAISE NOTICE 'visit detection: % newly created item\(s\) have no coordinates/)
+  // still exactly one transaction
+  assert.equal((sql.match(/^COMMIT;$/gm) ?? []).length, 1)
+})
+
 // ---------------------------------------------------------------------------
 // 7. finalReadyToApplyAudit cannot PASS a list-only package for a new
 //    metro — the real ITEM_PROVENANCE_GATE, exercised both as a pure
