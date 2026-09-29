@@ -13,6 +13,7 @@ import { forceRefreshGeofences } from '../lib/visitDetection/candidateVisitTrack
 import * as Updates from 'expo-updates'
 import { describeRegistrationState } from '../lib/visitDetection/registrationStateLabel'
 import { describeClientBundle } from '../lib/visitDetection/clientBundle'
+import { groupRegistrationRows, missingConfigHeadline } from '../lib/visitDetection/registrationRowGroups'
 
 // TEMPORARY — Phase 1 pilot only. Visible exclusively to
 // users.visit_detection_tester accounts (gated by the caller, ProfileScreen).
@@ -115,16 +116,46 @@ export default function VisitDetectionDebugPanel({ userId }) {
         </Text>
       )}
 
-      <Text style={[styles.subtitle, { color: TEXT }]}>Currently monitored / excluded set</Text>
-      {monitoredRows.length === 0 ? (
-        <Text style={[styles.meta, { color: MUTED }]}>No registration log yet — grant permission and refresh.</Text>
-      ) : (
-        monitoredRows.map(row => (
+      {(() => {
+        const groups = groupRegistrationRows(monitoredRows)
+        const headline = missingConfigHeadline(groups)
+        const line = (row, mark) => (
           <Text key={row.item_id} style={[styles.meta, { color: MUTED }]}>
-            {row.state === 'monitored' ? '✓' : '✗'} {row.item_name} — {row.distance_m}m — {row.state}
+            {mark} {row.item_name} — {row.distance_m}m
           </Text>
-        ))
-      )}
+        )
+        return (
+          <>
+            {headline ? (
+              <View style={[styles.warn, { borderColor: RED }]}>
+                <Text style={[styles.row, { color: RED, fontWeight: '700' }]}>⚠ Missing configuration</Text>
+                <Text style={[styles.meta, { color: RED }]}>{headline}</Text>
+                {groups.missingConfig.map(row => line(row, '•'))}
+              </View>
+            ) : null}
+            <Text style={[styles.subtitle, { color: TEXT }]}>Monitored ({groups.monitored.length})</Text>
+            {monitoredRows.length === 0
+              ? <Text style={[styles.meta, { color: MUTED }]}>No registration log yet — grant permission and refresh.</Text>
+              : groups.monitored.map(row => line(row, '✓'))}
+            {groups.intentional.length ? (
+              <>
+                <Text style={[styles.subtitle, { color: TEXT }]}>Intentionally excluded ({groups.intentional.length})</Text>
+                {groups.intentional.map(row => line(row, '–'))}
+              </>
+            ) : null}
+            {groups.other.length ? (
+              <>
+                <Text style={[styles.subtitle, { color: TEXT }]}>Not monitored: cap, inactive or other ({groups.other.length})</Text>
+                {groups.other.map(row => (
+                  <Text key={row.item_id} style={[styles.meta, { color: MUTED }]}>
+                    ✗ {row.item_name} — {row.distance_m}m — {row.state.replace('excluded: ', '')}
+                  </Text>
+                ))}
+              </>
+            ) : null}
+          </>
+        )
+      })()}
 
       <View style={styles.buttonRow}>
         <TouchableOpacity style={[styles.button, { backgroundColor: AMBER }]} onPress={handleGrantPermission} disabled={loading}>
@@ -153,6 +184,7 @@ const styles = StyleSheet.create({
   card: { marginTop: 16, padding: 12, borderRadius: 10, borderWidth: 1 },
   title: { fontWeight: '700', marginBottom: 8 },
   subtitle: { fontWeight: '600', marginTop: 10, marginBottom: 4 },
+  warn: { marginTop: 10, padding: 8, borderRadius: 8, borderWidth: 1 },
   row: { marginBottom: 4 },
   meta: { fontSize: 12, opacity: 0.8, marginBottom: 2 },
   buttonRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
