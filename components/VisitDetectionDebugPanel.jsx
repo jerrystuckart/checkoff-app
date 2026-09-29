@@ -40,7 +40,7 @@ export default function VisitDetectionDebugPanel({ userId }) {
 
       const { data: log } = await supabase
         .from('geofence_registration_log')
-        .select('refreshed_at, geofencing_started, error_message, monitored_items, excluded_items, registration_state')
+        .select('refreshed_at, geofencing_started, error_message, monitored_items, excluded_items, registration_state, refresh_cause, coverage')
         .eq('user_id', userId)
         .order('refreshed_at', { ascending: false })
         .limit(1)
@@ -115,6 +115,16 @@ export default function VisitDetectionDebugPanel({ userId }) {
           {lastLog.monitored_items?.length ?? 0} monitored, {lastLog.excluded_items?.length ?? 0} excluded
         </Text>
       )}
+
+      {lastLog?.refresh_cause ? (
+        <Text style={[styles.meta, { color: MUTED }]}>
+          Coverage refresh: {lastLog.refresh_cause} · {lastLog.registration_state}
+          {lastLog.coverage?.sentinelRadiusM ? ` · sentinel ${lastLog.coverage.sentinelRadiusM} m${lastLog.coverage.tight ? ' (tight)' : ''}` : ''}
+          {lastLog.coverage?.nextUnmonitoredM != null ? ` · next unmonitored venue ${lastLog.coverage.nextUnmonitoredM} m` : ''}
+          {lastLog.coverage?.cacheSource ? ` · cache ${lastLog.coverage.cacheSource}` : ''}
+          {lastLog.coverage?.reason ? ` · ${lastLog.coverage.reason}` : ''}
+        </Text>
+      ) : null}
 
       {(() => {
         const groups = groupRegistrationRows(monitoredRows)
