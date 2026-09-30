@@ -19,26 +19,11 @@ import { fanOutCheckIn } from '../lib/checkInFanOut'
 import {
   buildVisitConfirmationPayload,
   formatVisitWhenLabel,
-  selectInboxRows,
 } from '../lib/visitDetection/candidateVisitConfirmation'
 import { describeEmptyInbox } from '../lib/visitDetection/inboxEmptyState'
-import { fetchOptIn } from '../lib/visitDetection/recoverySettings'
+import { loadActionableCandidates } from '../lib/visitDetection/actionableCandidates'
+import { fetchOptIn, emitCandidatesChanged } from '../lib/visitDetection/recoverySettings'
 import { hasBackgroundLocationPermission } from '../lib/visitDetection/permissions'
-
-function mapRow(row) {
-  const it = row.items
-  if (!it) return null
-  return {
-    candidateVisitId: row.id,
-    status: row.status,
-    expiresAt: row.expires_at,
-    departureAt: row.departure_at,
-    itemId: it.id,
-    itemBody: it.body ?? '',
-    neighborhoodName: it.neighborhoods?.name ?? null,
-    competingVenueCount: row.metadata?.competingVenueCount ?? 0,
-  }
-}
 
 export default function VisitInboxScreen({ navigation, route }) {
   // Deep-linked from a tapped candidate_visit_high_confidence push (see
@@ -81,40 +66,9 @@ export default function VisitInboxScreen({ navigation, route }) {
         hasBackgroundLocationPermission().catch(() => false),
       ])
       setEmptyState({ optedIn, hasBackgroundPermission })
-      const { data, error } = await supabase
-        .from('candidate_visits')
-        .select(`
-          id, status, expires_at, departure_at, confirmed_at, rejected_at, metadata,
-          items ( id, body, neighborhoods!items_neighborhood_id_fkey ( name ) )
-        `)
-        .eq('user_id', user.id)
-        .in('status', ['candidate', 'medium_confidence', 'high_confidence'])
-        .order('departure_at', { ascending: false })
-
-      if (error) throw error
-
-      const mapped = (data ?? [])
-        .map(row => {
-          const m = mapRow(row)
-          return m && { ...m, confirmedAt: row.confirmed_at, rejectedAt: row.rejected_at }
-        })
-        .filter(Boolean)
-
-      // Hide any suggestion for an item the user has ALREADY checked off,
-      // through any path -- including one completed after this candidate
-      // visit was created. Display mirror of the server guard (migrations
-      // 20260924 / 20260927), which is the real boundary.
-      const itemIds = [...new Set(mapped.map(r => r.itemId))]
-      let alreadyCheckedOffItemIds = new Set()
-      if (itemIds.length > 0) {
-        const { data: existing } = await supabase
-          .from('check_ins')
-          .select('item_id')
-          .eq('user_id', user.id)
-          .in('item_id', itemIds)
-        alreadyCheckedOffItemIds = new Set((existing ?? []).map(r => r.item_id))
-      }
-      setRows(selectInboxRows({ rows: mapped, checkedOffItemIds: alreadyCheckedOffItemIds, highlightId }))
+      // Same loader and rules as the Home/Profile badges, so the badge always equals the cards shown here.
+      const { rows: actionable } = await loadActionableCandidates(supabase, user.id, { highlightId })
+      setRows(actionable)
     } catch (e) {
       console.warn('VisitInboxScreen load error:', e?.message ?? e)
       setRows([])
@@ -200,6 +154,7 @@ export default function VisitInboxScreen({ navigation, route }) {
         return next
       })
       setRows(prev => prev.filter(r => r.candidateVisitId !== row.candidateVisitId))
+      emitCandidatesChanged() // Home/Profile badges refresh immediately
       Alert.alert('Checked off!', `${row.itemBody} — added to your memory.`)
     } catch (e) {
       Alert.alert('Could not confirm this visit', e?.message ?? 'Please try again.')
@@ -216,6 +171,7 @@ export default function VisitInboxScreen({ navigation, route }) {
       if (dismissed === false) throw new Error('This suggestion is no longer available.')
 
       setRows(prev => prev.filter(r => r.candidateVisitId !== row.candidateVisitId))
+      emitCandidatesChanged()
     } catch (e) {
       Alert.alert('Could not dismiss this suggestion', e?.message ?? 'Please try again.')
     } finally {
@@ -279,11 +235,13 @@ export default function VisitInboxScreen({ navigation, route }) {
                 style={styles.attachPhotoBtn}
                 onPress={() => pickAttachmentPhoto(row.candidateVisitId)}
                 disabled={busyId === row.candidateVisitId}
+                accessibilityRole="button"
+                accessibilityLabel={attachments[row.candidateVisitId]?.photo ? 'Change photo' : 'Add a photo'}
               >
                 {attachments[row.candidateVisitId]?.photo ? (
                   <Image source={{ uri: attachments[row.candidateVisitId].photo.uri }} style={styles.attachThumb} />
                 ) : (
-                  <Text style={styles.attachPhotoText}>📷 Add a photo</Text>
+                  <Text style={styles.attachPhotoText} numberOfLines={1}>📷 Photo</Text>
                 )}
               </TouchableOpacity>
               <TextInput
@@ -341,10 +299,11 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, AMBER }) {
     itemBody: { fontSize: 16, color: TEXT, fontWeight: '700' },
     itemMeta: { fontSize: 12, color: MUTED, marginTop: 4, fontWeight: '600' },
     attachRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
-    attachPhotoBtn: { width: 40, height: 40, borderRadius: 10, borderWidth: 1, borderColor: BORDER, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-    attachThumb: { width: 40, height: 40 },
-    attachPhotoText: { fontSize: 18, color: TEXT },
-    attachNoteInput: { flex: 1, height: 40, borderRadius: 10, borderWidth: 1, borderColor: BORDER, paddingHorizontal: 12, fontSize: 13, color: TEXT },
+    // Sized to its label (was a fixed 40x40 square with overflow hidden, which clipped "📷 Add a photo"). Stays >= 44 pt tall for touch.
+    attachPhotoBtn: { minWidth: 44, height: 44, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: BORDER, alignItems: 'center', justifyContent: 'center', overflow: 'hidden', flexShrink: 0 },
+    attachThumb: { width: 44, height: 44 },
+    attachPhotoText: { fontSize: 14, color: TEXT, fontWeight: '600' },
+    attachNoteInput: { flex: 1, height: 44, borderRadius: 10, borderWidth: 1, borderColor: BORDER, paddingHorizontal: 12, fontSize: 13, color: TEXT },
     buttonRow: { flexDirection: 'row', gap: 10, marginTop: 14 },
     button: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
     dismissButton: { backgroundColor: 'transparent', borderWidth: 1, borderColor: BORDER },
