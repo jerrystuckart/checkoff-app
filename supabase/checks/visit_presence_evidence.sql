@@ -55,7 +55,7 @@ BEGIN
   EXECUTE 'SET LOCAL ROLE authenticated';
   o := visit_presence_enter(casola.id, casola.maps_lat, casola.maps_lng, 6, 3);
   EXECUTE 'RESET ROLE';
-  UPDATE visit_presence_sessions SET entered_at = now() - interval '50 minutes', last_inside_at = now() - interval '20 minutes' WHERE user_id=uid AND item_id=casola.id AND status='open';
+  UPDATE visit_presence_sessions SET entered_at = now() - interval '50 minutes', last_inside_at = now() - interval '20 minutes', proven_inside_s = 1800 WHERE user_id=uid AND item_id=casola.id AND status='open';
   PERFORM set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
   EXECUTE 'SET LOCAL ROLE authenticated';
   o := visit_presence_reconcile(casola.maps_lat + 0.02, casola.maps_lng, 8, 3);
@@ -75,7 +75,7 @@ BEGIN
 
   -- (6) a place already checked off yields no lower-bound candidate either
   INSERT INTO check_ins (user_id, item_id, list_item_id, checkin_method, points_awarded) VALUES (uid, duomo.id, NULL, 'tap', 1);
-  UPDATE visit_presence_sessions SET entered_at = now() - interval '50 minutes', last_inside_at = now() - interval '20 minutes' WHERE user_id=uid AND item_id=duomo.id AND status='open';
+  UPDATE visit_presence_sessions SET entered_at = now() - interval '50 minutes', last_inside_at = now() - interval '20 minutes', proven_inside_s = 1800 WHERE user_id=uid AND item_id=duomo.id AND status='open';
   PERFORM set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
   EXECUTE 'SET LOCAL ROLE authenticated';
   o := visit_presence_reconcile(duomo.maps_lat + 0.02, duomo.maps_lng, 8, 3);
