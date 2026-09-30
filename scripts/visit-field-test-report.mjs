@@ -21,7 +21,7 @@ const w = `>= ('${day} 00:00'::timestamp AT TIME ZONE '${TZ}') AND {c} < (('${da
 const within = (c) => w.replace('{c}', c)
 const rome = (c) => `to_char(${c} AT TIME ZONE '${TZ}', 'HH24:MI:SS')`
 
-const reg = q(`SELECT ${rome('refreshed_at')} t, refresh_cause cause, registration_state st, geofencing_started gs, jsonb_array_length(monitored_items) monitored,
+const reg = q(`SELECT ${rome('refreshed_at')} t, extract(epoch from refreshed_at) ep, refresh_cause cause, registration_state st, geofencing_started gs, jsonb_array_length(monitored_items) monitored,
   coverage->>'sentinelRadiusM' sentinel_m, coverage->>'nextUnmonitoredM' next_m, coverage->>'tight' tight, coverage->>'cacheSource' cache, coverage->>'reason' reason,
   round(selection_lat::numeric,3) lat, round(selection_lng::numeric,3) lng, left(client_build, 8) build, error_message
   FROM geofence_registration_log WHERE user_id='${userId}' AND refreshed_at ${within('refreshed_at')} ORDER BY refreshed_at`)
@@ -36,16 +36,25 @@ const cand = q(`SELECT ${rome('c.arrival_at')} arrival, ${rome('c.departure_at')
 const chk = q(`SELECT ${rome('k.checked_at')} t, left(i.body, 44) venue, k.verification_method, k.points_awarded, k.list_item_id IS NOT NULL on_list, k.matched_candidate_visit_id IS NOT NULL matched
   FROM check_ins k JOIN items i ON i.id = k.item_id WHERE k.user_id='${userId}' AND k.checked_at ${within('k.checked_at')} ORDER BY k.checked_at`)
 
+// Label how each refresh started. A sentinel_* refresh is 'BACKGROUND' unless the app was opened (app_start / foreground /
+// manual / opt_in_change) in the 3 minutes before it - then it is 'app-open nearby' and is not counted as background proof.
+const OPEN_CAUSES = new Set(['app_start', 'foreground', 'manual', 'opt_in_change'])
+for (const r of reg) {
+  if (String(r.cause ?? '').startsWith('sentinel')) {
+    const opened = reg.some((o) => OPEN_CAUSES.has(o.cause) && Number(r.ep) - Number(o.ep) >= 0 && Number(r.ep) - Number(o.ep) < 180)
+    r.how = opened ? 'app-open nearby' : 'BACKGROUND'
+  } else r.how = OPEN_CAUSES.has(r.cause) ? 'app opened' : '(classic/legacy)'
+}
 const t = (title, rows) => { console.log(`\n== ${title} (${rows.length})`); if (rows.length) console.table(rows) }
 console.log(`Field-test report for ${day} (${TZ}), user ${userId}`)
-t('Coverage/registration refreshes', reg)
+t('Coverage/registration refreshes', reg.map(({ ep, ...r }) => ({ t: r.t, how: r.how, ...r })))
 t('Geofence + presence debug events', ev.map((e) => ({ ...e, detail: JSON.stringify(e.detail) })))
 t('Presence sessions (enter -> exit)', sess)
 t('Candidate visits', cand)
 t('Check-ins that day', chk)
 
 const okReg = reg.filter((r) => r.st === 'ok_monitored' && r.gs)
-const sentinelRefreshes = reg.filter((r) => r.cause === 'sentinel_exit' && r.st === 'ok_monitored')
+const sentinelRefreshes = reg.filter((r) => r.cause === 'sentinel_exit' && r.st === 'ok_monitored' && r.how === 'BACKGROUND')
 const sentinelEvents = ev.filter((e) => e.event_type === 'sentinel_exit')
 const qualifying = sess.filter((s) => s.status === 'closed' && s.need_min != null && Number(s.minutes) >= Number(s.need_min))
 const candidates = cand.filter((c) => c.detection_method === 'geofence_dwell')
@@ -56,7 +65,7 @@ console.log('\n== Stage verdicts (from recorded evidence only)')
 console.log('1 Catalog readiness      ', 'see docs/visit-recovery/catalog_readiness_2026-09-29.md (data check, not a device test)')
 console.log('2 Device registration    ', verdict(okReg.length > 0, `${okReg.length} refresh(es) ok_monitored; latest monitored=${okReg.at(-1)?.monitored}`, 'no ok_monitored refresh recorded'))
 console.log('3 Background refresh     ', verdict(sentinelRefreshes.length > 0 && sentinelEvents.length > 0,
-  `${sentinelEvents.length} sentinel exit event(s) -> ${sentinelRefreshes.length} sentinel-driven re-registration(s). Check the times: they must fall while CheckOff was NOT in the foreground`,
+  `${sentinelEvents.length} sentinel exit event(s) -> ${sentinelRefreshes.length} BACKGROUND re-registration(s) (no app open within 3 min before)`,
   'no sentinel exit -> re-registration pair recorded'))
 console.log('4 Real dwell -> candidate', verdict(qualifying.length > 0 && candidates.length > 0,
   `${qualifying.length} closed session(s) at/above the profile threshold; ${candidates.length} geofence_dwell candidate(s)`,
