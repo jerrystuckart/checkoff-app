@@ -2,6 +2,13 @@
 
 Status: implemented, published by OTA `01a0ef6f-3a3a-795c-9e2e-68beb5ffb9fc` (runtime `81dbd1f1…`), **tester-only** (flag `candidate_visit_sentinel_refresh`: off globally, on for one tester account, and tester-gated in `lib/featureFlags.js`). No native change is needed: it uses only `Location.startGeofencingAsync` as shipped in expo-location 55.1.14.
 
+## Rollout, monitoring, rollback (2026-09-30)
+* **Who gets it:** OTA `01a0f128-d077-712d-9d44-2d85155d052a` (group `737d70ce…`, runtime `81dbd1f1…`) removed the tester gate: `candidate_visit_sentinel_refresh` now follows the global flag and per-user overrides (a per-user OFF wins), and the global flag was set ON on 2026-09-30. It only runs inside visit recovery: iOS, `candidate_visit_detection` on, the user **opted in** (`visit_recovery_settings`), **Always** location. Clients still on the previous OTA (`01a0ef6f`) keep the old tester gate. Android and the reminder/notification flags are untouched (`VISIT_RECOVERY_PLATFORMS = ['ios']`; the four reminder flags remain tester-only).
+* **Reach reality check:** at the time of the flip exactly one account had opted in to visit recovery, so "global" changes behaviour for that one account until others opt in.
+* **Verified resolution:** for a real non-tester account (RLS reads, real `featureFlags.js`): sentinel ON, detection ON, silent mode / historical recovery / realtime nearby / at-place reminders OFF.
+* **Monitor:** `node scripts/visit-sentinel-monitor.mjs [hours]` (read-only; exit 1 on alerts): refresh causes and outcomes, failure reasons, repeated/flapping refreshes per user, born-outside events, presence-session outcomes (`missed_exit`, `stale_open`, open > 8 h), sessions that straddled a sentinel re-registration, and qualifying stays without a candidate. Alert thresholds: > 20 sentinel refreshes in an hour, > 3 refreshes < 90 s apart, > 10 born-outside, > 25 % lost sessions, any session open > 8 h, any OS registration error or exception.
+* **Rollback switch:** `UPDATE feature_flags SET enabled_globally=false WHERE key='candidate_visit_sentinel_refresh'`. Effective (a) at the user's next app open, and (b) at the next sentinel wake, which re-reads the flag: an explicit OFF drops the sentinel and registers the classic set at once (`flag_off_fallback_classic` row). An unreadable flag (offline) does not roll back. A per-user override row still applies (the tester's ON override keeps it on for that account until deleted).
+
 ## Problem
 iOS allows 20 monitored regions per app. The tracker registers the nearest 19 eligible venues at launch/foreground and never updates them while backgrounded. Walking through a dense town leaves the covered set (nearest-19 radius: Florence ~350 m, Positano ~1.4 km).
 
