@@ -1,5 +1,9 @@
 import CoreLocation
 import Foundation
+import os.log
+
+/// Diagnostics for device testing (Console.app, subsystem com.checkoff.movement). Never logs coordinates.
+let movementLog = OSLog(subsystem: "com.checkoff.movement", category: "lifecycle")
 
 /// Owns the OS significant-location-change subscription and a small persistent queue of movement hints.
 ///
@@ -93,6 +97,7 @@ final class MovementMonitor: NSObject, CLLocationManagerDelegate {
     list.append(hint)
     if list.count > maxPending { list.removeFirst(list.count - maxPending) }
     defaults.set(list, forKey: pendingKey)
+    os_log("hint queued (pending=%d, appState=%d, jsListening=%{public}@)", log: movementLog, type: .info, list.count, UIApplication.shared.applicationState.rawValue, onHint == nil ? "no" : "yes")
     onHint?()
   }
 
