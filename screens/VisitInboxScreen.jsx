@@ -230,7 +230,7 @@ export default function VisitInboxScreen({ navigation, route }) {
                 </Text>
               ) : null}
               {row.competingVenueCount > 0 ? (
-                <Text style={styles.itemMeta}>Other CheckOff places are very close by — only check this off if it's the one you visited.</Text>
+                <Text style={styles.itemMeta}>Several CheckOff places are close together here. You spent time in this one's area: check it off only if it's something you did.</Text>
               ) : null}
             </TouchableOpacity>
 
