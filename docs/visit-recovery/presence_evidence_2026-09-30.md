@@ -1,5 +1,7 @@
 # Presence evidence quality, missed exits, sentinel delivery (2026-09-30, second pass)
 
+> **Terminology correction (2026-09-30, migration 20260930m):** wherever this document says "lower bound" or "proven" for a stay closed without an observed exit, read **"estimated"**. Sparse inside-samples do not prove continuous presence between them.
+
 Migration `20260930g_presence_evidence_quality.sql` (applied); client OTA built from the release branch. Detection remains a **suggestion you confirm**: nothing here proves you did the specific experience, only that the phone was observed near the place.
 
 ## 1. Why Casola opened a session while you were at the lodging
@@ -56,7 +58,7 @@ What is not solvable in the current binary: guaranteeing a wake-up while the pho
 ## 3. Missed exits: what later evidence can and cannot prove
 * Every accepted fix (enter, re-delivered enter, exit, reconcile) now stamps `last_inside_at` on every other open session it is **inside** of (`visit_touch_inside`). That is observed evidence, never inferred.
 * A session is closed as `missed_exit` only when a fresh, reasonably accurate fix is clearly **outside**. Stale or uncertain fixes leave it open.
-* On closing without an observed exit, if `last_inside_at − entered_at` proves at least the profile's candidate dwell, a candidate is created with `departure_at = last seen inside`, `dwell = that proven minimum`, `metadata.dwellBound = 'lower'`, at most medium confidence, never notifying. The inbox says "Last seen there … — at least N min (we didn't see you leave)". Arrival is never moved, no exit time is invented, unobserved time is never counted. With no later evidence the lower bound is 0: no candidate, the session stays `missed_exit` (uncertain). Checks: `visit_presence_evidence.sql`.
+* On closing without an observed exit, if `last_inside_at − entered_at` credits (estimates) at least the profile's candidate dwell, a candidate is created with `departure_at = last seen inside`, `dwell = that proven minimum`, `metadata.dwellBound = 'lower'`, at most medium confidence, never notifying. The inbox says "Last seen there … — at least N min (we didn't see you leave)". Arrival is never moved, no exit time is invented, unobserved time is never counted. With no later evidence the lower bound is 0: no candidate, the session stays `missed_exit` (uncertain). Checks: `visit_presence_evidence.sql`.
 * Venues with close neighbours score below the ignore band on dwell alone (overlap penalty), so a lower bound there produces nothing by design (a 30-minute proven stay at Villa Rufolo scores 30 < 50).
 * Today's Il Pirata session (entered 18:05:28, closed at 18:30:40) had no later inside evidence: lower bound 0, correctly left uncertain.
 

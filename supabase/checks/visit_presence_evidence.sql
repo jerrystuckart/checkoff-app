@@ -2,7 +2,7 @@
 -- Run: supabase db query -f supabase/checks/visit_presence_evidence.sql --linked   (replace the tester id below)
 -- Expected: ROLLED BACK: casola206=outside rufolo125=inside duomo88=inside coarse=uncertain stale=stale |
 --   lodging=rejected/fix_outside_venue stale=rejected/stale_fix coarse=rejected/fix_uncertain neighbour=opened |
---   lb_none=no_candidate(missed_exit) lb_cand=candidate(lower,30.0min) status=... departure_is_last_seen=true
+--   lb_none=no_candidate(missed_exit) lb_cand=candidate(estimated,30.0min) status=... departure_is_last_seen=true
 --   (an overlapped venue such as Rufolo, proven 30 min on dwell alone, scores 30 < 50 and yields no candidate by design)
 --   uncertain_keeps_open=1 checked_off=no_candidate
 DO $$
@@ -33,7 +33,7 @@ BEGIN
   -- a genuine visit to that neighbour, a few steps from its door, is still accepted
   o := visit_presence_enter(casola.id, casola.maps_lat + 40.0/111320, casola.maps_lng, 8, 5);       r := r || 'neighbour=' || (o->>'status') || ' | ';
 
-  -- (3) missed exit WITHOUT later evidence: no lower bound, no candidate, the session stays uncertain
+  -- (3) missed exit WITHOUT later evidence: no estimate, no candidate, the session stays uncertain
   EXECUTE 'RESET ROLE';
   UPDATE visit_presence_sessions SET status='discarded', outcome='test_isolation', closed_at=now() WHERE user_id=uid AND status='open';
   UPDATE visit_presence_sessions SET entered_at=entered_at - interval '3 days', closed_at=closed_at - interval '3 days', created_at=created_at - interval '3 days', last_inside_at=last_inside_at - interval '3 days' WHERE user_id=uid;  -- no 'impossible travel' from the previous step
@@ -50,17 +50,17 @@ BEGIN
   SELECT outcome INTO cand FROM visit_presence_sessions WHERE user_id=uid AND item_id=rufolo.id ORDER BY created_at DESC LIMIT 1;
   r := r || 'lb_none=' || CASE WHEN n=0 THEN 'no_candidate' ELSE 'CANDIDATE(BUG)' END || '(' || cand.outcome || ') ';
 
-  -- (4) missed exit WITH proven later evidence: a lower-bound candidate, departure = last seen inside, never above medium (a venue WITH close neighbours scores below the ignore band on dwell alone and produces nothing: Rufolo, Duomo)
+  -- (4) missed exit WITH proven later evidence: an estimated candidate, departure = last seen inside, never above medium (a venue WITH close neighbours scores below the ignore band on dwell alone and produces nothing: Rufolo, Duomo)
   PERFORM set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
   EXECUTE 'SET LOCAL ROLE authenticated';
   o := visit_presence_enter(casola.id, casola.maps_lat, casola.maps_lng, 6, 3);
   EXECUTE 'RESET ROLE';
-  UPDATE visit_presence_sessions SET entered_at = now() - interval '50 minutes', last_inside_at = now() - interval '20 minutes', proven_inside_s = 1800 WHERE user_id=uid AND item_id=casola.id AND status='open';
+  UPDATE visit_presence_sessions SET entered_at = now() - interval '50 minutes', last_inside_at = now() - interval '20 minutes', sampled_inside_s = 1800 WHERE user_id=uid AND item_id=casola.id AND status='open';
   PERFORM set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
   EXECUTE 'SET LOCAL ROLE authenticated';
   o := visit_presence_reconcile(casola.maps_lat + 0.02, casola.maps_lng, 8, 3);
   EXECUTE 'RESET ROLE';
-  SELECT c.metadata->>'dwellBound' AS b, c.dwell_minutes AS d, c.status AS st, c.departure_at, c.arrival_at, s.last_inside_at INTO cand
+  SELECT c.metadata->>'dwellBasis' AS b, c.dwell_minutes AS d, c.status AS st, c.departure_at, c.arrival_at, s.last_inside_at INTO cand
     FROM candidate_visits c JOIN visit_presence_sessions s ON s.candidate_visit_id = c.id WHERE c.user_id=uid AND c.item_id=casola.id;
   r := r || 'lb_cand=' || CASE WHEN cand.b IS NULL THEN 'NONE(BUG)' ELSE 'candidate(' || cand.b || ',' || cand.d || 'min) status=' || cand.st || ' departure_is_last_seen=' || (cand.departure_at = cand.last_inside_at)::text END || ' ';
 
@@ -73,9 +73,9 @@ BEGIN
   SELECT count(*) INTO n FROM visit_presence_sessions WHERE user_id=uid AND item_id=duomo.id AND status='open';
   r := r || 'uncertain_keeps_open=' || n || ' ';
 
-  -- (6) a place already checked off yields no lower-bound candidate either
+  -- (6) a place already checked off yields no estimated candidate either
   INSERT INTO check_ins (user_id, item_id, list_item_id, checkin_method, points_awarded) VALUES (uid, duomo.id, NULL, 'tap', 1);
-  UPDATE visit_presence_sessions SET entered_at = now() - interval '50 minutes', last_inside_at = now() - interval '20 minutes', proven_inside_s = 1800 WHERE user_id=uid AND item_id=duomo.id AND status='open';
+  UPDATE visit_presence_sessions SET entered_at = now() - interval '50 minutes', last_inside_at = now() - interval '20 minutes', sampled_inside_s = 1800 WHERE user_id=uid AND item_id=duomo.id AND status='open';
   PERFORM set_config('request.jwt.claims', '{"sub":"' || uid || '","role":"authenticated"}', true);
   EXECUTE 'SET LOCAL ROLE authenticated';
   o := visit_presence_reconcile(duomo.maps_lat + 0.02, duomo.maps_lng, 8, 3);

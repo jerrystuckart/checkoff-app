@@ -224,8 +224,8 @@ export default function VisitInboxScreen({ navigation, route }) {
               {row.neighborhoodName ? <Text style={styles.itemMeta}>{row.neighborhoodName}</Text> : null}
               {row.departureAt ? (
                 <Text style={styles.itemMeta}>
-                  {row.dwellBound === 'lower'
-                    ? `Last seen there ${formatVisitWhenLabel(row.departureAt)} — at least ${Math.round(row.dwellMinutes ?? 0)} min (we didn't see you leave)`
+                  {row.dwellBasis === 'estimated'
+                    ? `Last seen there ${formatVisitWhenLabel(row.departureAt)} — about ${Math.round(row.dwellMinutes ?? 0)} min, estimated from a few location checks (we didn't see you leave)`
                     : formatVisitWhenLabel(row.departureAt)}
                 </Text>
               ) : null}

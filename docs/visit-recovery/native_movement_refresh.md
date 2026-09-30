@@ -1,17 +1,17 @@
 # Native movement refresh (significant-location-change): design, build and travel test
 
-Status: **implemented on branch `native/movement-refresh`, not merged, not published, not submitted.** It needs a new iOS binary (and therefore a new runtime). Nothing that requires it was or will be published to the existing 1.1.9 runtime `81dbd1f1…`. The compatible 1.1.9 OTA line stays on branch `release/ios-1.1.9-runtime-81dbd1f1`.
+Status (updated 2026-09-30): **implemented on branch `native/movement-refresh`, not merged, not published, not submitted.** It needs a new iOS binary (and therefore a new runtime). Nothing that requires it was or will be published to the existing 1.1.9 runtime `81dbd1f1…`. The compatible 1.1.9 OTA line stays on branch `release/ios-1.1.9-runtime-81dbd1f1`.
 
 ## Why: what the real trip showed
 Sentinel re-registrations on 2026-09-30 (distance from the previous centre; the circle is 1.5 km): on time at 1.64, 1.72, 1.61 km; late at 2.56, 3.68, 2.86 km; and **no background exit at all** on the outbound bus ride (5.6 km, found only when the app was opened). Region exits depend on the OS noticing a boundary crossing, and it did not for a moving phone. Coverage therefore lagged kilometres behind the phone and Amalfi's venues were not watched on arrival.
 
 ## Apple's two candidate services (official documentation)
-* **Significant-location-change** (`CLLocationManager.startMonitoringSignificantLocationChanges()`, developer.apple.com/documentation/corelocation/cllocationmanager/startmonitoringsignificantlocationchanges()): events only after the device moves **≥ 500 m** from the previous notification, **not more than once every five minutes**; designed to be battery-efficient; if the app is terminated the system **relaunches it into the background** when a new location arrives (launch options carry `.location`); the app **must recreate its location manager and call the method again**, and the triggering location is then delivered immediately.
+* **Significant-location-change** (`CLLocationManager.startMonitoringSignificantLocationChanges()`, developer.apple.com/documentation/corelocation/cllocationmanager/startmonitoringsignificantlocationchanges()). What Apple documents: the service delivers a location when the device moves **a significant distance (the documentation gives 500 meters or more)** from the previous notification, and notifications **"should not occur more frequently than once every five minutes"**; it is meant to be power-efficient and uses cell/Wi-Fi data, so network availability affects how soon updates arrive; if the app is terminated the system **can relaunch it into the background** when a new location arrives (launch options carry `.location`) and the app **must recreate its location manager and start the service again**. **These are a minimum distance and a rate limit, not a delivery guarantee.** Apple does not promise an event at every 500 m, nor one within five minutes of moving 500 m; events can be delayed, coalesced or absent (no network data, Low Power Mode, Background App Refresh off, Location Services or authorization changes, a device restart before first unlock, a force-quit app). Nothing in CheckOff depends on a particular cadence.
 * **Visits** (`startMonitoringVisits()`, `CLVisit`): events when the user arrives at or leaves a *place where they stay*; arrival/departure dates are approximate and either may be absent; the system relaunches a terminated app; reduced accuracy without precise authorization.
 
 | | Significant-location-change | Visits |
 |---|---|---|
-| Fires while travelling (the failure we saw) | **Yes**, every ≥ 500 m / ≥ 5 min | No: only at places where the user stays |
+| Fires while travelling (the failure we saw) | **Usually**: designed for it, after ≥ ~500 m of movement and at most every ~5 min, with no timing guarantee | No: only at places where the user stays |
 | Relaunches a terminated app | Yes | Yes |
 | Gives a dwell or exit time | No (a position hint) | Yes (approximate arrival/departure) |
 | Battery | Low (cell-tower based) | Low |
@@ -55,7 +55,7 @@ OTA afterwards (for the NEW runtime only): publish from the 1.1.10 branch with `
 ## Travel test plan (new TestFlight build, flag already on for your account)
 1. Install the build, open CheckOff, Profile → debug panel: confirm the running bundle, Always location, and that **Movement: started** appears (panel line reads `movement` state from the last log).
 2. Before leaving, open the app once at the start point and press Home. **Do not swipe the app away.**
-3. Take a bus or car ≥ 10 km without opening the app. Every ≥ 500 m / ≥ 5 min the OS should wake the app.
+3. Take a bus or car ≥ 10 km without opening the app. The OS may wake the app after significant movement (no fixed cadence is promised): the test measures how often it really does.
 4. Stop at a venue you have not been near (at least the venue's dwell) and leave; then open the app after ~10 min.
 5. Report to me the times only; I read `node scripts/visit-field-test-report.mjs <date>`:
    * `movement_update` debug events and `refresh_cause = movement_update` rows with no app-open row in the 3 minutes before = **background movement refreshes proven**.
@@ -64,4 +64,4 @@ OTA afterwards (for the NEW runtime only): publish from the 1.1.10 branch with `
 6. Force-quit check (optional, separate day): swipe the app away, travel 2 km, and confirm that **nothing** refreshes until you open it (this is iOS behaviour, recorded so nobody expects otherwise).
 
 ## Limits stated plainly
-Force-quit apps are not relaunched. SLC is coarse (cell-tower based), can lag, and is capped at about one event per 5 minutes; it improves coverage refresh, it does not guarantee it. It needs Always authorization. A phone in Low Power Mode or with Background App Refresh restricted may deliver less. It is a refresh trigger; presence is still only established by venue events with a fresh, accurate fix.
+Force-quit apps are not relaunched. SLC is coarse (cell/Wi-Fi based), can lag or not fire, and Apple documents it as no more often than once every five minutes; it improves the odds of a coverage refresh, it does not guarantee one. It needs Always authorization. A phone in Low Power Mode or with Background App Refresh restricted may deliver less. It is a refresh trigger; presence is still only established by venue events with a fresh, accurate fix.
