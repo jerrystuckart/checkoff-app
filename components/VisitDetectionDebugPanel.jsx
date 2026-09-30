@@ -14,6 +14,7 @@ import * as Updates from 'expo-updates'
 import { describeRegistrationState } from '../lib/visitDetection/registrationStateLabel'
 import { describeClientBundle } from '../lib/visitDetection/clientBundle'
 import { groupRegistrationRows, missingConfigHeadline } from '../lib/visitDetection/registrationRowGroups'
+import { movementStatus } from '../lib/visitDetection/movementNative'
 
 // TEMPORARY — Phase 1 pilot only. Visible exclusively to
 // users.visit_detection_tester accounts (gated by the caller, ProfileScreen).
@@ -28,6 +29,7 @@ export default function VisitDetectionDebugPanel({ userId }) {
   const [status, setStatus] = useState(null)
   const [lastLog, setLastLog] = useState(null)
   const [monitoredRows, setMonitoredRows] = useState([])
+  const [movement, setMovement] = useState('…')
 
   const refreshStatus = useCallback(async () => {
     if (!userId) return
@@ -53,6 +55,7 @@ export default function VisitDetectionDebugPanel({ userId }) {
         .order('distance_m', { ascending: true })
 
       setStatus({ hasBgPermission, detectionEnabled })
+      setMovement(await movementStatus())
       setLastLog(log ?? null)
       setMonitoredRows(monitored ?? [])
     } catch (e) {
@@ -97,6 +100,9 @@ export default function VisitDetectionDebugPanel({ userId }) {
       })()}
       <Row label="Background location permission" ok={status?.hasBgPermission} color={TEXT} />
       <Row label="candidate_visit_detection flag" ok={status?.detectionEnabled} color={TEXT} />
+      <Text style={[styles.row, { color: movement === 'running' ? TEXT : MUTED }]}>
+        {movement === 'running' ? '✓' : 'ⓘ'} Movement refresh: {movement === 'not_installed' ? 'not in this build' : movement}
+      </Text>
 
       {(() => {
         const { label, tone } = describeRegistrationState(lastLog)
