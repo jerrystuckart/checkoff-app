@@ -4,7 +4,7 @@ import { useFocusEffect } from '@react-navigation/native'
 import { useTheme } from '../lib/ThemeContext'
 import { isFlagEnabled } from '../lib/featureFlags'
 import { hasBackgroundLocationPermission } from '../lib/visitDetection/permissions'
-import { fetchOptIn, enableVisitRecovery, turnOffVisitRecovery, countPendingSuggestions } from '../lib/visitDetection/recoverySettings'
+import { fetchOptIn, enableVisitRecovery, turnOffVisitRecovery, countPendingSuggestions, subscribeCandidatesChange } from '../lib/visitDetection/recoverySettings'
 import { recoveryCardState, shouldShowInboxEntry, RECOVERY_COPY } from '../lib/visitDetection/recoveryPolicy'
 import { openVisitInbox } from '../lib/visitDetection/inboxNavigation'
 
@@ -38,6 +38,7 @@ export default function VisitRecoverySection({ userId, navigation }) {
   }, [userId])
 
   useFocusEffect(useCallback(() => { load() }, [load]))
+  React.useEffect(() => subscribeCandidatesChange(load), [load])
 
   if (!loaded) return null
 

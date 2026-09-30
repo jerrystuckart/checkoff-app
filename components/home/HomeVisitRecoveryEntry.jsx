@@ -21,7 +21,7 @@ import { useFocusEffect } from '@react-navigation/native'
 import { Platform } from 'react-native'
 import { isFlagEnabled } from '../../lib/featureFlags'
 import { hasBackgroundLocationPermission } from '../../lib/visitDetection/permissions'
-import { fetchOptIn, countPendingSuggestions, subscribeRecoveryChange } from '../../lib/visitDetection/recoverySettings'
+import { fetchOptIn, countPendingSuggestions, subscribeRecoveryChange, subscribeCandidatesChange } from '../../lib/visitDetection/recoverySettings'
 import { recoveryCardState, RECOVERY_COPY } from '../../lib/visitDetection/recoveryPolicy'
 import { openVisitInbox } from '../../lib/visitDetection/inboxNavigation'
 
@@ -48,7 +48,11 @@ export default function HomeVisitRecoveryEntry({ userId, navigation, colors }) {
   }, [userId])
 
   useFocusEffect(useCallback(() => { load() }, [load]))
-  React.useEffect(() => subscribeRecoveryChange(load), [load])
+  React.useEffect(() => {
+    const offA = subscribeRecoveryChange(load)
+    const offB = subscribeCandidatesChange(load)
+    return () => { offA(); offB() }
+  }, [load])
 
   if (!userId || !loaded) return null
 
