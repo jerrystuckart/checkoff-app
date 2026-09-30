@@ -222,7 +222,13 @@ export default function VisitInboxScreen({ navigation, route }) {
             <TouchableOpacity onPress={() => navigation.navigate('ItemDetail', { item: { id: row.itemId, body: row.itemBody } })}>
               <Text style={styles.itemBody}>{row.itemBody}</Text>
               {row.neighborhoodName ? <Text style={styles.itemMeta}>{row.neighborhoodName}</Text> : null}
-              {row.departureAt ? <Text style={styles.itemMeta}>{formatVisitWhenLabel(row.departureAt)}</Text> : null}
+              {row.departureAt ? (
+                <Text style={styles.itemMeta}>
+                  {row.dwellBound === 'lower'
+                    ? `Last seen there ${formatVisitWhenLabel(row.departureAt)} — at least ${Math.round(row.dwellMinutes ?? 0)} min (we didn't see you leave)`
+                    : formatVisitWhenLabel(row.departureAt)}
+                </Text>
+              ) : null}
               {row.competingVenueCount > 0 ? (
                 <Text style={styles.itemMeta}>Other CheckOff places are very close by — only check this off if it's the one you visited.</Text>
               ) : null}
