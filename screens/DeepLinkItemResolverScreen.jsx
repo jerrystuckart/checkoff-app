@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { View, Text, ActivityIndicator, TouchableOpacity, StyleSheet } from 'react-native'
 import { supabase } from '../lib/supabase'
+import { resolveItemLink, planItemNavigation } from '../lib/linkResolution'
+import { setExplicitMetro } from '../lib/explicitMetroIntent'
 
 const NAVY = '#0F0F1E'
 const AMBER = '#F5A623'
@@ -57,35 +59,25 @@ export default function DeepLinkItemResolverScreen({ route, navigation }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Explicit navigation intent: resolve the item from production data, derive ITS metro from the item, make
+  // that metro the browsing context (lib/explicitMetroIntent.js, session scoped, never persisted), and only
+  // then open the exact item. Location refresh and nearest metro logic cannot replace it.
   async function resolveItem() {
-    if (!id || !UUID_RE.test(id)) {
-      setUnavailable(true)
-      return
-    }
-
     try {
-      const { data, error } = await supabase
-        .from('items')
-        .select('*')
-        .eq('id', id)
-        .eq('is_active', true)
-        .eq('is_approved', true)
-        .maybeSingle()
-
-      if (error) throw error
-
-      if (data) {
-        navigation.replace('ItemDetail', { item: data })
+      const result = await resolveItemLink(supabase, id)
+      if (result.status === 'ok') {
+        if (result.metro) setExplicitMetro(result.metro, 'item_link')
+        const cold = (navigation.getState?.()?.routes?.length ?? 1) <= 1
+        const plan = planItemNavigation(result, { cold })
+        if (plan.type === 'reset') navigation.reset({ index: plan.routes.length - 1, routes: plan.routes })
+        else navigation.replace(plan.name, plan.params)
         return
       }
     } catch (e) {
-      // Never surface internal error text/details in the UI — an
-      // unexpected/network failure lands on the same unavailable state
-      // as "not found", not a raw error dump.
+      // Never surface internal error text in the UI; an unexpected failure shows the same state as "not found".
       console.error('[deep link] DeepLinkItemResolverScreen error:', e?.message ?? e)
     }
-
-    console.log(`[deep link] checkoff://item/${id} — unavailable; showing unavailable state`)
+    console.log('[deep link] item link unavailable; showing unavailable state')
     setUnavailable(true)
   }
 
