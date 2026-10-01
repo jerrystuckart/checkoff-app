@@ -45,3 +45,17 @@ Internal accounts: email domain `getcheckoff.com`. Known test accounts: rows in 
 - Resend bounce and complaint webhook is not wired (`email_bounced` is never set automatically).
 - `docs/email-campaigns/august-2026-recap/` is tracked and contains recipient data; clean up separately (do not rewrite history without a decision).
 - `users.platform` is empty for every user, so the update block shows both stores.
+
+## September 2026 send record (2026-10-01)
+Sent once, to the reconciled eligible audience, after Jerry approved all five variants and every button on a real iPhone (TestFlight 1.1.10, build 155).
+- Campaign `recap_2026-09`; deployed `send-recap-campaign` v15 and `campaign-link` v13, source preserved on the remote branch `recap/september-2026-link-routing`.
+- Audience: 130 users, 123 eligible, 7 excluded (2 internal, 2 test, 2 no resolvable metro, 1 opted out). Segments: 11 active, 2 Fall continuation, 18 returning inactive, 92 never checked off (49 known metro, 43 unknown). September checkoffs visible to the RPC equal the canonical count (152).
+- Delivery: sent in three guarded batches (10, then 50 new, then 63 new; the earlier recipients were skipped by idempotency). 123 accepted by Resend, 0 failed, 0 duplicates. "Accepted" is not "delivered": review delivery in the Resend dashboard (search by message id), and clicks, votes and unsubscribes in `interaction_events` where `campaign_id = 'recap_2026-09'` (event types `*_click`, `next_metro_vote_submitted`, `unsubscribe`).
+- The production gate was open for about three minutes and then removed; `CAMPAIGN_ALLOW_PRODUCTION_SEND` is absent. `CAMPAIGN_ADMIN_SECRET` was rotated before the send.
+
+### Link routing and apps
+- Canonical links: `/open`, `/item/<uuid>`, `/list?id=<uuid>`, `/metro?slug=<slug>` (see `lib/emailLinkContract.js`). An explicit link outranks live location, the persisted metro and the nearest metro for the session; it is never persisted.
+- iOS: OTA on runtime `86ac0036` (TestFlight 1.1.10) and on runtime `81dbd1f1` (public 1.1.9). The public 1.1.9 update was published from `release/ios-1.1.9-runtime-81dbd1f1-link-routing` (the release tip plus exactly the routing files); reproduce that runtime with `app.json` set to version 1.1.9, ios.buildNumber 155 (uncommitted), then `eas update --branch production --platform ios --environment production --non-interactive`.
+- A link in an email reaches the app in two steps on iOS: the tracked redirect opens the web page, and its Open in CheckOff button hands the id to the app. Server redirects cannot trigger Universal Links.
+- Android: no OTA was published. Android build 1.1.9 (versionCode 17) was not accepted on Google Play (undeclared location permissions in the Play Console declaration), so the live Android binary is older and no EAS build reports the runtime the earlier Android OTAs target. Android users get the web fallback pages. Native App Links for `/open`, `/item`, `/list`, `/metro` are prepared on the local branch `android/app-links-open-item-list-metro` and need a new native build (app.json is part of the runtime fingerprint, so never ship it as an OTA).
+- Social: September used Instagram only (`https://www.instagram.com/checkoff.app/`). CheckOff also has Facebook and TikTok accounts, but their exact URLs are not yet supplied or verified. Follow-up for the October recap: obtain the exact URLs, verify them from an authoritative production source, add them to `OFFICIAL_SOCIAL_LINKS` in `_shared/campaignContent.ts`, and test before sending.
