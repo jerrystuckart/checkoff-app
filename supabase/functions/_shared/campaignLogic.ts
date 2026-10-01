@@ -2,6 +2,8 @@
 // calls in this file so it can be unit tested with `deno test` in isolation.
 // index.ts (the edge function) imports these and supplies the DB/network side.
 
+import { parseDestination, listUrl, itemUrl, metroUrl } from './linkContract.ts';
+
 export type Segment =
   | 'ACTIVE_MONTH'
   | 'FALL_CONTINUATION'
@@ -127,8 +129,10 @@ export function safeDestination(raw: string | null | undefined): string {
 // in-app deep link with zero further email/link changes whenever the app
 // gains that route.
 
-export type DestinationType = 'list' | 'item' | 'home' | 'join' | 'https_other' | 'unknown';
+export type DestinationType = 'list' | 'item' | 'metro' | 'home' | 'join' | 'https_other' | 'unknown';
 
+// What a destination points at, for attribution metadata (destination_type and destination_id).
+// Works for canonical https forms, older forms and checkoff:// URLs. For a metro the id is its slug.
 export function classifyDestination(raw: string): { type: DestinationType; id: string | null } {
   let parsed: URL;
   try {
@@ -136,12 +140,15 @@ export function classifyDestination(raw: string): { type: DestinationType; id: s
   } catch {
     return { type: 'unknown', id: null };
   }
+  const intent = parseDestination(raw);
+  if (intent.type === 'item') return { type: 'item', id: intent.id };
+  if (intent.type === 'list') return { type: 'list', id: intent.id };
+  if (intent.type === 'metro') return { type: 'metro', id: intent.slug };
+  if (intent.type === 'home') return { type: 'home', id: null };
+  // Not a canonical entity link. Keep the older behavior for legacy slug ids and other pages.
   if (parsed.protocol === 'checkoff:') {
-    const path = parsed.hostname; // checkoff://list?id=x -> hostname 'list'
-    const id = parsed.searchParams.get('id');
-    if (path === 'list') return { type: 'list', id };
-    if (path === 'item') return { type: 'item', id };
-    if (path === 'home' || path === '') return { type: 'home', id: null };
+    if (parsed.hostname === 'list') return { type: 'list', id: parsed.searchParams.get('id') };
+    if (parsed.hostname === 'item') return { type: 'item', id: parsed.searchParams.get('id') ?? parsed.pathname.replace(/^\//, '') ?? null };
     return { type: 'unknown', id: null };
   }
   if (parsed.protocol === 'https:') {
@@ -160,12 +167,26 @@ export function classifyDestination(raw: string): { type: DestinationType; id: s
 // raw checkoff:// redirect straight from an email click is not).
 export const FALLBACK_PAGE_ACTION_EVENTS = new Set(['app_open_click', 'appstore_click', 'playstore_click']);
 
+// Every checkoff:// destination (older emails, and any link built in the older form) becomes the canonical
+// https form, so no email click ever redirects to a raw custom scheme.
+//   checkoff://list?id=<uuid>   -> https://getcheckoff.com/list?id=<uuid>
+//   checkoff://list?id=<slug>   -> https://getcheckoff.com/list?id=<slug>   (legacy slug ids, resolved in app)
+//   checkoff://item?id=<uuid>   -> https://getcheckoff.com/item/<uuid>
+//   checkoff://item/<uuid>      -> https://getcheckoff.com/item/<uuid>
+//   checkoff://metro?slug=<s>   -> https://getcheckoff.com/metro?slug=<s>
+//   anything else (home, unknown) -> https://getcheckoff.com/open
 export function translateDeepLinkForBrowser(raw: string): string {
   if (!raw.startsWith('checkoff://')) return raw; // already a real https destination
-  const { type, id } = classifyDestination(raw);
-  if (type === 'list' && id) return `${SITE_URL}/list?id=${encodeURIComponent(id)}`;
-  if (type === 'item' && id) return `${SITE_URL}/item?id=${encodeURIComponent(id)}`;
-  return `${SITE_URL}/open`; // home, or any unrecognized checkoff:// path
+  const intent = parseDestination(raw);
+  if (intent.type === 'list') return listUrl(intent.id);
+  if (intent.type === 'item') return itemUrl(intent.id);
+  if (intent.type === 'metro') return metroUrl(intent.slug);
+  try {
+    const u = new URL(raw);
+    const legacyId = u.searchParams.get('id');
+    if (u.hostname === 'list' && legacyId) return `${SITE_URL}/list?id=${encodeURIComponent(legacyId)}`;
+  } catch { /* fall through to the generic page */ }
+  return `${SITE_URL}/open`;
 }
 
 // ── Vote-form URL + legacy-recovery classification ──────────────────────────
