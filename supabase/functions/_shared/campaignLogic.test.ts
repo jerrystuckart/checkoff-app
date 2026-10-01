@@ -1,10 +1,11 @@
 // Run with: deno test supabase/functions/_shared/campaignLogic.test.ts
 import { assertEquals, assert } from 'https://deno.land/std@0.168.0/testing/asserts.ts';
 import {
-  monthBounds, firstName, escapeHtml, subjectFor, daysRemaining, deviceCta, storeCta,
-  streakMessage, almostThereMessage, seasonalClosingCopy, selectSinceLastActivityUpdates,
+  monthBounds, monthLabelFor, isMonthClosed, firstName, escapeHtml, publicText, cityDisplayName, seasonDisplayName,
+  subjectFor, previewTextFor, daysRemaining, deviceCta, storeCta,
+  streakMessage, almostThereMessage, seasonalClosingCopy, NEUTRAL_CLOSING_COPY,
   assignRecommendationRoles, metroSlug, isStaleSeasonTitle, selectThemedLists,
-  AVAILABLE_MARKETS, UNKNOWN_METRO_OPENING, testSendSubject,
+  testSendSubject,
   validateCityInput, MAX_CITY_LENGTH, isSafeDestination, safeDestination, CAMPAIGN_LINK_FALLBACK_DEST,
   classifyDestination, translateDeepLinkForBrowser, voteFormUrl, classifyVotePostEligibility,
 } from './campaignLogic.ts';
@@ -41,29 +42,68 @@ Deno.test('firstName: takes first token only', () => {
   assertEquals(firstName('Jerry Stuckart'), 'Jerry');
 });
 
-Deno.test('subjectFor: ACTIVE_AUGUST falls back cleanly with no name', () => {
-  assertEquals(subjectFor('ACTIVE_AUGUST', null), 'Your August Monthly CheckOff Recap 🍂');
-  assertEquals(subjectFor('ACTIVE_AUGUST', 'Jerry'), 'Jerry, your August Monthly CheckOff Recap 🍂');
+const SEPT = { monthLabel: 'September', metroKnown: true, liveCityCount: 10 };
+
+Deno.test('subjectFor: ACTIVE_MONTH uses the explicit month and falls back cleanly with no name', () => {
+  assertEquals(subjectFor('ACTIVE_MONTH', null, SEPT), 'Your September CheckOff recap 🍂');
+  assertEquals(subjectFor('ACTIVE_MONTH', 'Jerry', SEPT), 'Jerry, your September CheckOff recap 🍂');
+  assertEquals(subjectFor('ACTIVE_MONTH', 'Jerry', { monthLabel: 'October' }), 'Jerry, your October CheckOff recap 🍂');
 });
 
-Deno.test('subjectFor: FALL_CONTINUATION uses season name, falls back to Fall', () => {
-  assertEquals(subjectFor('FALL_CONTINUATION', 'Jerry', 'Phoenix Fall 30'), 'Your August Recap: Phoenix Fall 30 is waiting 🍂');
-  assertEquals(subjectFor('FALL_CONTINUATION', 'Jerry', null), 'Your August Recap: Fall is waiting 🍂');
+Deno.test('subjectFor: FALL_CONTINUATION never needs a season title and has no month text', () => {
+  assertEquals(subjectFor('FALL_CONTINUATION', 'Jerry', SEPT), 'Jerry, your Fall list is waiting 🍂');
+  assertEquals(subjectFor('FALL_CONTINUATION', null, SEPT), 'Your Fall list is waiting 🍂');
 });
 
-Deno.test('subjectFor: RETURNING_INACTIVE and NEVER_CHECKED_OFF are name-independent', () => {
-  assertEquals(subjectFor('RETURNING_INACTIVE', null), 'Your August CheckOff Update: A lot changed');
-  assertEquals(subjectFor('NEVER_CHECKED_OFF', 'Anyone'), 'Your August CheckOff Update: Start exploring this Fall');
+Deno.test('subjectFor: RETURNING_INACTIVE and NEVER_CHECKED_OFF known metro are name independent', () => {
+  assertEquals(subjectFor('RETURNING_INACTIVE', null, SEPT), 'A lot is new on CheckOff since you last visited');
+  assertEquals(subjectFor('NEVER_CHECKED_OFF', 'Anyone', SEPT), 'Your first CheckOff is waiting');
 });
 
-Deno.test('subjectFor: NEVER_CHECKED_OFF with unknown metro gets the neutral subject, never "Monthly Recap"', () => {
-  const subject = subjectFor('NEVER_CHECKED_OFF', 'Jamie', null, false);
-  assertEquals(subject, "Your August CheckOff Update: See what's new");
-  assert(!subject.includes('Monthly Recap'));
+Deno.test('subjectFor: NEVER_CHECKED_OFF unknown metro uses the live city count, never a stale number', () => {
+  assertEquals(subjectFor('NEVER_CHECKED_OFF', 'Jamie', { ...SEPT, metroKnown: false }), 'CheckOff is now live in 10 metros');
+  assertEquals(subjectFor('NEVER_CHECKED_OFF', 'Jamie', { monthLabel: 'September', metroKnown: false, liveCityCount: 12 }), 'CheckOff is now live in 12 metros');
+  assertEquals(subjectFor('NEVER_CHECKED_OFF', 'Jamie', { monthLabel: 'September', metroKnown: false, liveCityCount: null }), 'See where CheckOff is live');
 });
 
-Deno.test('subjectFor: NEVER_CHECKED_OFF with known metro keeps the Fall-exploring subject', () => {
-  assertEquals(subjectFor('NEVER_CHECKED_OFF', 'Jamie', null, true), 'Your August CheckOff Update: Start exploring this Fall');
+Deno.test('subjectFor and previewTextFor: no August, no hyphens, no dashes in any September variant', () => {
+  const segs = ['ACTIVE_MONTH', 'FALL_CONTINUATION', 'RETURNING_INACTIVE', 'NEVER_CHECKED_OFF'] as const;
+  for (const seg of segs) for (const known of [true, false]) {
+    const ctx = { monthLabel: 'September', metroKnown: known, liveCityCount: 10 };
+    for (const text of [subjectFor(seg, 'Jamie', ctx), previewTextFor(seg, ctx)]) {
+      assert(!/August/i.test(text), text);
+      assert(!/[-\u2010-\u2015]/.test(text), text);
+    }
+  }
+});
+
+Deno.test('monthLabelFor and isMonthClosed: strict, explicit month handling', () => {
+  assertEquals(monthLabelFor('2026-09'), 'September');
+  assertEquals(monthLabelFor('2027-01'), 'January');
+  for (const bad of ['2026-9', '2026-13', '2026-00', 'September', '', '2026-09-01']) {
+    let threw = false; try { monthLabelFor(bad); } catch { threw = true; }
+    assert(threw, bad);
+  }
+  assertEquals(isMonthClosed('2026-09', new Date('2026-09-30T23:59:59Z')), false);
+  assertEquals(isMonthClosed('2026-09', new Date('2026-10-01T00:00:00Z')), true);
+  assertEquals(monthBounds('2026-09'), { start: '2026-09-01', end: '2026-10-01' });
+  assertEquals(monthBounds('2026-08'), { start: '2026-08-01', end: '2026-09-01' });
+});
+
+Deno.test('publicText: removes hyphens and dashes from database text', () => {
+  assertEquals(publicText('Fall 2026 \u2014 Munich Metro'), 'Fall 2026, Munich Metro');
+  assertEquals(publicText('Full Steins - Amalfi Coast'), 'Full Steins, Amalfi Coast');
+  assertEquals(publicText('the 99-meter towers'), 'the 99 meter towers');
+  assertEquals(publicText('Re\u2013open'), 'Re, open');
+  assert(!/[-\u2010-\u2015]/.test(publicText('A - B \u2013 C \u2014 D e-f')));
+});
+
+Deno.test('cityDisplayName and seasonDisplayName: friendly, hyphen free', () => {
+  assertEquals(cityDisplayName('Phoenix Metro'), 'Phoenix');
+  assertEquals(cityDisplayName('Amalfi Coast'), 'Amalfi Coast');
+  assertEquals(seasonDisplayName('Fall 2026 \u2014 Munich Metro', 'Munich Metro'), 'Fall 2026 in Munich');
+  assertEquals(seasonDisplayName('Denver Fall 2026', 'Denver Metro'), 'Fall 2026 in Denver');
+  assertEquals(seasonDisplayName('FALL 2026 \u2014 San Diego Metro', null), 'Fall 2026');
 });
 
 // ── HTML escaping ────────────────────────────────────────────────────────────
@@ -98,7 +138,8 @@ Deno.test('storeCta: routes to the correct store per platform', () => {
 // ── Streak messaging ─────────────────────────────────────────────────────────
 
 Deno.test('streakMessage: active streak, momentum, and never-checked-off cases', () => {
-  assertEquals(streakMessage(3, true), 'Your 3-week streak is alive. Keep it going this weekend.');
+  assertEquals(streakMessage(3, true), 'Your streak is 3 weeks strong. Keep it going this weekend.');
+  assertEquals(streakMessage(1, true), 'Your streak is 1 week strong. Keep it going this weekend.');
   assertEquals(streakMessage(0, true), "You're building momentum. Check off something this week to keep it going.");
   assertEquals(streakMessage(0, false), 'Your next streak starts with one CheckOff.');
   assertEquals(streakMessage(null, false), 'Your next streak starts with one CheckOff.');
@@ -129,36 +170,12 @@ Deno.test('metroSlug: strips the " Metro" suffix and lowercases', () => {
 
 // ── Seasonal closing copy ────────────────────────────────────────────────────
 
-Deno.test('seasonalClosingCopy: Denver/Milwaukee vs Phoenix/Tucson direction, real "<City> Metro" names', () => {
-  assert(seasonalClosingCopy('Denver Metro').includes('Leaves are changing'));
-  assert(seasonalClosingCopy('Milwaukee Metro').includes('Leaves are changing'));
-  assert(seasonalClosingCopy('Phoenix Metro').includes('patio weather'));
-  assert(seasonalClosingCopy('Tucson Metro').includes('patio weather'));
-});
-
-Deno.test('seasonalClosingCopy: unknown metro gets neutral copy, never a specific region default', () => {
-  const copy = seasonalClosingCopy(null);
-  assert(copy.length > 0); // safe default, never throws
-  assert(!copy.includes('patio weather')); // must not silently default to desert_southwest
-  assert(!copy.includes('Leaves are changing'));
-});
-
-// ── Since-last-activity updates ─────────────────────────────────────────────
-
-Deno.test('selectSinceLastActivityUpdates: prioritizes metro-specific, caps at 4, only post-activity', () => {
-  const picks = selectSinceLastActivityUpdates('Denver Metro', '2026-01-01');
-  assert(picks.length <= 4);
-  assertEquals(picks[0].id, 'denver_launch'); // metro-specific ranked first
-});
-
-Deno.test('selectSinceLastActivityUpdates: no history falls back to universal news only', () => {
-  const picks = selectSinceLastActivityUpdates(null, null);
-  assert(picks.every((p) => p.metros === '*'));
-});
-
-Deno.test('selectSinceLastActivityUpdates: excludes updates before the since date', () => {
-  const picks = selectSinceLastActivityUpdates('Denver Metro', '2026-09-01');
-  assert(!picks.some((p) => p.id === 'denver_launch')); // happened before the cutoff
+Deno.test('seasonalClosingCopy: every metro gets neutral copy, never a weather or region claim', () => {
+  for (const m of ['Phoenix Metro', 'Tucson Metro', 'Denver Metro', 'Munich Metro', 'Vienna Metro', 'Amalfi Coast', null, undefined]) {
+    const copy = seasonalClosingCopy(m as string | null);
+    assertEquals(copy, NEUTRAL_CLOSING_COPY);
+    assert(!/patio|weather|football|leaves|cooler|desert|snow/i.test(copy));
+  }
 });
 
 // ── Next-metro-vote city validation (campaign-link hotfix) ─────────────────
@@ -284,15 +301,12 @@ Deno.test('translateDeepLinkForBrowser: unrecognized checkoff:// path falls back
 
 // ── Test-send subject prefixing (inbox test package, section 5) ────────────
 
-Deno.test('testSendSubject: prefixes each segment with its distinct [TEST ...] label', () => {
-  assertEquals(testSendSubject('ACTIVE_AUGUST', 'Jerry, your August Monthly CheckOff Recap 🍂'),
-    '[TEST ACTIVE] Jerry, your August Monthly CheckOff Recap 🍂');
-  assertEquals(testSendSubject('FALL_CONTINUATION', 'Your August Recap: Fall 2026 — Denver Metro is waiting 🍂'),
-    '[TEST FALL] Your August Recap: Fall 2026 — Denver Metro is waiting 🍂');
-  assertEquals(testSendSubject('RETURNING_INACTIVE', 'Your August CheckOff Update: A lot changed'),
-    '[TEST RETURNING] Your August CheckOff Update: A lot changed');
-  assertEquals(testSendSubject('NEVER_CHECKED_OFF', "Your August CheckOff Update: See what's new"),
-    "[TEST NEW USER] Your August CheckOff Update: See what's new");
+Deno.test('testSendSubject: every variant has a distinct, unmistakable [TEST ...] marker', () => {
+  const keys = ['ACTIVE_MONTH', 'FALL_CONTINUATION', 'RETURNING_INACTIVE', 'NEVER_CHECKED_OFF', 'NEVER_CHECKED_OFF_UNKNOWN'];
+  const prefixes = keys.map((k) => testSendSubject(k, 'x').split(' x')[0]);
+  assertEquals(new Set(prefixes).size, 5);
+  for (const p of prefixes) assert(p.startsWith('[TEST'), p);
+  assertEquals(testSendSubject('ACTIVE_MONTH', 'Your September CheckOff recap 🍂'), '[TEST ACTIVE] Your September CheckOff recap 🍂');
 });
 
 // ── Recommendation roles ─────────────────────────────────────────────────────

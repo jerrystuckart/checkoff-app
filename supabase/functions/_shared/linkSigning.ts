@@ -13,6 +13,14 @@ async function hmacHex(secret: string, message: string): Promise<string> {
   return Array.from(new Uint8Array(sig)).map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+// Same resolution as getLinkSecret, but from an injected environment reader (used by the handlers so
+// they can be tested without environment permission).
+export function linkSecretFrom(env: (name: string) => string | undefined): string {
+  const secret = env('CAMPAIGN_LINK_SECRET') || env('SUPABASE_SERVICE_ROLE_KEY');
+  if (!secret) throw new Error('No CAMPAIGN_LINK_SECRET or SUPABASE_SERVICE_ROLE_KEY available for link signing');
+  return secret;
+}
+
 export function getLinkSecret(): string {
   const secret = Deno.env.get('CAMPAIGN_LINK_SECRET') || Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
   if (!secret) throw new Error('No CAMPAIGN_LINK_SECRET or SUPABASE_SERVICE_ROLE_KEY available for link signing');
