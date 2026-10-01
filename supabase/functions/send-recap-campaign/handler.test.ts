@@ -146,6 +146,14 @@ Deno.test('preview with synthetic variants returns all five without any producti
   assert(!all.includes('person0@example.com') && !all.includes('Person0'));
 });
 
+Deno.test('the synthetic sample query names the items to neighborhoods foreign key (PostgREST cannot guess it)', async () => {
+  const s = setup();
+  await handleRequest(post({ month: '2026-09', mode: 'preview', previewSynthetic: true }), s.deps);
+  const q = s.db.ops.find((o) => o.table === 'items' && o.op === 'select');
+  assert(q, 'items query ran');
+  assert(String(q!.payload).includes('neighborhoods!items_neighborhood_id_fkey!inner'), String(q!.payload));
+});
+
 Deno.test('dry_run is explicit, uses the month neutral segment, and only logs dry_run rows', async () => {
   const s = setup();
   const r = await handleRequest(post({ month: '2026-09', mode: 'dry_run' }), s.deps);

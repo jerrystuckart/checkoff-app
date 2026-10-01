@@ -55,7 +55,7 @@ export class FakeDb {
       return { data: hit, error: null };
     };
     const b: any = {
-      select(_c?: string, opts?: any) { if (opts?.head) state.head = true; state.wantRows = true; return b; },
+      select(c?: string, opts?: any) { if (opts?.head) state.head = true; state.wantRows = true; if (state.op === 'select') state.payload = c; return b; },
       insert(p: any) { state.op = 'insert'; state.payload = p; return b; },
       update(p: any) { state.op = 'update'; state.payload = p; return b; },
       delete() { state.op = 'delete'; return b; },

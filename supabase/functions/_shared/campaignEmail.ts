@@ -158,8 +158,9 @@ export async function buildEmailData(
 async function sampleItems(supabase: any, metroId: string, n: number): Promise<{ id: string; body: string; difficulty: number | null }[]> {
   const { data, error } = await supabase
     .from('items')
-    .select('id, body, difficulty, neighborhoods!inner(metro_id)')
-    .eq('neighborhoods.metro_id', metroId)
+    // items has two relationships to neighborhoods; name the foreign key so PostgREST can embed it.
+    .select('id, body, difficulty, hood:neighborhoods!items_neighborhood_id_fkey!inner(metro_id)')
+    .eq('hood.metro_id', metroId)
     .eq('is_active', true).eq('is_approved', true).eq('is_universal', false)
     .order('id', { ascending: true })
     .limit(n);
