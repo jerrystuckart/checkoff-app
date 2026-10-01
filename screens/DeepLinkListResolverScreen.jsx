@@ -1,6 +1,9 @@
 import React, { useEffect, useState } from 'react'
-import { View, Text, ActivityIndicator, StyleSheet } from 'react-native'
+import { View, Text, ActivityIndicator, StyleSheet, TouchableOpacity } from 'react-native'
 import { supabase } from '../lib/supabase'
+import { isUuid } from '../lib/emailLinkContract'
+import { resolveListLink, planListNavigation } from '../lib/linkResolution'
+import { setExplicitMetro } from '../lib/explicitMetroIntent'
 
 const NAVY = '#0F0F1E'
 const AMBER = '#F5A623'
@@ -9,8 +12,14 @@ const MUTED = 'rgba(255,255,255,0.5)'
 /**
  * DeepLinkListResolverScreen
  *
- * Destination for checkoff://list?id=SLUG&city=CITY_SLUG deep links.
+ * Destination for checkoff://list?id=... deep links.
  *
+ * A UUID id (the form email and web links use) is resolved FIRST and exactly: lists.id opens the List screen,
+ * curated_lists.id opens CuratedListPreview. The list's own metro becomes the browsing context before the list
+ * opens (lib/explicitMetroIntent.js). A missing or private list shows a controlled "no longer available" state
+ * with a Browse lists action; a valid list never falls back to Browse Lists.
+ *
+ * A non UUID id keeps the original slug and title behavior:
  * Resolution priority:
  *   STEP 1 — slug exact + city_slug     (most specific, requires slug column populated)
  *   STEP 2 — slug exact only            (any city)
@@ -26,10 +35,33 @@ const MUTED = 'rgba(255,255,255,0.5)'
 export default function DeepLinkListResolverScreen({ route, navigation }) {
   const { id, city } = route.params ?? {}
   const [fetchError, setFetchError] = useState(null)
+  const [unavailable, setUnavailable] = useState(false)
+  const startedRef = React.useRef(false)
 
   useEffect(() => {
+    if (startedRef.current) return // never resolve or navigate twice
+    startedRef.current = true
+    if (isUuid(id)) { resolveExactList(); return }
     resolveList()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  async function resolveExactList() {
+    try {
+      const result = await resolveListLink(supabase, id)
+      if (result.status === 'ok') {
+        if (result.metro) setExplicitMetro(result.metro, 'list_link')
+        const cold = (navigation.getState?.()?.routes?.length ?? 1) <= 1
+        const plan = planListNavigation(result, { cold, heroImage: route.params?.heroImage })
+        if (plan.type === 'reset') navigation.reset({ index: plan.routes.length - 1, routes: plan.routes })
+        else navigation.replace(plan.name, plan.params)
+        return
+      }
+    } catch (e) {
+      console.error('DeepLinkListResolverScreen exact list error:', e?.message ?? e)
+    }
+    setUnavailable(true)
+  }
 
   async function resolveList() {
     setFetchError(null)
@@ -128,6 +160,21 @@ export default function DeepLinkListResolverScreen({ route, navigation }) {
     })
   }
 
+  if (unavailable) {
+    return (
+      <View style={styles.container}>
+        <Text style={styles.message}>This list isn't available right now.</Text>
+        <TouchableOpacity style={styles.btn} activeOpacity={0.8} accessibilityRole="button"
+          onPress={() => navigation.replace('BrowseLists')}>
+          <Text style={styles.btnText}>Browse lists</Text>
+        </TouchableOpacity>
+        <TouchableOpacity activeOpacity={0.8} accessibilityRole="button" onPress={() => navigation.replace('Home')}>
+          <Text style={styles.link}>Back to Home</Text>
+        </TouchableOpacity>
+      </View>
+    )
+  }
+
   return (
     <View style={styles.container}>
       <ActivityIndicator size="small" color={AMBER} />
@@ -150,4 +197,8 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: MUTED,
   },
+  message: { fontSize: 15, color: 'rgba(255,255,255,0.6)', textAlign: 'center', paddingHorizontal: 32 },
+  btn: { backgroundColor: AMBER, borderRadius: 14, paddingVertical: 12, paddingHorizontal: 24 },
+  btnText: { fontSize: 14, fontWeight: '800', color: NAVY },
+  link: { fontSize: 14, color: MUTED, paddingVertical: 8 },
 })

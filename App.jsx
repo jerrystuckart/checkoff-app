@@ -14,7 +14,9 @@ global.ErrorUtils?.setGlobalHandler?.((error, isFatal) => {
 })
 
 import React, { useEffect, useState } from 'react'
-import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native'
+import { NavigationContainer, useNavigationContainerRef, getStateFromPath } from '@react-navigation/native'
+import { LINK_PREFIXES, LINKING_CONFIG } from './lib/linkingConfig'
+import { normalizeLinkPath } from './lib/emailLinkContract'
 import { SafeAreaProvider } from 'react-native-safe-area-context'
 import { createNativeStackNavigator } from '@react-navigation/native-stack'
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs'
@@ -54,6 +56,7 @@ import CoverCandidateCaptureScreen from './screens/CoverCandidateCaptureScreen'
 import BrowseListsScreen       from './screens/BrowseListsScreen'
 import CuratedListPreviewScreen from './screens/CuratedListPreviewScreen'
 import DeepLinkListResolverScreen from './screens/DeepLinkListResolverScreen'
+import DeepLinkMetroResolverScreen from './screens/DeepLinkMetroResolverScreen'
 import DeepLinkExperienceResolverScreen from './screens/DeepLinkExperienceResolverScreen'
 import DeepLinkItemResolverScreen from './screens/DeepLinkItemResolverScreen'
 import CreatorProfileScreen        from './screens/CreatorProfileScreen'
@@ -200,6 +203,11 @@ function HomeStack() {
       <Stack.Screen
         name="DeepLinkItemResolver"
         component={DeepLinkItemResolverScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="DeepLinkMetroResolver"
+        component={DeepLinkMetroResolverScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen
@@ -582,65 +590,11 @@ function App() {
             onReady={syncCurrentRouteName}
             onStateChange={syncCurrentRouteName}
             linking={{
-              prefixes: [
-                'checkoff://',
-                'https://getcheckoff.com',
-                'https://www.getcheckoff.com',
-              ],
-              config: {
-                screens: {
-                  HomeTab: {
-                    screens: {
-                      JoinList: 'join/:invite_code',
-                      CuratedListPreview: 'next10',
-                      DeepLinkListResolver: {
-                        path: 'list',
-                        parse: {
-                          id: (id) => id,
-                        },
-                      },
-                      DeepLinkExperienceResolver: {
-                        path: 'experience',
-                        parse: {
-                          tag: (tag) => tag,
-                        },
-                      },
-                      DeepLinkItemResolver: {
-                        path: 'item/:id',
-                        parse: {
-                          id: (id) => id,
-                        },
-                      },
-                      DeepLinkCreatorResolver: {
-                        path: 'c/:handle',
-                        parse: {
-                          handle: (h) => h,
-                        },
-                      },
-                      ResetPassword: {
-                        path: 'reset-password',
-                        parse: {
-                          access_token: (v) => v,
-                          refresh_token: (v) => v,
-                          token: (v) => v,
-                          type: (v) => v,
-                        },
-                      },
-                      ConfirmEmail: {
-                        path: 'auth/confirm',
-                        parse: {
-                          access_token:  (v) => v,
-                          refresh_token: (v) => v,
-                          token:         (v) => v,
-                          type:          (v) => v,
-                          code:          (v) => v,
-                        },
-                      },
-                      Home: '',
-                    },
-                  },
-                },
-              },
+              prefixes: LINK_PREFIXES,
+              config: LINKING_CONFIG,
+              // Every accepted URL form (https and checkoff://, /open, /item?id=, /item/<id>, /list?id=, /metro?slug=)
+              // is rewritten to the single form LINKING_CONFIG matches. See lib/emailLinkContract.js.
+              getStateFromPath: (path, options) => getStateFromPath(normalizeLinkPath(path), options),
             }}
           >
             <MainTabs isSignedIn={isSignedIn} />
