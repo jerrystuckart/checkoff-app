@@ -65,6 +65,9 @@ export type RecapEmailData = {
   inviteUrl: string;
   unsubscribeUrl: string;
   ctaUrl: string; // wrapped through campaign-link for click attribution
+
+  // Only set for test sends: a visible banner explaining what to verify. Never set for production.
+  testNotice?: string;
 };
 
 // A never checked off user with an unknown metro gets the city discovery treatment: no item level
@@ -336,6 +339,7 @@ export function buildRecapEmailHtml(d: RecapEmailData): string {
     <td align="right" style="font-size:11px;font-weight:800;color:#F5A623;text-transform:uppercase;letter-spacing:1.2px;">${escapeHtml(d.monthLabel)} Recap</td>
   </tr></table>
 </td></tr>
+${d.testNotice ? `<tr><td class="px" style="padding:14px 30px;background:#FFF1C9;border-bottom:2px solid #F5A623;"><div style="font-size:13px;line-height:19px;color:#5A3B00;font-weight:700;">${escapeHtml(d.testNotice)}</div></td></tr>` : ''}
 <tr><td class="px" style="padding:36px 34px 22px;background:#0F1117;background-image:linear-gradient(180deg,#0F1117 0%,#171A21 100%);">
   ${personalOpeningSection(d)}
 </td></tr>

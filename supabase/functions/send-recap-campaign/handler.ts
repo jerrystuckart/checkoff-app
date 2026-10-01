@@ -20,7 +20,7 @@ import {
   authorizeRequest, validateRequestBody, checkProductionSend, preflightEligible,
   isApprovedTestRecipient, TEST_VARIANTS, type TestVariant,
 } from '../_shared/campaignControls.ts';
-import { buildEmailData, buildSyntheticRow, type AudienceRow, type CampaignContext } from '../_shared/campaignEmail.ts';
+import { buildEmailData, buildSyntheticRow, buildLinkFixEmail, type AudienceRow, type CampaignContext } from '../_shared/campaignEmail.ts';
 import type { CityRow } from '../_shared/campaignContent.ts';
 
 export const TEMPLATE_VERSION = 'v2';
@@ -202,15 +202,28 @@ export async function handleRequest(req: Request, deps: Deps): Promise<Response>
         : [...TEST_VARIANTS];
       if (!requested.length) return json({ error: 'No valid variants requested.' }, 400);
 
+      if (body.testProfile !== undefined && body.testProfile !== 'link_fix') {
+        return json({ error: 'testProfile must be omitted or "link_fix".' }, 400);
+      }
+      const linkFix = body.testProfile === 'link_fix';
+
       const testCampaignId = `${campaignId}_test`;
       const results: Record<string, unknown>[] = [];
       let accepted = 0, failed = 0;
-      for (const variant of requested) {
+      for (const [index, variant] of requested.entries()) {
         try {
-          const row = await buildSyntheticRow(ctx, variant, testUserId);
-          const built = await buildEmailData(ctx, row, testCampaignId);
+          let row: AudienceRow; let built: Awaited<ReturnType<typeof buildEmailData>>;
+          if (linkFix) {
+            // Real catalog entities in five different home metros, with a visible checklist banner.
+            ({ row, built } = await buildLinkFixEmail(ctx, variant, testUserId, testCampaignId));
+          } else {
+            row = await buildSyntheticRow(ctx, variant, testUserId);
+            built = await buildEmailData(ctx, row, testCampaignId);
+          }
           const html = buildRecapEmailHtml(built.data);
-          const subject = testSendSubject(variant, built.subject);
+          const subject = linkFix
+            ? `[LINK FIX TEST ${index + 1} of ${requested.length}] ${built.subject}`
+            : testSendSubject(variant, built.subject);
           const r = await resendSend(deps, RESEND_KEY, {
             from: FROM_ADDRESS, to: [to], subject, html, headers: listUnsubscribeHeaders(built.data.unsubscribeUrl),
           });
@@ -218,7 +231,7 @@ export async function handleRequest(req: Request, deps: Deps): Promise<Response>
           const { error: logErr } = await supabase.from('campaign_sends').insert({
             campaign_id: testCampaignId, campaign_month: start, user_id: testUserId, segment: row.segment,
             template_version: TEMPLATE_VERSION, subject, recommendation_ids: built.recommendationIds,
-            rendered_snapshot: { variant, synthetic: true }, status: 'sent', resend_message_id: r.id,
+            rendered_snapshot: { variant, synthetic: true, profile: linkFix ? 'link_fix' : 'default' }, status: 'sent', resend_message_id: r.id,
             is_test_send: true, sent_at: deps.now().toISOString(),
           });
           accepted++;

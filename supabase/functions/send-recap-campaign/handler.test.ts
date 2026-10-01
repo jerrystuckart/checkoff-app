@@ -11,12 +11,15 @@ const TEST_USER = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const PROD_USERS = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'];
 const BASE_ENV = { SUPABASE_URL: 'https://proj.supabase.co', SUPABASE_SERVICE_ROLE_KEY: SERVICE, CAMPAIGN_ADMIN_SECRET: ADMIN, RESEND_API_KEY: 're_test' };
 
+const SEASON_PHX = '5ea50000-0000-4000-8000-00000000f411';
+const REC_ID = 'b1c20000-0000-4000-8000-0000000000a1';
+const uuidFor = (slug: string) => `1157${[...slug].reduce((a, c) => (a * 31 + c.charCodeAt(0)) % 99999999, 7).toString().padStart(8, '0')}-0000-4000-8000-000000000000`;
 const city = (slug: string, name: string, over: any = {}) => ({
   metro_id: `m-${slug}`, name, slug, created_at: '2026-09-01T00:00:00Z', active_items: 100, public_official_lists: 2,
-  season_list_id: slug === 'phoenix' ? 'season-phoenix' : null, season_name: slug === 'phoenix' ? 'Fall 2026 — Phoenix Metro' : null,
-  destination_list_id: `list-${slug}`, destination_list_title: 'List', ...over,
+  season_list_id: slug === 'phoenix' ? SEASON_PHX : null, season_name: slug === 'phoenix' ? 'Fall 2026 \u2014 Phoenix Metro' : null,
+  destination_list_id: uuidFor(slug), destination_list_title: 'List', ...over,
 });
-const CITIES = [city('phoenix', 'Phoenix Metro'), city('munich', 'Munich Metro'), city('vienna_austria', 'Vienna Metro')];
+const CITIES = [city('phoenix', 'Phoenix Metro'), city('munich', 'Munich Metro'), city('vienna_austria', 'Vienna Metro'), city('amalfi-coast', 'Amalfi Coast'), city('florence', 'Florence Metro')];
 
 function audRow(i: number, over: any = {}) {
   return {
@@ -25,9 +28,9 @@ function audRow(i: number, over: any = {}) {
     checkins_this_month: 2, points_this_month: 5, lifetime_points: 10, completed_item_names: [{ id: 'i1', body: 'Do a thing' }],
     most_active_hood: null, current_streak_weeks: 1, last_checkin_at: '2026-09-20T00:00:00Z', last_checkin_item_name: 'Do a thing',
     days_since_last_checkin: 11, new_items_since_last_checkin: 0, lifetime_checkins: 4,
-    season_list_id: 'season-phoenix', season_name: 'Fall 2026 — Phoenix Metro', season_ends_at: null, season_total_items: 32,
+    season_list_id: SEASON_PHX, season_name: 'Fall 2026 — Phoenix Metro', season_ends_at: null, season_total_items: 32,
     season_checked_count: 1, season_days_remaining: null,
-    recommended_items: [{ id: 'r1', body: 'Rec one', difficulty: 1, url: 'checkoff://item?id=r1' }],
+    recommended_items: [{ id: REC_ID, body: 'Rec one', difficulty: 1, url: `checkoff://item?id=${REC_ID}` }],
     ...over,
   };
 }
@@ -36,8 +39,8 @@ function setup(opts: { env?: Record<string, string | undefined>; audience?: any[
   const db = new FakeDb({
     users: [{ id: TEST_USER, email: 'tester@getcheckoff.com' }, { id: PROD_USERS[0], email: 'person0@example.com' }],
     campaign_suppressions: [], campaign_sends: [], interaction_events: [], curated_lists: [],
-    items: Array.from({ length: 6 }, (_, i) => ({ id: `it${i}`, body: `Sample place ${i}`, difficulty: i + 1, is_active: true, is_approved: true, is_universal: false })),
-    list_items: Array.from({ length: 32 }, (_, i) => ({ id: `li${i}`, list_id: 'season-phoenix' })),
+    items: Array.from({ length: 6 }, (_, i) => ({ id: `1e40000${i}-0000-4000-8000-000000000000`, body: `Sample place ${i}`, difficulty: i + 1, is_active: true, is_approved: true, is_universal: false })),
+    list_items: Array.from({ length: 32 }, (_, i) => ({ id: `li${i}`, list_id: SEASON_PHX })),
   });
   db.rpcs.get_recap_campaign_audience = opts.audience ?? [audRow(0), audRow(1), audRow(2)];
   db.rpcs.get_recap_campaign_cities = CITIES;
@@ -318,4 +321,28 @@ Deno.test('test_send reports Resend acceptance, never delivery', async () => {
   assertEquals(r.results.length, 1);
   assertEquals(r.results[0].acceptedByResend, true);
   assert(!JSON.stringify(r).toLowerCase().includes('delivered'));
+});
+
+Deno.test('test_send link_fix profile: five [LINK FIX TEST n of 5] emails to the approved address only, banner says sample content', async () => {
+  const s = setup();
+  const r = await json(await handleRequest(post({ month: '2026-09', mode: 'test_send', testProfile: 'link_fix', testUserId: TEST_USER, testEmailOverride: 'jerrystuckart@gmail.com' }), s.deps));
+  assertEquals([r.accepted, r.failed], [5, 0]);
+  assertEquals(s.resend.calls.length, 5);
+  s.resend.calls.forEach((c, i) => {
+    assertEquals(c.body.to, ['jerrystuckart@gmail.com']);
+    assert(c.body.subject.startsWith(`[LINK FIX TEST ${i + 1} of 5] `), c.body.subject);
+    assert(c.body.html.includes('LINK FIX TEST') && c.body.html.includes('sample content'));
+    assert(!/href="checkoff:/.test(c.body.html));
+    for (const id of PROD_USERS) assert(!c.body.html.includes(id));
+  });
+  const rows = s.db.rows('campaign_sends');
+  assert(rows.every((x) => x.campaign_id === 'recap_2026-09_test' && x.is_test_send === true && x.rendered_snapshot.profile === 'link_fix'));
+  assertEquals(s.db.rows('campaign_sends').filter((x) => x.campaign_id === 'recap_2026-09').length, 0);
+});
+
+Deno.test('test_send rejects an unknown testProfile before sending anything', async () => {
+  const s = setup();
+  const r = await handleRequest(post({ month: '2026-09', mode: 'test_send', testProfile: 'prod', testUserId: TEST_USER, testEmailOverride: 'jerrystuckart@gmail.com' }), s.deps);
+  assertEquals(r.status, 400);
+  assertEquals(s.resend.calls.length, 0);
 });
