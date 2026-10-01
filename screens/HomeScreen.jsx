@@ -25,7 +25,8 @@ import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { isItemInSeason } from '../lib/seasonFilter'
 import { useWhatsGood } from '../lib/useWhatsGood'
 import { useCurrentLocation } from '../lib/currentLocation'
-import { resolveHomeMetro, nearestMetroWithinBoundary } from '../lib/metroSelection'
+import { resolveHomeMetro, nearestMetroWithinBoundary, shouldAdoptNearestMetro } from '../lib/metroSelection'
+import { getExplicitMetro, clearExplicitMetro, subscribeExplicitMetro, metroForIntent } from '../lib/explicitMetroIntent'
 import { attachActiveCoverImages, attachDisplayEligibleImagePools } from '../lib/coverCandidates'
 import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
 import HomeVisitRecoveryEntry from '../components/home/HomeVisitRecoveryEntry'
@@ -191,6 +192,25 @@ export default function HomeScreen({ navigation }) {
     })
   }, [nextTenList?.id])
 
+  // Explicit link intent (warm start, or Home already mounted): when a link names a metro, item or list, make
+  // that metro the selected one. The intent is session scoped and in memory only, so nothing is persisted and
+  // the next cold start resolves exactly as before the link. Also applies an intent that was set before the
+  // active metros finished loading.
+  useEffect(() => {
+    function applyIntent() {
+      const intent = getExplicitMetro()
+      if (!intent) return
+      const linked = metroForIntent(intent, metros)
+      if (!linked) return
+      if (selectedMetro?.id === linked.id) return
+      setSelectedMetro(linked)
+      setNeedsMetroSelection(false)
+      loadForMetro(linked.id, user?.id, linked.slug)
+    }
+    applyIntent()
+    return subscribeExplicitMetro(applyIntent)
+  }, [metros, selectedMetro, user]) // eslint-disable-line
+
   async function init() {
     let authUser = null
     try {
@@ -286,11 +306,14 @@ export default function HomeScreen({ navigation }) {
       // replaced THAT — each was rejected in turn as still being a silent,
       // arbitrary (or, for the "always wins" rule, permanently stale)
       // metro default.
-      const { metro: defaultMetro, reason: metroReason } = resolveHomeMetro({
+      let { metro: defaultMetro, reason: metroReason } = resolveHomeMetro({
         persistedSlug,
         metros,
         location: locationResult,
         locationState,
+        // An explicit link (email / shared item, list or metro link) outranks the persisted choice, live
+        // location and the nearest metro. See lib/explicitMetroIntent.js for the full precedence.
+        explicitLinkMetro: getExplicitMetro(),
       })
 
       // Destination zone check — only meaningful with a real fix, and only
@@ -344,6 +367,14 @@ export default function HomeScreen({ navigation }) {
       // a later successful location resolution or explicit user pick via
       // switchMetro() can still resolve normally on the next app open.
       // Surface the existing city-picker mechanism instead of guessing.
+      // A link can arrive while init() is still awaiting GPS or network (cold start from a link, or a link
+      // opened while Home is loading). Re-read the intent right before applying so it can never be
+      // overwritten by the resolution above.
+      {
+        const linked = metroForIntent(getExplicitMetro(), metros)
+        if (linked) { defaultMetro = linked; metroReason = 'explicit_link' }
+      }
+
       if (defaultMetro) {
         setSelectedMetro(defaultMetro)
         await loadForMetro(defaultMetro.id, authUser?.id, defaultMetro.slug)
@@ -769,6 +800,8 @@ async function loadNearbyRail(userId) {
 }
 
   async function switchMetro(metro) {
+    // A manual pick is the newest explicit action, so it replaces any link intent.
+    clearExplicitMetro('manual')
     setSelectedMetro(metro)
     // An actual user pick always resolves the needs_selection state, same
     // as any other explicit choice.
@@ -853,7 +886,9 @@ async function loadNearbyRail(userId) {
     const nearestChanged = lastResolvedNearestMetroIdRef.current !== null &&
       lastResolvedNearestMetroIdRef.current !== nearest.id
     lastResolvedNearestMetroIdRef.current = nearest.id
-    if (!nearestChanged || nearest.id === selectedMetro.id) return
+    // An explicit link intent outranks live location: while one is active, location ticks never replace the
+    // selected metro (a manual Switch City pick clears the intent, so location handling resumes after that).
+    if (!shouldAdoptNearestMetro({ explicitLinkMetro: getExplicitMetro(), nearest, selectedMetro, nearestChanged })) return
     setSelectedMetro(nearest)
     loadForMetro(nearest.id, user?.id, nearest.slug)
     AsyncStorage.setItem(SELECTED_METRO_SLUG_KEY, nearest.slug).catch(() => {
