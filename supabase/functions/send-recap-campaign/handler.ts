@@ -36,7 +36,7 @@ export type Deps = {
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-admin-secret',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-campaign-secret',
 };
 
 function json(obj: unknown, status = 200): Response {
@@ -97,7 +97,7 @@ export async function handleRequest(req: Request, deps: Deps): Promise<Response>
   // 1. Authorization first. Nothing below runs, reads or writes without it.
   const auth = authorizeRequest(req.headers, {
     serviceRoleKey: deps.env('SUPABASE_SERVICE_ROLE_KEY'),
-    adminSecret: deps.env('ADMIN_SECRET'),
+    campaignSecret: deps.env('CAMPAIGN_ADMIN_SECRET'),
   });
   if (auth.ok === false) return json({ error: auth.error }, auth.status);
   if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);

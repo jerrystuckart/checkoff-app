@@ -3,15 +3,21 @@
 // Threat being closed: the public anon key (shipped inside the app) used to pass the Supabase gateway
 // and reach every mode of this function. Every operational mode now requires one of two server side
 // credentials that never appear in the app, the website, or the repository:
-//   1. Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>      (server to server)
-//   2. x-admin-secret: <ADMIN_SECRET>                          (the project's existing admin secret,
-//                                                               same pattern as admin-partner-link)
+//   1. SUPABASE_SERVICE_ROLE_KEY, sent as Authorization: Bearer or as the apikey header
+//      (server to server; with the newer key system the function's key can be an sb_secret_ value,
+//      which cannot be a gateway bearer, so the apikey header is accepted too)
+//   2. x-campaign-secret: <CAMPAIGN_ADMIN_SECRET>              (dedicated to this campaign; must be at
+//                                                               least 24 characters, shorter values are
+//                                                               treated as unset. The shared ADMIN_SECRET
+//                                                               is deliberately NOT accepted here.)
 // Authorization is decided BEFORE the body is read, before any database client is created, and
 // before any audience data, HTML, signed token, database write or Resend call can happen.
 
 import { MONTH_FORMAT, isMonthClosed } from './campaignLogic.ts';
 
-export type AuthResult = { ok: true; via: 'service_role' | 'admin_secret' } | { ok: false; status: 401 | 403; error: string };
+export const MIN_CAMPAIGN_SECRET_LENGTH = 24;
+
+export type AuthResult = { ok: true; via: 'service_role' | 'campaign_secret' } | { ok: false; status: 401 | 403; error: string };
 
 // Constant time comparison that does not leak length through early exit on the common prefix.
 export function timingSafeEqual(a: string, b: string): boolean {
@@ -26,20 +32,23 @@ export function timingSafeEqual(a: string, b: string): boolean {
 
 export function authorizeRequest(
   headers: Headers,
-  env: { serviceRoleKey?: string; adminSecret?: string },
+  env: { serviceRoleKey?: string; campaignSecret?: string },
 ): AuthResult {
   const authHeader = headers.get('authorization') ?? '';
-  const adminHeader = headers.get('x-admin-secret') ?? '';
+  const adminHeader = headers.get('x-campaign-secret') ?? '';
+  const apikeyHeader = (headers.get('apikey') ?? '').trim();
   if (!authHeader && !adminHeader) {
     return { ok: false, status: 401, error: 'Missing authorization' };
   }
 
   const bearer = /^Bearer\s+(.+)$/i.exec(authHeader)?.[1]?.trim() ?? '';
-  if (bearer && env.serviceRoleKey && timingSafeEqual(bearer, env.serviceRoleKey)) {
-    return { ok: true, via: 'service_role' };
+  if (env.serviceRoleKey) {
+    if (bearer && timingSafeEqual(bearer, env.serviceRoleKey)) return { ok: true, via: 'service_role' };
+    if (apikeyHeader && timingSafeEqual(apikeyHeader, env.serviceRoleKey)) return { ok: true, via: 'service_role' };
   }
-  if (adminHeader && env.adminSecret && timingSafeEqual(adminHeader, env.adminSecret)) {
-    return { ok: true, via: 'admin_secret' };
+  if (adminHeader && env.campaignSecret && env.campaignSecret.length >= MIN_CAMPAIGN_SECRET_LENGTH
+      && timingSafeEqual(adminHeader, env.campaignSecret)) {
+    return { ok: true, via: 'campaign_secret' };
   }
   // Present but wrong: this includes the public anon key.
   return { ok: false, status: 403, error: 'Forbidden' };
