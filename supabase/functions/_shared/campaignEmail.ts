@@ -7,6 +7,7 @@ import {
   type Segment, type RawRecommendation, type MetroSource, type SubjectContext,
 } from './campaignLogic.ts';
 import { signToken } from './linkSigning.ts';
+import { homeUrl, itemUrl, listUrl, metroUrl, isUuid, isMetroSlug } from './linkContract.ts';
 import type { RecapEmailData, CityLink } from './campaignTemplate.ts';
 import {
   selectLiveCities, newCitiesForMonth, OFFICIAL_SOCIAL_LINKS, APP_STORE_URL, PLAY_STORE_URL,
@@ -62,7 +63,7 @@ export async function fetchThemedLists(supabase: any, metroName: string | null):
       .order('season', { ascending: true })
       .limit(10);
     if (error || !data) return [];
-    return selectThemedLists(data).map((l) => ({ title: l.title, url: `checkoff://list?id=${l.id}` }));
+    return selectThemedLists(data).filter((l) => isUuid(l.id)).map((l) => ({ title: l.title, url: listUrl(l.id) }));
   } catch {
     return [];
   }
@@ -76,8 +77,15 @@ export function subjectContext(ctx: Pick<CampaignContext, 'month' | 'cities'>, r
   };
 }
 
+export type BuildOptions = {
+  // Link fix test content: replaces the themed list block with these exact public lists and adds a visible
+  // test notice. Never used for production sends.
+  themedListsOverride?: { title: string; id: string }[];
+  testNotice?: string;
+};
+
 export async function buildEmailData(
-  ctx: CampaignContext, row: AudienceRow, campaignId: string,
+  ctx: CampaignContext, row: AudienceRow, campaignId: string, opts: BuildOptions = {},
 ): Promise<{ data: RecapEmailData; recommendationIds: string[]; subject: string }> {
   const uid = row.user_id;
   const seg = row.segment;
@@ -86,23 +94,30 @@ export async function buildEmailData(
 
   const sctx = subjectContext(ctx, row);
   const rawRecs = (row.recommended_items || []).slice(0, 3);
-  const recommendations = await Promise.all(assignRecommendationRoles(rawRecs).map(async (r) => ({
-    ...r, url: await track(r.url, 'recommendation_click', { rec: r.id }),
+  // Every destination below is a canonical https URL (lib/emailLinkContract.js in the app is the source of
+  // truth): the exact item id, list id or metro slug survives tracking and every redirect.
+  const recommendations = await Promise.all(assignRecommendationRoles(rawRecs.filter((r) => isUuid(r.id))).map(async (r) => ({
+    ...r, url: await track(itemUrl(r.id), 'recommendation_click', { rec: r.id }),
   })));
 
-  const themedLists = await Promise.all((await fetchThemedLists(ctx.supabase, row.metro_name)).map(async (l) => ({
+  const themedSource = opts.themedListsOverride
+    ? opts.themedListsOverride.filter((l) => isUuid(l.id)).map((l) => ({ title: l.title, url: listUrl(l.id) }))
+    : await fetchThemedLists(ctx.supabase, row.metro_name);
+  const themedLists = await Promise.all(themedSource.map(async (l) => ({
     ...l, url: await track(l.url, 'themed_list_click'),
   })));
 
   const live = selectLiveCities(ctx.cities);
+  // A city chip selects THAT metro (canonical metro slug). It is never a stand in list.
   const cityLink = async (c: CityRow): Promise<CityLink> => ({
     name: cityDisplayName(c.name),
-    url: await track(`checkoff://list?id=${c.destination_list_id}`, 'city_click', { meta: { city: c.slug } }),
+    url: await track(metroUrl(c.slug), 'city_click', { meta: { city: c.slug } }),
   });
-  const liveCities = await Promise.all(live.map(cityLink));
-  const newCities = await Promise.all(newCitiesForMonth(ctx.month, live).map(cityLink));
+  const linkable = (c: CityRow) => isMetroSlug(c.slug);
+  const liveCities = await Promise.all(live.filter(linkable).map(cityLink));
+  const newCities = await Promise.all(newCitiesForMonth(ctx.month, live).filter(linkable).map(cityLink));
 
-  const seasonListDeepLink = row.season_list_id ? await track(`checkoff://list?id=${row.season_list_id}`, 'season_continue_click') : null;
+  const seasonListDeepLink = isUuid(row.season_list_id) ? await track(listUrl(row.season_list_id!), 'season_continue_click') : null;
   const socialLinks = await Promise.all(OFFICIAL_SOCIAL_LINKS.map(async (s) => ({
     label: s.label, url: await track(s.url, 'social_click', { meta: { network: s.label.toLowerCase() } }),
   })));
@@ -141,7 +156,8 @@ export async function buildEmailData(
     suggestAnotherCityUrl: 'mailto:hello@getcheckoff.com?subject=City%20Suggestion&body=I%27d%20love%20to%20see%20CheckOff%20in%3A%20',
     inviteUrl: await track('https://getcheckoff.com/join', 'invite_click'),
     unsubscribeUrl: await track('https://getcheckoff.com/download', 'unsubscribe'),
-    ctaUrl: await track('checkoff://home', 'main_cta_click'),
+    ctaUrl: await track(homeUrl(), 'main_cta_click'),
+    testNotice: opts.testNotice,
   };
   return {
     data,
@@ -175,16 +191,19 @@ async function listItemCount(supabase: any, listId: string): Promise<number> {
 }
 
 export async function buildSyntheticRow(
-  ctx: CampaignContext, variant: TestVariant, testUserId: string,
+  ctx: CampaignContext, variant: TestVariant, testUserId: string, homeSlug?: string,
 ): Promise<AudienceRow> {
   const live = selectLiveCities(ctx.cities);
-  // Prefer a metro with a current Fall list so every variant can show the Fall block.
-  const home = live.find((c) => c.slug === 'phoenix' && c.season_list_id) ?? live.find((c) => c.season_list_id);
-  if (!home) throw new Error('No live city with a Fall list is available for a synthetic sample');
+  // Default: a metro with a current Fall list (Phoenix first) so every variant can show the Fall block.
+  // A caller can name the home metro (the link fix test package does), with or without a Fall list.
+  const home = homeSlug
+    ? live.find((c) => c.slug === homeSlug)
+    : (live.find((c) => c.slug === 'phoenix' && c.season_list_id) ?? live.find((c) => c.season_list_id));
+  if (!home) throw new Error(homeSlug ? `Metro ${homeSlug} is not live` : 'No live city with a Fall list is available for a synthetic sample');
   const items = await sampleItems(ctx.supabase, home.metro_id, 6);
-  const recs = items.slice(0, 3).map((i) => ({ id: i.id, body: i.body, difficulty: i.difficulty, url: `checkoff://item?id=${i.id}` }));
+  const recs = items.slice(0, 3).map((i) => ({ id: i.id, body: i.body, difficulty: i.difficulty, url: itemUrl(i.id) }));
   const done = items.slice(3, 6).map((i) => ({ id: i.id, body: i.body }));
-  const total = await listItemCount(ctx.supabase, home.season_list_id!);
+  const total = home.season_list_id ? await listItemCount(ctx.supabase, home.season_list_id) : 0;
 
   const base: AudienceRow = {
     user_id: testUserId, email: 'synthetic@example.invalid', display_name: 'Alex', platform: null,
@@ -215,4 +234,58 @@ export async function buildSyntheticRow(
       return { ...base, segment: 'NEVER_CHECKED_OFF', metro_id: null, metro_name: null, metro_source: 'unknown',
         season_list_id: null, season_name: null, season_total_items: 0, recommended_items: null };
   }
+}
+
+// ── Link fix test package ───────────────────────────────────────────────────
+// Five emails, each with a different home metro and real catalog entities, so one pass on a phone verifies:
+// a Phoenix item while outside Phoenix, a Fall list from another metro, a Phoenix list, a Munich and a Vienna
+// list, Amalfi Coast and Florence city selection, the main Home button, vote, unsubscribe and both stores.
+// Test only. Counts and progress in these emails are sample content and the banner says so.
+export type LinkFixPlan = { homeSlug: string | null; listsMetroSlug: string | null; notice: string };
+
+const SAMPLE = 'LINK FIX TEST. Counts and progress in this email are sample content. Please tap each link below and report where it lands.';
+
+export const LINK_FIX_PLAN: Record<TestVariant, LinkFixPlan> = {
+  ACTIVE_MONTH: {
+    homeSlug: 'phoenix', listsMetroSlug: null,
+    notice: `${SAMPLE} Email 1 of 5. (1) An item under Next up is a Phoenix item: it must open that exact item even if you are not near Phoenix. (2) Continue your Fall list must open the Phoenix Fall list. (3) A list under More lists worth a look must open that exact list. (4) In the New in September line, Amalfi Coast and Florence must each switch to that city.`,
+  },
+  FALL_CONTINUATION: {
+    homeSlug: 'munich', listsMetroSlug: 'munich',
+    notice: `${SAMPLE} Email 2 of 5. (1) Continue your Fall list must open the MUNICH Fall list, a Fall list from another metro. (2) The Next up items are Munich items. (3) The Munich list under More lists must open that exact list. (4) Open CheckOff at the bottom must open CheckOff Home.`,
+  },
+  RETURNING_INACTIVE: {
+    homeSlug: 'vienna_austria', listsMetroSlug: 'vienna_austria',
+    notice: `${SAMPLE} Email 3 of 5. (1) The Vienna list under More lists must open that exact list. (2) The city buttons under New on CheckOff: tap Amalfi Coast, go back, then tap Florence. Each must show a different selected city. (3) The App Store and Google Play buttons must open the right store pages.`,
+  },
+  NEVER_CHECKED_OFF: {
+    homeSlug: 'amalfi-coast', listsMetroSlug: null,
+    notice: `${SAMPLE} Email 4 of 5. (1) The Next up items are Amalfi Coast items and each must open its exact item. (2) In the New in September line, tap Florence: it must switch to Florence. (3) Vote for a city must open the vote form and accept a city. (4) Unsubscribe must show a confirmation page and must NOT unsubscribe you (this is a test).`,
+  },
+  NEVER_CHECKED_OFF_UNKNOWN: {
+    homeSlug: null, listsMetroSlug: null,
+    notice: `${SAMPLE} Email 5 of 5. (1) Tap two different city buttons, for example San Diego and Tucson: each must select its own city, never the same generic screen. (2) Choose a city to explore at the bottom must open CheckOff Home. (3) Follow CheckOff on Instagram must open the Instagram profile.`,
+  },
+};
+
+export async function fetchOfficialMetroLists(supabase: any, metroId: string, excludeListId: string | null): Promise<{ title: string; id: string }[]> {
+  const { data, error } = await supabase
+    .from('lists').select('id, title')
+    .eq('metro_id', metroId).eq('is_public', true).eq('is_official', true)
+    .order('title', { ascending: true }).limit(8);
+  if (error || !data) return [];
+  return (data as { id: string; title: string }[]).filter((l) => l.id !== excludeListId && isUuid(l.id)).slice(0, 2);
+}
+
+export async function buildLinkFixEmail(
+  ctx: CampaignContext, variant: TestVariant, testUserId: string, campaignId: string,
+) {
+  const plan = LINK_FIX_PLAN[variant];
+  const row = await buildSyntheticRow(ctx, variant, testUserId, plan.homeSlug ?? undefined);
+  let themedListsOverride: { title: string; id: string }[] | undefined;
+  if (plan.listsMetroSlug && row.metro_id) {
+    themedListsOverride = await fetchOfficialMetroLists(ctx.supabase, row.metro_id, row.season_list_id);
+  }
+  const built = await buildEmailData(ctx, row, campaignId, { themedListsOverride, testNotice: plan.notice });
+  return { row, built };
 }
