@@ -167,14 +167,16 @@ export async function handleRequest(req: Request, deps: Deps): Promise<Response>
       } else {
         return json({ error: 'preview needs previewSynthetic, previewUserId or previewAllSegments' }, 400);
       }
+      // Identity free synthetic previews are signed for the isolated test campaign, never the real one.
+      const previewCampaignId = body.previewSynthetic === true ? `${campaignId}_test` : campaignId;
       const previews = await Promise.all(targets.map(async (row) => {
-        const built = await buildEmailData(ctx, row, campaignId);
+        const built = await buildEmailData(ctx, row, previewCampaignId);
         return {
           segment: row.segment, metroSource: row.metro_source, subject: built.subject,
           previewText: built.data.previewText, html: buildRecapEmailHtml(built.data),
         };
       }));
-      return json({ mode, month, campaignId, previews });
+      return json({ mode, month, campaignId: previewCampaignId, previews });
     }
 
     // ── test_send ──────────────────────────────────────────────────────────

@@ -135,6 +135,12 @@ Deno.test('preview with synthetic variants returns all five without any producti
   assertEquals(r.status, 200);
   const j = await json(r);
   assertEquals(j.previews.length, 5);
+  assertEquals(j.campaignId, 'recap_2026-09_test');
+  for (const pv of j.previews) {
+    for (const m of pv.html.matchAll(/campaign-link\?([^"]+)"/g)) {
+      assertEquals(new URLSearchParams(m[1].replaceAll('&amp;', '&')).get('c'), 'recap_2026-09_test');
+    }
+  }
   const all = JSON.stringify(j);
   for (const id of PROD_USERS) assert(!all.includes(id));
   assert(!all.includes('person0@example.com') && !all.includes('Person0'));
