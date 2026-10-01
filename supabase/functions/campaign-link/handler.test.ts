@@ -172,9 +172,34 @@ Deno.test('no email destination redirects to a raw custom scheme; everything lan
   const home = await handleRequest(get(await link({ ev: 'main_cta_click', dest: 'checkoff://home' })), deps);
   assertEquals(loc(home), 'https://getcheckoff.com/open');
   const item = await handleRequest(get(await link({ ev: 'recommendation_click', dest: `checkoff://item?id=${OTHER}` })), deps);
-  assertEquals(loc(item), `https://getcheckoff.com/item?id=${OTHER}`);
+  assertEquals(loc(item), `https://getcheckoff.com/item/${OTHER}`); // canonical item URL (the old /item?id= form is still served by the site)
   const list = await handleRequest(get(await link({ ev: 'city_click', dest: `checkoff://list?id=${OTHER}` })), deps);
   assertEquals(loc(list), `https://getcheckoff.com/list?id=${OTHER}`);
+});
+
+Deno.test('canonical https destinations pass through untouched and are attributed to their entity (item, list, metro, home)', async () => {
+  const { db, deps } = setup();
+  const cases: [string, string, string, string | null][] = [
+    [`https://getcheckoff.com/item/${OTHER}`, 'recommendation_click', 'item', OTHER],
+    [`https://getcheckoff.com/list?id=${OTHER}`, 'themed_list_click', 'list', OTHER],
+    ['https://getcheckoff.com/metro?slug=amalfi-coast', 'city_click', 'metro', 'amalfi-coast'],
+    ['https://getcheckoff.com/metro?slug=florence', 'city_click', 'metro', 'florence'],
+    ['https://getcheckoff.com/open', 'main_cta_click', 'home', null],
+  ];
+  for (const [dest, ev, type, id] of cases) {
+    const r = await handleRequest(get(await link({ dest, ev })), deps);
+    assertEquals(loc(r), dest);
+  }
+  const events = db.rows('interaction_events');
+  assertEquals(events.length, cases.length);
+  cases.forEach(([, ev, type, id], i) => {
+    assertEquals(events[i].event_type, ev);
+    assertEquals(events[i].metadata.destination_type, type);
+    assertEquals(events[i].metadata.destination_id, id);
+    assertEquals(events[i].campaign_id, CAMP);
+  });
+  // different cities keep different destinations: no collapse onto one generic route
+  assert(events[2].metadata.destination_id !== events[3].metadata.destination_id);
 });
 
 Deno.test('a valid click logs one event, an invalid one logs nothing, and HEAD logs nothing', async () => {

@@ -267,9 +267,28 @@ Deno.test('classifyDestination: unparseable input is unknown, never throws', () 
   assertEquals(classifyDestination('not a url'), { type: 'unknown', id: null });
 });
 
-Deno.test('translateDeepLinkForBrowser: an existing delivered checkoff://item URL becomes safe HTTPS', () => {
-  assertEquals(translateDeepLinkForBrowser('checkoff://item?id=832ab5b4-2b62-463e-a26c-0647751a0460'),
-    'https://getcheckoff.com/item?id=832ab5b4-2b62-463e-a26c-0647751a0460');
+Deno.test('translateDeepLinkForBrowser: an existing delivered checkoff://item URL becomes the canonical item URL (August compatible)', () => {
+  const id = '832ab5b4-2b62-463e-a26c-0647751a0460';
+  assertEquals(translateDeepLinkForBrowser(`checkoff://item?id=${id}`), `https://getcheckoff.com/item/${id}`);
+  assertEquals(translateDeepLinkForBrowser(`checkoff://item/${id}`), `https://getcheckoff.com/item/${id}`);
+});
+
+Deno.test('translateDeepLinkForBrowser: metro and legacy slug list links', () => {
+  assertEquals(translateDeepLinkForBrowser('checkoff://metro?slug=amalfi-coast'), 'https://getcheckoff.com/metro?slug=amalfi-coast');
+  assertEquals(translateDeepLinkForBrowser('checkoff://metro?slug=../x'), 'https://getcheckoff.com/open'); // invalid slug never routed
+  assertEquals(translateDeepLinkForBrowser('checkoff://item?id=not-a-uuid'), 'https://getcheckoff.com/open');
+  assertEquals(translateDeepLinkForBrowser('checkoff://list?id=west-valley-best'), 'https://getcheckoff.com/list?id=west-valley-best');
+  assertEquals(translateDeepLinkForBrowser('https://getcheckoff.com/metro?slug=florence'), 'https://getcheckoff.com/metro?slug=florence'); // already https: untouched
+});
+
+Deno.test('classifyDestination: canonical forms report their entity (item and list ids, metro slug) for attribution', () => {
+  const id = '832ab5b4-2b62-463e-a26c-0647751a0460';
+  assertEquals(classifyDestination(`https://getcheckoff.com/item/${id}`), { type: 'item', id });
+  assertEquals(classifyDestination(`https://getcheckoff.com/list?id=${id}`), { type: 'list', id });
+  assertEquals(classifyDestination('https://getcheckoff.com/metro?slug=amalfi-coast'), { type: 'metro', id: 'amalfi-coast' });
+  assertEquals(classifyDestination('https://getcheckoff.com/open'), { type: 'home', id: null });
+  assertEquals(classifyDestination('checkoff://metro?slug=florence'), { type: 'metro', id: 'florence' });
+  assertEquals(classifyDestination(`checkoff://item/${id}`), { type: 'item', id });
 });
 
 Deno.test('translateDeepLinkForBrowser: an existing delivered checkoff://list URL becomes safe HTTPS', () => {
