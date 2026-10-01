@@ -5,7 +5,7 @@ import {
   approvedTestRecipients, timingSafeEqual, TEST_VARIANTS,
 } from './campaignControls.ts';
 
-const ENV = { serviceRoleKey: 'service-role-secret-value', adminSecret: 'admin-secret-value' };
+const ENV = { serviceRoleKey: 'service-role-secret-value', campaignSecret: 'campaign-admin-secret-0123456789abcdef' };
 const ANON = 'public-anon-key-value';
 const h = (o: Record<string, string>) => new Headers(o);
 
@@ -26,7 +26,7 @@ Deno.test('authorize: the public anon key is 403, with or without an apikey head
 Deno.test('authorize: invalid or malformed credentials are 403', () => {
   for (const headers of [
     { authorization: 'Bearer wrong' }, { authorization: 'Basic abc' }, { authorization: 'Bearer ' },
-    { 'x-admin-secret': 'wrong' }, { authorization: `Bearer ${ANON}`, 'x-admin-secret': 'nope' },
+    { 'x-campaign-secret': 'wrong' }, { authorization: `Bearer ${ANON}`, 'x-campaign-secret': 'nope' },
   ]) {
     const r = authorizeRequest(h(headers), ENV);
     assertEquals(r.ok, false, JSON.stringify(headers));
@@ -35,12 +35,24 @@ Deno.test('authorize: invalid or malformed credentials are 403', () => {
 
 Deno.test('authorize: service role bearer and the admin secret are accepted', () => {
   assertEquals(authorizeRequest(h({ authorization: `Bearer ${ENV.serviceRoleKey}` }), ENV), { ok: true, via: 'service_role' });
-  assertEquals(authorizeRequest(h({ authorization: `Bearer ${ANON}`, 'x-admin-secret': ENV.adminSecret }), ENV), { ok: true, via: 'admin_secret' });
+  assertEquals(authorizeRequest(h({ authorization: `Bearer ${ANON}`, 'x-campaign-secret': ENV.campaignSecret }), ENV), { ok: true, via: 'campaign_secret' });
+});
+
+Deno.test('authorize: the service key is also accepted as the apikey header; the anon key as apikey is not', () => {
+  assertEquals(authorizeRequest(h({ authorization: `Bearer ${ANON}`, apikey: ENV.serviceRoleKey }), ENV), { ok: true, via: 'service_role' });
+  assertEquals(authorizeRequest(h({ authorization: `Bearer ${ANON}`, apikey: ANON }), ENV).ok, false);
+  assertEquals(authorizeRequest(h({ apikey: ENV.serviceRoleKey }), ENV).ok, false); // an apikey alone, with no authorization header, is still missing authorization
+});
+
+Deno.test('authorize: the shared ADMIN_SECRET header and short campaign secrets are never accepted', () => {
+  assertEquals(authorizeRequest(h({ authorization: `Bearer ${ANON}`, 'x-admin-secret': 'checkoff-admin-2026' }), { ...ENV }).ok, false);
+  const weak = { serviceRoleKey: ENV.serviceRoleKey, campaignSecret: 'short-secret' };
+  assertEquals(authorizeRequest(h({ authorization: `Bearer ${ANON}`, 'x-campaign-secret': 'short-secret' }), weak).ok, false);
 });
 
 Deno.test('authorize: unset server secrets can never be matched by an empty header', () => {
-  assertEquals(authorizeRequest(h({ authorization: 'Bearer ' }), { serviceRoleKey: '', adminSecret: '' }).ok, false);
-  assertEquals(authorizeRequest(h({ 'x-admin-secret': '' , authorization: 'Bearer x' }), { serviceRoleKey: undefined, adminSecret: undefined }).ok, false);
+  assertEquals(authorizeRequest(h({ authorization: 'Bearer ' }), { serviceRoleKey: '', campaignSecret: '' }).ok, false);
+  assertEquals(authorizeRequest(h({ 'x-campaign-secret': '' , authorization: 'Bearer x' }), { serviceRoleKey: undefined, campaignSecret: undefined }).ok, false);
 });
 
 Deno.test('timingSafeEqual: equal, unequal and different lengths', () => {

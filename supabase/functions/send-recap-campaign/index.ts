@@ -1,6 +1,6 @@
 // Monthly recap campaign endpoint. All logic lives in handler.ts so it can be tested with fakes.
 // Deploy: supabase functions deploy send-recap-campaign --project-ref uggusbbswybyplypkbxz
-// (verify_jwt stays ON. The handler additionally requires the service role key or ADMIN_SECRET, so
+// (verify_jwt stays ON. The handler additionally requires the service role key or CAMPAIGN_ADMIN_SECRET, so
 // the public anon key is rejected for every mode.)
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { handleRequest } from './handler.ts';

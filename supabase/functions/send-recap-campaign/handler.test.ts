@@ -5,11 +5,11 @@ import { FakeDb, fakeResend, envOf } from '../_shared/testSupport.ts';
 import { verifyToken } from '../_shared/linkSigning.ts';
 
 const SERVICE = 'service-role-secret-value';
-const ADMIN = 'admin-secret-value';
+const ADMIN = 'campaign-admin-secret-0123456789abcdef';
 const ANON = 'public-anon-key-value';
 const TEST_USER = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
 const PROD_USERS = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', '33333333-3333-4333-8333-333333333333'];
-const BASE_ENV = { SUPABASE_URL: 'https://proj.supabase.co', SUPABASE_SERVICE_ROLE_KEY: SERVICE, ADMIN_SECRET: ADMIN, RESEND_API_KEY: 're_test' };
+const BASE_ENV = { SUPABASE_URL: 'https://proj.supabase.co', SUPABASE_SERVICE_ROLE_KEY: SERVICE, CAMPAIGN_ADMIN_SECRET: ADMIN, RESEND_API_KEY: 're_test' };
 
 const city = (slug: string, name: string, over: any = {}) => ({
   metro_id: `m-${slug}`, name, slug, created_at: '2026-09-01T00:00:00Z', active_items: 100, public_official_lists: 2,
@@ -79,14 +79,14 @@ Deno.test('missing authorization is 401, invalid is 403, with no side effects', 
   assertEquals(none.status, 401);
   const bad = await handleRequest(post({ month: '2026-09', mode: 'preview', previewAllSegments: true }, { authorization: 'Bearer nope' }), s.deps);
   assertEquals(bad.status, 403);
-  const badAdmin = await handleRequest(post({ month: '2026-09', mode: 'preview', previewAllSegments: true }, { 'x-admin-secret': 'nope', authorization: `Bearer ${ANON}` }), s.deps);
+  const badAdmin = await handleRequest(post({ month: '2026-09', mode: 'preview', previewAllSegments: true }, { 'x-campaign-secret': 'nope', authorization: `Bearer ${ANON}` }), s.deps);
   assertEquals(badAdmin.status, 403);
   assertEquals(s.created(), 0); assertEquals(s.db.ops.length, 0); assertEquals(s.resend.calls.length, 0);
 });
 
-Deno.test('the admin secret authorizes (project pattern), alongside the gateway token', async () => {
+Deno.test('the dedicated campaign secret authorizes, alongside the gateway token', async () => {
   const s = setup();
-  const r = await handleRequest(post({ month: '2026-09', mode: 'preview', previewAllSegments: true }, { authorization: `Bearer ${ANON}`, 'x-admin-secret': ADMIN }), s.deps);
+  const r = await handleRequest(post({ month: '2026-09', mode: 'preview', previewAllSegments: true }, { authorization: `Bearer ${ANON}`, 'x-campaign-secret': ADMIN }), s.deps);
   assertEquals(r.status, 200);
 });
 
