@@ -40,6 +40,7 @@ export default function CompactHomeHeader({
   tierProgressFilledDots,
   onProfilePress,
   showProfileStatus,
+  metroBadge = null,
 }) {
   const { TEXT, MUTED, BORDER, AMBER, NAVY } = colors
 
@@ -75,16 +76,25 @@ export default function CompactHomeHeader({
       </View>
 
       <View style={styles.row}>
-        <TouchableOpacity
-          onPress={onMetroPress}
-          activeOpacity={multiMetro ? 0.7 : 1}
-          disabled={!multiMetro}
-          style={styles.metroChip}
-          hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
-        >
-          <Text style={[styles.metroChipText, { color: MUTED }]}>{metroLabel}</Text>
-          {multiMetro && <Text style={[styles.metroChevron, { color: MUTED }]}> ▾</Text>}
-        </TouchableOpacity>
+        <View style={styles.metroGroup}>
+          <TouchableOpacity
+            onPress={onMetroPress}
+            activeOpacity={multiMetro ? 0.7 : 1}
+            disabled={!multiMetro}
+            style={styles.metroChip}
+            hitSlop={{ top: 6, bottom: 6, left: 4, right: 4 }}
+          >
+            <Text style={[styles.metroChipText, { color: MUTED }]}>{metroLabel}</Text>
+            {multiMetro && <Text style={[styles.metroChevron, { color: MUTED }]}> ▾</Text>}
+          </TouchableOpacity>
+
+          {/* Geography, not rank: shown only when Home is showing a metro the phone is not physically in. */}
+          {metroBadge ? (
+            <View style={[styles.metroBadge, { borderColor: BORDER }]}>
+              <Text style={[styles.metroBadgeText, { color: MUTED }]} allowFontScaling={false}>{metroBadge}</Text>
+            </View>
+          ) : null}
+        </View>
 
         {showProfileStatus && (
           <TouchableOpacity onPress={onProfilePress} activeOpacity={0.75} style={styles.tierGroup}>
@@ -118,9 +128,12 @@ const styles = StyleSheet.create({
   iconBtnText: { fontSize: 15 },
   streakPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 10, borderWidth: 1 },
   streakPillText: { fontSize: 11, fontWeight: '800' },
+  metroGroup: { flexDirection: 'row', alignItems: 'center' },
   metroChip: { flexDirection: 'row', alignItems: 'center' },
   metroChipText: { fontSize: 13, fontWeight: '700' },
   metroChevron: { fontSize: 12 },
+  metroBadge: { marginLeft: 8, paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6, borderWidth: 1 },
+  metroBadgeText: { fontSize: 9, fontWeight: '800', letterSpacing: 0.6 },
   tierGroup: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   tierLabel: { fontSize: 10, fontWeight: '800', letterSpacing: 0.4 },
   dotsRow: { flexDirection: 'row', gap: 3 },

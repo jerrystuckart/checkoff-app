@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity,
   StyleSheet, StatusBar, ActivityIndicator, Alert,
-  RefreshControl, Modal, ImageBackground, useWindowDimensions,
+  RefreshControl, Modal, ImageBackground, useWindowDimensions, AppState,
 } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import * as Location from 'expo-location'
@@ -25,8 +25,10 @@ import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { isItemInSeason } from '../lib/seasonFilter'
 import { useWhatsGood } from '../lib/useWhatsGood'
 import { useCurrentLocation } from '../lib/currentLocation'
-import { resolveHomeMetro, nearestMetroWithinBoundary, shouldAdoptNearestMetro } from '../lib/metroSelection'
-import { getExplicitMetro, clearExplicitMetro, subscribeExplicitMetro, metroForIntent } from '../lib/explicitMetroIntent'
+import { resolveHomeMetro, nearestMetroWithinBoundary } from '../lib/metroSelection'
+import { getExplicitMetro, getActiveExplicitMetro, stampExplicitMetroOrigin, clearExplicitMetro, subscribeExplicitMetro, metroForIntent } from '../lib/explicitMetroIntent'
+import { seasonTimeLeftLabel } from '../lib/seasonCountdown'
+import { deriveHomeMetroContext, reconcileHomeMetroState, HOME_METRO_KIND } from '../lib/homeMetroContext'
 import { attachActiveCoverImages, attachDisplayEligibleImagePools } from '../lib/coverCandidates'
 import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
 import HomeVisitRecoveryEntry from '../components/home/HomeVisitRecoveryEntry'
@@ -202,7 +204,8 @@ export default function HomeScreen({ navigation }) {
       if (!intent) return
       const linked = metroForIntent(intent, metros)
       if (!linked) return
-      if (selectedMetro?.id === linked.id) return
+      if (selectedMetro?.id === linked.id) { selectedFromLinkRef.current = true; return }
+      selectedFromLinkRef.current = true
       setSelectedMetro(linked)
       setNeedsMetroSelection(false)
       loadForMetro(linked.id, user?.id, linked.slug)
@@ -313,7 +316,7 @@ export default function HomeScreen({ navigation }) {
         locationState,
         // An explicit link (email / shared item, list or metro link) outranks the persisted choice, live
         // location and the nearest metro. See lib/explicitMetroIntent.js for the full precedence.
-        explicitLinkMetro: getExplicitMetro(),
+        explicitLinkMetro: getActiveExplicitMetro({ location: locationResult, resumed: true }),
       })
 
       // Destination zone check — only meaningful with a real fix, and only
@@ -371,10 +374,11 @@ export default function HomeScreen({ navigation }) {
       // opened while Home is loading). Re-read the intent right before applying so it can never be
       // overwritten by the resolution above.
       {
-        const linked = metroForIntent(getExplicitMetro(), metros)
+        const linked = metroForIntent(getActiveExplicitMetro({ location: locationResult, resumed: true }), metros)
         if (linked) { defaultMetro = linked; metroReason = 'explicit_link' }
       }
 
+      selectedFromLinkRef.current = metroReason === 'explicit_link'
       if (defaultMetro) {
         setSelectedMetro(defaultMetro)
         await loadForMetro(defaultMetro.id, authUser?.id, defaultMetro.slug)
@@ -802,6 +806,7 @@ async function loadNearbyRail(userId) {
   async function switchMetro(metro) {
     // A manual pick is the newest explicit action, so it replaces any link intent.
     clearExplicitMetro('manual')
+    selectedFromLinkRef.current = false
     setSelectedMetro(metro)
     // An actual user pick always resolves the needs_selection state, same
     // as any other explicit choice.
@@ -878,23 +883,79 @@ async function loadNearbyRail(userId) {
   // result near a boundary the way it could for two closely-spaced metros;
   // if metros are ever launched close enough together for that to become a
   // real risk, add a margin then.
-  const lastResolvedNearestMetroIdRef = useRef(null)
-  useEffect(() => {
-    if (!userLocation || metros.length === 0 || !selectedMetro) return
-    const nearest = nearestMetroWithinBoundary(userLocation, metros)
-    if (!nearest) return
-    const nearestChanged = lastResolvedNearestMetroIdRef.current !== null &&
-      lastResolvedNearestMetroIdRef.current !== nearest.id
-    lastResolvedNearestMetroIdRef.current = nearest.id
-    // An explicit link intent outranks live location: while one is active, location ticks never replace the
-    // selected metro (a manual Switch City pick clears the intent, so location handling resumes after that).
-    if (!shouldAdoptNearestMetro({ explicitLinkMetro: getExplicitMetro(), nearest, selectedMetro, nearestChanged })) return
-    setSelectedMetro(nearest)
-    loadForMetro(nearest.id, user?.id, nearest.slug)
-    AsyncStorage.setItem(SELECTED_METRO_SLUG_KEY, nearest.slug).catch(() => {
-      /* persistence optional — resolution still correct for this session */
+  // 2026-10-02 metro state contract (lib/homeMetroContext.js, lib/explicitMetroIntent.js):
+  //   physical metro = the launched metro containing the live location (null when outside every one)
+  //   browsing metro = selectedMetro
+  //   link intent    = temporary, expires on resume after an hour or on 50 km of travel
+  // reconcileHomeMetro is the single place that reacts to a location change, a resume from background or a
+  // lost link intent. Previously this effect returned early whenever the phone was outside every launched
+  // metro (London, New York), so a link-derived Amalfi selection was never revisited, and it only noticed a
+  // physical metro change when a PREVIOUS metro had also been seen, so arriving in Phoenix from an
+  // unsupported place never adopted Phoenix until the next cold start.
+  const selectedFromLinkRef = useRef(false)
+  const lastPhysicalMetroIdRef = useRef(undefined)
+  const metroStateRef = useRef({})
+  metroStateRef.current = { metros, selectedMetro, userLocation, user }
+
+  async function reconcileHomeMetro({ resumed = false, location } = {}) {
+    // The only await comes first, so everything below reads current state and runs without interleaving.
+    let persistedSlug = null
+    try { persistedSlug = await AsyncStorage.getItem(SELECTED_METRO_SLUG_KEY) } catch (e) { /* optional */ }
+    const { metros: ms, selectedMetro: sel, userLocation: storeLoc, user: u } = metroStateRef.current
+    const loc = location ?? storeLoc
+    if (ms.length === 0) return
+    if (loc) stampExplicitMetroOrigin(loc)
+    const intent = getActiveExplicitMetro({ location: loc, resumed })
+    const next = reconcileHomeMetroState({
+      metros: ms,
+      selectedMetro: sel,
+      selectedFromLink: selectedFromLinkRef.current,
+      lastPhysicalMetroId: lastPhysicalMetroIdRef.current,
+      activeIntent: intent,
+      location: loc,
+      persistedSlug,
     })
-  }, [userLocation, metros, selectedMetro, user])
+    lastPhysicalMetroIdRef.current = next.lastPhysicalMetroId
+    selectedFromLinkRef.current = next.selectedFromLink
+    if (next.action === 'keep') return
+    // adopt-physical (travelled to / returned to a launched metro) or re-resolve (link intent expired).
+    if (next.selectedMetro) {
+      setNeedsMetroSelection(false)
+      if (next.selectedMetro.id !== sel?.id) {
+        setSelectedMetro(next.selectedMetro)
+        loadForMetro(next.selectedMetro.id, u?.id, next.selectedMetro.slug)
+      }
+      if (next.persistSlug) {
+        AsyncStorage.setItem(SELECTED_METRO_SLUG_KEY, next.persistSlug).catch(() => {
+          /* persistence optional — resolution still correct for this session */
+        })
+      }
+    } else {
+      setSelectedMetro(null)
+      setNeedsMetroSelection(next.needsMetroSelection)
+    }
+  }
+
+  useEffect(() => {
+    if (loading) return // init() owns the first resolution; this only RE-checks after it
+    reconcileHomeMetro()
+  }, [userLocation, metros, loading]) // eslint-disable-line
+
+  // Warm resume: the process (and the in-memory link intent) can survive a long trip. On every
+  // background -> active transition, consume a fresh-enough fix (5 minute staleness policy in
+  // lib/currentLocation.js) and re-check with age based expiry enabled.
+  useEffect(() => {
+    let prev = AppState.currentState
+    const sub = AppState.addEventListener('change', async (next) => {
+      const resumed = /inactive|background/.test(prev) && next === 'active'
+      prev = next
+      if (!resumed) return
+      let fresh = null
+      try { fresh = (await refreshUserLocation(false))?.coords ?? null } catch (e) { /* keep last fix */ }
+      reconcileHomeMetro({ resumed: true, location: fresh ?? undefined })
+    })
+    return () => sub.remove()
+  }, []) // eslint-disable-line
 
   // Density tier for the "Near you right now" rail — session-cached by
   // getSessionDensityTier, computed against the full item candidate set
@@ -944,6 +1005,11 @@ async function loadNearbyRail(userId) {
   const [homeMemoryModalLoading, setHomeMemoryModalLoading] = useState(false)
   const [homeMemoryModalDetail, setHomeMemoryModalDetail] = useState(null)
   const [homeMemoryModalItemBody, setHomeMemoryModalItemBody] = useState('')
+  const physicalMetro = useMemo(() => (userLocation ? nearestMetroWithinBoundary(userLocation, metros) : null), [userLocation, metros])
+  const homeMetroContext = useMemo(
+    () => deriveHomeMetroContext({ selectedMetro, physicalMetro, hasLiveLocation: Boolean(userLocation) }),
+    [selectedMetro, physicalMetro, userLocation]
+  )
   const whatsGood = useWhatsGood({
     userId: user?.id ?? null,
     rawNearbyItems,
@@ -1146,22 +1212,10 @@ async function loadNearbyRail(userId) {
     return Math.round((end - today) / (1000 * 60 * 60 * 24))
   }
 
-  // Returns a formatted time-left string; null if ended
+  // Returns a formatted time-left string; null if ended, open ended, or a placeholder end date
+  // (lib/seasonCountdown.js).
   function timeLeft(endsAt) {
-    if (!endsAt) return null
-    const days = calDaysLeft(endsAt)
-    if (days < 0) return null
-    if (days === 0) {
-      // Ending today — hour/minute countdown to end of day
-      const endOfDay = new Date(`${endsAt}T23:59:59`)
-      const msLeft   = endOfDay - new Date()
-      if (msLeft <= 0) return 'Ends tonight'
-      const h = Math.floor(msLeft / 3600000)
-      const m = Math.floor((msLeft % 3600000) / 60000)
-      return h > 0 ? `${h}h ${m}m left` : `${m}m left`
-    }
-    if (days === 1) return '1 day left'
-    return `${days} days left`
+    return seasonTimeLeftLabel(endsAt, new Date())
   }
 
   // True when a list is ending within N days (for highlighting)
@@ -1412,7 +1466,9 @@ async function loadNearbyRail(userId) {
           Choose your city
         </Text>
         <Text style={{ color: MUTED, fontSize: 14, textAlign: 'center', paddingHorizontal: 32, marginTop: 8, marginBottom: 20 }}>
-          We couldn't find your location. Pick a city to see local lists and events.
+          {userLocation
+            ? 'CheckOff has not launched near your current location. Pick a city to browse.'
+            : "We couldn't find your location. Pick a city to see local lists and events."}
         </Text>
         <TouchableOpacity
           onPress={() => setMetroPickerVisible(true)}
@@ -1500,6 +1556,7 @@ async function loadNearbyRail(userId) {
               tierProgressFilledDots={filledDots2}
               onProfilePress={() => navigation.navigate('ProfileTab')}
               showProfileStatus={Boolean(user)}
+              metroBadge={homeMetroContext.badge}
             />
 
             {Boolean(user) && (
@@ -1548,6 +1605,7 @@ async function loadNearbyRail(userId) {
               isAdmin={isAdmin}
               diagnostics={whatsGoodDiagnostics}
               onRefreshWhatsGood={refreshWhatsGoodDiagnostics}
+              browsingName={homeMetroContext.kind === HOME_METRO_KIND.BROWSING_UNSUPPORTED_LOCATION ? homeMetroContext.browsingName : null}
             />
           </View>
         )
