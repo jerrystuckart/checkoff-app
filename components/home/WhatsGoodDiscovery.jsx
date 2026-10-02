@@ -58,7 +58,7 @@ const RAIL_CARD_GAP = 12
  * @param {(() => void)|null} [onRefreshWhatsGood]  Passed straight through
  *   to UnsupportedLocationCard's "Refresh What's Good" diagnostics action.
  */
-export default function WhatsGoodDiscovery({ items, navigation, colors, userId = null, coverageMode = null, onExploreCities = null, memoryItemIds = null, onViewMemory = null, isAdmin = false, diagnostics = null, onRefreshWhatsGood = null, browsingName = null }) {
+export default function WhatsGoodDiscovery({ items, navigation, colors, userId = null, coverageMode = null, onExploreCities = null, memoryItemIds = null, onViewMemory = null, isAdmin = false, diagnostics = null, onRefreshWhatsGood = null, browsingName = null, browsingIsNearest = false }) {
   if (coverageMode === COVERAGE_MODE.UNSUPPORTED) {
     return (
       <UnsupportedLocationCard
@@ -72,6 +72,7 @@ export default function WhatsGoodDiscovery({ items, navigation, colors, userId =
         diagnostics={diagnostics}
         onRefreshWhatsGood={onRefreshWhatsGood}
         browsingName={browsingName}
+        browsingIsNearest={browsingIsNearest}
       />
     )
   }

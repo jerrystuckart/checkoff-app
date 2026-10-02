@@ -25,10 +25,10 @@ import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { isItemInSeason } from '../lib/seasonFilter'
 import { useWhatsGood } from '../lib/useWhatsGood'
 import { useCurrentLocation } from '../lib/currentLocation'
-import { resolveHomeMetro, nearestMetroWithinBoundary } from '../lib/metroSelection'
-import { getExplicitMetro, getActiveExplicitMetro, stampExplicitMetroOrigin, clearExplicitMetro, subscribeExplicitMetro, metroForIntent } from '../lib/explicitMetroIntent'
+import { nearestMetroWithinBoundary } from '../lib/metroSelection'
+import { getExplicitMetro, getActiveExplicitMetro, stampExplicitMetroOrigin, shouldClearExactLinkIntent, clearExplicitMetro, subscribeExplicitMetro, metroForIntent } from '../lib/explicitMetroIntent'
 import { seasonTimeLeftLabel } from '../lib/seasonCountdown'
-import { deriveHomeMetroContext, reconcileHomeMetroState, HOME_METRO_KIND } from '../lib/homeMetroContext'
+import { deriveHomeMetroContext, reconcileHomeMetroState, resolveMetroChoice, normalizePersistedMetro, METRO_PROVENANCE, HOME_METRO_KIND } from '../lib/homeMetroContext'
 import { attachActiveCoverImages, attachDisplayEligibleImagePools } from '../lib/coverCandidates'
 import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
 import HomeVisitRecoveryEntry from '../components/home/HomeVisitRecoveryEntry'
@@ -55,6 +55,31 @@ const PURPLE = '#7A4DB3'
 // calculation on the next app open; it is never silently overwritten by
 // location resolution.
 const SELECTED_METRO_SLUG_KEY = 'checkoff_selected_metro_slug'
+// How the persisted slug got there ('manual' | 'nearest' | 'physical'). A slug without it is legacy state.
+const SELECTED_METRO_SOURCE_KEY = 'checkoff_selected_metro_source'
+
+async function readPersistedMetro() {
+  try {
+    const [slug, source] = await Promise.all([
+      AsyncStorage.getItem(SELECTED_METRO_SLUG_KEY),
+      AsyncStorage.getItem(SELECTED_METRO_SOURCE_KEY),
+    ])
+    const { record, legacy } = normalizePersistedMetro({ slug, source })
+    // One time normalization: an untagged slug may have come from an old email link or an auto choice, so it
+    // is dropped instead of being trusted as a deliberate pick. A tagged manual pick is never touched.
+    if (legacy) await AsyncStorage.removeItem(SELECTED_METRO_SLUG_KEY).catch(() => {})
+    return record
+  } catch (e) {
+    return null
+  }
+}
+
+function writePersistedMetro(slug, source) {
+  return Promise.all([
+    AsyncStorage.setItem(SELECTED_METRO_SLUG_KEY, slug),
+    AsyncStorage.setItem(SELECTED_METRO_SOURCE_KEY, source),
+  ]).catch(() => { /* persistence optional */ })
+}
 
 // Per-list ACCENT COLOR (not a gradient) for the "More [Metro] lists" rail
 // — used only when a list has no hero_image_url set. A photo + the shared
@@ -103,6 +128,10 @@ export default function HomeScreen({ navigation }) {
   const [metros, setMetros] = useState([])
   const [metroPickerVisible, setMetroPickerVisible] = useState(false)
   const [selectedMetro, setSelectedMetro] = useState(null)
+  // Why selectedMetro is selected: 'link' | 'manual' | 'nearest' | 'physical' (lib/homeMetroContext.js).
+  const [selectedProvenance, setSelectedProvenanceState] = useState(null)
+  const selectedProvenanceRef = useRef(null)
+  function setSelectedProvenance(p) { selectedProvenanceRef.current = p; setSelectedProvenanceState(p) }
   // Set when resolveHomeMetro returns reason: 'needs_selection' — no
   // explicit persisted choice AND location denied/unavailable/timed out.
   // Distinct from the initial loading window: `loading` covers "still
@@ -204,8 +233,9 @@ export default function HomeScreen({ navigation }) {
       if (!intent) return
       const linked = metroForIntent(intent, metros)
       if (!linked) return
-      if (selectedMetro?.id === linked.id) { selectedFromLinkRef.current = true; return }
-      selectedFromLinkRef.current = true
+      if (selectedMetro?.id === linked.id && selectedProvenanceRef.current === METRO_PROVENANCE.LINK) return
+      setSelectedProvenance(METRO_PROVENANCE.LINK)
+      if (selectedMetro?.id === linked.id) return
       setSelectedMetro(linked)
       setNeedsMetroSelection(false)
       loadForMetro(linked.id, user?.id, linked.slug)
@@ -229,7 +259,7 @@ export default function HomeScreen({ navigation }) {
       // choice in parallel — banner never blocks the screen, and the
       // persisted choice (if present) short-circuits the GPS lookup below
       // entirely, per resolveHomeMetro's precedence.
-      const [{ data: metroData }, { data: n10Data }, persistedSlug] = await Promise.all([
+      const [{ data: metroData }, { data: n10Data }, persisted] = await Promise.all([
         supabase
           .from('metro_areas')
           .select('id, name, state, slug, center_lat, center_lng, boundary_radius_km')
@@ -241,7 +271,7 @@ export default function HomeScreen({ navigation }) {
           .eq('audience_group', 'the-next-10')
           .eq('is_active', true)
           .maybeSingle(),
-        AsyncStorage.getItem(SELECTED_METRO_SLUG_KEY).catch(() => null),
+        readPersistedMetro(),
       ])
 
       setNextTenList(n10Data ?? null)
@@ -309,14 +339,16 @@ export default function HomeScreen({ navigation }) {
       // replaced THAT — each was rejected in turn as still being a silent,
       // arbitrary (or, for the "always wins" rule, permanently stale)
       // metro default.
-      let { metro: defaultMetro, reason: metroReason } = resolveHomeMetro({
-        persistedSlug,
+      // One precedence-aware resolution (lib/homeMetroContext.js resolveMetroChoice): link intent, then the
+      // physical metro, then a deliberate manual pick, then the NEAREST launched metro when the phone is
+      // outside every one (previously this left no metro or a stale one), then the last known automatic
+      // choice when location is unavailable.
+      let { metro: defaultMetro, provenance: metroProvenance, reason: metroReason } = resolveMetroChoice({
         metros,
         location: locationResult,
         locationState,
-        // An explicit link (email / shared item, list or metro link) outranks the persisted choice, live
-        // location and the nearest metro. See lib/explicitMetroIntent.js for the full precedence.
-        explicitLinkMetro: getActiveExplicitMetro({ location: locationResult, resumed: true }),
+        activeIntent: getActiveExplicitMetro({ location: locationResult, resumed: true }),
+        persisted,
       })
 
       // Destination zone check — only meaningful with a real fix, and only
@@ -375,27 +407,17 @@ export default function HomeScreen({ navigation }) {
       // overwritten by the resolution above.
       {
         const linked = metroForIntent(getActiveExplicitMetro({ location: locationResult, resumed: true }), metros)
-        if (linked) { defaultMetro = linked; metroReason = 'explicit_link' }
+        if (linked) { defaultMetro = linked; metroProvenance = METRO_PROVENANCE.LINK; metroReason = 'link' }
       }
 
-      selectedFromLinkRef.current = metroReason === 'explicit_link'
+      setSelectedProvenance(metroProvenance)
       if (defaultMetro) {
         setSelectedMetro(defaultMetro)
         await loadForMetro(defaultMetro.id, authUser?.id, defaultMetro.slug)
-        // Live location just won over a DIFFERENT (stale) persisted slug —
-        // update AsyncStorage to match so the stale value stops fighting
-        // every future resolution (requirement: stale persisted selections
-        // are cleared/updated automatically, no reinstall/manual-clear
-        // needed). Only writes when something actually changed, and only
-        // ever overwrites with the metro real GPS just resolved to — never
-        // an arbitrary/guessed value.
-        if (metroReason === 'nearest' && persistedSlug &&
-            String(persistedSlug).toLowerCase() !== (defaultMetro.slug ?? '').toLowerCase()) {
-          try {
-            await AsyncStorage.setItem(SELECTED_METRO_SLUG_KEY, defaultMetro.slug)
-          } catch (e) {
-            /* persistence optional — resolution still correct for this session */
-          }
+        // Automatic choices (physical / nearest) are remembered as the last known metro for when location is
+        // unavailable; they are tagged so they are never mistaken for a deliberate pick. A link is never saved.
+        if (metroProvenance === METRO_PROVENANCE.PHYSICAL || metroProvenance === METRO_PROVENANCE.NEAREST) {
+          await writePersistedMetro(defaultMetro.slug, metroProvenance)
         }
       } else if (metroReason === 'needs_selection') {
         setNeedsMetroSelection(true)
@@ -806,7 +828,7 @@ async function loadNearbyRail(userId) {
   async function switchMetro(metro) {
     // A manual pick is the newest explicit action, so it replaces any link intent.
     clearExplicitMetro('manual')
-    selectedFromLinkRef.current = false
+    setSelectedProvenance(METRO_PROVENANCE.MANUAL)
     setSelectedMetro(metro)
     // An actual user pick always resolves the needs_selection state, same
     // as any other explicit choice.
@@ -815,13 +837,7 @@ async function loadNearbyRail(userId) {
     // every future app open (see SELECTED_METRO_SLUG_KEY / resolveHomeMetro)
     // — an intentional user override must stick until they change it again.
     const slug = metro?.slug ?? metro?.name?.toLowerCase().replace(/\s+metro/i, '').trim()
-    if (slug) {
-      try {
-        await AsyncStorage.setItem(SELECTED_METRO_SLUG_KEY, slug)
-      } catch (e) {
-        /* persistence optional — selection still works for this session */
-      }
-    }
+    if (slug) await writePersistedMetro(slug, METRO_PROVENANCE.MANUAL)
     await loadForMetro(metro.id, user?.id, metro.slug)
   }
 
@@ -892,49 +908,58 @@ async function loadNearbyRail(userId) {
   // metro (London, New York), so a link-derived Amalfi selection was never revisited, and it only noticed a
   // physical metro change when a PREVIOUS metro had also been seen, so arriving in Phoenix from an
   // unsupported place never adopted Phoenix until the next cold start.
-  const selectedFromLinkRef = useRef(false)
   const lastPhysicalMetroIdRef = useRef(undefined)
   const metroStateRef = useRef({})
-  metroStateRef.current = { metros, selectedMetro, userLocation, user }
+  metroStateRef.current = { metros, selectedMetro, userLocation, user, loading }
 
   async function reconcileHomeMetro({ resumed = false, location } = {}) {
     // The only await comes first, so everything below reads current state and runs without interleaving.
-    let persistedSlug = null
-    try { persistedSlug = await AsyncStorage.getItem(SELECTED_METRO_SLUG_KEY) } catch (e) { /* optional */ }
-    const { metros: ms, selectedMetro: sel, userLocation: storeLoc, user: u } = metroStateRef.current
+    const persisted = await readPersistedMetro()
+    const { metros: ms, selectedMetro: sel, userLocation: storeLoc, user: u, loading: initLoading } = metroStateRef.current
     const loc = location ?? storeLoc
-    if (ms.length === 0) return
+    if (ms.length === 0 || initLoading) return // init() owns the first resolution
     if (loc) stampExplicitMetroOrigin(loc)
+    // Clearing an expired intent here is immediately followed by the re-resolve below: the selection that
+    // came from the link (provenance 'link') is never left behind.
     const intent = getActiveExplicitMetro({ location: loc, resumed })
     const next = reconcileHomeMetroState({
       metros: ms,
       selectedMetro: sel,
-      selectedFromLink: selectedFromLinkRef.current,
+      provenance: selectedProvenanceRef.current,
       lastPhysicalMetroId: lastPhysicalMetroIdRef.current,
       activeIntent: intent,
       location: loc,
-      persistedSlug,
+      persisted,
     })
     lastPhysicalMetroIdRef.current = next.lastPhysicalMetroId
-    selectedFromLinkRef.current = next.selectedFromLink
     if (next.action === 'keep') return
-    // adopt-physical (travelled to / returned to a launched metro) or re-resolve (link intent expired).
+    setSelectedProvenance(next.provenance)
     if (next.selectedMetro) {
       setNeedsMetroSelection(false)
       if (next.selectedMetro.id !== sel?.id) {
         setSelectedMetro(next.selectedMetro)
         loadForMetro(next.selectedMetro.id, u?.id, next.selectedMetro.slug)
       }
-      if (next.persistSlug) {
-        AsyncStorage.setItem(SELECTED_METRO_SLUG_KEY, next.persistSlug).catch(() => {
-          /* persistence optional — resolution still correct for this session */
-        })
-      }
+      if (next.persist) writePersistedMetro(next.persist.slug, next.persist.source)
     } else {
       setSelectedMetro(null)
       setNeedsMetroSelection(next.needsMetroSelection)
     }
   }
+
+  // Closing an exact item / list link flow: when Home regains focus after the flow, drop that link's metro
+  // intent and re-resolve (a metro link is a browsing request and stays until it expires).
+  const homeFocusRef = useRef({ previousFocusAt: 0, lastBlurAt: 0 })
+  useEffect(() => {
+    const onBlur = navigation.addListener('blur', () => { homeFocusRef.current.lastBlurAt = Date.now() })
+    const onFocus = navigation.addListener('focus', () => {
+      const f = homeFocusRef.current
+      if (shouldClearExactLinkIntent(getExplicitMetro(), f)) clearExplicitMetro('flow-closed')
+      f.previousFocusAt = Date.now()
+      reconcileHomeMetro()
+    })
+    return () => { onBlur(); onFocus() }
+  }, [navigation]) // eslint-disable-line
 
   useEffect(() => {
     if (loading) return // init() owns the first resolution; this only RE-checks after it
@@ -1007,8 +1032,8 @@ async function loadNearbyRail(userId) {
   const [homeMemoryModalItemBody, setHomeMemoryModalItemBody] = useState('')
   const physicalMetro = useMemo(() => (userLocation ? nearestMetroWithinBoundary(userLocation, metros) : null), [userLocation, metros])
   const homeMetroContext = useMemo(
-    () => deriveHomeMetroContext({ selectedMetro, physicalMetro, hasLiveLocation: Boolean(userLocation) }),
-    [selectedMetro, physicalMetro, userLocation]
+    () => deriveHomeMetroContext({ selectedMetro, physicalMetro, hasLiveLocation: Boolean(userLocation), provenance: selectedProvenance }),
+    [selectedMetro, physicalMetro, userLocation, selectedProvenance]
   )
   const whatsGood = useWhatsGood({
     userId: user?.id ?? null,
@@ -1605,7 +1630,8 @@ async function loadNearbyRail(userId) {
               isAdmin={isAdmin}
               diagnostics={whatsGoodDiagnostics}
               onRefreshWhatsGood={refreshWhatsGoodDiagnostics}
-              browsingName={homeMetroContext.kind === HOME_METRO_KIND.BROWSING_UNSUPPORTED_LOCATION ? homeMetroContext.browsingName : null}
+              browsingName={homeMetroContext.kind === HOME_METRO_KIND.BROWSING_UNSUPPORTED_LOCATION || homeMetroContext.kind === HOME_METRO_KIND.NEAREST_CITY_UNSUPPORTED_LOCATION ? homeMetroContext.browsingName : null}
+              browsingIsNearest={homeMetroContext.kind === HOME_METRO_KIND.NEAREST_CITY_UNSUPPORTED_LOCATION}
             />
           </View>
         )

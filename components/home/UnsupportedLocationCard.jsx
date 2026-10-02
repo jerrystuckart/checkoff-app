@@ -53,8 +53,8 @@ const RAIL_CARD_GAP = 12
  *   refresh (see HomeScreen.jsx's `refreshWhatsGoodDiagnostics`). Only
  *   rendered/used inside the admin diagnostics section.
  */
-export default function UnsupportedLocationCard({ coverageMode, items, navigation, colors, userId = null, onExploreCities = null, isAdmin = false, diagnostics = null, onRefreshWhatsGood = null, browsingName = null }) {
-  const state = deriveUnsupportedLocationCardState({ coverageMode, items, browsingName })
+export default function UnsupportedLocationCard({ coverageMode, items, navigation, colors, userId = null, onExploreCities = null, isAdmin = false, diagnostics = null, onRefreshWhatsGood = null, browsingName = null, browsingIsNearest = false }) {
+  const state = deriveUnsupportedLocationCardState({ coverageMode, items, browsingName, browsingIsNearest })
   const { width: windowWidth } = useWindowDimensions()
   const cardWidth = computeRailCardWidth(windowWidth, SECTION_HORIZONTAL_PADDING)
   const hasTrackedView = useRef(false)
