@@ -20,3 +20,9 @@ Later, for Android visit recovery: ACCESS_BACKGROUND_LOCATION (Play permissions 
 foreground service type "location" if a service is used (declaration), expo-location background plugin flags, Android geofencing or
 activity-recognition design (the iOS native movement module has no Android twin), battery/Doze testing on several OEMs, privacy policy and
 Data safety updates, add 'android' to VISIT_RECOVERY_PLATFORMS, and a physical walk test like the iOS field tests.
+
+## Build and submit
+EAS build 9b58e190-5fca-4f19-8ac7-ef5a7d0af9be (production, commit bc45eb7): 1.1.10, versionCode 18, runtime 56c5f2cd23878dd4083475b052989216e4c3ae11,
+signed with the EAS upload key 95:3C:...:C8:C9, Sentry release com.getcheckoff.app@1.1.10+18 (dist 18), source maps uploaded (debug id f2424f31-...).
+Play upload NOT done: EAS has no Google Service Account Key (cannot be configured non-interactively). Internal-testing submit profile added to eas.json.
+Later, interactively: npx eas-cli submit --platform android --profile android-internal --id 9b58e190-5fca-4f19-8ac7-ef5a7d0af9be
