@@ -59,6 +59,12 @@ const RAIL_CARD_GAP = 12
  *   to UnsupportedLocationCard's "Refresh What's Good" diagnostics action.
  */
 export default function WhatsGoodDiscovery({ items, navigation, colors, userId = null, coverageMode = null, onExploreCities = null, memoryItemIds = null, onViewMemory = null, isAdmin = false, diagnostics = null, onRefreshWhatsGood = null, browsingName = null, browsingIsNearest = false }) {
+  // Hooks must run on EVERY render, before any early return. This used to sit below the two early returns, so the
+  // hook set changed when items arrived (or coverage mode flipped), which React dev reports as "Internal React
+  // error: Expected static flag was missing."
+  const { width: windowWidth } = useWindowDimensions()
+  const cardWidth = computeRailCardWidth(windowWidth, SECTION_HORIZONTAL_PADDING)
+
   if (coverageMode === COVERAGE_MODE.UNSUPPORTED) {
     return (
       <UnsupportedLocationCard
@@ -79,8 +85,6 @@ export default function WhatsGoodDiscovery({ items, navigation, colors, userId =
 
   if (!items || items.length === 0) return null
   const { TEXT } = colors
-  const { width: windowWidth } = useWindowDimensions()
-  const cardWidth = computeRailCardWidth(windowWidth, SECTION_HORIZONTAL_PADDING)
 
   return (
     <View style={styles.wrapper}>

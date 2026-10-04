@@ -504,12 +504,14 @@ function RailCard({ item, index, colors, onPress, userId, cardWidth, cardHeight,
 }
 
 export default function EditorialCard({ item, onPress, colors, variant = 'primary', userId = null, index = 0, cardWidth, cardHeight, navigation = null, hasMemory = false, onViewMemory = null }) {
+  // Hook first (before the null-item early return) so the hook set is identical on every render — it tolerates a
+  // null item. A conditional hook shows up in React dev as "Expected static flag was missing".
+  const artwork = useCardArtwork(item, userId)
   if (!item) return null
 
   const isSpecial = isSpecialItemPresentation(item)
   const { venueName, thing } = deriveVenueAndThing(item)
   const meta = metaLine(item)
-  const artwork = useCardArtwork(item, userId)
 
   // Check-In Memory Viewer (2026-09-23) — hasMemory/onViewMemory are only
   // wired into the 'row' variant for now (the natural attachment point
