@@ -19,6 +19,7 @@ import * as Sentry from '@sentry/react-native'
 import * as Updates from 'expo-updates'
 import { clearWhatsGoodSession } from '../lib/whatsGoodSessionCache'
 import { haversineMeters } from '../lib/distance'
+import { pickNearbyZone } from '../lib/hubLocationSection'
 import { getSessionDensityTier } from '../lib/densityTier'
 import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
 import { filterMaskedBonusDrops } from '../lib/bonusDrops'
@@ -170,7 +171,7 @@ export default function HomeScreen({ navigation }) {
   const [heroImage, setHeroImage] = useState(null)
   const [recapModal, setRecapModal] = useState(null) // { count, pts, streak, weekStartIso }
   const [featuredCreators, setFeaturedCreators] = useState([])
-  const [nearbyZone, setNearbyZone] = useState(null)
+  const [destinationZones, setDestinationZones] = useState([])
   const [zoneBannerDismissed, setZoneBannerDismissed] = useState(false)
 
   // "Near you right now" rail — userLocation comes from the shared
@@ -180,6 +181,25 @@ export default function HomeScreen({ navigation }) {
   // after the user has traveled while the app was backgrounded. See
   // requestFreshLocation() call in the RefreshControl below.
   const { location: userLocation, refreshLocation: refreshUserLocation } = useCurrentLocation()
+
+  // Destination Hub arrival card. Zones are public data (RLS: active zones readable by everyone, so this works for
+  // guests); the match is recomputed from the LIVE shared location, so it appears on entering a zone and disappears
+  // on leaving it, whether or not the location changed after launch.
+  async function loadDestinationZones() {
+    try {
+      let zoneQuery = supabase
+        .from('destination_zones')
+        // destinations(hero_image_url) feeds DestinationHero; destination_zones has exactly one FK to destinations.
+        .select('id, name, slug, banner_title, banner_subtitle, center_lat, center_lng, radius_km, destination_id, is_active, curated_list_id, destinations(hero_image_url)')
+      if (!__DEV__) zoneQuery = zoneQuery.eq('is_active', true)
+      const { data, error } = await zoneQuery
+      if (!error) setDestinationZones(data ?? [])
+    } catch (e) { /* zone card is optional */ }
+  }
+  useEffect(() => { loadDestinationZones() }, []) // eslint-disable-line
+  const nearbyZone = useMemo(() => pickNearbyZone(userLocation, destinationZones), [userLocation, destinationZones])
+  // Dismissal is session-only; a different zone (or leaving and re-entering) shows the card again.
+  useEffect(() => { setZoneBannerDismissed(false) }, [nearbyZone?.id])
   const [sessionTier, setSessionTier] = useState(null)
   const [rawNearbyItems, setRawNearbyItems] = useState([]) // unsorted candidate pool
   const [checkedItemIds, setCheckedItemIds] = useState(new Set())
@@ -352,49 +372,9 @@ export default function HomeScreen({ navigation }) {
         persisted,
       })
 
-      // Destination zone check — only meaningful with a real fix, and only
-      // when we actually looked one up (skipped entirely for an explicit
-      // persisted metro choice, same as above).
-      if (locationResult) {
-        const { latitude: uLat, longitude: uLng } = locationResult
-        try {
-          let zoneQuery = supabase
-            .from('destination_zones')
-            // destinations(hero_image_url) added for the 2026 redesign's
-            // DestinationHero — additive only, legacy zoneBanner ignores
-            // it. Investigate + Restore Destination Hub Hero (2026-09-03):
-            // this previously (incorrectly) embedded curated_lists
-            // (hero_image_url), a column that does not exist on
-            // curated_lists at all — the embed made the WHOLE query
-            // throw a 400, silently swallowed by the catch below, so
-            // nearbyZone never got set regardless of any admin toggle.
-            // The Destination's hero image actually lives on
-            // destinations.hero_image_url (see the admin tool's
-            // Destinations tab image upload) — destination_zones has
-            // exactly one FK to destinations, so no embed hint is needed.
-            .select('id, name, slug, banner_title, banner_subtitle, center_lat, center_lng, radius_km, destination_id, is_active, curated_list_id, destinations(hero_image_url)')
-          if (!__DEV__) {
-            zoneQuery = zoneQuery.eq('is_active', true)
-          }
-          const { data: zones } = await zoneQuery
-
-          const hit = (zones ?? []).find(z =>
-            haversineMeters(uLat, uLng, z.center_lat, z.center_lng) <= z.radius_km * 1000
-          )
-
-          if (hit) {
-            // Dismissal is session-only (zoneBannerDismissed local state) —
-            // no persisted flag to check here, so the banner always shows
-            // on a fresh cold launch while the user is still in range.
-            if (__DEV__ && !hit.is_active) {
-              console.log('[DEBUG] destination zone bypass — showing INACTIVE zone in dev build:', hit.name, hit.id)
-            }
-            setNearbyZone(hit)
-          }
-        } catch (e) {
-          /* zone check optional */
-        }
-      }
+      // Destination zone: no longer evaluated here. It used to run once, from this cold-start fix only, so a location
+      // that changed after launch switched the metro but never showed (or cleared) the Hub arrival card. It is now
+      // derived reactively from the shared location (see `nearbyZone` below).
 
       // A 'needs_selection' resolution (location genuinely denied/
       // unavailable/timed out, no persisted choice) means NO metro is
