@@ -70,3 +70,11 @@ Not provable without a phone: real geofence delivery, Doze, OEM behavior, the sy
 6. Deny test: revoke Location in Settings: card says Turn on Location; set While using: card says Turn on Allow all the time; turn Location Services off: services off message.
 7. Turn off and delete visits: suggestions disappear, task registered = no. Sign out and in as another account: no candidates from the first.
 8. Reboot the phone, open nothing for 10 minutes, then check the debug panel: task registered (restored).
+
+## 10. Build record
+EAS build 25a22852-749f-4ebc-9224-f76cb5e24eb6, commit d584d17, 1.1.10 versionCode 19, runtime 53ba13b59fec2f2667b5ce1f9568e19f8f5076b3,
+signed with the EAS upload key 95:3C:29:...:C8:C9, Sentry release com.getcheckoff.app@1.1.10+19 (source maps uploaded, debug id a67cbfe7-...).
+Manifest permissions added: ACCESS_BACKGROUND_LOCATION (RECEIVE_BOOT_COMPLETED from expo-notifications, as before). No FOREGROUND_SERVICE* permission.
+Library note: expo-location declares an unused LocationTaskService (foregroundServiceType=location) in its own manifest; it is never started by geofencing.
+Play upload: blocked, EAS has no Google Play service account key. Manual: Play Console > Internal testing > Create release > upload the AAB.
+Later (interactive): npx eas-cli submit --platform android --profile android-internal --id 25a22852-749f-4ebc-9224-f76cb5e24eb6
