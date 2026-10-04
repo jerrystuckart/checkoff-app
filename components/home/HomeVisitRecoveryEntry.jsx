@@ -15,64 +15,25 @@
 // intro/needsPermission/paused, already shown elsewhere) — no new wording
 // invented for this surface, per product direction.
 
-import React, { useCallback, useState } from 'react'
+import React from 'react'
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
-import { useFocusEffect } from '@react-navigation/native'
-import { Platform } from 'react-native'
-import { isFlagEnabled } from '../../lib/featureFlags'
-import { hasBackgroundLocationPermission } from '../../lib/visitDetection/permissions'
-import { fetchOptIn, countPendingSuggestions, subscribeRecoveryChange, subscribeCandidatesChange } from '../../lib/visitDetection/recoverySettings'
-import { recoveryCardState, RECOVERY_COPY } from '../../lib/visitDetection/recoveryPolicy'
+import { RECOVERY_COPY } from '../../lib/visitDetection/recoveryPolicy'
 import { openVisitInbox } from '../../lib/visitDetection/inboxNavigation'
+import { useVisitRecovery } from '../../lib/visitDetection/useVisitRecovery'
 
+// Renders nothing where visit recovery is unsupported (Android) and nothing until the permission-aware state is known.
+// The status line comes from lib/visitDetection/recoveryState.js: it says "On" only when recovery can actually work.
 export default function HomeVisitRecoveryEntry({ userId, navigation, colors }) {
   const { CARD, TEXT, MUTED, BORDER, AMBER } = colors
-  const [loaded, setLoaded] = useState(false)
-  const [st, setSt] = useState({ flagEnabled: false, optedIn: false, backgroundGranted: false, suggestionCount: 0 })
+  const { supported, loaded, resolved, runCta } = useVisitRecovery(userId)
 
-  const load = useCallback(async () => {
-    if (!userId) return
-    try {
-      const [flagEnabled, optedIn, backgroundGranted, suggestionCount] = await Promise.all([
-        isFlagEnabled(userId, 'candidate_visit_detection'),
-        fetchOptIn(userId),
-        hasBackgroundLocationPermission().catch(() => false),
-        countPendingSuggestions(userId),
-      ])
-      setSt({ flagEnabled, optedIn, backgroundGranted, suggestionCount })
-    } catch (e) {
-      console.warn('HomeVisitRecoveryEntry load failed:', e?.message ?? e)
-    } finally {
-      setLoaded(true)
-    }
-  }, [userId])
+  if (!supported || !userId || !loaded || !resolved.visible) return null
 
-  useFocusEffect(useCallback(() => { load() }, [load]))
-  React.useEffect(() => {
-    const offA = subscribeRecoveryChange(load)
-    const offB = subscribeCandidatesChange(load)
-    return () => { offA(); offB() }
-  }, [load])
-
-  if (!userId || !loaded) return null
-
-  const cardState = recoveryCardState({ ...st, platformOS: Platform.OS })
-  // Same hide condition as Profile's card section: not offered to this user
-  // (flag off, and they haven't opted in) or the platform can't do it yet.
-  if (cardState === 'hidden' || cardState === 'unsupported_platform') return null
-
-  const subtitle =
-    cardState === 'on'
-      ? (st.suggestionCount > 0
-          ? `${st.suggestionCount} place${st.suggestionCount === 1 ? '' : 's'} waiting for you to check off`
-          : 'On — nothing to review right now')
-      : cardState === 'needs_permission'
-        ? RECOVERY_COPY.needsPermission
-        : cardState === 'paused'
-          ? RECOVERY_COPY.paused
-          : RECOVERY_COPY.intro // 'off'
+  const subtitle = resolved.state === 'off' ? RECOVERY_COPY.intro : resolved.status
+  const st = { suggestionCount: resolved.suggestionCount }
 
   return (
+    <View>
     <TouchableOpacity
       style={[styles.row, { backgroundColor: CARD, borderColor: BORDER }]}
       onPress={() => openVisitInbox(navigation.getParent?.() ?? navigation)}
@@ -91,6 +52,12 @@ export default function HomeVisitRecoveryEntry({ userId, navigation, colors }) {
       )}
       <Text style={[styles.chevron, { color: MUTED }]}>›</Text>
     </TouchableOpacity>
+    {resolved.cta ? (
+      <TouchableOpacity style={[styles.cta, { backgroundColor: AMBER }]} onPress={runCta} activeOpacity={0.85} accessibilityRole="button">
+        <Text style={styles.ctaText}>{resolved.cta.label}</Text>
+      </TouchableOpacity>
+    ) : null}
+    </View>
   )
 }
 
@@ -113,4 +80,6 @@ const styles = StyleSheet.create({
   badge: { borderRadius: 10, paddingHorizontal: 8, paddingVertical: 2, marginRight: 4 },
   badgeText: { color: '#1A1A2E', fontWeight: '800', fontSize: 12 },
   chevron: { fontSize: 20 },
+  cta: { marginHorizontal: 16, marginTop: 8, borderRadius: 12, paddingVertical: 10, alignItems: 'center' },
+  ctaText: { color: '#1A1A2E', fontWeight: '800', fontSize: 13 },
 })
