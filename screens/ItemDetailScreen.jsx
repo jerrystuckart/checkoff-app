@@ -46,7 +46,10 @@ import { useSavedItems } from '../lib/SavedItemsContext'
 import BookmarkIcon from '../components/BookmarkIcon'
 import { deriveTitlePresentation } from '../lib/detailTitlePresentation'
 import { isTripModeAvailableForList, isTripModeWindowOpen, DEFAULT_TRIP_MODE_GRACE_DAYS } from '../lib/tripMode'
-import { shouldShowTripModeEntry } from '../lib/tripModeCheckOffFlow'
+import { deriveTripContext, findRecentVisitCandidate, resolveRetroAction, CHECK_OFF_LABELS } from '../lib/itemCheckOffActions'
+import { supportsVisitRecovery } from '../lib/visitDetection/recoveryPolicy'
+import { loadActionableCandidates } from '../lib/visitDetection/actionableCandidates'
+import { openVisitInbox } from '../lib/visitDetection/inboxNavigation'
 import TripModeCheckOffSheet from '../components/TripModeCheckOffSheet'
 
 const AMBER = '#F5A623'
@@ -256,6 +259,10 @@ export default function ItemDetailScreen({ route, navigation }) {
   // (same shape as screens/JoinListScreen.jsx:110-117's membership check).
   const [tripModeListMeta, setTripModeListMeta] = useState(null) // { tripModeEnabled, graceDays, startsAt, endsAt, timezone }
   const [isListMember, setIsListMember] = useState(false)
+  // The list_item row named by the route was verified to belong to THIS list and THIS item (never trusted from params).
+  const [listItemVerified, setListItemVerified] = useState(false)
+  // Actionable candidate visits for this user (iOS only; see lib/itemCheckOffActions.js findRecentVisitCandidate).
+  const [recoverableVisits, setRecoverableVisits] = useState([])
   const [tripModeSheetVisible, setTripModeSheetVisible] = useState(false)
   // Item Detail Corrective Pass (2026-09-18) — "Invite someone" opens this
   // on-demand channel sheet rather than the old permanently-inline channel
@@ -306,6 +313,17 @@ export default function ItemDetailScreen({ route, navigation }) {
 
   const isAtPlaceForItem = isAtPlace(item, detailUserLocation)
 
+  // Recoverable visits (iOS only). Authoritative filtering lives in loadActionableCandidates; the server still validates
+  // any confirmation. Universal items never get a candidate, so nothing is fetched for them.
+  useEffect(() => {
+    let cancelled = false
+    if (!userId || !supportsVisitRecovery(Platform.OS) || (item?.is_universal ?? item?.isUniversal)) { setRecoverableVisits([]); return undefined }
+    loadActionableCandidates(supabase, userId)
+      .then(({ rows }) => { if (!cancelled) setRecoverableVisits(rows ?? []) })
+      .catch(() => { if (!cancelled) setRecoverableVisits([]) })
+    return () => { cancelled = true }
+  }, [userId, item?.id]) // eslint-disable-line
+
   // Trip Mode MVP (2026-09-23) — derived, not stateful: recomputed on every
   // render from tripModeListMeta/isListMember/isAtPlaceForItem, all of
   // which already have their own state/effects above. `atVenue` reuses the
@@ -328,12 +346,23 @@ export default function ItemDetailScreen({ route, navigation }) {
     tripModeEnabled: tripModeListMeta?.tripModeEnabled ?? false,
     isMember: isListMember,
   })
-  const showTripModeEntry = !!item?.listItemId && shouldShowTripModeEntry({
-    tripModeEnabled: tripModeListMeta?.tripModeEnabled ?? false,
+  // Retrospective affordance (lib/itemCheckOffActions.js): a verified recent visit for this exact item, else genuine
+  // trip context verified against the list, else none. The ordinary action is always the primary one.
+  const tripContext = deriveTripContext({
+    routeListId: listId ?? null,
+    list: tripModeListMeta,
     isMember: isListMember,
-    windowOpen: tripModeWindowOpenNow,
+    listItemVerified,
     atVenue: isAtPlaceForItem,
   })
+  const recentCandidate = findRecentVisitCandidate({
+    candidates: recoverableVisits,
+    itemId: item?.id,
+    isUniversal: item?.is_universal ?? item?.isUniversal ?? false,
+    recoverySupported: supportsVisitRecovery(Platform.OS),
+  })
+  const retroAction = resolveRetroAction({ recentCandidate, trip: tripContext })
+  const showTripModeEntry = retroAction.kind === 'trip' && !!item?.listItemId
 
   // Fires once a TripModeCheckOffSheet submission is confirmed written
   // (fresh insert or a resolved 23505 collision) — same post-success shape
@@ -622,7 +651,7 @@ export default function ItemDetailScreen({ route, navigation }) {
       // membership check. Both run in parallel with the existing query,
       // adding exactly one new round-trip (the membership check) rather
       // than two.
-      const [{ data: listData }, { data: membershipRow }] = await Promise.all([
+      const [{ data: listData }, { data: membershipRow }, { data: listItemRow }] = await Promise.all([
         supabase
           .from('lists')
           .select('invite_code, trip_mode_enabled, trip_mode_grace_days, starts_at, ends_at, metro_id, metro_areas(timezone)')
@@ -631,10 +660,15 @@ export default function ItemDetailScreen({ route, navigation }) {
         uid
           ? supabase.from('list_members').select('id').eq('list_id', listId).eq('user_id', uid).maybeSingle()
           : Promise.resolve({ data: null }),
+        item?.listItemId
+          ? supabase.from('list_items').select('id').eq('id', item.listItemId).eq('list_id', listId).eq('item_id', currentItemId).maybeSingle()
+          : Promise.resolve({ data: null }),
       ])
       if (isStale()) return
       setListInviteCode(listData?.invite_code ?? null)
+      setListItemVerified(!!listItemRow)
       setTripModeListMeta({
+        id: listId,
         tripModeEnabled: listData?.trip_mode_enabled ?? false,
         graceDays: listData?.trip_mode_grace_days ?? DEFAULT_TRIP_MODE_GRACE_DAYS,
         startsAt: listData?.starts_at ?? null,
@@ -1718,7 +1752,7 @@ export default function ItemDetailScreen({ route, navigation }) {
             <ActivityIndicator color={checked ? '#fff' : NAVY} />
           ) : (
             <Text style={[styles.primaryDoneBtnText, checked && styles.primaryDoneBtnTextChecked]}>
-              {checked ? 'DONE ✓' : "I'VE DONE THIS"}
+              {checked ? 'DONE ✓' : CHECK_OFF_LABELS.ordinary}
             </Text>
           )}
         </TouchableOpacity>
@@ -1795,6 +1829,20 @@ export default function ItemDetailScreen({ route, navigation }) {
           the only offer, unchanged. Visually and textually distinct from
           the live "I'VE DONE THIS"/"You are here" language on purpose —
           never implies location was verified. */}
+      {retroAction.kind === 'recent' ? (
+        <TouchableOpacity
+          style={styles.tripModeEntryBtn}
+          onPress={() => {
+            trackEvent('recent_visit_entry_tap', { itemId: item?.id })
+            openVisitInbox(navigation.getParent?.() ?? navigation, recentCandidate.candidateVisitId)
+          }}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel={CHECK_OFF_LABELS.recent}
+        >
+          <Text style={styles.tripModeEntryBtnText}>{CHECK_OFF_LABELS.recent}</Text>
+        </TouchableOpacity>
+      ) : null}
       {showTripModeEntry ? (
         <TouchableOpacity
           style={styles.tripModeEntryBtn}
@@ -1804,9 +1852,9 @@ export default function ItemDetailScreen({ route, navigation }) {
           }}
           activeOpacity={0.85}
           accessibilityRole="button"
-          accessibilityLabel="Check off from this trip"
+          accessibilityLabel={CHECK_OFF_LABELS.trip}
         >
-          <Text style={styles.tripModeEntryBtnText}>Check off from this trip</Text>
+          <Text style={styles.tripModeEntryBtnText}>{CHECK_OFF_LABELS.trip}</Text>
         </TouchableOpacity>
       ) : null}
 

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   View, Text, ScrollView, TouchableOpacity, StyleSheet,
   ActivityIndicator, Alert, RefreshControl, Switch, StatusBar, Share,
-  Animated, Modal, Pressable,
+  Animated, Modal, Pressable, Platform,
 } from 'react-native'
 import * as Haptics from 'expo-haptics'
 import { getTierByName, getNextTier, getTierProgress } from '../lib/tiers'
@@ -16,6 +16,7 @@ import { useTheme } from '../lib/ThemeContext'
 import * as Sentry from '@sentry/react-native'
 import VisitDetectionDebugPanel from '../components/VisitDetectionDebugPanel'
 import VisitRecoverySection from '../components/VisitRecoverySection'
+import { supportsVisitRecovery } from '../lib/visitDetection/recoveryPolicy'
 
 export default function ProfileScreen({ navigation }) {
   const insets = useSafeAreaInsets()
@@ -367,7 +368,7 @@ export default function ProfileScreen({ navigation }) {
           <View style={styles.adminBadge}><Text style={styles.adminBadgeText}>⚙ Admin</Text></View>
         )}
         <VisitRecoverySection userId={user?.id} navigation={navigation} />
-        {profile?.visit_detection_tester && (
+        {supportsVisitRecovery(Platform.OS) && profile?.visit_detection_tester && (
           <VisitDetectionDebugPanel userId={user?.id} />
         )}
         {/* Tier badge pill */}
