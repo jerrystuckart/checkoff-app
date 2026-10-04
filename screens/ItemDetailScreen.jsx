@@ -353,6 +353,7 @@ export default function ItemDetailScreen({ route, navigation }) {
     list: tripModeListMeta,
     isMember: isListMember,
     listItemVerified,
+    itemActive: item?.is_active ?? true,
     atVenue: isAtPlaceForItem,
   })
   const recentCandidate = findRecentVisitCandidate({
