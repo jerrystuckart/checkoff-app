@@ -1,53 +1,25 @@
-import React, { useCallback, useMemo, useState } from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Linking, Platform } from 'react-native'
-import { useFocusEffect } from '@react-navigation/native'
+import React, { useMemo, useState } from 'react'
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native'
 import { useTheme } from '../lib/ThemeContext'
-import { isFlagEnabled } from '../lib/featureFlags'
-import { hasBackgroundLocationPermission } from '../lib/visitDetection/permissions'
-import { fetchOptIn, enableVisitRecovery, turnOffVisitRecovery, countPendingSuggestions, subscribeCandidatesChange } from '../lib/visitDetection/recoverySettings'
-import { recoveryCardState, shouldShowInboxEntry, RECOVERY_COPY } from '../lib/visitDetection/recoveryPolicy'
+import { enableVisitRecovery, turnOffVisitRecovery } from '../lib/visitDetection/recoverySettings'
+import { RECOVERY_COPY } from '../lib/visitDetection/recoveryPolicy'
 import { openVisitInbox } from '../lib/visitDetection/inboxNavigation'
+import { useVisitRecovery } from '../lib/visitDetection/useVisitRecovery'
 
-// Profile section for seven-day visit recovery: the plain-language permission
-// explanation, the on/off control (off deletes saved visits), and the entry to
-// "Places you may have visited" — shown to anyone with a valid suggestion, not
-// only people who have the feature switched on.
+// Profile section for seven-day visit recovery. The whole section is capability-gated: where visit recovery is
+// unsupported (Android) it renders nothing at all. On iOS the state shown comes from
+// lib/visitDetection/recoveryState.js, so "On" appears only when Always Location is actually granted.
 export default function VisitRecoverySection({ userId, navigation }) {
   const { colors } = useTheme()
   const { CARD, TEXT, MUTED, BORDER, AMBER } = colors
   const s = useMemo(() => makeStyles({ CARD, TEXT, MUTED, BORDER, AMBER }), [CARD, TEXT, MUTED, BORDER, AMBER])
-  const [loaded, setLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [st, setSt] = useState({ flagEnabled: false, optedIn: false, backgroundGranted: false, suggestionCount: 0 })
+  const { supported, loaded, resolved, reload: load, runCta, openSettings } = useVisitRecovery(userId)
 
-  const load = useCallback(async () => {
-    if (!userId) return
-    try {
-      const [flagEnabled, optedIn, backgroundGranted, suggestionCount] = await Promise.all([
-        isFlagEnabled(userId, 'candidate_visit_detection'),
-        fetchOptIn(userId),
-        hasBackgroundLocationPermission().catch(() => false),
-        countPendingSuggestions(userId),
-      ])
-      setSt({ flagEnabled, optedIn, backgroundGranted, suggestionCount })
-    } catch (e) {
-      console.warn('VisitRecoverySection load failed:', e?.message ?? e)
-    } finally {
-      setLoaded(true)
-    }
-  }, [userId])
-
-  useFocusEffect(useCallback(() => { load() }, [load]))
-  React.useEffect(() => subscribeCandidatesChange(load), [load])
-
-  if (!loaded) return null
-
-  const cardState = recoveryCardState({ ...st, platformOS: Platform.OS })
-  const showInbox = shouldShowInboxEntry({ suggestionCount: st.suggestionCount, optedIn: st.optedIn })
-
-  async function openSettings() {
-    try { await Linking.openURL('app-settings:') } catch { Alert.alert('Open Settings', RECOVERY_COPY.permissionDeniedHint) }
-  }
+  if (!supported || !loaded || !resolved.visible) return null
+  const cardState = resolved.state
+  const showInbox = resolved.showInbox
+  const st = { suggestionCount: resolved.suggestionCount }
 
   function turnOn() {
     Alert.alert(RECOVERY_COPY.title, `${RECOVERY_COPY.intro}\n\n${RECOVERY_COPY.how}\n\n${RECOVERY_COPY.privacy}`, [
@@ -89,8 +61,6 @@ export default function VisitRecoverySection({ userId, navigation }) {
     ])
   }
 
-  if (cardState === 'hidden' && !showInbox) return null
-
   return (
     <View style={s.wrap}>
       {showInbox && (
@@ -100,40 +70,40 @@ export default function VisitRecoverySection({ userId, navigation }) {
         </TouchableOpacity>
       )}
 
-      {cardState !== 'hidden' && (
-        <View style={s.card}>
-          <Text style={s.title}>{RECOVERY_COPY.title}</Text>
-          {cardState === 'unsupported_platform' && <Text style={s.body}>{RECOVERY_COPY.androidNote}</Text>}
-          {cardState === 'off' && (
-            <>
-              <Text style={s.body}>{RECOVERY_COPY.intro}</Text>
-              <Text style={s.small}>{RECOVERY_COPY.how}</Text>
-              <TouchableOpacity style={s.primary} onPress={turnOn} disabled={busy} activeOpacity={0.85}>
-                {busy ? <ActivityIndicator color="#1A1A2E" /> : <Text style={s.primaryText}>Turn on</Text>}
-              </TouchableOpacity>
-            </>
-          )}
-          {cardState === 'needs_permission' && (
-            <>
-              <Text style={s.body}>{RECOVERY_COPY.needsPermission}</Text>
-              <TouchableOpacity style={s.primary} onPress={openSettings} activeOpacity={0.85}><Text style={s.primaryText}>Open Settings</Text></TouchableOpacity>
-              <TouchableOpacity onPress={turnOff} disabled={busy}><Text style={s.link}>Turn off and delete visits</Text></TouchableOpacity>
-            </>
-          )}
-          {cardState === 'paused' && (
-            <>
-              <Text style={s.body}>{RECOVERY_COPY.paused}</Text>
-              <TouchableOpacity onPress={turnOff} disabled={busy}><Text style={s.link}>Turn off and delete visits</Text></TouchableOpacity>
-            </>
-          )}
-          {cardState === 'on' && (
-            <>
-              <Text style={s.body}>On — we’ll note when you spend time at CheckOff places. {RECOVERY_COPY.privacy}</Text>
-              <TouchableOpacity onPress={turnOff} disabled={busy}>{busy ? <ActivityIndicator color={AMBER} /> : <Text style={s.link}>Turn off and delete visits</Text>}</TouchableOpacity>
-            </>
-          )}
-        </View>
-      )}
+      <View style={s.card}>
+        <Text style={s.title}>{resolved.title}</Text>
+        {cardState === 'off' && (
+          <>
+            <Text style={s.body}>{RECOVERY_COPY.intro}</Text>
+            <Text style={s.small}>{RECOVERY_COPY.how}</Text>
+            <TouchableOpacity style={s.primary} onPress={turnOn} disabled={busy} activeOpacity={0.85}>
+              {busy ? <ActivityIndicator color="#1A1A2E" /> : <Text style={s.primaryText}>Turn on</Text>}
+            </TouchableOpacity>
+          </>
+        )}
+        {(cardState === 'needs_always' || cardState === 'needs_foreground' || cardState === 'services_disabled') && (
+          <>
+            <Text style={s.body}>{resolved.status}</Text>
+            {resolved.cta && (
+              <TouchableOpacity style={s.primary} onPress={runCta} activeOpacity={0.85}><Text style={s.primaryText}>{resolved.cta.label}</Text></TouchableOpacity>
+            )}
+            <Text style={s.small}>{RECOVERY_COPY.privacy}</Text>
+            <TouchableOpacity onPress={turnOff} disabled={busy}><Text style={s.link}>Turn off and delete visits</Text></TouchableOpacity>
+          </>
+        )}
+        {cardState === 'paused' && (
+          <>
+            <Text style={s.body}>{resolved.status}</Text>
+            <TouchableOpacity onPress={turnOff} disabled={busy}><Text style={s.link}>Turn off and delete visits</Text></TouchableOpacity>
+          </>
+        )}
+        {cardState === 'on' && (
+          <>
+            <Text style={s.body}>On — we’ll note when you spend time at CheckOff places. {RECOVERY_COPY.privacy}</Text>
+            <TouchableOpacity onPress={turnOff} disabled={busy}>{busy ? <ActivityIndicator color={AMBER} /> : <Text style={s.link}>Turn off and delete visits</Text>}</TouchableOpacity>
+          </>
+        )}
+      </View>
     </View>
   )
 }
