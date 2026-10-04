@@ -9,6 +9,8 @@ import { supabase } from '../lib/supabase'
 import { adoptDestinationList } from '../lib/useItems'
 import { useTheme } from '../lib/ThemeContext'
 import { isWithinWindow } from '../lib/seasonWindow'
+import { useHubLocationSection } from '../lib/useHubLocationSection'
+import HubLocationSection from '../components/hub/HubLocationSection'
 
 const AMBER = '#F5A623'
 
@@ -46,6 +48,16 @@ export default function HubScreen({ navigation, route }) {
   // made anywhere (Hub, home rail, nearby, ItemDetail). Not Hub-specific
   // logic — same shape as HomeScreen.jsx's "More metro lists" rail.
   const [progressByListId, setProgressByListId] = useState({}) // { [lists.id]: { checked, total } }
+
+  // Location-aware strip above the lists. Hook sits above the early
+  // returns below; yields null (renders nothing) outside the zone, without
+  // a reliable fix, or with no eligible experiences.
+  const locationSection = useHubLocationSection({
+    destinationId,
+    destLists: destination?.destination_lists,
+    userId: user?.id ?? null,
+    navigation,
+  })
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => setUser(data?.user ?? null))
@@ -266,6 +278,8 @@ export default function HubScreen({ navigation, route }) {
             ))}
           </View>
         )}
+
+        <HubLocationSection section={locationSection} navigation={navigation} colors={colors} />
 
         {/* Lists */}
         <View style={styles.section}>
