@@ -47,7 +47,7 @@ import BookmarkIcon from '../components/BookmarkIcon'
 import { deriveTitlePresentation } from '../lib/detailTitlePresentation'
 import { isTripModeAvailableForList, isTripModeWindowOpen, DEFAULT_TRIP_MODE_GRACE_DAYS } from '../lib/tripMode'
 import { deriveTripContext, findRecentVisitCandidate, resolveRetroAction, CHECK_OFF_LABELS } from '../lib/itemCheckOffActions'
-import { supportsVisitRecovery } from '../lib/visitDetection/recoveryPolicy'
+import { deviceSupportsVisitRecovery } from '../lib/visitDetection/deviceCapability'
 import { loadActionableCandidates } from '../lib/visitDetection/actionableCandidates'
 import { openVisitInbox } from '../lib/visitDetection/inboxNavigation'
 import TripModeCheckOffSheet from '../components/TripModeCheckOffSheet'
@@ -317,7 +317,7 @@ export default function ItemDetailScreen({ route, navigation }) {
   // any confirmation. Universal items never get a candidate, so nothing is fetched for them.
   useEffect(() => {
     let cancelled = false
-    if (!userId || !supportsVisitRecovery(Platform.OS) || (item?.is_universal ?? item?.isUniversal)) { setRecoverableVisits([]); return undefined }
+    if (!userId || !deviceSupportsVisitRecovery() || (item?.is_universal ?? item?.isUniversal)) { setRecoverableVisits([]); return undefined }
     loadActionableCandidates(supabase, userId)
       .then(({ rows }) => { if (!cancelled) setRecoverableVisits(rows ?? []) })
       .catch(() => { if (!cancelled) setRecoverableVisits([]) })
@@ -360,7 +360,7 @@ export default function ItemDetailScreen({ route, navigation }) {
     candidates: recoverableVisits,
     itemId: item?.id,
     isUniversal: item?.is_universal ?? item?.isUniversal ?? false,
-    recoverySupported: supportsVisitRecovery(Platform.OS),
+    recoverySupported: deviceSupportsVisitRecovery(),
   })
   const retroAction = resolveRetroAction({ recentCandidate, trip: tripContext })
   const showTripModeEntry = retroAction.kind === 'trip' && !!item?.listItemId
