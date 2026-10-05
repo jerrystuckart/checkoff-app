@@ -1,0 +1,144 @@
+# EAS build-archive rules. When this file exists EAS uses it INSTEAD of .gitignore, so every .gitignore rule is repeated here.
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+/ios
+/android
+.claude/
+
+# Local Claude worktrees
+.claude/
+
+# Local secrets and environment files
+.env
+.env.*
+!.env.example
+*.pem
+
+# Supabase CLI local session cache
+supabase/.temp/
+*.p8
+
+# Local admin / secret-bearing tools
+checkoff_admin.html
+generate-apple-jwt.js
+
+# Deployment-ready binary handoff assets — produced locally by
+# scripts/build-archetype-artwork.js from approved source art that lives
+# outside the repo (~/Downloads/checkoff-home-archetype-artwork-approved/).
+# These .webp files are Storage-hosted remote assets, never bundled into
+# the app or committed to git — see docs/fallback-art-manifest.md.
+/assets-handoff/
+
+# Apple/private keys
+*.p8
+AuthKey_*.p8
+
+# Local admin/import/update scripts that may contain private credentials
+checkoff_seasonal_update.js
+checkoff_gapfill_import.js
+checkoff_precision_import.js
+
+# CocoaPods generated dependencies
+ios/Pods/
+
+# Private Apple keys
+*.p8
+AuthKey_*.p8
+
+# Local one-time admin/import/export/geocoding scripts with private Supabase keys
+checkoff_seasonal_update.js
+checkoff_gapfill_import.js
+checkoff_export_csv.js
+checkoff_import_csv.js
+checkoff_precision_import.js
+geocode-items.mjs
+checkoff_partner_signup.html
+
+# Local one-time admin/geocoding/triage scripts with embedded Supabase keys
+scripts/geocode-items.js
+scripts/geocode-denver-items.js
+scripts/geocode-san-diego-items.js
+scripts/generate-commit-sql.js
+scripts/generate-commit-sql-weak-review.js
+scripts/generate-commit-sql-weak-auto.js
+scripts/triage-weak.js
+
+# Local Claude worktrees
+.claude/
+
+# CocoaPods generated dependencies
+ios/Pods/
+
+.env.local
+*.ipa
+
+# Generated review reports (geocoding, etc.) — not source, not for commit
+scripts/output/
+
+# Simulator/visual-verification screenshots and local-only dev preview
+# imagery — never real production assets, never committed. See
+# CheckOff Release Candidate — Final Cleanup (2026-09-03).
+docs/visual-verification/
+assets/dev-preview/
+
+# Chief Phase 2D operator CLI local state (agent-service/cli.ts) — never
+# a source of truth, never committed.
+.chief-executions.json
+.chief-playbook-runs.json
+
+# Chief Phase 2J monitor local state (agent-service/monitorCli.ts) — the
+# Gmail poll checkpoint and file-backed contact directory. Never a source
+# of truth (a real DB-backed version is the documented upgrade path),
+# never committed.
+.chief-gmail-checkpoint.json
+.chief-contacts.json
+
+# Local build artifacts and pipeline scratch output — never source, never committed
+*.aab
+*.log
+scripts/tmp-vienna/
+scripts/tmp-green-bay/
+
+# --- extra build-archive exclusions (local-only data, never build inputs) ---
+docs/metro-launch-audit/
+scripts/tmp-*/
+*.ipa
+*.aab
+*.apk
