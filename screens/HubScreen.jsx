@@ -11,6 +11,7 @@ import { useTheme } from '../lib/ThemeContext'
 import { isWithinWindow } from '../lib/seasonWindow'
 import { useHubLocationSection } from '../lib/useHubLocationSection'
 import HubLocationSection from '../components/hub/HubLocationSection'
+import ExpandableDescription from '../components/hub/ExpandableDescription'
 
 const AMBER = '#F5A623'
 
@@ -255,7 +256,8 @@ export default function HubScreen({ navigation, route }) {
         <View style={styles.headerBlock}>
           <Text style={styles.destName}>{destination.name}</Text>
           {!!destination.description && (
-            <Text style={styles.destDescription}>{destination.description}</Text>
+            // key resets to collapsed when a different Hub opens
+            <ExpandableDescription key={destination.id} text={destination.description} textStyle={styles.destDescription} />
           )}
         </View>
 
