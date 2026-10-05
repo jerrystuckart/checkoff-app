@@ -47,18 +47,9 @@ const RAIL_CARD_GAP = 12
  *   selection/ranking/coverage-mode branching above.
  * @param {((item: object) => void)|null} [onViewMemory]  Called with the
  *   tapped item when its memory badge is pressed.
- * @param {boolean} [isAdmin]  ADMIN DIAGNOSTICS PANEL (Phase 1, 2026-09-23) —
- *   HomeScreen.jsx's resolved `users.is_admin` flag, passed straight through
- *   to UnsupportedLocationCard (the only current render site of the
- *   diagnostics panel — see its own doc). Purely additive: has no effect on
- *   anything above when omitted/false.
- * @param {object|null} [diagnostics]  HomeScreen.jsx's assembled What's Good
- *   diagnostics payload — see lib/whatsGoodDiagnosticsPanel.js for the shape
- *   it expects. Passed straight through, never read here.
- * @param {(() => void)|null} [onRefreshWhatsGood]  Passed straight through
- *   to UnsupportedLocationCard's "Refresh What's Good" diagnostics action.
+
  */
-export default function WhatsGoodDiscovery({ items, navigation, colors, userId = null, coverageMode = null, onExploreCities = null, memoryItemIds = null, onViewMemory = null, isAdmin = false, diagnostics = null, onRefreshWhatsGood = null, browsingName = null, browsingIsNearest = false }) {
+export default function WhatsGoodDiscovery({ items, navigation, colors, userId = null, coverageMode = null, onExploreCities = null, memoryItemIds = null, onViewMemory = null, browsingName = null, browsingIsNearest = false }) {
   // Hooks must run on EVERY render, before any early return. This used to sit below the two early returns, so the
   // hook set changed when items arrived (or coverage mode flipped), which React dev reports as "Internal React
   // error: Expected static flag was missing."
@@ -74,9 +65,6 @@ export default function WhatsGoodDiscovery({ items, navigation, colors, userId =
         colors={colors}
         userId={userId}
         onExploreCities={onExploreCities}
-        isAdmin={isAdmin}
-        diagnostics={diagnostics}
-        onRefreshWhatsGood={onRefreshWhatsGood}
         browsingName={browsingName}
         browsingIsNearest={browsingIsNearest}
       />

@@ -25,6 +25,7 @@ import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
 import { filterMaskedBonusDrops } from '../lib/bonusDrops'
 import { isItemInSeason } from '../lib/seasonFilter'
 import { useWhatsGood } from '../lib/useWhatsGood'
+import { publishWhatsGoodDiagnostics } from '../lib/whatsGoodDiagnosticsStore'
 import { useCurrentLocation } from '../lib/currentLocation'
 import { nearestMetroWithinBoundary } from '../lib/metroSelection'
 import { getExplicitMetro, getActiveExplicitMetro, stampExplicitMetroOrigin, shouldClearExactLinkIntent, clearExplicitMetro, subscribeExplicitMetro, metroForIntent } from '../lib/explicitMetroIntent'
@@ -1013,7 +1014,7 @@ async function loadNearbyRail(userId) {
     selectedItemIds: whatsGood.debug?.selectedItemIds ?? [],
   }), [selectedMetro, whatsGood.debug, whatsGood.coverageMode, userLocation])
 
-  // "Refresh What's Good" (admin diagnostics panel only) — clears the
+  // The What's Good refresh action (used by Profile's admin Diagnostics disclosure) — clears the
   // session cache, then triggers the SAME refresh mechanism this screen's
   // own pull-to-refresh already uses (refreshUserLocation(true) cascades
   // into useWhatsGood's selection effect via the shared location store — no
@@ -1022,6 +1023,12 @@ async function loadNearbyRail(userId) {
     await clearWhatsGoodSession()
     await refreshUserLocation(true)
   }, [refreshUserLocation])
+
+  // Diagnostics are no longer rendered on Home. The payload is still assembled here (no new work) and handed to Profile's
+  // admin-only "Diagnostics" disclosure through lib/whatsGoodDiagnosticsStore.
+  useEffect(() => {
+    publishWhatsGoodDiagnostics(whatsGoodDiagnostics, refreshWhatsGoodDiagnostics)
+  }, [whatsGoodDiagnostics, refreshWhatsGoodDiagnostics])
 
   // Check-In Memory Viewer (2026-09-23) — batch existence check over every
   // item id currently rendered on Home (Near You + What's Good), re-run
@@ -1550,9 +1557,6 @@ async function loadNearbyRail(userId) {
               onExploreCities={multiMetro2 ? openMetroPicker2 : null}
               memoryItemIds={homeMemoryItemIds}
               onViewMemory={openHomeCheckInMemory}
-              isAdmin={isAdmin}
-              diagnostics={whatsGoodDiagnostics}
-              onRefreshWhatsGood={refreshWhatsGoodDiagnostics}
               browsingName={homeMetroContext.kind === HOME_METRO_KIND.BROWSING_UNSUPPORTED_LOCATION || homeMetroContext.kind === HOME_METRO_KIND.NEAREST_CITY_UNSUPPORTED_LOCATION ? homeMetroContext.browsingName : null}
               browsingIsNearest={homeMetroContext.kind === HOME_METRO_KIND.NEAREST_CITY_UNSUPPORTED_LOCATION}
             />

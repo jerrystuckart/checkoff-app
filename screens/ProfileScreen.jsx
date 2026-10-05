@@ -14,7 +14,7 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../lib/useAuth'
 import { useTheme } from '../lib/ThemeContext'
 import * as Sentry from '@sentry/react-native'
-import VisitDetectionDebugPanel from '../components/VisitDetectionDebugPanel'
+import AdminDiagnosticsSection from '../components/profile/AdminDiagnosticsSection'
 import VisitRecoverySection from '../components/VisitRecoverySection'
 import { supportsVisitRecovery } from '../lib/visitDetection/recoveryPolicy'
 
@@ -368,9 +368,13 @@ export default function ProfileScreen({ navigation }) {
           <View style={styles.adminBadge}><Text style={styles.adminBadgeText}>⚙ Admin</Text></View>
         )}
         <VisitRecoverySection userId={user?.id} navigation={navigation} />
-        {supportsVisitRecovery(Platform.OS) && profile?.visit_detection_tester && (
-          <VisitDetectionDebugPanel userId={user?.id} />
-        )}
+        {/* Admin-only, collapsed by default; includes the visit-detection debug panel for iOS testers. */}
+        <AdminDiagnosticsSection
+          isAdmin={profile?.is_admin}
+          userId={user?.id}
+          showVisitDebug={supportsVisitRecovery(Platform.OS) && !!profile?.visit_detection_tester}
+          colors={colors}
+        />
         {/* Tier badge pill */}
         {(() => {
           const tierName = profile?.insider_tier ?? 'Starter'
