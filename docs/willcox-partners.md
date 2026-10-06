@@ -29,3 +29,6 @@ CheckOff's recommendation (read-only) is separate from the Chamber's actual deci
 
 ## Chamber Review Mode (2026-10-07, DEPLOYED, site commit cdb2a6c)
 Champions see only: place, proposed CheckOff, CheckOff's recommendation, membership (set once per business), one Chamber question, the Chamber decision, and a collapsed "Questions & details". Content status, verification owner, list placement, research and technical fields are not sent to Champions at all (API strips them). Admins keep full controls and get a "View as Chamber" preview toggle. One global "Suggest a missing place or experience" action sits at the top.
+
+## Chamber polish (2026-10-07, DEPLOYED)
+73 Chamber-facing recommendation notes (53 candidate, 20 live) made membership-neutral via `docs/willcox-launch/research/neutral_notes.py` (old text in `recommendation-notes-before-neutral.json`). Chamber cards now lead with the CheckOff sentence. Internal notes, bodies, recommendations, statuses, owners and lists unchanged.

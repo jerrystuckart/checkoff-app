@@ -1,0 +1,444 @@
+{
+ "candidates": [
+  {
+   "place_name": "Adolfo's Taco Shop",
+   "id": "05a37bd3-6f24-429f-90ad-1e8dd53647b4",
+   "old": "Casual taco spot on Rex Allen Dr. Discuss until membership is confirmed and we know the dish locals order most.",
+   "new": "Casual taco spot on Rex Allen Dr. Good everyday candidate. Help us name the dish locals order most."
+  },
+  {
+   "place_name": "All The Things",
+   "id": "ba1ae9ee-839b-438b-91d1-87c52a80b725",
+   "old": "Chamber member, likely a shop. Facebook only.",
+   "new": "Local shop. Working CheckOff. Help us sharpen the local hook."
+  },
+  {
+   "place_name": "Amarillo by Morning",
+   "id": "f8949a6d-030f-492e-b6c9-37a5aa676421",
+   "old": "Western shop on Railroad Avenue. Discuss until membership is confirmed and we know what visitors actually pick up there.",
+   "new": "Western shop on Railroad Avenue. Good nearby candidate. Help us name what visitors actually pick up there."
+  },
+  {
+   "place_name": "Amerind Museum",
+   "id": "28a161c8-8949-42dd-930a-2780e86e477c",
+   "old": "Museum. Membership does not apply. Roughly 35 miles west, so confirm it belongs in the Willcox Hub.",
+   "new": "Strong museum for history visitors. Roughly 35 miles west, so discuss whether it fits the Willcox Hub."
+  },
+  {
+   "place_name": "Antojitos El Cholo Food Truck",
+   "id": "cb421722-3ce2-4a7f-b003-2d06af29d463",
+   "old": "Food truck on Rex Allen Dr. Discuss until membership is confirmed and we know where and when it serves.",
+   "new": "Food truck on Rex Allen Dr. Good candidate. Need its current location and schedule confirmed."
+  },
+  {
+   "place_name": "Bear's Vintage Thrift",
+   "id": "5df29c39-9875-475d-8823-4c070a64e1a8",
+   "old": "Thrift store on North Haskell. Discuss until membership and visitor fit are confirmed.",
+   "new": "Thrift store on North Haskell. Working CheckOff. Discuss whether it belongs in the launch set."
+  },
+  {
+   "place_name": "Buffalo Sisters",
+   "id": "7b723a1e-b730-4db0-b922-838fef717f1f",
+   "old": "Trading post on Railroad Avenue. Discuss until membership is confirmed and we know what it is best known for.",
+   "new": "Trading post on Railroad Avenue. Good nearby candidate. Help us name what it is best known for."
+  },
+  {
+   "place_name": "Copper Horse Vineyard",
+   "id": "0d8e6894-cdd3-41d5-b4ef-b7526ac52126",
+   "old": "Tasting room in the same historic building as Strive (Suite B). Not in the public Chamber directory.",
+   "new": "Tasting room in the same historic building as Strive (Suite B). Good downtown candidate. Need current hours and signature wine confirmed."
+  },
+  {
+   "place_name": "Cross (+) 8 Cast Iron Cottage Creations",
+   "id": "eace590c-3331-47d3-b9b2-c1f02c3f6263",
+   "old": "Local maker and Chamber member. Discuss because we need to know what visitors can buy or see, and where.",
+   "new": "Local maker. Working CheckOff. Help us name what visitors can buy or see, and where."
+  },
+  {
+   "place_name": "Desert Brew",
+   "id": "5171064a-f885-4b1f-aefe-7eba92a01d51",
+   "old": "Coffee stop on North Haskell. Discuss until membership is confirmed and we know its signature drink.",
+   "new": "Coffee stop on North Haskell. Good everyday candidate. Help us name its signature drink."
+  },
+  {
+   "place_name": "Dos Cabezas Coffee Company",
+   "id": "2fb1610f-5767-419d-9c5f-7c472c2c5dba",
+   "old": "Coffee stop at 308 S Haskell Ave. Not in the public directory. 'Locally roasted' claim not confirmed.",
+   "new": "Coffee stop at 308 S Haskell Ave. Good everyday candidate. Need the roasting detail confirmed before we lean on it."
+  },
+  {
+   "place_name": "Double S Steakhouse",
+   "id": "0bb42331-5755-463b-a9a1-d2b460962b5e",
+   "old": "Steakhouse on Rex Allen Dr. Discuss until membership is confirmed and we know its signature dish.",
+   "new": "Steakhouse on Rex Allen Dr. Good candidate. Help us name its signature dish."
+  },
+  {
+   "place_name": "Evermore Coffee",
+   "id": "590efcfd-d30a-4b2c-9f76-c06574b8af00",
+   "old": "Chamber member. Discuss because we need to know where visitors can actually find it.",
+   "new": "Coffee at local events. Working CheckOff. Need to know where visitors can actually find it."
+  },
+  {
+   "place_name": "Friendly Bookstore",
+   "id": "e7657a93-275a-4d28-b7ca-5e3c6c24285d",
+   "old": "Bookstore on East Maley Street. Discuss until membership is confirmed and we know what makes it worth a CheckOff.",
+   "new": "Bookstore on East Maley Street. Working CheckOff. Help us sharpen the local hook."
+  },
+  {
+   "place_name": "Golden Rule Vineyards",
+   "id": "eadbdb2e-2085-4f58-947e-a903cdeb257b",
+   "old": "Chamber member. Address now confirmed from the winery's own site.",
+   "new": "Good downtown wine candidate. Address now confirmed from the winery's own site."
+  },
+  {
+   "place_name": "Inde Motorsports Ranch",
+   "id": "52ef40f0-9875-4991-be4f-72e69fed973d",
+   "old": "Chamber member. Most unusual item in the set. Needs the visitor-access options confirmed.",
+   "new": "Most unusual experience in the set. Need current visitor-access options confirmed."
+  },
+  {
+   "place_name": "Isabel's South of the Border",
+   "id": "562517ba-9223-42dc-bad7-300117fc39d4",
+   "old": "Downtown restaurant. Discuss until membership is confirmed and we know its signature dish, including the fire-roasted salsa.",
+   "new": "Downtown restaurant. Good candidate. Help us name its signature dish, including the fire-roasted salsa."
+  },
+  {
+   "place_name": "L&B Farm",
+   "id": "1ad092ca-836a-44dd-9078-b124b985cd1d",
+   "old": "Chamber member. Tours by request only, so we need to know if visitors are welcome.",
+   "new": "Working farm that offers tours by request. Need to know whether casual visitors are welcome."
+  },
+  {
+   "place_name": "Laramita Cellars",
+   "id": "ff2f01fa-b3e8-459d-9ab0-a944b05e5949",
+   "old": "Winery near Willcox. Discuss until membership is confirmed and we know visitor access and hours.",
+   "new": "Winery near Willcox. Good candidate. Need current visitor access and hours confirmed."
+  },
+  {
+   "place_name": "Lazul Aesthetics & Wellness Med Spa",
+   "id": "208d4384-9e7f-48a4-a690-257c4166cee6",
+   "old": "Chamber member. Wellness is a stretch for most visitors; services need confirming.",
+   "new": "Wellness is a stretch for most visitors. Discuss whether it belongs, and what services visitors can book."
+  },
+  {
+   "place_name": "Lee's Pecans",
+   "id": "40a7f446-cedb-452e-b73f-f3d39786b099",
+   "old": "Chamber member. Family farm since 1982, 12 pecan varieties. Call ahead for hours.",
+   "new": "Family farm since 1982 with 12 pecan varieties. Strong experience. Call ahead for hours."
+  },
+  {
+   "place_name": "Mack's Bar",
+   "id": "3b68f32c-abbd-457e-92eb-dce78ddacd85",
+   "old": "116 E Maley St. Not in the public directory.",
+   "new": "Downtown bar at 116 E Maley St. Good nearby candidate. Need hours and signature order confirmed."
+  },
+  {
+   "place_name": "Mini ASSets Farm & Ranch",
+   "id": "05a86bc4-98df-415f-a5af-5f25fe7afb0e",
+   "old": "Chamber member farm. Discuss because we need to know what visitors can actually do there.",
+   "new": "Farm and ranch. Working CheckOff. Need to know what visitors can actually do there."
+  },
+  {
+   "place_name": "Momster Creations",
+   "id": "26476d60-c71b-4965-8ea1-67e0e9ecd52d",
+   "old": "Chamber member and local maker. Facebook only.",
+   "new": "Local maker. Working CheckOff. Need to know where visitors can find it."
+  },
+  {
+   "place_name": "Olivery Orchards",
+   "id": "8715b75a-a67e-4f72-8915-e16c8655046a",
+   "old": "Chamber member, but based in San Simon, about 45 miles east. Confirm visitor access and distance fit.",
+   "new": "Olive oil producer based in San Simon, about 45 miles east. Discuss distance fit and confirm visitor access."
+  },
+  {
+   "place_name": "Passion Cellars",
+   "id": "0853b2bd-8bb9-41fd-b988-bfbab90384e5",
+   "old": "Winery near Willcox. Discuss until membership is confirmed and we know visitor hours.",
+   "new": "Winery near Willcox with a tasting room that looks into the barrel room. Good candidate. Need visitor hours confirmed."
+  },
+  {
+   "place_name": "Peter's Mexican Food",
+   "id": "538d8389-8b9a-414f-ac81-3a146825cb90",
+   "old": "Downtown Mexican restaurant. Discuss until membership is confirmed and we know its signature dish.",
+   "new": "Downtown Mexican restaurant. Good everyday candidate. Help us name its signature dish."
+  },
+  {
+   "place_name": "Pillsbury Wine Company",
+   "id": "5774bb11-bec3-45de-ba2e-3524f9c51209",
+   "old": "Vineyard tasting room near Rhumb Line (6450 S Bennett Pl). Not in the public directory.",
+   "new": "Vineyard tasting room near Rhumb Line (6450 S Bennett Pl). Good candidate. Need current hours and access confirmed."
+  },
+  {
+   "place_name": "R&R Pizza Express",
+   "id": "7836b1ff-71c5-4aea-ac21-f250b8642da7",
+   "old": "Chamber member. Opened in 2023 by Sean and Cindy Chaffey.",
+   "new": "Local pizza spot opened in 2023 by Sean and Cindy Chaffey. Good everyday candidate. Need buffet days and hours confirmed."
+  },
+  {
+   "place_name": "Rafter M Meats",
+   "id": "a1a50e71-c18c-457f-876e-77bb843c5732",
+   "old": "Chamber member. Weekdays only, 8 to 4.",
+   "new": "Strong local meat shop with its own smokehouse. Open weekdays only, 8 to 4."
+  },
+  {
+   "place_name": "Reconnect Farm",
+   "id": "c1ac583e-0f27-43fb-8dd0-78ce50500301",
+   "old": "Chamber member. No street address on its website, so we need the location and visitor hours.",
+   "new": "Farm with a store. Need the location and visitor hours confirmed."
+  },
+  {
+   "place_name": "Rex Allen Days",
+   "id": "29d664be-2edd-4c60-b571-3dd8908d1b53",
+   "old": "October festival (Oct 1 to 4 this year). Organizer needs confirming.",
+   "new": "October festival (Oct 1 to 4 this year). Need the organizer and next dates confirmed."
+  },
+  {
+   "place_name": "Rex Allen Monday music jam",
+   "id": "63486826-544d-455a-b46c-45c24b683f98",
+   "old": "Chamber member. Mondays 10 to 1 (verify).",
+   "new": "Live country music on Monday mornings, 10 to 1. Need the current schedule confirmed."
+  },
+  {
+   "place_name": "Rex Allen statue",
+   "id": "25ee26c5-ea18-49dd-a2d9-c28cf80958c9",
+   "old": "Public statue across the street from the museum. Needs the exact spot and owner confirmed.",
+   "new": "Public statue across the street from the museum. Need the exact spot and who looks after it confirmed."
+  },
+  {
+   "place_name": "Rhumb Line Harvest Hootenanny",
+   "id": "7332546f-e47d-4671-afe9-3828ac232f7e",
+   "old": "Festival-day event on Oct 17. Needs confirming.",
+   "new": "Festival-day event on Oct 17. Need the time and details confirmed."
+  },
+  {
+   "place_name": "Rhumb Line lavender bloom",
+   "id": "ea34dfc2-20a5-4672-964a-f1ef50f6c0fd",
+   "old": "Peak bloom is June and July. Not in the public directory.",
+   "new": "Peak bloom is June and July. Strong seasonal experience. Need weekday access confirmed."
+  },
+  {
+   "place_name": "Roadrunner Kafe at the KOA",
+   "id": "55d1cdc4-a6bd-41f1-9770-6e1b52e25e2e",
+   "old": "Chamber member. The campground cafe is open to the public.",
+   "new": "Campground cafe that is open to the public. Good everyday candidate. Need hours confirmed."
+  },
+  {
+   "place_name": "Ron Applegate Saddle Shop",
+   "id": "4e9ccd66-0949-4f56-95bb-ed8c222ed741",
+   "old": "Chamber member and local maker. Discuss because we need to confirm what the shop does and whether visitors can stop in.",
+   "new": "Local maker. Working CheckOff. Need to confirm what the shop does and whether visitors can stop in."
+  },
+  {
+   "place_name": "Soaring Wines",
+   "id": "5c106005-7ab9-4a19-836a-e8217753f5fa",
+   "old": "Willcox Wine Country partner at 180 N Railroad Ave. Not in the public Chamber directory.",
+   "new": "Willcox Wine Country partner at 180 N Railroad Ave. Good downtown candidate. Need current hours and signature wine confirmed."
+  },
+  {
+   "place_name": "Stagecoach Inn",
+   "id": "2ed669fa-d027-4b32-9011-90fa4296d148",
+   "old": "Chamber member. Inn at 100 W Rex Allen Dr. No visitor-experience detail found.",
+   "new": "Inn at 100 W Rex Allen Dr. Lodging-specific CheckOff for guests. Discuss whether to keep it as a Nearby-only item."
+  },
+  {
+   "place_name": "The Moore House",
+   "id": "2dfd718b-1bbf-4643-88b7-0af44de3c154",
+   "old": "Chamber member. Vacation rental. Chamber to decide whether lodging is checkable.",
+   "new": "Restored 1919 vacation rental. Lodging-specific CheckOff for guests. Discuss whether lodging belongs."
+  },
+  {
+   "place_name": "Tirrito Farm tour",
+   "id": "8a5cec0b-0a92-4ef0-8e78-bde4e2954dc9",
+   "old": "Strongest agritourism item in the set. Not in the public directory.",
+   "new": "Strongest agritourism item in the set. Need tour days and booking details confirmed."
+  },
+  {
+   "place_name": "Tortilleria La Unica",
+   "id": "f94192cc-5817-4aa9-bc01-ef2f6809175c",
+   "old": "Chamber member. Restaurant and tortilleria at 142 N Haskell Ave.",
+   "new": "Restaurant and tortilleria at 142 N Haskell Ave. Strong local experience."
+  },
+  {
+   "place_name": "Twin Lakes birding",
+   "id": "5c41c0e6-75ae-4914-b30d-22dbc473fc72",
+   "old": "Public birding. Membership does not apply.",
+   "new": "Public birding spot. Need the best access point and parking confirmed."
+  },
+  {
+   "place_name": "Vin-Tage",
+   "id": "9872d08a-8d52-4301-ba89-f9b132fb7ae2",
+   "old": "Vintage shop in the 1881 Commercial building. Discuss until membership is confirmed and we know what it sells now.",
+   "new": "Vintage shop in the 1881 Commercial building. Good downtown candidate. Help us name what it sells now."
+  },
+  {
+   "place_name": "Willcox Art League",
+   "id": "f513fb4a-c16f-41d3-9a79-4b5ba7fbd9ce",
+   "old": "Chamber member, but it is a club that meets monthly. No gallery. Not a visitor experience.",
+   "new": "A club that meets monthly, with no gallery. Not a visitor experience."
+  },
+  {
+   "place_name": "Willcox Community Center Playground",
+   "id": "3817009d-9ac7-436a-bdb2-516d7bf4a24f",
+   "old": "Needs confirming it is open to casual public use.",
+   "new": "Good family candidate. Need casual public use confirmed."
+  },
+  {
+   "place_name": "Willcox Flyer Bike Ride",
+   "id": "2b793f30-600a-409c-8412-ebf744118bdd",
+   "old": "August event. Organizer needs confirming.",
+   "new": "August event. Need the organizer and next date confirmed."
+  },
+  {
+   "place_name": "Willcox Traders",
+   "id": "5e14cb92-c093-4e13-a28a-7cab02bacc00",
+   "old": "Trading post on South Haskell. Discuss until membership is confirmed and its address is verified.",
+   "new": "Trading post on South Haskell. Working CheckOff. Need the address verified."
+  },
+  {
+   "place_name": "Willcox West Fest",
+   "id": "dbbea535-7343-4e65-bb87-5f19c20a7eaa",
+   "old": "Chamber member. April event at the Event Center. Dates need confirming.",
+   "new": "April event at the Event Center. Strong seasonal experience. Need next dates confirmed."
+  },
+  {
+   "place_name": "Willcox Wine Festival (fall)",
+   "id": "dceb92ca-c967-473a-b6ad-c608a4097282",
+   "old": "Chamber member (Willcox Wine Country). Oct 17 and 18, 11 AM to 5 PM, Railroad Park. Seasonal.",
+   "new": "Oct 17 and 18, 11 AM to 5 PM, at Railroad Park. Seasonal."
+  },
+  {
+   "place_name": "Willcox Wine Festival (spring)",
+   "id": "7c47ddc6-8437-4082-90c5-66b45306d88e",
+   "old": "Chamber member (Willcox Wine Country). April festival. Seasonal.",
+   "new": "April festival. Seasonal. Need next dates confirmed."
+  },
+  {
+   "place_name": "Zarpara Vineyards",
+   "id": "27319ca1-fca4-4756-8d1a-b3bedc25df02",
+   "old": "Vineyard beneath the Dos Cabezas Mountains. Discuss until membership is confirmed and we know visitor hours.",
+   "new": "Vineyard beneath the Dos Cabezas Mountains. Good candidate. Need visitor hours confirmed."
+  }
+ ],
+ "live": [
+  {
+   "item_prefix": "5d15ae43",
+   "id": "dabd642c-d484-42fa-acd7-af6e2ee7eaac",
+   "old": "Chamber member. Current item is the vineyard estate; a downtown tasting-room item is proposed next to it.",
+   "new": "Current item is the vineyard estate; a downtown tasting-room item is proposed next to it."
+  },
+  {
+   "item_prefix": "455ed6c5",
+   "id": "04b1518e-e3be-4581-9043-abc4f7a786cc",
+   "old": "Chamber member. Hidden (secret) experience at its downtown tasting room, Suite C of the historic Commercial building.",
+   "new": "Hidden (secret) experience at its downtown tasting room, Suite C of the historic Commercial building."
+  },
+  {
+   "item_prefix": "8a9759d7",
+   "id": "c0e88be8-d975-4f49-8e43-3499c3493178",
+   "old": "Chamber member. Two more specific Rex Allen items are proposed (Monday music jam, the statue).",
+   "new": "Two more specific Rex Allen items are proposed (Monday music jam, the statue)."
+  },
+  {
+   "item_prefix": "84b3ad09",
+   "id": "101793ef-13cf-45fe-91cd-ef3e30c4d5a9",
+   "old": "Strong tasting-room item. Not in the public Chamber directory. Tastings are by appointment.",
+   "new": "Strong tasting-room item. Tastings are by appointment."
+  },
+  {
+   "item_prefix": "3c706acd",
+   "id": "46e469bf-d9e2-4774-b560-0f6ca93cf33c",
+   "old": "Chamber member. Address needs a quick check: City list says 4511 E Robbs Rd, our item says 4718 E Robbs Rd.",
+   "new": "Address needs a quick check: City list says 4511 E Robbs Rd, our item says 4718 E Robbs Rd."
+  },
+  {
+   "item_prefix": "21fdc0b2",
+   "id": "6309cb0d-68b1-4d4a-b84b-96d799ee6244",
+   "old": "Strong item: tasting room in the 1917 Willcox Bank and Trust building. Not in the public Chamber directory (it is a Willcox Wine Country partner).",
+   "new": "Strong item: tasting room in the 1917 Willcox Bank and Trust building. A Willcox Wine Country partner."
+  },
+  {
+   "item_prefix": "02decd89",
+   "id": "49586e33-5307-4bea-828c-4ad3cf9f040d",
+   "old": "Museum. Membership does not apply.",
+   "new": "Museum covering Chiricahua Apache history from Cochise to Geronimo."
+  },
+  {
+   "item_prefix": "d23154df",
+   "id": "1129b850-f7af-4333-b48f-fdbe4be496fb",
+   "old": "Willcox Wine Country (Chamber member) anchors this one. Three-plus tasting rooms within a block.",
+   "new": "Anchored by Willcox Wine Country. Three-plus tasting rooms within a block."
+  },
+  {
+   "item_prefix": "f590b131",
+   "id": "a4eb4369-dfa7-47e6-8b8c-bb445f4b6d4b",
+   "old": "National Park Service site. Membership does not apply.",
+   "new": "National Park Service site. Free admission."
+  },
+  {
+   "item_prefix": "e620f063",
+   "id": "21ec4d51-463f-442f-a9f0-0dd726d3712a",
+   "old": "National Park Service site. Membership does not apply.",
+   "new": "National Park Service site. The wildlife angle on the same monument."
+  },
+  {
+   "item_prefix": "c4b020ca",
+   "id": "1b146e4b-cc9b-40db-8f5c-3ea6fe892097",
+   "old": "Inside Chiricahua National Monument. Membership does not apply.",
+   "new": "Inside Chiricahua National Monument."
+  },
+  {
+   "item_prefix": "29270440",
+   "id": "702b9389-adc1-4e0c-8223-3831dfa463f1",
+   "old": "National Park Service site. Membership does not apply.",
+   "new": "National Park Service site."
+  },
+  {
+   "item_prefix": "daf77fc6",
+   "id": "29a836e4-830b-4acf-91a6-e08e7f97fd5b",
+   "old": "Great hook (1920 Pullman dining car). Not in the public directory. Chamber to confirm membership and pick one signature dish.",
+   "new": "Great hook (1920 Pullman dining car). Help us pick one signature dish."
+  },
+  {
+   "item_prefix": "d397b765",
+   "id": "3f3a0ea9-453e-4c35-8451-6ce4c152b604",
+   "old": "Coronado National Forest. Membership does not apply.",
+   "new": "Coronado National Forest."
+  },
+  {
+   "item_prefix": "f2c29c3b",
+   "id": "e556f104-b3bf-4cf9-800b-2e95fab920fb",
+   "old": "Public wildlife area. Membership does not apply. Best October to February for sandhill cranes.",
+   "new": "Public wildlife area. Best October to February for sandhill cranes."
+  },
+  {
+   "item_prefix": "7018a16a",
+   "id": "4fb65762-d541-43ab-882e-c0cca09b72df",
+   "old": "Very short item. Not in the public directory. Needs the food experience confirmed before we rewrite it.",
+   "new": "Very short item. Need the food experience confirmed before we rewrite it."
+  },
+  {
+   "item_prefix": "132a829f",
+   "id": "e425a5de-5c3c-4363-b526-825a056f8176",
+   "old": "Orchard item is live but bare. A fuller rewrite is proposed, plus separate store and corn maze items. Not in the public directory.",
+   "new": "Orchard item is live but bare. A fuller rewrite is proposed, plus separate store and corn maze items."
+  },
+  {
+   "item_prefix": "d981fbdc",
+   "id": "05d8f8ac-6ae1-4818-b097-3bca549a4e0c",
+   "old": "Historic 1936 theater. Not in the public directory; confirm whether it counts as a business or a community venue.",
+   "new": "Historic 1936 theater. Strong downtown candidate. Need current programming confirmed."
+  },
+  {
+   "item_prefix": "b07c6c8b",
+   "id": "eb0831e7-343d-45cc-8cfb-7a9667724e6a",
+   "old": "Chamber member (listed in the directory). January event. Off until winter.",
+   "new": "January event. Off until winter."
+  },
+  {
+   "item_prefix": "814f48c1",
+   "id": "5a65a88c-52ea-4859-bda0-e4072782da7e",
+   "old": "Pioneer Cemetery (454 N 3rd Ave). Public history. Membership does not apply. Who maintains it is unconfirmed.",
+   "new": "Pioneer Cemetery (454 N 3rd Ave). Public history. Who maintains it is unconfirmed."
+  }
+ ]
+}
