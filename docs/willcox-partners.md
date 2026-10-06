@@ -26,3 +26,6 @@ Proposed experiences live in `destination_item_candidates` (migration `20261006b
 
 ## Champion review UX final (2026-10-07, DEPLOYED, site commit de6199d)
 CheckOff's recommendation (read-only) is separate from the Chamber's actual decision (Not Reviewed until a Champion acts). Migration `20261007_candidate_review_ux.sql` applied (chamber_question, availability_type, body_provisional). 83 of 84 candidates have bodies; Willcox Art League is the intentional blank (Exclude / Not Included). Final bodies applied via `docs/willcox-launch/research/apply_final_bodies.py`; questions via `gen_questions.py`. Event-only (8), pop-up (2) and lodging-only (5) candidates are tagged. Nothing promoted to items; Chamber decisions are zero at handoff.
+
+## Chamber Review Mode (2026-10-07, DEPLOYED, site commit cdb2a6c)
+Champions see only: place, proposed CheckOff, CheckOff's recommendation, membership (set once per business), one Chamber question, the Chamber decision, and a collapsed "Questions & details". Content status, verification owner, list placement, research and technical fields are not sent to Champions at all (API strips them). Admins keep full controls and get a "View as Chamber" preview toggle. One global "Suggest a missing place or experience" action sits at the top.
