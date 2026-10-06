@@ -3,8 +3,8 @@
 -- Visitor visibility is unaffected: this only sets who is responsible for verifying each item.
 -- Review the judgement calls before running (marked REVIEW):
 --   REVIEW: Rex Allen museum, Chiricahua Regional Museum and the Historic Theater are set to business (operating organizations).
---   REVIEW: Wings Over Willcox is set to checkoff; it may belong to the Chamber.
---   REVIEW: Warren Earp grave is set to checkoff until the cemetery owner is confirmed (likely City).
+--   Wings Over Willcox is set to chamber (started by the Willcox Chamber with Arizona Game and Fish; Chamber runs it).
+--   STILL UNCERTAIN: Warren Earp grave is checkoff. The Pioneer Cemetery (454 N 3rd Ave) is likely City of Willcox but management is not confirmed anywhere found. Confirm with the City or Chamber, then reassign in the Champion page.
 --   REVIEW: Railroad Avenue wine trail is set to destination_partner "Willcox Wine Country".
 --   Federal, state and public sites with no operating entity here are checkoff (per the ownership model).
 insert into public.destination_item_decisions (destination_id, item_id, verification_owner_type, verification_owner_name, decided_by, updated_at)
@@ -32,7 +32,7 @@ from (values
   ('f2c29c3b-3dc7-4dbf-9358-770ade99fe50'::uuid, 'checkoff', null),  -- Pull over at 'Willcox Playa Wildlife Area' — a
   ('814f48c1-e01e-450f-b680-81008b89b693'::uuid, 'checkoff', null),  -- Locate the grave of Warren Earp, the youngest 
   ('984d5c12-0492-4a0d-8bff-b9ea1e8288dc'::uuid, 'checkoff', null),  -- Watch the sandhill cranes land at dusk at 'Coc
-  ('b07c6c8b-edd3-42c6-9215-1ce8dfd69d00'::uuid, 'checkoff', null),  -- Go to the 'Wings Over Willcox' birding festiva
+  ('b07c6c8b-edd3-42c6-9215-1ce8dfd69d00'::uuid, 'chamber', 'Willcox Chamber of Commerce and Agriculture'),  -- Go to the 'Wings Over Willcox' birding festiva
   ('e4e347d9-2a69-4353-8636-67bfab98c86f'::uuid, 'checkoff', null),  -- Get a coffee from a local spot — not Starbucks
   ('fa52507f-f90e-46f3-9703-e7f4f8f52823'::uuid, 'checkoff', null),  -- Start the day with a Bloody Mary — the drive t
   ('504c8b29-71b3-4aa7-9a9a-2e9ca25146e9'::uuid, 'checkoff', null)  -- Grab a meal at a downtown Willcox local spot —
