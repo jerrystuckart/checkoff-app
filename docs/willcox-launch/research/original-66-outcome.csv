@@ -1,0 +1,67 @@
+#,Workbook place,Workbook visibility,Workbook Include?,Now,Membership,CheckOff recommends,Content status now
+1,Aridus Wine Company,Curated,Include,LIVE,not_found,discuss,curated
+2,Birds & Barrels Vineyards,Curated,Include,LIVE,member_public_directory,include,curated
+3,Bodega Pierce,Curated,Include,LIVE,member_public_directory,include,curated
+4,Carlson Creek Vineyard,Curated,Discuss,PROPOSED,not_found,discuss,discoverable
+5,Keeling Schaefer Vineyards,Curated,Include,LIVE,not_found,discuss,curated
+6,Strive Vineyards,Curated,Include,LIVE,member_public_directory,include,curated
+7,Golden Rule Vineyards,Curated,Discuss,PROPOSED,member_public_directory,include,discoverable
+8,Pillsbury Wine Company,Curated,Include,PROPOSED,not_found,discuss,discoverable
+9,Big Tex BBQ,Curated,Include,LIVE,not_found,discuss,curated
+10,La Unica Tortilleria,Curated,Include,PROPOSED,member_public_directory,include,curated
+11,Isabel's South of the Border,Curated,Include,PROPOSED,not_found,discuss,curated
+12,Adolfo's Taco Shop,Curated,Include,PROPOSED,not_found,discuss,discoverable
+13,Double S Steakhouse,Curated,Include,PROPOSED,not_found,discuss,discoverable
+14,Desert Brew,Curated,Include,PROPOSED,not_found,discuss,discoverable
+15,Dos Cabezas Coffee Company,Curated,Include,PROPOSED,not_found,discuss,discoverable
+16,Katy's Rico Hot Dogs,Discoverable,Discuss,PROPOSED,not_found,discuss,reserve
+17,Peter's Mexican Food,Discoverable,Discuss,PROPOSED,not_found,discuss,reserve
+18,Antojitos El Cholo Food Truck,Discoverable,Discuss,PROPOSED,not_found,discuss,reserve
+19,R&R Pizza,Discoverable,Discuss,PROPOSED,member_public_directory,include,discoverable
+20,Rix's Tavern,Discoverable,Discuss,LIVE,not_found,discuss,discoverable
+21,Mack's Bar,Discoverable,Discuss,PROPOSED,not_found,discuss,reserve
+22,Historic Railroad Depot / Visitor Center,Curated,Include,PROPOSED,not_applicable_public_experience,include,curated
+23,Rex Allen Arizona Cowboy Museum,Curated,Include,LIVE,member_public_directory,include,curated
+24,Historic Railroad Park,Curated,Include,PROPOSED,not_applicable_public_experience,include,discoverable
+25,Willcox Historic Theater,Curated,Include,LIVE,not_found,discuss,curated
+26,Chiricahua Regional Museum & Research Center,Curated,Include,LIVE,not_applicable_public_experience,include,curated
+27,Historic Willcox Pioneer Cemetery,Curated,Include,LIVE,not_applicable_public_experience,include,curated
+28,Historic Schwertner House,Discoverable,Discuss,PROPOSED,not_applicable_public_experience,discuss,reserve
+29,Amerind Museum,Curated,Discuss,PROPOSED,not_applicable_public_experience,discuss,discoverable
+30,Studio 128,Discoverable,Discuss,PROPOSED,not_found,discuss,reserve
+31,Chiricahua National Monument,Curated,Include,LIVE,not_applicable_public_experience,include,curated
+32,Cochise Stronghold,Curated,Include,LIVE,not_applicable_public_experience,include,curated
+33,Fort Bowie National Historic Site,Curated,Include,LIVE,not_applicable_public_experience,include,curated
+34,Dos Cabezas,Discoverable,Discuss,PROPOSED,not_applicable_public_experience,discuss,discoverable
+35,Willcox Playa,Curated,Include,LIVE,not_applicable_public_experience,include,curated
+36,Twin Lakes Birding,Curated,Include,PROPOSED,not_applicable_public_experience,include,discoverable
+37,Twin Lakes Golf Course,Discoverable,Include,PROPOSED,not_applicable_public_experience,include,discoverable
+38,Keiller Park,Discoverable,Include,PROPOSED,not_applicable_public_experience,include,discoverable
+39,Quail Park,Discoverable,Include,PROPOSED,not_applicable_public_experience,include,discoverable
+40,Railroad Dog Park,Discoverable,Include,PROPOSED,not_applicable_public_experience,include,discoverable
+41,Willcox Pool & Splash Pad,Seasonal,Include,PROPOSED,not_applicable_public_experience,include,seasonal
+42,Event Center & Rodeo Grounds,Seasonal,Include,PROPOSED,not_applicable_public_experience,include,seasonal
+43,Willcox Community Center Playground,Discoverable,Discuss,PROPOSED,not_applicable_public_experience,discuss,reserve
+44,Railroad Avenue Walk,Curated,Include,PROPOSED,not_applicable_public_experience,include,curated
+45,Willcox Historic Downtown Photo Walk,Discoverable,Include,MERGED into Railroad Avenue Walk,not_applicable_public_experience,include,curated
+46,Willcox Flyer Bike Ride,Seasonal,Discuss,PROPOSED,not_applicable_public_experience,discuss,seasonal
+47,Boulderdash Trail Run,Seasonal,Discuss,PROPOSED,not_applicable_public_experience,discuss,reserve
+48,Amerind Texas Canyon Trail Run,Seasonal,Discuss,PROPOSED,not_applicable_public_experience,discuss,reserve
+49,Apple Annie's Orchard,Curated,Include,LIVE,not_found,discuss,curated
+50,Apple Annie's Produce & Pumpkins,Seasonal,Include,PROPOSED,not_found,discuss,seasonal
+51,Tirrito Farm,Curated,Include,PROPOSED,not_found,discuss,curated
+52,Rhumb Line Vineyard & Lavender Farm,Seasonal,Include,PROPOSED,not_found,discuss,seasonal
+53,Lee's Pecans,Curated,Include,PROPOSED,member_public_directory,include,curated
+54,Rafter M Meats,Curated,Include,PROPOSED,member_public_directory,include,curated
+55,Amarillo by Morning,Discoverable,Discuss,PROPOSED,not_found,discuss,reserve
+56,Buffalo Sisters,Discoverable,Discuss,PROPOSED,not_found,discuss,reserve
+57,Friendly Bookstore,Discoverable,Discuss,PROPOSED,not_found,discuss,reserve
+58,Vin•Tage,Discoverable,Discuss,PROPOSED,not_found,discuss,reserve
+59,Willcox Traders,Discoverable,Discuss,PROPOSED,not_found,discuss,reserve
+60,Bear's Vintage Thrift,Discoverable,Discuss,PROPOSED,not_found,discuss,reserve
+61,Lazul Med Spa,Reserve,Discuss,PROPOSED,member_public_directory,discuss,reserve
+62,The Neighborhood Studio (Pilates),Discoverable,Discuss,PROPOSED,not_found,discuss,reserve
+63,Tirrito Farm Casitas,Discoverable,Discuss,MERGED into Tirrito Farm glamping domes,not_found,discuss,reserve
+64,Tirrito Farm Glamping Domes,Curated,Discuss,PROPOSED,not_found,discuss,reserve
+65,Arizona Sunset Inn,Reserve,Discuss,PROPOSED,not_found,discuss,reserve
+66,Inde Motorsports Ranch,Curated,Include,PROPOSED,member_public_directory,include,curated

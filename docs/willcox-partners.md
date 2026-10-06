@@ -20,3 +20,6 @@ See `docs/willcox-launch/` (readiness report, reconciliation, DRAFT inventory SQ
 
 ## Verification ownership (2026-10-06, DEPLOYED, site commit bd84203)
 Ownership is separate from visibility. See the readiness report section 6. Migration 20261006 applied and the pilot seed run (26 items: 13 business, 11 checkoff, 1 chamber, 1 destination_partner). Champion sign-in is now the server-gated flow; Supabase redirect allow-list includes /willcox/champion. Uncertain owner: Warren Earp grave (checkoff until the Pioneer Cemetery manager is confirmed).
+
+## Candidate review layer (2026-10-06, DEPLOYED, site commit 7329ff1)
+Proposed experiences live in `destination_item_candidates` (migration `20261006b`, applied), never in `items`. `/willcox/champion` shows LIVE + PROPOSED. Research summary: `docs/willcox-launch/willcox-research-pass-summary.md`. Promotion of a candidate to a production item is a manual CheckOff-admin step and has not been done. Rows imported from `docs/willcox-launch/import-candidates.sql`.
