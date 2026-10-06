@@ -18,5 +18,5 @@ Site repo `getcheckoff-site`. Routes: `/willcox/partners` (public), `/willcox/ch
 See `docs/willcox-launch/` (readiness report, reconciliation, DRAFT inventory SQL that has NOT been run), `docs/willcox-launch-analytics.sql`, `docs/willcox-chamber-launch-report.sql`, `docs/willcox-wine-festival-launch-checklist.md`.
 - Phase 2: panel in checkoff_admin.html for the queue, apply-change tooling, outreach status, Champion metrics by channel.
 
-## Verification ownership (2026-10-06, branch feat/verification-owner, not deployed)
-Ownership is separate from visibility. See the readiness report section 6. Needs: apply `supabase/migrations/20261006_destination_item_verification_owner.sql`, then (after review) run `docs/willcox-launch/willcox-verification-owner-seed.sql`, then merge and deploy the site branch.
+## Verification ownership (2026-10-06, DEPLOYED, site commit bd84203)
+Ownership is separate from visibility. See the readiness report section 6. Migration 20261006 applied and the pilot seed run (26 items: 13 business, 11 checkoff, 1 chamber, 1 destination_partner). Champion sign-in is now the server-gated flow; Supabase redirect allow-list includes /willcox/champion. Uncertain owner: Warren Earp grave (checkoff until the Pioneer Cemetery manager is confirmed).
