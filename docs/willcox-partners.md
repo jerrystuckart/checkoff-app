@@ -23,3 +23,6 @@ Ownership is separate from visibility. See the readiness report section 6. Migra
 
 ## Candidate review layer (2026-10-06, DEPLOYED, site commit 7329ff1)
 Proposed experiences live in `destination_item_candidates` (migration `20261006b`, applied), never in `items`. `/willcox/champion` shows LIVE + PROPOSED. Research summary: `docs/willcox-launch/willcox-research-pass-summary.md`. Promotion of a candidate to a production item is a manual CheckOff-admin step and has not been done. Rows imported from `docs/willcox-launch/import-candidates.sql`.
+
+## Champion review UX final (2026-10-07, DEPLOYED, site commit de6199d)
+CheckOff's recommendation (read-only) is separate from the Chamber's actual decision (Not Reviewed until a Champion acts). Migration `20261007_candidate_review_ux.sql` applied (chamber_question, availability_type, body_provisional). 83 of 84 candidates have bodies; Willcox Art League is the intentional blank (Exclude / Not Included). Final bodies applied via `docs/willcox-launch/research/apply_final_bodies.py`; questions via `gen_questions.py`. Event-only (8), pop-up (2) and lodging-only (5) candidates are tagged. Nothing promoted to items; Chamber decisions are zero at handoff.
