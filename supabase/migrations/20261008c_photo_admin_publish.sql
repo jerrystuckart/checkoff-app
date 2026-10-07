@@ -13,11 +13,9 @@
 --    primary, items pointer set). Already has an active cover -> it is only added to the
 --    rotation pool (cover_eligible, not primary); the active cover is never replaced.
 --    secret_business_photo_storage_path is never touched.
--- 4. Hardening: the user INSERT policy on item_cover_candidates previously let a client
---    insert a row with ANY status/display_eligible/is_primary. It now only allows an
---    ordinary community submission (pending/needs_review/automated_rejected, not
---    display-eligible, not primary, source community, no token). Existing app inserts
---    already satisfy this.
+-- Apply AFTER 20261008a (users column lock) and 20261008b (candidate insert lock). Nothing here
+-- depends on users.is_admin. There is NO client path to grant photo-admin: the first row is inserted by the
+-- operator through the service role (see supabase/manual/grant_photo_admin.sql).
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS public.photo_admins (
@@ -103,20 +101,5 @@ END
 $$;
 REVOKE ALL ON FUNCTION public.admin_publish_item_photo(uuid, text, jsonb) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.admin_publish_item_photo(uuid, text, jsonb) TO authenticated;
-
-DROP POLICY IF EXISTS item_cover_candidates_insert_own ON public.item_cover_candidates;
-CREATE POLICY item_cover_candidates_insert_own ON public.item_cover_candidates
-  FOR INSERT
-  WITH CHECK (
-    submitted_by_user_id = auth.uid()
-    AND consent_ack = true
-    AND status IN ('pending', 'needs_review', 'automated_rejected')
-    AND display_eligible = false
-    AND is_primary = false
-    AND source = 'community'
-    AND submitted_by_token_id IS NULL
-    AND selected_as_cover_at IS NULL
-    AND reviewed_by_user_id IS NULL
-  );
 
 COMMIT;
