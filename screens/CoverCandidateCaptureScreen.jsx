@@ -23,6 +23,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { submitCoverCandidate } from '../lib/coverCandidates'
 import { localSanityOnlyAdapter, initialStatusFromAssessment } from '../lib/coverModeration/moderationAdapter'
+import { fetchIsPhotoAdmin, publishPhotoAsAdmin, photoAdminSuccessMessage } from '../lib/photoAdmin'
+import { bumpPhotoVersion } from '../lib/photoRefresh'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
@@ -35,6 +37,7 @@ export default function CoverCandidateCaptureScreen({ route, navigation }) {
   const [photo, setPhoto] = useState(null)
   const [mode, setMode] = useState('camera') // 'camera' | 'preview' | 'submitted'
   const [submitting, setSubmitting] = useState(false)
+  const [submittedMessage, setSubmittedMessage] = useState(null) // photo-admin confirmation; null = normal 'Submitted for review'
   const cameraRef = useRef(null)
 
   async function takePicture() {
@@ -79,6 +82,21 @@ export default function CoverCandidateCaptureScreen({ route, navigation }) {
         fileSizeBytes: arrayBuffer.byteLength,
       })
       const status = initialStatusFromAssessment(assessment)
+
+      // Photo admins publish through ONE server call that re-verifies their privilege and
+      // applies the cover/rotation rule atomically. Everyone else takes the unchanged
+      // moderated path below. (The server rejects non-admins regardless of what this says.)
+      if (await fetchIsPhotoAdmin({ userId: user.id })) {
+        const { becameCover } = await publishPhotoAsAdmin({
+          itemId: item.id,
+          storagePath,
+          moderationMetadata: assessment.signals,
+        })
+        setSubmittedMessage(photoAdminSuccessMessage(becameCover))
+        bumpPhotoVersion()
+        setMode('submitted')
+        return
+      }
 
       await submitCoverCandidate({
         userId: user.id,
@@ -154,7 +172,7 @@ export default function CoverCandidateCaptureScreen({ route, navigation }) {
   // ── Submitted confirmation ──
   return (
     <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
-      <Text style={styles.submittedText}>Submitted for review ✓</Text>
+      <Text style={styles.submittedText}>{submittedMessage ?? 'Submitted for review ✓'}</Text>
       <TouchableOpacity style={styles.doneBtn} onPress={() => navigation.goBack()}>
         <Text style={styles.doneBtnText}>Done</Text>
       </TouchableOpacity>

@@ -35,6 +35,7 @@ import { checkGeoFence, presentGeoFenceFailure } from '../lib/geoFence'
 import * as Location from 'expo-location'
 import { isAtPlace } from '../lib/whatsGoodAtPlace'
 import { useCoverCandidateCTA } from '../lib/useCoverCandidateCTA'
+import { usePhotoVersion } from '../lib/photoRefresh'
 import CoverCandidateCTA from '../components/CoverCandidateCTA'
 import { fetchActiveCoverImageUrl, fetchDisplayEligibleImagePool } from '../lib/coverCandidates'
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
@@ -407,6 +408,7 @@ export default function ItemDetailScreen({ route, navigation }) {
   // feeds both the eligibility check below and the image render further
   // down, so a selected cover is never missed and the "no contribution CTA
   // once a cover exists" rule holds no matter how this screen was reached.
+  const photoVersion = usePhotoVersion()
   const [fetchedCoverUrl, setFetchedCoverUrl] = useState(null)
   useEffect(() => {
     let cancelled = false
@@ -415,7 +417,7 @@ export default function ItemDetailScreen({ route, navigation }) {
       if (!cancelled && url) setFetchedCoverUrl(url)
     })
     return () => { cancelled = true }
-  }, [item?.id])
+  }, [item?.id, photoVersion])
 
   // Multi-Image Rotation (2026-09-03) — fetch the full display-eligible
   // pool directly (fresh signed URLs), same reasoning as fetchedCoverUrl
@@ -435,7 +437,7 @@ export default function ItemDetailScreen({ route, navigation }) {
       if (!cancelled && pool.length > 0) setFetchedImagePool(pool)
     })
     return () => { cancelled = true }
-  }, [item?.id])
+  }, [item?.id, photoVersion])
 
   const resolvedItem = {
     ...item,

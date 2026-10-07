@@ -26,9 +26,11 @@
 import React from 'react'
 import { View, Text, StyleSheet } from 'react-native'
 import PressableTactile from './PressableTactile'
+import { usePhotoAdmin } from '../lib/usePhotoAdmin'
 
 export default function CoverCandidateCTA({ item, navigation, colors, compact = false, variant = 'card' }) {
   const { TEXT, MUTED, AMBER } = colors
+  const isPhotoAdmin = usePhotoAdmin()
 
   if (variant === 'pill') {
     return (
@@ -47,7 +49,7 @@ export default function CoverCandidateCTA({ item, navigation, colors, compact = 
           adjustsFontSizeToFit
           minimumFontScale={0.8}
         >
-          Add photo
+          {isPhotoAdmin ? 'Add photo (live)' : 'Add photo'}
         </Text>
       </PressableTactile>
     )
@@ -66,11 +68,11 @@ export default function CoverCandidateCTA({ item, navigation, colors, compact = 
         <View style={styles.textCol}>
           {!compact && (
             <>
-              <Text style={[styles.title, { color: TEXT }]}>No photo yet</Text>
-              <Text style={[styles.subtitle, { color: MUTED }]}>Want to help make this better?</Text>
+              <Text style={[styles.title, { color: TEXT }]}>{isPhotoAdmin ? 'Photo admin' : 'No photo yet'}</Text>
+              <Text style={[styles.subtitle, { color: MUTED }]}>{isPhotoAdmin ? 'Your photo is published right away' : 'Want to help make this better?'}</Text>
             </>
           )}
-          <Text style={[styles.cta, { color: AMBER }]}>Take a photo to be considered for the cover →</Text>
+          <Text style={[styles.cta, { color: AMBER }]}>{isPhotoAdmin ? 'Take a photo — goes live immediately →' : 'Take a photo to be considered for the cover →'}</Text>
         </View>
       </View>
     </PressableTactile>
