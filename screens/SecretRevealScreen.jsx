@@ -11,7 +11,10 @@ import { supabase } from '../lib/supabase'
 import { trackEvent } from '../lib/trackEvent'
 import { haversineMeters } from '../lib/distance'
 import { useSavedItems } from '../lib/SavedItemsContext'
-import { useCardArtwork } from '../components/home/useCardArtwork'
+import { LinearGradient } from 'expo-linear-gradient'
+import { fetchSecretBusinessPhotoUrl } from '../lib/secretBusinessPhoto'
+import { useSecretPhotoContribution } from '../lib/useSecretPhotoContribution'
+import CoverCandidateCTA from '../components/CoverCandidateCTA'
 import BookmarkIcon from '../components/BookmarkIcon'
 import { buildInviteMessage, buildSecretInviteMessage } from '../lib/inviteMessage'
 import { itemHasLocation, itemHasWebsite, openItemDirections, openItemWebsite } from '../lib/itemUtilityActions'
@@ -52,8 +55,11 @@ export default function SecretRevealScreen({ route, navigation }) {
   // Same saved-items context + toggle the normal item detail uses; it also
   // owns the guest sign-in prompt, so no auth handling is duplicated here.
   const { isSaved, toggleSaved } = useSavedItems()
-  // Only ever rendered heavily blurred + darkened below, never as-is.
-  const artwork = useCardArtwork(item, null)
+  // Locked-screen photo: the item's dedicated business (storefront/venue)
+  // photo ONLY. Normal covers can depict the secret, so they are never used
+  // here. null -> the designed purple/dark treatment, never a substitute.
+  const [businessPhotoUrl, setBusinessPhotoUrl] = useState(null)
+  const [coverFailed, setCoverFailed] = useState(false)
 
   const glowAnim   = useRef(new Animated.Value(0)).current
   const revealAnim = useRef(new Animated.Value(0)).current
@@ -75,6 +81,22 @@ export default function SecretRevealScreen({ route, navigation }) {
   // without exposing the challenge. partnerName loads async; item.partnerName
   // arrives immediately if the item came from useItems/useNearby (after today's changes).
   const locationHint = partnerName ?? item?.partnerName ?? item?.neighborhoodName ?? null
+
+  useEffect(() => {
+    let cancelled = false
+    if (item?.id) {
+      fetchSecretBusinessPhotoUrl({ itemId: item.id }).then((url) => {
+        if (!cancelled && url) setBusinessPhotoUrl(url)
+      })
+    }
+    return () => { cancelled = true }
+  }, [item?.id])
+
+  // Existing photo-contribution CTA, under the normal eligibility rules
+  // (at the place, signed in, no approved image, no pending submission).
+  // While locked the user is outside the unlock radius, so the proximity rule
+  // keeps it hidden exactly as elsewhere; it appears once at the place.
+  const showPhotoCTA = useSecretPhotoContribution({ item, refreshKey: phase })
 
   useEffect(() => {
     startWatching()
@@ -209,6 +231,19 @@ export default function SecretRevealScreen({ route, navigation }) {
   }
 
   const saved = !!item?.id && isSaved(item.id)
+  const coverPhoto = businessPhotoUrl && !coverFailed ? { url: businessPhotoUrl } : null
+
+  function renderPhotoCTA() {
+    if (!showPhotoCTA) return null
+    return (
+      <CoverCandidateCTA
+        item={item}
+        navigation={navigation}
+        colors={{ TEXT: '#fff', MUTED: 'rgba(255,255,255,0.6)', AMBER }}
+        compact
+      />
+    )
+  }
 
   function renderUtilityRow() {
     return (
@@ -248,22 +283,21 @@ export default function SecretRevealScreen({ route, navigation }) {
   }
 
   // Shared locked layout for 'checking' and 'tooFar'. Reveals nothing about
-  // the secret: no body/challenge text, and the photo (if any) is blurred.
+  // the secret: no body/challenge text. The purple header is always the
+  // designed treatment; the approved cover photo (when one exists) only
+  // starts below it, behind the body, cover-cropped under a strong scrim.
   function renderLocked(statusNode) {
     const radius = requiredRadius
     const venue = locationHint
     return (
       <ScrollView
         style={{ flex: 1, backgroundColor: '#0F0F1E' }}
-        contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
+        contentContainerStyle={{ flexGrow: 1 }}
         showsVerticalScrollIndicator={false}
+        bounces={false}
       >
         <View style={[styles.lockedHero, { paddingTop: insets.top + 24 }]}>
-          {artwork.isPhoto && artwork.url ? (
-            <Image source={{ uri: artwork.url }} blurRadius={45} resizeMode="cover"
-              style={StyleSheet.absoluteFill} accessibilityIgnoresInvertColors />
-          ) : null}
-          <View style={[StyleSheet.absoluteFill, { backgroundColor: artwork.isPhoto ? 'rgba(15,15,30,0.62)' : 'rgba(139,92,246,0.22)' }]} />
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: 'rgba(139,92,246,0.22)' }]} />
           <View style={styles.lockedHeroFade} />
           <Animated.View style={[styles.lockCircle, { transform: [{ scale: pulseAnim }] }]}>
             <LockGlyph />
@@ -271,27 +305,48 @@ export default function SecretRevealScreen({ route, navigation }) {
           <View style={styles.secretPill}><Text style={styles.secretPillText}>SECRET CHECKOFF</Text></View>
         </View>
 
-        <View style={styles.lockedBody}>
-          {venue ? <Text style={styles.lockedVenue}>{venue}</Text> : null}
-          <Text style={styles.lockedHeadline}>There's something here for you to unlock.</Text>
-          <Text style={styles.lockedSub}>
-            Get within {radius}m of {venue ?? 'this spot'} and we'll reveal the CheckOff.
-          </Text>
+        <View style={styles.lockedBodyWrap}>
+          {coverPhoto ? (
+            <>
+              <Image
+                source={{ uri: coverPhoto.url }}
+                resizeMode="cover"
+                onError={() => setCoverFailed(true)}
+                style={StyleSheet.absoluteFill}
+                accessibilityIgnoresInvertColors
+              />
+              <LinearGradient
+                colors={['#1B1433', 'rgba(15,15,30,0.62)', 'rgba(15,15,30,0.80)', 'rgba(15,15,30,0.95)']}
+                locations={[0, 0.18, 0.55, 1]}
+                style={StyleSheet.absoluteFill}
+                pointerEvents="none"
+              />
+            </>
+          ) : null}
 
-          <View style={styles.statusCard}>
-            {distance !== null && phase === 'tooFar' ? (
-              <Text style={styles.distValue}>
-                {distance >= 1000 ? `${(distance / 1000).toFixed(1)} km away` : `${distance}m away`}
-              </Text>
-            ) : null}
-            {statusNode}
+          <View style={[styles.lockedBody, { paddingBottom: insets.bottom + 24 }]}>
+            {venue ? <Text style={styles.lockedVenue}>{venue}</Text> : null}
+            <Text style={styles.lockedHeadline}>There's something here for you to unlock.</Text>
+            <Text style={styles.lockedSub}>
+              Get within {radius}m of {venue ?? 'this spot'} and we'll reveal the CheckOff.
+            </Text>
+
+            <View style={[styles.statusCard, coverPhoto && styles.statusCardOnPhoto]}>
+              {distance !== null && phase === 'tooFar' ? (
+                <Text style={styles.distValue}>
+                  {distance >= 1000 ? `${(distance / 1000).toFixed(1)} km away` : `${distance}m away`}
+                </Text>
+              ) : null}
+              {statusNode}
+            </View>
+
+            {renderUtilityRow()}
+            {renderPhotoCTA()}
+
+            <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.8}>
+              <Text style={[styles.backBtnText, coverPhoto && { color: 'rgba(255,255,255,0.6)' }]}>← Back to list</Text>
+            </TouchableOpacity>
           </View>
-
-          {renderUtilityRow()}
-
-          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.8}>
-            <Text style={styles.backBtnText}>← Back to list</Text>
-          </TouchableOpacity>
         </View>
       </ScrollView>
     )
@@ -403,6 +458,7 @@ export default function SecretRevealScreen({ route, navigation }) {
           </View>
 
           {renderUtilityRow()}
+          {renderPhotoCTA()}
 
           {/* CTA */}
           <TouchableOpacity style={styles.checkOffBtn} onPress={proceedToCheckIn} activeOpacity={0.88}>
@@ -477,7 +533,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(139,92,246,0.25)', borderWidth: 1, borderColor: PURPLE_BORDER,
   },
   secretPillText: { fontSize: 11, fontWeight: '800', color: '#D4BBFF', letterSpacing: 1.5 },
-  lockedBody: { paddingHorizontal: 24, paddingTop: 22 },
+  lockedBodyWrap: { flexGrow: 1, overflow: 'hidden', backgroundColor: '#0F0F1E' },
+  lockedBody: { flexGrow: 1, paddingHorizontal: 24, paddingTop: 22 },
+  statusCardOnPhoto: { backgroundColor: 'rgba(15,15,30,0.55)', borderColor: 'rgba(255,255,255,0.16)' },
   lockedVenue: {
     fontSize: 30, fontWeight: '900', color: '#fff', letterSpacing: -0.6,
     textAlign: 'center', marginBottom: 8,
@@ -486,7 +544,7 @@ const styles = StyleSheet.create({
     fontSize: 17, fontWeight: '700', color: '#D4BBFF', textAlign: 'center', marginBottom: 8,
   },
   lockedSub: {
-    fontSize: 14, color: 'rgba(255,255,255,0.6)', textAlign: 'center',
+    fontSize: 14, color: 'rgba(255,255,255,0.78)', textAlign: 'center',
     lineHeight: 21, marginBottom: 18, paddingHorizontal: 8,
   },
   statusCard: {
