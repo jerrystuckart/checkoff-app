@@ -245,25 +245,26 @@ export default function SecretRevealScreen({ route, navigation }) {
     )
   }
 
-  function renderUtilityRow() {
+  function renderUtilityRow(onPhoto = false) {
+    const btn = onPhoto ? [styles.utilityBtn, styles.utilityBtnOnPhoto] : styles.utilityBtn
     return (
       <View style={styles.utilityRow}>
         {hasLoc && (
-          <TouchableOpacity style={styles.utilityBtn} onPress={openDirections} activeOpacity={0.8}
+          <TouchableOpacity style={btn} onPress={openDirections} activeOpacity={0.8}
             accessibilityRole="button" accessibilityLabel="Get directions">
             <Text style={styles.utilityBtnIcon}>⌖</Text>
             <Text style={styles.utilityBtnText}>Directions</Text>
           </TouchableOpacity>
         )}
         {hasWeb && (
-          <TouchableOpacity style={styles.utilityBtn} onPress={openWebsite} activeOpacity={0.8}
+          <TouchableOpacity style={btn} onPress={openWebsite} activeOpacity={0.8}
             accessibilityRole="button" accessibilityLabel="Visit website">
             <Text style={styles.utilityBtnIcon}>↗</Text>
             <Text style={styles.utilityBtnText}>Website</Text>
           </TouchableOpacity>
         )}
         <TouchableOpacity
-          style={styles.utilityBtn}
+          style={btn}
           onPress={() => { if (item?.id) toggleSaved(item.id, navigation) }}
           activeOpacity={0.8}
           accessibilityRole="button"
@@ -273,7 +274,7 @@ export default function SecretRevealScreen({ route, navigation }) {
           <BookmarkIcon filled={saved} color={AMBER} size={18} />
           <Text style={styles.utilityBtnText}>{saved ? 'Saved' : 'Save'}</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.utilityBtn} onPress={shareItem} activeOpacity={0.8}
+        <TouchableOpacity style={btn} onPress={shareItem} activeOpacity={0.8}
           accessibilityRole="button" accessibilityLabel="Share">
           <Text style={styles.utilityBtnIcon}>⇪</Text>
           <Text style={styles.utilityBtnText}>Share</Text>
@@ -315,9 +316,18 @@ export default function SecretRevealScreen({ route, navigation }) {
                 style={StyleSheet.absoluteFill}
                 accessibilityIgnoresInvertColors
               />
+              {/* Photo stays at full strength. Gradients are localized: a soft
+                  top scrim behind the venue/teaser text and a bottom scrim
+                  behind the distance card + controls; the middle stays bright. */}
               <LinearGradient
-                colors={['#1B1433', 'rgba(15,15,30,0.62)', 'rgba(15,15,30,0.80)', 'rgba(15,15,30,0.95)']}
-                locations={[0, 0.18, 0.55, 1]}
+                colors={['rgba(27,20,51,0.85)', 'rgba(15,15,30,0.38)', 'rgba(15,15,30,0)']}
+                locations={[0, 0.22, 0.45]}
+                style={StyleSheet.absoluteFill}
+                pointerEvents="none"
+              />
+              <LinearGradient
+                colors={['rgba(15,15,30,0)', 'rgba(15,15,30,0.5)', 'rgba(15,15,30,0.88)']}
+                locations={[0.5, 0.78, 1]}
                 style={StyleSheet.absoluteFill}
                 pointerEvents="none"
               />
@@ -325,27 +335,31 @@ export default function SecretRevealScreen({ route, navigation }) {
           ) : null}
 
           <View style={[styles.lockedBody, { paddingBottom: insets.bottom + 24 }]}>
-            {venue ? <Text style={styles.lockedVenue}>{venue}</Text> : null}
-            <Text style={styles.lockedHeadline}>There's something here for you to unlock.</Text>
-            <Text style={styles.lockedSub}>
-              Get within {radius}m of {venue ?? 'this spot'} and we'll reveal the CheckOff.
-            </Text>
-
-            <View style={[styles.statusCard, coverPhoto && styles.statusCardOnPhoto]}>
-              {distance !== null && phase === 'tooFar' ? (
-                <Text style={styles.distValue}>
-                  {distance >= 1000 ? `${(distance / 1000).toFixed(1)} km away` : `${distance}m away`}
-                </Text>
-              ) : null}
-              {statusNode}
+            <View>
+              {venue ? <Text style={[styles.lockedVenue, coverPhoto && styles.onPhotoText]}>{venue}</Text> : null}
+              <Text style={[styles.lockedHeadline, coverPhoto && styles.onPhotoText]}>There's something here for you to unlock.</Text>
+              <Text style={[styles.lockedSub, coverPhoto && styles.onPhotoText]}>
+                Get within {radius}m of {venue ?? 'this spot'} and we'll reveal the CheckOff.
+              </Text>
             </View>
 
-            {renderUtilityRow()}
-            {renderPhotoCTA()}
+            <View>
+              <View style={[styles.statusCard, coverPhoto && styles.statusCardOnPhoto]}>
+                {distance !== null && phase === 'tooFar' ? (
+                  <Text style={styles.distValue}>
+                    {distance >= 1000 ? `${(distance / 1000).toFixed(1)} km away` : `${distance}m away`}
+                  </Text>
+                ) : null}
+                {statusNode}
+              </View>
 
-            <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.8}>
-              <Text style={[styles.backBtnText, coverPhoto && { color: 'rgba(255,255,255,0.6)' }]}>← Back to list</Text>
-            </TouchableOpacity>
+              {renderUtilityRow(!!coverPhoto)}
+              {renderPhotoCTA()}
+
+              <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.8}>
+                <Text style={[styles.backBtnText, coverPhoto && { color: 'rgba(255,255,255,0.85)', textShadowColor: 'rgba(0,0,0,0.6)', textShadowRadius: 4 }]}>← Back to list</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </ScrollView>
@@ -534,8 +548,10 @@ const styles = StyleSheet.create({
   },
   secretPillText: { fontSize: 11, fontWeight: '800', color: '#D4BBFF', letterSpacing: 1.5 },
   lockedBodyWrap: { flexGrow: 1, overflow: 'hidden', backgroundColor: '#0F0F1E' },
-  lockedBody: { flexGrow: 1, paddingHorizontal: 24, paddingTop: 22 },
-  statusCardOnPhoto: { backgroundColor: 'rgba(15,15,30,0.55)', borderColor: 'rgba(255,255,255,0.16)' },
+  lockedBody: { flexGrow: 1, justifyContent: 'space-between', paddingHorizontal: 24, paddingTop: 22 },
+  onPhotoText: { textShadowColor: 'rgba(0,0,0,0.65)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
+  utilityBtnOnPhoto: { backgroundColor: 'rgba(15,15,30,0.55)', borderColor: 'rgba(255,255,255,0.22)' },
+  statusCardOnPhoto: { backgroundColor: 'rgba(15,15,30,0.5)', borderColor: 'rgba(255,255,255,0.22)' },
   lockedVenue: {
     fontSize: 30, fontWeight: '900', color: '#fff', letterSpacing: -0.6,
     textAlign: 'center', marginBottom: 8,
@@ -544,7 +560,7 @@ const styles = StyleSheet.create({
     fontSize: 17, fontWeight: '700', color: '#D4BBFF', textAlign: 'center', marginBottom: 8,
   },
   lockedSub: {
-    fontSize: 14, color: 'rgba(255,255,255,0.78)', textAlign: 'center',
+    fontSize: 14, color: 'rgba(255,255,255,0.92)', textAlign: 'center',
     lineHeight: 21, marginBottom: 18, paddingHorizontal: 8,
   },
   statusCard: {
