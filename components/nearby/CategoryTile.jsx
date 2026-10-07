@@ -38,7 +38,13 @@ export default function CategoryTile({ name, color, selected, onPress, style, te
           ]}
         >
           {meta ? (
-            <Image source={meta.image} style={styles.image} resizeMode="cover" />
+            <View style={[styles.image, styles.clip]}>
+              <Image
+                source={meta.image}
+                style={{ width: INNER * (meta.zoom ?? 1), height: INNER * (meta.zoom ?? 1) }}
+                resizeMode="cover"
+              />
+            </View>
           ) : (
             <View style={[styles.image, styles.fallback, { backgroundColor: `${accent}22` }]}>
               <CategoryIcon categoryName={name} color={accent} size={26} />
@@ -66,6 +72,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#000',
   },
   image: { width: INNER, height: INNER, borderRadius: INNER / 2 },
+  clip: { overflow: 'hidden', alignItems: 'center', justifyContent: 'center' },
   fallback: { alignItems: 'center', justifyContent: 'center' },
   label: { marginTop: 7, fontSize: 11, fontWeight: '600', textAlign: 'center', lineHeight: 13 },
   labelSelected: { fontWeight: '800' },
