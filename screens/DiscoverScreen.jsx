@@ -1042,7 +1042,7 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT_2 }) {
     activeChipX:      { fontSize: 11, color: NAVY, fontWeight: '700' },
 
     categoryRow:     { flexGrow: 0, marginBottom: 10 },
-    categoryContent: { paddingHorizontal: 16, paddingVertical: 4, paddingRight: 24 },
+    categoryContent: { paddingHorizontal: 16, paddingVertical: 8, paddingRight: 24 },
 
     filterRow:              { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, marginBottom: 14 },
     filterPill:             { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 999, borderWidth: 1, borderColor: BORDER, backgroundColor: CARD, minHeight: 44, justifyContent: 'center' },
