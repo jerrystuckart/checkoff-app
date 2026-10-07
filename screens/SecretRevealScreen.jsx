@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import {
   Platform,
   View, Text, TouchableOpacity, StyleSheet,
-  ActivityIndicator, Animated, Linking, ScrollView,
+  ActivityIndicator, Animated, Linking, ScrollView, Image, Share,
 } from 'react-native'
 import * as Location from 'expo-location'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -10,6 +10,11 @@ import * as Haptics from 'expo-haptics'
 import { supabase } from '../lib/supabase'
 import { trackEvent } from '../lib/trackEvent'
 import { haversineMeters } from '../lib/distance'
+import { useSavedItems } from '../lib/SavedItemsContext'
+import { useCardArtwork } from '../components/home/useCardArtwork'
+import BookmarkIcon from '../components/BookmarkIcon'
+import { buildInviteMessage, buildSecretInviteMessage } from '../lib/inviteMessage'
+import { itemHasLocation, itemHasWebsite, openItemDirections, openItemWebsite } from '../lib/itemUtilityActions'
 
 const AMBER  = '#F5A623'
 const NAVY   = '#1A1A2E'
@@ -18,6 +23,16 @@ const PURPLE_DIM = 'rgba(139,92,246,0.15)'
 const PURPLE_BORDER = 'rgba(139,92,246,0.35)'
 
 const DEFAULT_RADIUS_M = 150
+
+// Code-drawn padlock (no icon library in this app, no new art dependency).
+function LockGlyph() {
+  return (
+    <View style={styles.lockGlyph}>
+      <View style={styles.lockShackle} />
+      <View style={styles.lockBody}><View style={styles.lockKeyhole} /></View>
+    </View>
+  )
+}
 
 /**
  * SecretRevealScreen
@@ -34,6 +49,11 @@ export default function SecretRevealScreen({ route, navigation }) {
   const [distance, setDistance]     = useState(null)
   const [permDenied, setPermDenied] = useState(false)
   const [partnerName, setPartnerName] = useState(null)
+  // Same saved-items context + toggle the normal item detail uses; it also
+  // owns the guest sign-in prompt, so no auth handling is duplicated here.
+  const { isSaved, toggleSaved } = useSavedItems()
+  // Only ever rendered heavily blurred + darkened below, never as-is.
+  const artwork = useCardArtwork(item, null)
 
   const glowAnim   = useRef(new Animated.Value(0)).current
   const revealAnim = useRef(new Animated.Value(0)).current
@@ -161,85 +181,138 @@ export default function SecretRevealScreen({ route, navigation }) {
     })
   }
 
+  // Directions / Website open the exact same links as the normal item detail
+  // (lib/itemUtilityActions.js); both stay available while locked.
+  const hasLoc = itemHasLocation(item)
+  const hasWeb = itemHasWebsite(item)
+
   function openDirections() {
     if (item?.id) trackEvent('directions_click', { itemId: item.id })
-    if (itemLat && itemLng) {
-      const url = `maps://?daddr=${itemLat},${itemLng}&dirflg=d`
-      Linking.canOpenURL(url).then(ok =>
-        Linking.openURL(ok ? url : `https://www.google.com/maps/dir/?api=1&destination=${itemLat},${itemLng}`).catch(() => {})
-      )
-    } else if (item?.maps_query) {
-      const encoded = encodeURIComponent(item.maps_query)
-      Linking.canOpenURL(`maps://?q=${encoded}`).then(ok =>
-        Linking.openURL(ok ? `maps://?q=${encoded}` : `https://maps.google.com/?q=${encoded}`).catch(() => {})
-      )
-    }
+    openItemDirections(item)
+  }
+
+  function openWebsite() {
+    if (!item?.website_url) return
+    trackEvent('url_click', { itemId: item.id })
+    openItemWebsite(item)
+  }
+
+  // While locked the message names only the venue and the item deep link —
+  // never the body/challenge. Once revealed it is the normal invite message.
+  async function shareItem() {
+    const message = phase === 'revealed'
+      ? buildInviteMessage({ itemBody: revealText, itemId: item?.id })
+      : buildSecretInviteMessage({ venueName: locationHint, itemId: item?.id })
+    try {
+      await Share.share({ message, title: 'CheckOff invite' })
+    } catch (e) {}
+  }
+
+  const saved = !!item?.id && isSaved(item.id)
+
+  function renderUtilityRow() {
+    return (
+      <View style={styles.utilityRow}>
+        {hasLoc && (
+          <TouchableOpacity style={styles.utilityBtn} onPress={openDirections} activeOpacity={0.8}
+            accessibilityRole="button" accessibilityLabel="Get directions">
+            <Text style={styles.utilityBtnIcon}>⌖</Text>
+            <Text style={styles.utilityBtnText}>Directions</Text>
+          </TouchableOpacity>
+        )}
+        {hasWeb && (
+          <TouchableOpacity style={styles.utilityBtn} onPress={openWebsite} activeOpacity={0.8}
+            accessibilityRole="button" accessibilityLabel="Visit website">
+            <Text style={styles.utilityBtnIcon}>↗</Text>
+            <Text style={styles.utilityBtnText}>Website</Text>
+          </TouchableOpacity>
+        )}
+        <TouchableOpacity
+          style={styles.utilityBtn}
+          onPress={() => { if (item?.id) toggleSaved(item.id, navigation) }}
+          activeOpacity={0.8}
+          accessibilityRole="button"
+          accessibilityState={{ selected: saved }}
+          accessibilityLabel={saved ? 'Remove from Saved' : 'Save'}
+        >
+          <BookmarkIcon filled={saved} color={AMBER} size={18} />
+          <Text style={styles.utilityBtnText}>{saved ? 'Saved' : 'Save'}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.utilityBtn} onPress={shareItem} activeOpacity={0.8}
+          accessibilityRole="button" accessibilityLabel="Share">
+          <Text style={styles.utilityBtnIcon}>⇪</Text>
+          <Text style={styles.utilityBtnText}>Share</Text>
+        </TouchableOpacity>
+      </View>
+    )
+  }
+
+  // Shared locked layout for 'checking' and 'tooFar'. Reveals nothing about
+  // the secret: no body/challenge text, and the photo (if any) is blurred.
+  function renderLocked(statusNode) {
+    const radius = requiredRadius
+    const venue = locationHint
+    return (
+      <ScrollView
+        style={{ flex: 1, backgroundColor: '#0F0F1E' }}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 24 }}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={[styles.lockedHero, { paddingTop: insets.top + 24 }]}>
+          {artwork.isPhoto && artwork.url ? (
+            <Image source={{ uri: artwork.url }} blurRadius={45} resizeMode="cover"
+              style={StyleSheet.absoluteFill} accessibilityIgnoresInvertColors />
+          ) : null}
+          <View style={[StyleSheet.absoluteFill, { backgroundColor: artwork.isPhoto ? 'rgba(15,15,30,0.62)' : 'rgba(139,92,246,0.22)' }]} />
+          <View style={styles.lockedHeroFade} />
+          <Animated.View style={[styles.lockCircle, { transform: [{ scale: pulseAnim }] }]}>
+            <LockGlyph />
+          </Animated.View>
+          <View style={styles.secretPill}><Text style={styles.secretPillText}>SECRET CHECKOFF</Text></View>
+        </View>
+
+        <View style={styles.lockedBody}>
+          {venue ? <Text style={styles.lockedVenue}>{venue}</Text> : null}
+          <Text style={styles.lockedHeadline}>There's something here for you to unlock.</Text>
+          <Text style={styles.lockedSub}>
+            Get within {radius}m of {venue ?? 'this spot'} and we'll reveal the CheckOff.
+          </Text>
+
+          <View style={styles.statusCard}>
+            {distance !== null && phase === 'tooFar' ? (
+              <Text style={styles.distValue}>
+                {distance >= 1000 ? `${(distance / 1000).toFixed(1)} km away` : `${distance}m away`}
+              </Text>
+            ) : null}
+            {statusNode}
+          </View>
+
+          {renderUtilityRow()}
+
+          <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.8}>
+            <Text style={styles.backBtnText}>← Back to list</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+    )
   }
 
   // ── Checking ──
   if (phase === 'checking') {
-    return (
-      <View style={[styles.container, { paddingTop: insets.top + 40 }]}>
-        <Animated.View style={[styles.lockCircle, { transform: [{ scale: pulseAnim }] }]}>
-          <Text style={styles.lockIcon}>🔒</Text>
-        </Animated.View>
-        {locationHint && (
-          <Text style={styles.locationHint}>{locationHint}</Text>
-        )}
-        <Text style={styles.title}>Checking your location</Text>
-        <Text style={styles.sub}>Stand by while we confirm you're at the right spot…</Text>
-        <ActivityIndicator color={AMBER} style={{ marginTop: 24 }} />
+    return renderLocked(
+      <View style={styles.trackingBadge}>
+        <ActivityIndicator size="small" color="#1D9E75" />
+        <Text style={styles.trackingText}>Checking your location…</Text>
       </View>
     )
   }
 
   // ── Too far ──
   if (phase === 'tooFar') {
-    const distLabel = distance !== null
-      ? distance >= 1000 ? `${(distance / 1000).toFixed(1)} km away` : `${distance}m away`
-      : 'You need to be closer'
-
-    const canGetDirections = !!(item?.maps_query || (itemLat && itemLng))
-
-    return (
-      <View style={[styles.container, { paddingTop: insets.top + 40 }]}>
-        <Animated.View style={[styles.lockCircle, { transform: [{ scale: pulseAnim }] }]}>
-          <Text style={styles.lockIcon}>🔒</Text>
-        </Animated.View>
-
-        {locationHint && (
-          <Text style={styles.locationHint}>{locationHint}</Text>
-        )}
-
-        <Text style={styles.title}>Get closer to unlock</Text>
-        <Text style={styles.sub}>
-          Head {locationHint ? `to ${locationHint}` : 'to this location'} — the secret challenge
-          reveals automatically when you're within {requiredRadius}m.
-        </Text>
-
-        <View style={styles.distCard}>
-          <Text style={styles.distValue}>{distLabel}</Text>
-          <Text style={styles.distMeta}>
-            {locationHint ? `from ${locationHint}` : 'from this location'}
-          </Text>
-        </View>
-
-        {canGetDirections && (
-          <TouchableOpacity style={styles.directionsBtn} onPress={openDirections} activeOpacity={0.88}>
-            <Text style={styles.directionsBtnText}>
-              ⌖  Get directions{locationHint ? ` to ${locationHint}` : ''}
-            </Text>
-          </TouchableOpacity>
-        )}
-
-        <View style={styles.trackingBadge}>
-          <View style={styles.trackingDot} />
-          <Text style={styles.trackingText}>Tracking your location live</Text>
-        </View>
-
-        <TouchableOpacity style={styles.backBtn} onPress={() => navigation.goBack()} activeOpacity={0.8}>
-          <Text style={styles.backBtnText}>← Back to list</Text>
-        </TouchableOpacity>
+    return renderLocked(
+      <View style={styles.trackingBadge}>
+        <View style={styles.trackingDot} />
+        <Text style={styles.trackingText}>Watching for your arrival</Text>
       </View>
     )
   }
@@ -262,6 +335,7 @@ export default function SecretRevealScreen({ route, navigation }) {
             <Text style={styles.directionsBtnText}>Open Settings</Text>
           </TouchableOpacity>
         )}
+        {renderUtilityRow()}
         <TouchableOpacity style={styles.retryBtn} onPress={checkProximity} activeOpacity={0.88}>
           <Text style={styles.retryBtnText}>Try again</Text>
         </TouchableOpacity>
@@ -328,12 +402,7 @@ export default function SecretRevealScreen({ route, navigation }) {
             <Text style={styles.pointsDesc}>Photo proof required to claim your points</Text>
           </View>
 
-          {/* Directions if available */}
-          {item?.maps_query && (
-            <TouchableOpacity style={styles.directionsCard} onPress={openDirections} activeOpacity={0.88}>
-              <Text style={styles.directionsCardText}>⌖  Get directions to {partnerName ?? item.maps_query}</Text>
-            </TouchableOpacity>
-          )}
+          {renderUtilityRow()}
 
           {/* CTA */}
           <TouchableOpacity style={styles.checkOffBtn} onPress={proceedToCheckIn} activeOpacity={0.88}>
@@ -378,7 +447,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', marginBottom: 20,
     borderWidth: 1, borderColor: 'rgba(255,255,255,0.1)', width: '100%',
   },
-  distValue: { fontSize: 32, fontWeight: '800', color: AMBER },
+  distValue: { fontSize: 30, fontWeight: '800', color: AMBER },
   distMeta:  { fontSize: 13, color: 'rgba(255,255,255,0.4)', marginTop: 4, fontWeight: '600' },
 
   directionsBtn: {
@@ -394,6 +463,58 @@ const styles = StyleSheet.create({
 
   backBtn:     { paddingVertical: 14, alignItems: 'center', width: '100%' },
   backBtnText: { fontSize: 14, color: 'rgba(255,255,255,0.35)', fontWeight: '600' },
+
+  lockedHero: {
+    height: 280, alignItems: 'center', justifyContent: 'center',
+    overflow: 'hidden', backgroundColor: '#1B1433',
+  },
+  lockedHeroFade: {
+    position: 'absolute', left: 0, right: 0, bottom: 0, height: 90,
+    backgroundColor: 'rgba(15,15,30,0.55)',
+  },
+  secretPill: {
+    marginTop: 4, paddingHorizontal: 14, paddingVertical: 6, borderRadius: 999,
+    backgroundColor: 'rgba(139,92,246,0.25)', borderWidth: 1, borderColor: PURPLE_BORDER,
+  },
+  secretPillText: { fontSize: 11, fontWeight: '800', color: '#D4BBFF', letterSpacing: 1.5 },
+  lockedBody: { paddingHorizontal: 24, paddingTop: 22 },
+  lockedVenue: {
+    fontSize: 30, fontWeight: '900', color: '#fff', letterSpacing: -0.6,
+    textAlign: 'center', marginBottom: 8,
+  },
+  lockedHeadline: {
+    fontSize: 17, fontWeight: '700', color: '#D4BBFF', textAlign: 'center', marginBottom: 8,
+  },
+  lockedSub: {
+    fontSize: 14, color: 'rgba(255,255,255,0.6)', textAlign: 'center',
+    lineHeight: 21, marginBottom: 18, paddingHorizontal: 8,
+  },
+  statusCard: {
+    alignItems: 'center', gap: 10, paddingVertical: 14, paddingHorizontal: 16,
+    borderRadius: 16, marginBottom: 16,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.09)',
+  },
+  lockGlyph: { alignItems: 'center' },
+  lockShackle: {
+    width: 22, height: 18, borderTopLeftRadius: 11, borderTopRightRadius: 11,
+    borderWidth: 3.5, borderBottomWidth: 0, borderColor: '#E9DDFF', marginBottom: -2,
+  },
+  lockBody: {
+    width: 34, height: 26, borderRadius: 7, backgroundColor: '#E9DDFF',
+    alignItems: 'center', justifyContent: 'center',
+  },
+  lockKeyhole: { width: 6, height: 9, borderRadius: 3, backgroundColor: '#4B2FA0' },
+
+  utilityRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 14, width: '100%' },
+  utilityBtn: {
+    flex: 1, minWidth: 72, alignItems: 'center', gap: 6,
+    paddingVertical: 14, paddingHorizontal: 8, borderRadius: 16,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)',
+  },
+  utilityBtnIcon: { fontSize: 19, color: AMBER },
+  utilityBtnText: { fontSize: 12, fontWeight: '800', color: '#fff', textAlign: 'center' },
 
   trackingBadge: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 20, paddingVertical: 8, paddingHorizontal: 16, borderRadius: 999, backgroundColor: 'rgba(29,158,117,0.15)', borderWidth: 1, borderColor: 'rgba(29,158,117,0.3)' },
   trackingDot:   { width: 7, height: 7, borderRadius: 4, backgroundColor: '#1D9E75' },

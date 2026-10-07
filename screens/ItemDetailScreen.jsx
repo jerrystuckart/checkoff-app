@@ -43,6 +43,7 @@ import { getMemoryDetailForItem, hasMemoryContent } from '../lib/checkInMemory'
 import DetailArtwork from '../components/itemDetail/DetailArtwork'
 import { buildInviteMessage, buildInviteAskLine } from '../lib/inviteMessage'
 import { useSavedItems } from '../lib/SavedItemsContext'
+import { openItemDirections, openItemWebsite } from '../lib/itemUtilityActions'
 import BookmarkIcon from '../components/BookmarkIcon'
 import { deriveTitlePresentation } from '../lib/detailTitlePresentation'
 import { isTripModeAvailableForList, isTripModeWindowOpen, DEFAULT_TRIP_MODE_GRACE_DAYS } from '../lib/tripMode'
@@ -1356,27 +1357,13 @@ export default function ItemDetailScreen({ route, navigation }) {
   function openDirections() {
     if (!item) return
     trackEvent('directions_click', { itemId: item.id })
-    // Support both snake_case (useNearby) and camelCase (useItems) field names
-    const lat = item.maps_lat ?? item.mapsLat
-    const lng = item.maps_lng ?? item.mapsLng
-    if (lat && lng) {
-      const url = `maps://?daddr=${lat},${lng}&dirflg=d`
-      Linking.canOpenURL(url).then(ok =>
-        Linking.openURL(ok ? url : `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`).catch(() => {})
-      )
-    } else if (item.maps_query) {
-      const encoded = encodeURIComponent(item.maps_query)
-      const url = `maps://?q=${encoded}`
-      Linking.canOpenURL(url).then(ok =>
-        Linking.openURL(ok ? url : `https://maps.google.com/?q=${encoded}`).catch(() => {})
-      )
-    }
+    openItemDirections(item)
   }
 
   function openWebsite() {
     if (!item?.website_url) return
     trackEvent('url_click', { itemId: item.id })
-    Linking.openURL(item.website_url).catch(() => {})
+    openItemWebsite(item)
   }
 
   async function shareVia(channelKey) {
