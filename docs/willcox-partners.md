@@ -32,3 +32,6 @@ Champions see only: place, proposed CheckOff, CheckOff's recommendation, members
 
 ## Chamber polish (2026-10-07, DEPLOYED)
 73 Chamber-facing recommendation notes (53 candidate, 20 live) made membership-neutral via `docs/willcox-launch/research/neutral_notes.py` (old text in `recommendation-notes-before-neutral.json`). Chamber cards now lead with the CheckOff sentence. Internal notes, bodies, recommendations, statuses, owners and lists unchanged.
+
+## Willcox Activation Kit (2026-10-07, DEPLOYED, site commit 8c87216)
+Public page https://getcheckoff.com/willcox/kit. Assets in `public/downloads/willcox/kit/` (13 PNG, 3 SVG QR, 5 lossless print PDFs, 10 preview thumbnails). The 24x36 Wine Festival poster was replaced with the corrected 4096 x 6144 file after the original's QR failed ZXing. All 13 QR-bearing PNGs and 3 SVGs decode (Apple Vision + ZXing) to /willcox?utm_source={business|general|wine_festival}&utm_medium=qr&utm_campaign=willcox_launch_2026. Champion nav now: Willcox Activation Kit, Visitor Page, Chamber Pitch, Sign Out (Business Page admin-only; generic Featured Kit no longer linked).
