@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native'
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Platform } from 'react-native'
 import { useTheme } from '../lib/ThemeContext'
 import { enableVisitRecovery, turnOffVisitRecovery } from '../lib/visitDetection/recoverySettings'
 import { RECOVERY_COPY } from '../lib/visitDetection/recoveryPolicy'
 import { openVisitInbox } from '../lib/visitDetection/inboxNavigation'
-import { useVisitRecovery } from '../lib/visitDetection/useVisitRecovery'
+import { useVisitRecovery, backgroundPermissionRunner, showAndroidDisclosure } from '../lib/visitDetection/useVisitRecovery'
 
 // Profile section for seven-day visit recovery. The whole section is capability-gated: where visit recovery is
 // unsupported (Android) it renders nothing at all. On iOS the state shown comes from
@@ -21,27 +21,28 @@ export default function VisitRecoverySection({ userId, navigation }) {
   const showInbox = resolved.showInbox
   const st = { suggestionCount: resolved.suggestionCount }
 
+  async function doEnable() {
+    setBusy(true)
+    try {
+      const { permission } = await enableVisitRecovery(userId, backgroundPermissionRunner())
+      if (permission !== 'granted') Alert.alert('One more step', Platform.OS === 'android' ? RECOVERY_COPY.permissionDeniedHintAndroid : RECOVERY_COPY.permissionDeniedHint, [
+        { text: 'Later', style: 'cancel' },
+        { text: 'Open Settings', onPress: openSettings },
+      ])
+    } catch (e) {
+      Alert.alert('Could not turn on', e?.message ?? 'Please try again.')
+    } finally {
+      setBusy(false)
+      load()
+    }
+  }
+
   function turnOn() {
+    // Android: the prominent disclosure on its own, before any permission request (Google Play User Data policy).
+    if (Platform.OS === 'android') { showAndroidDisclosure({ onContinue: doEnable }); return }
     Alert.alert(RECOVERY_COPY.title, `${RECOVERY_COPY.intro}\n\n${RECOVERY_COPY.how}\n\n${RECOVERY_COPY.privacy}`, [
       { text: 'Not now', style: 'cancel' },
-      {
-        text: 'Turn on',
-        onPress: async () => {
-          setBusy(true)
-          try {
-            const { permission } = await enableVisitRecovery(userId)
-            if (permission !== 'granted') Alert.alert('One more step', RECOVERY_COPY.permissionDeniedHint, [
-              { text: 'Later', style: 'cancel' },
-              { text: 'Open Settings', onPress: openSettings },
-            ])
-          } catch (e) {
-            Alert.alert('Could not turn on', e?.message ?? 'Please try again.')
-          } finally {
-            setBusy(false)
-            load()
-          }
-        },
-      },
+      { text: 'Turn on', onPress: doEnable },
     ])
   }
 
@@ -81,7 +82,7 @@ export default function VisitRecoverySection({ userId, navigation }) {
             </TouchableOpacity>
           </>
         )}
-        {(cardState === 'needs_always' || cardState === 'needs_foreground' || cardState === 'services_disabled') && (
+        {(cardState === 'needs_always' || cardState === 'needs_foreground' || cardState === 'needs_precise' || cardState === 'services_disabled' || cardState === 'registration_error' || cardState === 'registering') && (
           <>
             <Text style={s.body}>{resolved.status}</Text>
             {resolved.cta && (

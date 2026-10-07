@@ -16,7 +16,7 @@ import { useTheme } from '../lib/ThemeContext'
 import * as Sentry from '@sentry/react-native'
 import AdminDiagnosticsSection from '../components/profile/AdminDiagnosticsSection'
 import VisitRecoverySection from '../components/VisitRecoverySection'
-import { supportsVisitRecovery } from '../lib/visitDetection/recoveryPolicy'
+import { deviceSupportsVisitRecovery } from '../lib/visitDetection/deviceCapability'
 
 export default function ProfileScreen({ navigation }) {
   const insets = useSafeAreaInsets()
@@ -372,7 +372,7 @@ export default function ProfileScreen({ navigation }) {
         <AdminDiagnosticsSection
           isAdmin={profile?.is_admin}
           userId={user?.id}
-          showVisitDebug={supportsVisitRecovery(Platform.OS) && !!profile?.visit_detection_tester}
+          showVisitDebug={deviceSupportsVisitRecovery() && !!profile?.visit_detection_tester}
           colors={colors}
         />
         {/* Tier badge pill */}
