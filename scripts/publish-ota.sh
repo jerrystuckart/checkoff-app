@@ -65,7 +65,7 @@ fi
 export SENTRY_AUTH_TOKEN
 ORG="$(node -p "require('./app.json').expo.plugins.find(p=>Array.isArray(p)&&p[0]==='@sentry/react-native/expo')[1].organization")"
 PROJ="$(node -p "require('./app.json').expo.plugins.find(p=>Array.isArray(p)&&p[0]==='@sentry/react-native/expo')[1].project")"
-CODE="$(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN" | curl -s -o /dev/null -w '%{http_code}' -m 20 -K - "https://sentry.io/api/0/projects/$ORG/$PROJ/")"
+CODE="$(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN" | curl -s -o /dev/null -w '%{http_code}' -m 20 -K - "https://sentry.io/api/0/organizations/$ORG/releases/")"
 [ "$CODE" = 200 ] || fail "Sentry rejected the token for $ORG/$PROJ (HTTP $CODE)"
 ok "Sentry token accepted for $ORG/$PROJ"
 if [ "$PUBLISH" -ne 1 ]; then echo; echo "CHECK COMPLETE: compatible and ready, credential valid. To publish:  scripts/publish-ota.sh $PLATFORM --publish"; exit 0; fi
