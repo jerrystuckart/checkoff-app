@@ -27,8 +27,8 @@ case "$PLATFORM" in
 esac
 [ -n "$EXPECTED_RUNTIME" ] || fail "no expected runtime on record"
 echo "== 1. Source and compatibility ($PLATFORM)"
-[ "$(git rev-parse --abbrev-ref HEAD)" = "$BRANCH" ] || fail "run this from branch $BRANCH (this is $(git rev-parse --abbrev-ref HEAD))"
-git fetch -q origin 2>/dev/null; [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$BRANCH")" ] || fail "local tip differs from origin/$BRANCH (push or pull first)"
+# The publishing checkout may use any local branch name; what matters is that HEAD is EXACTLY the pushed tip of the release branch.
+git fetch -q origin 2>/dev/null; [ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$BRANCH")" ] || fail "HEAD ($(git rev-parse --short HEAD)) is not the pushed tip of origin/$BRANCH ($(git rev-parse --short "origin/$BRANCH")); check out $BRANCH at its pushed tip"
 [ -z "$(git status --porcelain --untracked-files=no)" ] || fail "tracked files have uncommitted changes"
 [ ! -d ios ] && [ ! -d android ] || fail "a generated ios/ or android/ folder exists: an OTA published from here would not be reproducible"
 [ -d node_modules ] && [ ! -L node_modules ] || fail "node_modules must be a real directory (npm ci); a symlink gives wrong fingerprints"
