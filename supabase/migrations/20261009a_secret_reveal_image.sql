@@ -17,6 +17,13 @@ BEGIN;
 ALTER TABLE public.items
   ADD COLUMN IF NOT EXISTS secret_reveal_image_storage_path text NULL;
 
+-- Optional admin-chosen crop focus for the portrait background (percent, 0..100 per axis; NULL = app default).
+ALTER TABLE public.items
+  ADD COLUMN IF NOT EXISTS secret_reveal_image_focus_x smallint NULL
+    CONSTRAINT items_secret_reveal_focus_x_range CHECK (secret_reveal_image_focus_x BETWEEN 0 AND 100),
+  ADD COLUMN IF NOT EXISTS secret_reveal_image_focus_y smallint NULL
+    CONSTRAINT items_secret_reveal_focus_y_range CHECK (secret_reveal_image_focus_y BETWEEN 0 AND 100);
+
 COMMENT ON COLUMN public.items.secret_reveal_image_storage_path IS
   'Optional admin-uploaded portrait background shown behind the unlocked Secret card (submission-photos/secret-reveal-images/<item_id>/...). NULL = reuse approved cover.';
 
@@ -34,4 +41,5 @@ COMMIT;
 
 -- Rollback (no data loss for other features):
 --   DROP POLICY IF EXISTS "anyone can view secret reveal images" ON storage.objects;
---   ALTER TABLE public.items DROP COLUMN IF EXISTS secret_reveal_image_storage_path;
+--   ALTER TABLE public.items DROP COLUMN IF EXISTS secret_reveal_image_storage_path,
+--     DROP COLUMN IF EXISTS secret_reveal_image_focus_x, DROP COLUMN IF EXISTS secret_reveal_image_focus_y;

@@ -7,14 +7,15 @@
 // Purely presentational: every decision (which photo, which copy, which
 // actions) is made by lib/secretRevealModel.js and passed in; side effects
 // (location, navigation, share, save) stay in screens/SecretRevealScreen.jsx.
-import React, { useEffect, useRef } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import {
   View, Text, Image, ScrollView, Animated, Easing, StyleSheet,
   TouchableOpacity, ActivityIndicator,
 } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import BookmarkIcon from '../BookmarkIcon'
-import { revealHeadline, unlockedHeroHeight } from '../../lib/secretRevealModel'
+import { REVEAL_HEADING } from '../../lib/secretRevealModel'
+import { coverPlacement } from '../../lib/imageCrop'
 import { shouldAnimateReveal } from '../../lib/secretRevealVisit'
 
 export const COLORS = {
@@ -88,7 +89,8 @@ export default function SecretRevealView({
   pointsText,            // '25 pts' | null
   requirementText,       // string | null (revealed only)
   lockedPhoto,           // { url } | null — business photo
-  unlockedPhoto,         // { url } | null — approved experience photo
+  unlockedPhoto,         // { url } | null — reveal image / approved experience photo
+  revealFocus = null,    // { x, y } 0..100 admin crop focus for the reveal image (null = default)
   onLockedPhotoError,
   onUnlockedPhotoError,
   plan,                  // { primary: {id}|null, secondary: string[] }
@@ -104,7 +106,7 @@ export default function SecretRevealView({
 }) {
   const revealed = phase === 'revealed'
   const lockedH = heroHeight + insets.top
-  const unlockedH = unlockedHeroHeight(heroHeight) + insets.top
+  const unlockedH = lockedH // the card starts below the same top band, so the photo above it stays unobstructed
   const heroH = useRef(new Animated.Value(revealed ? unlockedH : lockedH)).current
   const mix = useRef(new Animated.Value(revealed ? 1 : 0)).current
   const contentIn = useRef(new Animated.Value(0)).current
@@ -162,6 +164,20 @@ export default function SecretRevealView({
   // (above the tab bar, since this view only fills the area above it); the locked hero
   // photo fades out. Same image for both states is fine: it simply expands.
   const bgUrl = unlockedPhoto?.url ?? null
+  const [box, setBox] = useState({ w: 0, h: 0 })
+  const [imgSize, setImgSize] = useState({ url: null, w: 0, h: 0 })
+  useEffect(() => {
+    let live = true
+    if (!bgUrl) return undefined
+    Image.getSize(bgUrl, (w, h) => { if (live) setImgSize({ url: bgUrl, w, h }) }, () => { if (live) setImgSize({ url: bgUrl, w: 0, h: 0 }) })
+    return () => { live = false }
+  }, [bgUrl])
+  // The photo occupies the top ~72% of the screen and melts into the dark below, so its
+  // subject sits in the band above the card. Crop focus is admin-adjustable (reveal image only).
+  const photoBoxH = Math.round(box.h * 0.72)
+  const placement = imgSize.url === bgUrl && box.w > 0
+    ? coverPlacement({ imgW: imgSize.w, imgH: imgSize.h, boxW: box.w, boxH: photoBoxH, focus: revealFocus })
+    : null
   const bgScale = mix.interpolate({ inputRange: [0, 1], outputRange: [reduceMotion ? 1 : 1.14, 1] })
   const heroPhotoOpacity = mix.interpolate({ inputRange: [0, 1], outputRange: [1, 0] })
   const heroPhotoScale = mix.interpolate({ inputRange: [0, 1], outputRange: [1, reduceMotion ? 1 : 1.18] })
@@ -181,7 +197,7 @@ export default function SecretRevealView({
   const primaryLabel = primaryId ? PRIMARY_LABELS[primaryId] : null
 
   return (
-    <View style={styles.root}>
+    <View style={styles.root} onLayout={(e) => setBox({ w: e.nativeEvent.layout.width, h: e.nativeEvent.layout.height })}>
       {/* Stationary full-screen reveal background (behind the scrolling content) */}
       <Animated.View
         style={[StyleSheet.absoluteFill, { opacity: mix, transform: [{ scale: bgScale }] }]}
@@ -189,20 +205,24 @@ export default function SecretRevealView({
       >
         <BrandedHero />
         {bgUrl ? (
-          <Image
-            source={{ uri: bgUrl }}
-            resizeMode="cover"
-            onError={onUnlockedPhotoError}
-            style={StyleSheet.absoluteFill}
-            accessibilityIgnoresInvertColors
-          />
+          <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: photoBoxH, overflow: 'hidden' }}>
+            <Image
+              source={{ uri: bgUrl }}
+              resizeMode={placement ? 'stretch' : 'cover'}
+              onError={onUnlockedPhotoError}
+              style={placement
+                ? { position: 'absolute', width: placement.width, height: placement.height, left: placement.left, top: placement.top }
+                : StyleSheet.absoluteFill}
+              accessibilityIgnoresInvertColors
+            />
+          </View>
         ) : null}
       </Animated.View>
       {/* Readability gradient: light at the top (photo shows), dark behind card, utilities and the action */}
       <Animated.View style={[StyleSheet.absoluteFill, { opacity: mix }]} pointerEvents="none">
         <LinearGradient
-          colors={['rgba(8,8,20,0.5)', 'rgba(15,15,30,0.12)', 'rgba(15,15,30,0.5)', 'rgba(15,15,30,0.82)', 'rgba(15,15,30,0.94)']}
-          locations={[0, 0.16, 0.42, 0.7, 1]}
+          colors={['rgba(8,8,20,0.45)', 'rgba(15,15,30,0)', 'rgba(15,15,30,0)', 'rgba(15,15,30,0.55)', 'rgba(15,15,30,0.88)', 'rgba(15,15,30,1)']}
+          locations={[0, 0.14, 0.34, 0.52, 0.74, 0.92]}
           style={StyleSheet.absoluteFill}
         />
       </Animated.View>
@@ -261,8 +281,9 @@ export default function SecretRevealView({
                 <Text style={styles.eyebrow} maxFontSizeMultiplier={1.3}>SECRET UNLOCKED</Text>
               </View>
               <Text style={styles.discoveryHeadline} accessibilityRole="header" maxFontSizeMultiplier={1.35}>
-                {revealHeadline(venueName)}
+                {REVEAL_HEADING}
               </Text>
+              {venueName ? <Text style={styles.discoveryVenue} numberOfLines={2} maxFontSizeMultiplier={1.3}>{venueName}</Text> : null}
               <View style={styles.goldRule} />
               <View style={styles.paragraphs}>
                 {paragraphs.map((p, i) => (
@@ -386,7 +407,7 @@ const styles = StyleSheet.create({
 
   back: {
     position: 'absolute', left: 16, width: 44, height: 44, borderRadius: 22,
-    backgroundColor: 'rgba(15,15,30,0.95)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.22)', zIndex: 10, elevation: 6,
+    backgroundColor: '#0F0F1E', borderWidth: 1, borderColor: 'rgba(255,255,255,0.22)', zIndex: 10, elevation: 6,
     alignItems: 'center', justifyContent: 'center',
   },
   chevron: {
@@ -429,7 +450,8 @@ const styles = StyleSheet.create({
   },
   eyebrowRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   eyebrow: { fontSize: 12, fontWeight: '800', color: COLORS.GOLD, letterSpacing: 1.2, flexShrink: 1 },
-  discoveryHeadline: { fontSize: 24, lineHeight: 30, fontWeight: '800', color: COLORS.TEXT, letterSpacing: -0.3, marginTop: 10 },
+  discoveryHeadline: { fontSize: 28, lineHeight: 34, fontWeight: '800', color: COLORS.TEXT, letterSpacing: -0.4, marginTop: 10 },
+  discoveryVenue: { fontSize: 14, lineHeight: 20, fontWeight: '700', color: 'rgba(255,255,255,0.78)', marginTop: 2 },
   goldRule: { width: 36, height: 3, borderRadius: 2, backgroundColor: COLORS.GOLD, marginTop: 14 },
   paragraphs: { marginTop: 16, gap: 14 },
   description: {

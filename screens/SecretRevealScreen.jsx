@@ -246,6 +246,7 @@ export default function SecretRevealScreen({ route, navigation }) {
       requirementText={photoRequirementCopy(item).text}
       lockedPhoto={lockedPhoto}
       unlockedPhoto={unlockedPhoto}
+      revealFocus={unlockedPhoto?.source === 'reveal' ? unlocked.revealFocus : null}
       onLockedPhotoError={reportBusinessPhotoError}
       onUnlockedPhotoError={onUnlockedPhotoError}
       plan={plan}
