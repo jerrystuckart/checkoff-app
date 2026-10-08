@@ -1,8 +1,9 @@
-# Account deletion (iOS and Android), revision 3, 2026-10-08
+# Account deletion (iOS and Android), revision 4, 2026-10-08
 
 STATUS: written and unit tested, NOT applied to production, NOT exercised end to end. Production is unchanged. The website pages and client OTAs are NOT published.
-The migration `supabase/migrations/20261008d_account_deletion_pipeline.sql` is the FINAL revision (rev 3) and supersedes rev 1 (21c7dec) and rev 2 (9b9d4ab). Reviewable diffs:
-`docs/release/ACCOUNT_DELETION_migration_rev1_to_rev3.diff` (everything) and `docs/release/ACCOUNT_DELETION_migration_rev2_to_rev3.diff` (this correction only).
+Rev 3's production apply FAILED atomically with `42P13 cannot change return type of existing function` (read only checks afterwards confirmed nothing persisted: 0 new tables, functions or cron jobs; the old
+`delete_my_account()` is intact). Rev 4 fixes it. The migration `supabase/migrations/20261008d_account_deletion_pipeline.sql` is the FINAL revision (rev 4) and supersedes rev 1 (21c7dec), rev 2 (9b9d4ab) and rev 3. Reviewable diffs:
+`docs/release/ACCOUNT_DELETION_migration_rev1_to_rev4.diff` (everything) and `docs/release/ACCOUNT_DELETION_migration_rev3_to_rev4.diff` (the 42P13 fix only).
 Apply with `scripts/apply-account-deletion-migration.sh` (preflight by default; it refuses to apply unless the linked project and the exact file revision match).
 
 ## Root causes (verified from live definitions, read only)
@@ -64,8 +65,23 @@ Implemented, DORMANT until deployed: `supabase/functions/revoke-apple-token` (ve
 users to disconnect CheckOff in Apple Account settings. To activate: `supabase login`; `supabase secrets set APPLE_TEAM_ID=... APPLE_KEY_ID=... APPLE_BUNDLE_ID=com.checkoff.app APPLE_PRIVATE_KEY="$(cat AuthKey_82ZW59TB9L.p8)"`; `supabase functions deploy revoke-apple-token`.
 Also unverified: whether the Apple client id for native sign in is the bundle id (`com.checkoff.app`, the identity token audience) rather than the Services ID `com.checkoff.services` used by the web flow; test with a real Apple account before relying on it.
 
-## Pipeline (one backend contract for iOS and Android; the RPC keeps its name so installed builds benefit immediately)
-`delete_my_account()`: identity is `auth.uid()`; no user id parameter; refuses only the sole administrator / sole photo administrator; inventories retained and private files BEFORE removing anything; bans the auth user and revokes sessions and push tokens; runs the processor; returns `completed` or
+## Rev 4: RPC compatibility (the 42P13 fix)
+Inspected read only: `public.delete_my_account()` is `RETURNS void`, plpgsql, SECURITY DEFINER, `search_path=public`, owner postgres, EXECUTE for anon, authenticated, postgres, service_role; NO dependents (no views, policies, triggers, other functions; `pg_depend` empty).
+Installed iOS (1.1.10 / 1.1.9 on source f237aaf and earlier) and Android (vc21, e7b8aa1) clients call it as `const { error } = await supabase.rpc('delete_my_account'); if (error) throw error`, then sign out and navigate Home. They never read a result and never show a success message, so they cannot mistake a queued deletion for a completed one.
+Fix: the existing function KEEPS its exact signature and `void` return (CREATE OR REPLACE with the same return type is legal and keeps owner and ACL) and becomes a wrapper that performs the new `delete_my_account_v2()` (returns jsonb `{status: completed|accepted, request_id, already_requested}`). New clients (this branch, via `lib/accountDeletion.js`) call `delete_my_account_v2`.
+No DROP and no CASCADE anywhere in the forward migration (a test asserts it). Grants: both RPCs EXECUTE for authenticated and service_role; anon loses EXECUTE on the old one (it could only ever get "Not authenticated"). `notify pgrst, 'reload schema'` publishes v2 immediately.
+Other compatibility review: CTE named `real` and `found` renamed (type name / plpgsql variable), CHECK on `period_month` made immutable (`extract(day ...) = 1`), `retained` and `owned` CTEs and `jsonb_array_elements` alias patterns executed on literals.
+
+## What was and was NOT verified for rev 4 (structural versus execution)
+No disposable database exists on this machine (no Postgres server, Docker or pglite; only the `pg` client library), and production was not modified. So there is NO execution test of the migration.
+Structural, read only, against the LIVE production catalog (`docs/release/account_deletion_structural_validation.sql`, passes; negative controls prove it fails on a bad column and on a missing privilege): 33 statements that touch existing tables were
+parsed and planned with PREPARE (so column names, types, FK targets, function signatures including `net.http_post/http_delete` named arguments are real); 11 pure SELECTs and expression patterns were executed on a random uuid or literals; 11 privileges that the SECURITY DEFINER functions need on `auth`, `storage`, `vault`, `net`, `cron`
+were confirmed for `postgres` (PREPARE does not check privileges, so this is explicit).
+NOT validated until the migration runs: anything touching tables the migration creates (account_deletion_requests, anonymous_completion_counts, retained_checkin_photos), plpgsql control flow and loops, `FOR UPDATE`, ON CONFLICT targets, the Storage API move and delete calls, FK cascade behavior on a real user, trigger side effects of deleting a user (for example `after_checkin_delete`). Those are covered only by reading the code and by the disposable account test after apply.
+Rollback: `docs/security/rollback_account_deletion_20261008d.sql` (explicit SQL, no CASCADE, keeps the three tables and their data).
+
+## Pipeline (one backend contract for iOS and Android; installed builds benefit immediately through the void wrapper)
+`delete_my_account_v2()` (and the void wrapper `delete_my_account()` for installed builds): identity is `auth.uid()`; no user id parameter; refuses only the sole administrator / sole photo administrator; inventories retained and private files BEFORE removing anything; bans the auth user and revokes sessions and push tokens; runs the processor; returns `completed` or
 `accepted` (access blocked, cleanup queued; not the same as completed). `account_deletion_process()` (no HTTP endpoint; once inside the RPC and every minute from pg_cron): move retained photos (verify, then anonymize rows) -> delete private files (verify none remain) ->
 `account_deletion_delete_data()` (one transaction: anonymous counts exactly once, list transfer or deletion, the NO ACTION foreign keys, the users row and its cascades) -> delete the auth user and clear identifiers. Every step persists and resumes.
 Anonymized by their own foreign keys: `items.submitted_by`, `list_items.added_by`, `item_flags.user_id`, `user_suggestions.user_id`; `users.referred_by` on other accounts; `creators.user_id`.

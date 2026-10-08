@@ -5,7 +5,7 @@
 cd "$(git rev-parse --show-toplevel)" || exit 1
 SCRIPT=scripts/apply-account-deletion-migration.sh
 FAKE_DIR="$(mktemp -d)"; trap 'rm -rf "$FAKE_DIR"' EXIT
-GOOD='[{"buckets":3,"extensions":3,"service_key_in_vault":1,"old_function":1,"already_applied":false,"items":2230,"users":136}]'
+GOOD='[{"buckets":3,"extensions":3,"service_key_in_vault":1,"old_function":1,"old_function_result":"void","new_functions":0,"already_applied":false,"items":2230,"users":136}]'
 FAILS=0
 
 run_case() {  # name, fake stdout, fake stderr, fake exit, expected exit (0 or 1), expected text in output
@@ -34,7 +34,9 @@ run_case "B: csv output"                         $'buckets,items\n3,2230' "" 0 1
 run_case "B: empty output"                       "" "" 0 1 "CLASS B"
 run_case "B: wrong row count"                    '[]' "" 0 1 "CLASS B"
 run_case "B: wrong key or type"                  '[{"buckets":"3"}]' "" 0 1 "CLASS B"
-run_case "C: wrong database (2 buckets)"         '[{"buckets":2,"extensions":3,"service_key_in_vault":1,"old_function":1,"already_applied":false,"items":2230,"users":136}]' "" 0 1 "CLASS C"
-run_case "C: already applied"                    '[{"buckets":3,"extensions":3,"service_key_in_vault":1,"old_function":1,"already_applied":true,"items":2230,"users":136}]' "" 0 1 "already applied"
-run_case "C: not production sized"               '[{"buckets":3,"extensions":3,"service_key_in_vault":1,"old_function":1,"already_applied":false,"items":5,"users":2}]' "" 0 1 "do not look like production"
+run_case "C: wrong database (2 buckets)"         '[{"buckets":2,"extensions":3,"service_key_in_vault":1,"old_function":1,"old_function_result":"void","new_functions":0,"already_applied":false,"items":2230,"users":136}]' "" 0 1 "CLASS C"
+run_case "C: already applied"                    '[{"buckets":3,"extensions":3,"service_key_in_vault":1,"old_function":1,"old_function_result":"void","new_functions":0,"already_applied":true,"items":2230,"users":136}]' "" 0 1 "already applied"
+run_case "C: old function no longer returns void"  '[{"buckets":3,"extensions":3,"service_key_in_vault":1,"old_function":1,"old_function_result":"jsonb","new_functions":0,"already_applied":false,"items":2230,"users":136}]' "" 0 1 "not void"
+run_case "C: new functions already exist"      '[{"buckets":3,"extensions":3,"service_key_in_vault":1,"old_function":1,"old_function_result":"void","new_functions":2,"already_applied":false,"items":2230,"users":136}]' "" 0 1 "already applied"
+run_case "C: not production sized"               '[{"buckets":3,"extensions":3,"service_key_in_vault":1,"old_function":1,"old_function_result":"void","new_functions":0,"already_applied":false,"items":5,"users":2}]' "" 0 1 "do not look like production"
 [ "$FAILS" -eq 0 ] && echo "ALL CASES PASSED" || { echo "$FAILS FAILURE(S)"; exit 1; }
