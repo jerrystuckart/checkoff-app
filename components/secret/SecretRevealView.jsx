@@ -15,6 +15,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient'
 import BookmarkIcon from '../BookmarkIcon'
 import { revealHeadline, unlockedHeroHeight } from '../../lib/secretRevealModel'
+import { shouldAnimateReveal } from '../../lib/secretRevealVisit'
 
 export const COLORS = {
   BG: '#0F0F1E',
@@ -100,11 +101,7 @@ export default function SecretRevealView({
   footerBottomPad = 16,
   heroHeight = 300,
   reduceMotion = false,
-  revealMode = 'animate', // 'animate' (first unlock of this item) | 'settled'
-  onRevealPresented,      // called once, only after the arrival animation has actually finished
 }) {
-  const presentedCb = useRef(onRevealPresented)
-  presentedCb.current = onRevealPresented
   const revealed = phase === 'revealed'
   const lockedH = heroHeight + insets.top
   const unlockedH = unlockedHeroHeight(heroHeight) + insets.top
@@ -115,7 +112,7 @@ export default function SecretRevealView({
   const glow = useRef(new Animated.Value(0)).current
   const prevPhase = useRef(phase)
   const mounted = useRef(false)
-  const played = useRef(false) // the arrival plays at most once per mount
+  const played = useRef(false) // the arrival plays at most once per mount (= per screen visit)
 
   useEffect(() => {
     const arrival = mounted.current && prevPhase.current !== phase && revealed
@@ -127,7 +124,7 @@ export default function SecretRevealView({
       cardIn.setValue(revealed ? 1 : 0)
       glow.setValue(0)
     }
-    if (arrival && revealMode === 'animate' && !reduceMotion && !played.current) {
+    if (shouldAnimateReveal({ arrival, alreadyPlayed: played.current, reduceMotion })) {
       played.current = true
       contentIn.setValue(1)
       cardIn.setValue(0)
@@ -146,7 +143,7 @@ export default function SecretRevealView({
           ]),
         ]),
       ])
-      run.start(({ finished }) => { if (finished) presentedCb.current?.() })
+      run.start()
       return () => run.stop()
     }
     settle()
