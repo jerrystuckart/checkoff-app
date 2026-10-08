@@ -73,7 +73,7 @@ echo "== 5. Upload source maps (before publishing), then publish the SAME export
 npx --no-install eas-cli whoami >/dev/null 2>&1 || fail "not logged in to EAS (eas login)"
 SENTRY_ORG="$ORG" SENTRY_PROJECT="$PROJ" npx --no-install sentry-expo-upload-sourcemaps "$DIST" >/tmp/ota_sentry.$$ 2>&1 || { tail -5 /tmp/ota_sentry.$$ | sed -E 's/(token|Bearer)[^ ]*/\1 <redacted>/Ig'; rm -f /tmp/ota_sentry.$$; fail "source map upload failed: NOT publishing"; }
 rm -f /tmp/ota_sentry.$$; ok "source maps uploaded to Sentry"
-MSG="Account deletion client (delete_my_account_v2): accepted vs completed copy, local cleanup, banned sign in message, best effort Apple revocation (dormant). JS only, runtime ${FP:0:8}"
+MSG="${OTA_MESSAGE:-JS only update}; runtime ${FP:0:8}"   # set OTA_MESSAGE for each publish
 npx --no-install eas-cli update --branch production --platform "$PLATFORM" --environment production --message "$MSG" --input-dir "$DIST" --skip-bundler --non-interactive || fail "eas update failed (source maps are uploaded; nothing was published)"
 echo "== 6. Verify"
 npx --no-install eas-cli update:list --branch production --limit 3 --non-interactive --json 2>/dev/null | python3 -c "
