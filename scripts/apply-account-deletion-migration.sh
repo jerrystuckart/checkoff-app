@@ -41,28 +41,75 @@ grep -q "https://${EXPECTED_REF}.supabase.co" "$MIGRATION" || fail "the migratio
 ok "linked project ($LINK_DIR/supabase/.temp/project-ref) = $LINKED_REF and the migration's Storage API base URL points at the same project"
 
 echo "== 3. Live production identity (read only)"
+# The CLI's default output depends on who is running it: a human terminal gets a TABLE, an AI agent gets a JSON envelope. So ask for JSON explicitly
+# (--agent=no -o json = a bare JSON array) and validate the shape. stdout, stderr and the exit status are captured separately: the CLI's notices
+# ("Initialising login role...", update hints) go to stderr and never touch stdout.
 SQL="select (select count(*) from storage.buckets where id in ('checkin-photos','submission-photos','checkoff-images')) as buckets,
             (select count(*) from pg_extension where extname in ('pg_net','pg_cron','supabase_vault')) as extensions,
             (select count(*) from vault.decrypted_secrets where name = 'service_role_key') as service_key_in_vault,
             (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'delete_my_account') as old_function,
             (to_regclass('public.account_deletion_requests') is not null) as already_applied,
             (select count(*) from public.items) as items, (select count(*) from public.users) as users"
-OUT="$(sdb "$SQL" --linked 2>/dev/null)" || fail "could not query the linked database"
-echo "$OUT" | python3 -c '
+OUT_F="$(mktemp -t acct_del_out.XXXXXX)"; ERR_F="$(mktemp -t acct_del_err.XXXXXX)"
+trap 'rm -f "$OUT_F" "$ERR_F" "${TMP:-}"' EXIT
+
+# Redacts anything that looks like a credential, token, connection string, long hex id or email before it is shown.
+redact() {
+  sed -E 's/eyJ[A-Za-z0-9_.-]{10,}/<jwt>/g; s/(sbp_|sb_secret_|sb_publishable_)[A-Za-z0-9_]+/\1<redacted>/g; s#(postgres(ql)?://)[^[:space:]]+#\1<redacted>#g; s/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/<email>/g; s/[0-9a-fA-F]{24,}/<hex>/g' | cut -c1-200
+}
+
+sdb --agent=no -o json "$SQL" --linked >"$OUT_F" 2>"$ERR_F"
+CLI_EXIT=$?
+if [ "$CLI_EXIT" -ne 0 ]; then
+  echo "  CLASS A: the Supabase CLI itself failed (authentication, network or query error). The database identity was NOT checked." >&2
+  echo "  exit status: $CLI_EXIT | stdout bytes: $(wc -c <"$OUT_F" | tr -d ' ') | stderr bytes: $(wc -c <"$ERR_F" | tr -d ' ')" >&2
+  echo "  stderr (redacted, first 6 lines):" >&2; head -6 "$ERR_F" | redact | sed 's/^/    /' >&2
+  fail "CLI/authentication/network/query failure (not a database mismatch). Try: supabase login ; supabase link --project-ref $EXPECTED_REF ; then rerun."
+fi
+
+# Validate the ACTUAL shape. Accepts the two documented JSON shapes: a bare array (--agent=no) or the agent envelope {"rows": [...]}. Anything else is class B.
+python3 - "$OUT_F" <<'PY'
 import sys, json
-t = sys.stdin.read()
-r = json.loads(t[t.find("{"):t.rfind("}") + 1])["rows"][0]
+path = sys.argv[1]
+raw = open(path, 'rb').read()
+def b_fail(why):
+    head = raw.split(b'\n', 1)[0]
+    kind = 'table' if b'\xe2\x94' in raw else 'csv' if (b',' in head and raw.lstrip()[:1] not in (b'{', b'[')) else 'empty' if not raw.strip() else 'other'
+    print("  CLASS B: the CLI exited 0 but its output is not the expected JSON. The database identity was NOT checked.")
+    print(f"  reason: {why} | stdout bytes: {len(raw)} | looks like: {kind} | first byte: {raw[:1]!r}")
+    sys.exit(3)
+try:
+    doc = json.loads(raw.decode('utf-8'))
+except Exception as e:
+    b_fail(f"not valid JSON ({type(e).__name__})")
+rows = doc.get('rows') if isinstance(doc, dict) else doc
+if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+    b_fail("expected exactly one row object; got " + (f"{type(rows).__name__} of {len(rows)}" if isinstance(rows, list) else type(rows).__name__))
+r = rows[0]
+want = {"buckets": int, "extensions": int, "service_key_in_vault": int, "old_function": int, "already_applied": bool, "items": int, "users": int}
+bad_shape = [k for k, t in want.items() if k not in r or isinstance(r[k], bool) != (t is bool) or not isinstance(r[k], t)]
+if bad_shape or set(r) - set(want):
+    b_fail("row keys or types differ from the query: " + ", ".join(bad_shape or sorted(set(r) - set(want))))
 print("  live:", r)
 bad = []
-if r["buckets"] != 3: bad.append("expected the 3 CheckOff storage buckets")
-if r["extensions"] != 3: bad.append("pg_net, pg_cron and supabase_vault must all be installed")
+if r["buckets"] != 3: bad.append("expected the 3 CheckOff storage buckets, found %d" % r["buckets"])
+if r["extensions"] != 3: bad.append("pg_net, pg_cron and supabase_vault must all be installed (found %d of 3)" % r["extensions"])
 if r["service_key_in_vault"] != 1: bad.append("service_role_key is not in vault")
 if r["old_function"] != 1: bad.append("public.delete_my_account() not found: this is not the expected database")
 if r["already_applied"]: bad.append("account_deletion_requests already exists: the pipeline is already applied")
-if int(r["items"]) < 100 or int(r["users"]) < 10: bad.append("item and user counts do not look like production")
+if r["items"] < 100 or r["users"] < 10: bad.append("item and user counts do not look like production (items %d, users %d)" % (r["items"], r["users"]))
 if bad:
-    print("  PROBLEM: " + "; ".join(bad)); sys.exit(1)
-' || fail "the live database does not match what this migration expects"
+    print("  CLASS C: the query ran and the output is valid, but this database failed the identity checks:")
+    for b in bad: print("    - " + b)
+    sys.exit(4)
+PY
+PY_EXIT=$?
+case "$PY_EXIT" in
+  0) ;;
+  3) fail "unexpected CLI output (not a database mismatch); the identity check could not run" ;;
+  4) fail "the live database does not match what this migration expects" ;;
+  *) fail "internal error while validating the CLI output (exit $PY_EXIT)" ;;
+esac
 ok "this is the CheckOff production database and the pipeline is not applied yet"
 
 if [ "$APPLY" -ne 1 ]; then
@@ -77,7 +124,6 @@ read -r -p "Type exactly '$CONFIRM_PHRASE' to continue: " ANSWER
 [ "$ANSWER" = "$CONFIRM_PHRASE" ] || fail "confirmation phrase did not match; nothing was applied"
 
 TMP="$(mktemp -t account_deletion_apply.XXXXXX)"
-trap 'rm -f "$TMP"' EXIT
 { echo "begin;"; cat "$MIGRATION"; echo; echo "commit;"; } > "$TMP"
 sdb -f "$TMP" --linked || fail "the migration failed; the transaction was not committed"
 
