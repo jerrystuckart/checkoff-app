@@ -80,7 +80,7 @@ export default function SecretRevealView({
   venueName,             // string | null
   area,                  // string | null (neighborhood hint, never the venue)
   lockedTitle = "Something's hidden here",
-  revealedTitle = 'Your secret CheckOff',
+  revealedTitle = 'You found it.',
   lockedBlurb,           // string (locked body copy)
   paragraphs = [],       // revealed description paragraphs
   status,                // lockedStatus() result (locked only)
