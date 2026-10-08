@@ -1,4 +1,5 @@
 # Android 1.1.10 — consolidated release notes (2026-10-07)
+> STATUS 2026-10-08: the installed and submittable build is versionCode 21 (local build, runtime 53ba13b5, source e7b8aa1; JavaScript since then ships by OTA, latest group 5c41dbeb). Sections below about building vc20, paid EAS cloud builds, a missing privacy policy update, a reviewer account with a seeded suggestion and the unverified background test are HISTORICAL and removed. Store work: `docs/release/STORE_RELEASE_1_1_10.md` is authoritative.
 
 Release source: branch `release/android-1.1.10` = `production/1.1.10-canonical` (f237aaf, the line behind the iOS 1.1.10 OTAs) merged with
 `feature/android-visit-recovery` (d584d17, which already contains `release/android-1.1.10-parity`). Nothing was merged into `main`.
@@ -51,32 +52,8 @@ See docs/visit-recovery/android/ANDROID_VISIT_RECOVERY.md.
 - A vc19 (53ba13b5) binary would accept this branch as an OTA. No vc19 is public, so for Play, build a fresh AAB (vc20) with this JS embedded.
 - Publish no OTA to runtime 53ba13b5 before the AAB is installed on testers, and never point `--runtime-version` at a mismatching native build.
 
-## Build (Jerry runs; paid EAS cloud build, not run in this audit)
-```bash
-cd <checkout of release/android-1.1.10>   # clean tree
-npx eas-cli build --platform android --profile production      # AAB, autoIncrement -> versionCode 20, Sentry source maps via EAS secret
-npx eas-cli build:view <build-id> --json | grep -E 'runtimeVersion|appBuildVersion'   # expect 53ba13b5…, 20
-```
-If the runtime comes back different, STOP: do not add it to `ANDROID_RECOVERY_RUNTIMES` blindly; find what changed natively first.
-
-## Upload to the Play internal track
-Automated (needs a Google service-account key with Play Console release permission, set up once interactively by Jerry; never commit it):
-```bash
-npx eas-cli submit --platform android --profile android-internal --id <build-id>
-```
-Manual (works today): download the AAB from the EAS build page → Play Console → CheckOff → Testing → Internal testing → Create new release → upload AAB →
-release name `1.1.10 (20)` → Save → Review release → Start rollout to Internal testing; add tester emails to the internal list.
-
-## Open items before production (not before internal testing)
-1. Privacy policy (getcheckoff.com/privacy, last updated 2026-08-03) says CheckOff does not "build a history of your movements, attach timestamps to your
-   location" and never mentions background visit recovery. It must be updated (draft in PLAY_SUBMISSION_DRAFTS.md §D) before the Background Location
-   declaration and before production. The same gap applies to iOS.
-2. Play Console: Background Location declaration + review video (§A, §G), Data safety (location collected, §C), reviewer test account with a seeded suggestion (§E).
-3. `feature_flags.android_visit_recovery`: row state could not be read (RLS). Jerry/testers/admins see the feature regardless; set it globally only after the
-   physical walk test and Play approval.
-4. Optional hardening: RECORD_AUDIO and SYSTEM_ALERT_WINDOW come from library defaults and are not used; blocking them changes the native fingerprint (new runtime),
-   so do it only deliberately, together with updating `ANDROID_RECOVERY_RUNTIMES`.
-5. Admin Diagnostics (including the Android registration rows) show for admin accounts only; a non-admin tester will not see the debug panel.
+## Open items before production
+See `STORE_RELEASE_1_1_10.md` section 9 (Play declaration/video, Data safety, deletion URL entered, reviewer account, closed-testing gate). The privacy policy was updated 2026-10-08; the real background test passed on a physical Android phone.
 
 ## Correction 2026-10-07 (device findings)
 - Missing Home/Profile recovery controls on the installed vc20: (1) it was built from the wrong checkout, so its runtime `bf330c5e…` is not in

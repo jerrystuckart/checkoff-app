@@ -1,3 +1,5 @@
+> SUPERSEDED 2026-10-08 by `docs/release/STORE_RELEASE_1_1_10.md` (1.1.10). Historical only: do not follow the steps, privacy rows or reviewer-account SQL below.
+
 # Google Play and policy drafts for Android visit recovery (REVIEW READY, NOT SUBMITTED, NOT PUBLISHED)
 
 > UPDATE 2026-10-07: the reconciled, implementation checked answers now live in docs/release/STORE_DISCLOSURES_1_1_10.md (Data safety, Background Location
