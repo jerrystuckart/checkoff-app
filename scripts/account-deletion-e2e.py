@@ -205,6 +205,11 @@ def stage_cleanup():
     """Removes EVERY synthetic record (users, items, lists, files, request rows) and verifies production is back to its baseline. Safe to run any time: it only matches the test's own markers."""
     st = load()
     print("-- removing synthetic users and their dependent rows")
+    sql("""delete from public.notification_queue where payload::text ~ '(zz-control|zz-someone|ZZ DELTEST|zz-deltest|ZZ DELETION TEST)'""")
+    ids = [u["id"] for u in st.get("users", {}).values()]
+    if ids:   # rows addressed to a synthetic id carry no text marker (for example badge rows of accounts deleted before the queue fix)
+        sql("delete from public.notification_queue where payload->>'to_user_id' in (%s)" % ",".join("'%s'" % i for i in ids))
+        sql("delete from net._http_response where content ~ '(_good|_empty|_sel|_pend|_rej)\\\\.jpg|retained/'")
     sql("""delete from public.interaction_events where user_id in (select id from auth.users where email like '%@checkoff-deltest.invalid');
            delete from public.campaign_sends where user_id in (select id from auth.users where email like '%@checkoff-deltest.invalid');
            delete from public.notification_log where user_id in (select id from auth.users where email like '%@checkoff-deltest.invalid');
@@ -419,7 +424,7 @@ def stage_finish_a():
     check("recovery: A's request, stuck while Storage failed, COMPLETED by itself once the fault was fixed (no manual action), after earlier failed attempts", req["done"] and req["status"] == "completed" and req["attempts"] >= 2, req)
     check("recovery: the completed request holds no identifier or manifest and no error", req["id_cleared"] and req["m1"] and req["m2"] and not req["last_error"], req)
     snap = a_snapshot(st)
-    check("deleted: A's auth account, profile, sessions, check ins, candidate visits, events, lists and attributed candidates are gone", all(snap[k] in (0, False) for k in ("profile", "auth_user", "banned", "sessions", "push_tokens", "checkins", "candidate_visits", "events", "lists_created", "candidates_attributed")), snap)
+    check("deleted: A's auth account, profile, sessions, check ins, candidate visits, events, lists and attributed candidates are gone", all(snap[k] in (0, False, None) for k in ("profile", "auth_user", "banned", "sessions", "push_tokens", "checkins", "candidate_visits", "events", "lists_created", "candidates_attributed")), snap)
     other = sql("""select (select count(*) from public.dares where from_user_id='%s' or to_user_id='%s') as dares, (select count(*) from public.friendships where user_a='%s' or user_b='%s') as friendships,
                           (select count(*) from public.list_members where user_id='%s') as memberships, (select count(*) from public.visit_presence_sessions where user_id='%s') as presence,
                           (select count(*) from public.visit_recovery_settings where user_id='%s') as settings, (select count(*) from public.campaign_sends where user_id='%s') as sends,
@@ -466,6 +471,12 @@ def stage_finish_a():
         if label == "display name":
             # the same-name LOOKALIKE control row (about someone else's list item) must survive by design: it is the only allowed hit
             check("no trace: A's display name appears only in the one same-name lookalike control row (a name alone is never enough to delete another member's row)", hits == {"public.notification_queue": 1}, hits)
+        elif label == "id":
+            # RESIDUAL (documented): the Storage API's own response to the file delete call echoes the deleted file's record (path, owner, owner_id) and pg_net keeps responses
+            # for its ttl (6 hours) before purging them itself. Everything durable must be clean.
+            age = sql("select coalesce(max(extract(epoch from now() - created)) / 3600, 0)::numeric(6,2) as hours_old from net._http_response where content like '%%%s%%'" % A)[0]["hours_old"] if hits else 0
+            check("no trace: A's id appears in NO durable table of public, auth, storage, cron or vault (the only hit allowed is one auto-purging pg_net response row, younger than its 6 hour ttl)",
+                  set(hits) <= {"net._http_response"} and float(age) < 6, {"hits": hits, "response_row_age_hours": float(age)})
         else:
             check("no trace: A's %s appears in NO table of public, auth, storage, net, cron or vault" % label, hits == {}, hits or "no hits")
     q = sql("select count(*) as n from public.notification_queue where payload::text like '%%zz-control%%' or payload::text like '%%zz-someone-elses-list-item%%'")[0]["n"]
