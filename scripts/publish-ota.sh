@@ -43,7 +43,7 @@ node --test lib/*.test.js lib/visitDetection/*.test.js >/tmp/ota_tests.$$ 2>&1 |
 ok "$(grep -E '^# pass' /tmp/ota_tests.$$) tests passed"; rm -f /tmp/ota_tests.$$
 echo "== 3. Export and Sentry debug ids"
 DIST="$(mktemp -d -t ota_dist.XXXXXX)"; trap 'rm -rf "$DIST"; unset SENTRY_AUTH_TOKEN' EXIT
-SENTRY_DISABLE_AUTO_UPLOAD=true npx --no-install expo export --platform "$PLATFORM" --output-dir "$DIST" >/tmp/ota_export.$$ 2>&1 || { tail -5 /tmp/ota_export.$$; fail "expo export failed"; }
+SENTRY_DISABLE_AUTO_UPLOAD=true npx --no-install expo export --platform "$PLATFORM" --source-maps --output-dir "$DIST" >/tmp/ota_export.$$ 2>&1 || { tail -5 /tmp/ota_export.$$; fail "expo export failed"; }
 rm -f /tmp/ota_export.$$
 MAPS="$(find "$DIST" -name '*.map' | head -3)"; [ -n "$MAPS" ] || fail "the export produced no source map"
 for m in $MAPS; do node node_modules/@sentry/react-native/scripts/has-sourcemap-debugid.js "$m" >/dev/null 2>&1 || fail "source map $(basename "$m") has no Sentry debug id"; done
