@@ -1,8 +1,9 @@
-# Account deletion (iOS and Android), revision 2, 2026-10-08
+# Account deletion (iOS and Android), revision 3, 2026-10-08
 
 STATUS: written and unit tested, NOT applied to production, NOT exercised end to end. Production is unchanged. The website pages and client OTAs are NOT published.
-The migration `supabase/migrations/20261008d_account_deletion_pipeline.sql` is the REVISED file and supersedes revision 1 (commit 21c7dec). Reviewable diff against revision 1:
-`docs/release/ACCOUNT_DELETION_migration_rev1_to_rev2.diff`.
+The migration `supabase/migrations/20261008d_account_deletion_pipeline.sql` is the FINAL revision (rev 3) and supersedes rev 1 (21c7dec) and rev 2 (9b9d4ab). Reviewable diffs:
+`docs/release/ACCOUNT_DELETION_migration_rev1_to_rev3.diff` (everything) and `docs/release/ACCOUNT_DELETION_migration_rev2_to_rev3.diff` (this correction only).
+Apply with `scripts/apply-account-deletion-migration.sh` (preflight by default; it refuses to apply unless the linked project and the exact file revision match).
 
 ## Root causes (verified from live definitions, read only)
 1. Four NO ACTION foreign keys into users block the old `delete_my_account()`: `interaction_events.user_id` (47 users have rows), `campaign_sends.user_id` (126 users),
@@ -11,14 +12,13 @@ The migration `supabase/migrations/20261008d_account_deletion_pipeline.sql` is t
 3. No public deletion route existed (Play requires a web link).
 
 ## Product decisions (Jerry) and what they mean in the migration
-- Photos submitted as CheckOff content are RETAINED, including catalog covers: `item_cover_candidates` rows (selected, approved, pending, business) keep their file. Attribution is removed:
-  `submitted_by_user_id` -> NULL; the file is MOVED (Storage API) from `cover-candidates/<uid>/...` to `cover-candidates/retained/<candidate id>.<ext>` because the old path embeds the uploader id;
-  `storage.objects.owner/owner_id` cleared; any occurrence of the user id in `moderation_metadata` / `rejection_reason` scrubbed. `storage_path` is updated in the same step the move is verified,
-  and the storage policy "anyone can view selected cover photos" is keyed on that path, so signed URLs for retained covers keep working (to be proven in the disposable test).
-  REJECTED candidates were never accepted as content and are deleted with the account (judgment call, one condition in `account_deletion_retain_inventory`; flip to retain them too).
-- Private account files are DELETED: `checkin-photos/<uid>/...` and anything else the user owns (`owner_id`). Check in photos are treated as account activity, not catalog content (judgment call: confirm).
-  Avatars: `users.avatar_url` is NULL for all users and there is no avatar bucket, so there is nothing to retain or delete; any object a user owned is caught by the `owner_id` rule. `creators.avatar_url` belongs to
-  public creator pages, which are detached from the login (`creators.user_id` -> NULL), not deleted.
+- EVERY submitted photo file is RETAINED (rev 3 correction): `item_cover_candidates` rows of ANY status (selected covers, approved, pending AND rejected) and the user's check in photos. Only attribution changes:
+  * candidates: `submitted_by_user_id` -> NULL; file moved (Storage API) from `cover-candidates/<uid>/...` to `cover-candidates/retained/<candidate id>.<ext>` (the old path embeds the uploader id); owner cleared;
+    the user id scrubbed from `moderation_metadata` and `rejection_reason`. The anonymizing UPDATE sets ONLY those four columns: `status`, `display_eligible`, `is_primary`, `selected_as_cover_at`, `display_weight` are never touched (asserted by a test).
+  * check in photos: file moved inside the same (already public) `checkin-photos` bucket to `checkin-photos/retained/<random uuid>.<ext>`; owner cleared; an attribution free record (item, bucket, name, width, height) goes to `retained_checkin_photos`
+    (service role only, no user, date, check in or count columns, so it cannot be joined to `anonymous_completion_counts` or to a person). The app does not read that table: displaying retained check in photos is a separate product decision.
+  * Deleted: zero byte files (36 of the 69 `checkin-photos` objects are 0 bytes, failed uploads with nothing in them; 5 check ins point at such files), and objects a user owns that are not an accepted submission (unreferenced uploads).
+  Avatars: `users.avatar_url` is NULL for all users and there is no avatar bucket, so there are no avatar files to retain or delete; `creators.avatar_url` belongs to public creator pages, which are detached from the login (`creators.user_id` -> NULL), not deleted.
 - Admins: deletion is supported unless the account is the ONLY administrator or the ONLY photo administrator (`photo_admins` has one row today, the owner); the error tells the user what to do first
   (make another account an administrator / add another photo administrator). Lists the deleted admin owned that are official or destination lists go to another admin.
 - Completed CheckOff history is kept as ANONYMOUS COUNTS (next section).
@@ -37,6 +37,15 @@ Reporting: `anonymous_completions_for_items(item_ids, month)` (service role). `g
 they are deployed deleted users' completions are missing from partner totals.
 Residual risk, stated honestly: these are small counts about public places; someone who independently knows what a person did could recognize it in a cell, and a retained photo's `item_id`/timestamps sit in the same
 catalog. The counts do not identify anyone and nothing joins them to an account, but they are not claimed to be mathematically anonymous. Retained candidates keep `created_at`/`submitted_at` (not coarsened).
+
+## Photo visibility after retention (verified from live policies) and EXIF
+- `submission-photos` is a PRIVATE bucket (10 MB, image types only). Storage SELECT: admins can read everything; anyone can read a file only if an `item_cover_candidates` row has `storage_path = name` AND `display_eligible = true`
+  (plus secret business photos named by `items.secret_business_photo_storage_path`). Table policies: select own or admin, select selected public, update/delete admin only. So a rejected or pending candidate (display_eligible false) is admin only before
+  and after retention; anonymizing sets `submitted_by_user_id` to NULL, which removes the only non admin reader (the owner). A selected cover keeps resolving because `storage_path` is updated to the new name in the step that verifies the move.
+- `checkin-photos` is a PUBLIC bucket: files open to anyone holding the exact URL (no SELECT policy needed), unchanged by retention. The new URL contains a random uuid instead of the uploader id; the old URL stops working.
+- EXIF (presence only; values were never read or printed; first 64 KB of each file): all 69 `checkin-photos` objects, all 25 display-eligible covers. Readable and non empty: 33 check in photos (5 not JPEG, 28 with an EXIF segment) and 25 covers (1 not JPEG, 24 with an EXIF segment):
+  GPS block 0, device make/model 0, capture date/time 0 in every one (the segments hold only basic fields such as orientation and size, consistent with re-encoding on upload; the app never requests EXIF).
+  NOT inspected: the 61 candidates that are not display eligible (private; not readable without server credentials), and any non JPEG. Retention cannot strip metadata (no re-encoding in the database): a one time offline scan of the private files is recommended.
 
 ## Licensing: unresolved, flagged for Jerry (no rights language was invented)
 - Terms of Service (updated April 17, 2026), section 3: "You retain ownership of content you post. By posting content, you grant CheckOff a non-exclusive, royalty-free license to store, display, and distribute that content within the Service."
@@ -65,9 +74,10 @@ Anonymized by their own foreign keys: `items.submitted_by`, `list_items.added_by
 - Done: 1316 unit and structural tests pass (client contract, migration structure, anonymous count shape, retention ordering, admin rule, Apple helper never blocks, reporting hooks).
 - NOT done: any run against the database. There is no local Postgres or Docker, and the production schema change was denied by the automatic approval review. Nothing is claimed deleted, retained, counted or signed until the disposable account test runs.
 - Test plan (synthetic accounts only, never real users; signup needs email confirmation so confirm via SQL on the synthetic address):
-  A (deleted): check ins with uploaded photos, interaction events, campaign_sends row, visit recovery rows incl. a confirmed candidate, a selected cover candidate with an uploaded file and an ordinary one, a rejected one, a solo list, a shared list with B, B.referred_by = A, a dare with B.
+  A (deleted): check ins with uploaded photos (one empty 0 byte file), interaction events, campaign_sends row, visit recovery rows incl. a confirmed candidate, a selected cover candidate with an uploaded file, a pending one and a REJECTED one, a solo list, a shared list with B, B.referred_by = A, a dare with B.
   B (bystander): own check ins, the shared list, a check in on A's list. C (forced failure): made the last-but-one administrator after acceptance to force a data-step failure, then resumed. Expect: A auth user and profile gone; private files gone; retained cover file at the neutral path with
-  NULL submitter and no uid in path or metadata and a signed URL for B still returning the image; anonymous cells equal the expected counts exactly once even after calling the processor repeatedly; no table or join reachable by a client can map the cells or the photo back to A; B's data and the shared list (now owned by B) intact;
+  NULL submitter and no uid in path or metadata and a signed URL for B still returning the image; the REJECTED and pending files retained, still admin only (anon and B cannot sign or read them); the check in photo moved to checkin-photos/retained/<uuid> with no uid anywhere,
+  the old URL 404 and the new URL 200, a retained_checkin_photos row with no user data, the zero byte file gone; anonymous cells equal the expected counts exactly once even after calling the processor repeatedly; no table or join reachable by a client can map the cells or the photo back to A; B's data and the shared list (now owned by B) intact;
   unauthenticated and anon calls rejected; a client cannot call any helper; sole administrator refusal message; a repeated request returns the same request.
 
 ## Open items
