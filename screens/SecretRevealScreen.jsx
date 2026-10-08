@@ -13,11 +13,11 @@ import { useLockedSecretPhoto, useUnlockedSecretPhoto } from '../lib/useSecretPh
 import CoverCandidateCTA from '../components/CoverCandidateCTA'
 import SecretRevealView from '../components/secret/SecretRevealView'
 import { buildInviteMessage, buildSecretInviteMessage } from '../lib/inviteMessage'
-import { hasSeenReveal, markRevealSeen } from '../lib/secretRevealSeen'
+import { createProximityGate } from '../lib/secretRevealVisit'
 import { itemHasLocation, itemHasWebsite, openItemDirections, openItemWebsite } from '../lib/itemUtilityActions'
 import {
   resolveSecretVenue, selectHeroPhoto, lockedStatus, planActions,
-  pointsLabel, photoRequirementCopy, descriptionParagraphs, revealMode as pickRevealMode,
+  pointsLabel, photoRequirementCopy, descriptionParagraphs,
 } from '../lib/secretRevealModel'
 
 const DEFAULT_RADIUS_M = 150
@@ -47,8 +47,6 @@ export default function SecretRevealScreen({ route, navigation }) {
   const [userId, setUserId] = useState(null)
   const [reduceMotion, setReduceMotion] = useState(false)
   const reduceMotionRef = useRef(false)
-  const [revealMode, setRevealMode] = useState('animate')
-  const revealUidRef = useRef(null)
   // Same saved-items context + toggle the normal item detail uses; it also
   // owns the guest sign-in prompt, so no auth handling is duplicated here.
   const { isSaved, toggleSaved } = useSavedItems()
@@ -58,7 +56,8 @@ export default function SecretRevealScreen({ route, navigation }) {
   const itemLng        = item?.maps_lng    ?? item?.mapsLng    ?? null
   const requiredRadius = item?.geo_radius_m ?? item?.geoRadiusM ?? DEFAULT_RADIUS_M
   const watchRef       = useRef(null)
-  const revealedRef    = useRef(false)
+  // One gate per screen visit (fresh on every opening; never persisted).
+  const gateRef        = useRef(createProximityGate())
 
   // The actual challenge text — check both naming conventions since the item
   // object comes from useNearby (snake_case) or useItems (camelCase)
@@ -149,11 +148,11 @@ export default function SecretRevealScreen({ route, navigation }) {
   }
 
   function handlePosition(coords) {
-    if (revealedRef.current) return
     const dist = haversineMeters(coords.latitude, coords.longitude, itemLat, itemLng)
+    const result = gateRef.current.update(dist, requiredRadius)
+    if (result === 'done') return
     setDistance(Math.round(dist))
-    if (dist <= requiredRadius) {
-      revealedRef.current = true
+    if (result === 'reveal') {
       if (watchRef.current) { watchRef.current.remove(); watchRef.current = null }
       triggerReveal()
     } else {
@@ -162,25 +161,18 @@ export default function SecretRevealScreen({ route, navigation }) {
   }
 
   function checkProximity() {
-    revealedRef.current = false
+    gateRef.current.reset()
     if (watchRef.current) watchRef.current.remove()
     startWatching()
   }
 
-  // The reveal plays (with the haptic) only the first time this item is
-  // unlocked on this device; later visits open settled. The marker is written
-  // by the view only AFTER the arrival animation has finished (never when it
-  // was skipped for Reduce Motion or interrupted), and is purely an animation hint — eligibility is still the live distance check. Unlocking
-  // never completes the item (that only happens in PhotoCheckIn).
-  async function triggerReveal() {
-    let uid = null
-    try { uid = (await supabase.auth.getSession())?.data?.session?.user?.id ?? null } catch {}
-    const seenBefore = await hasSeenReveal({ userId: uid, itemId: item?.id })
-    const mode = pickRevealMode({ seenBefore, reduceMotion: reduceMotionRef.current })
-    setRevealMode(mode)
+  // Plays once per screen visit, when eligibility is first established (already
+  // in range on open, or on entering range). Reduce Motion shows the settled
+  // reveal immediately (no motion, no haptic). Animation state never affects
+  // eligibility; unlocking never completes the item (that is PhotoCheckIn).
+  function triggerReveal() {
     setPhase('revealed')
-    if (mode === 'animate') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
-    revealUidRef.current = uid
+    if (!reduceMotionRef.current) Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
   }
 
   function proceedToCheckIn() {
@@ -270,8 +262,6 @@ export default function SecretRevealScreen({ route, navigation }) {
       footerBottomPad={tabBarHeight ? 14 : insets.bottom + 14}
       heroHeight={heroHeight}
       reduceMotion={reduceMotion}
-      revealMode={revealMode}
-      onRevealPresented={() => markRevealSeen({ userId: revealUidRef.current, itemId: item?.id })}
     />
   )
 }
