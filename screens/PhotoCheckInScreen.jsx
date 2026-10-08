@@ -19,6 +19,7 @@ import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
 import { fanOutCheckIn } from '../lib/checkInFanOut'
 import { checkGeoFence, presentGeoFenceFailure } from '../lib/geoFence'
 import { updateUserLifetimePoints } from '../lib/points'
+import { requestBadgeCelebrationCheck, useBadgeCelebrationHold } from '../lib/badgeCelebrationStore'
 import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
 import { resolveCheckOffAttachment } from '../lib/checkOffAttachment'
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
@@ -46,6 +47,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
   const [uploading, setUploading] = useState(false)
   const [fenceOk, setFenceOk] = useState(false)
   const [postCheckoffData, setPostCheckoffData] = useState(null)
+  useBadgeCelebrationHold(!!postCheckoffData)
   const cameraRef = useRef(null)
 
   // Gate on entry, before the camera or library ever opens — reached from
@@ -238,6 +240,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
           const { data: existingRows } = await verifyQuery
           if (existingRows?.length) {
             setPostCheckoffData({ itemId: item?.id, listItemId, userId: user.id, item })
+            requestBadgeCelebrationCheck('photo-checkin')
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
           } else {
             Alert.alert('Something went wrong', 'Please try again.')
@@ -264,6 +267,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
       // (not even while the photo is still uploading), so a slow/failed
       // check-in can't show a false "Checked off" moment.
       setPostCheckoffData({ itemId: item?.id, listItemId, userId: user.id, item })
+      requestBadgeCelebrationCheck('photo-checkin')
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
 
       // Mirror this check-off into every other active list containing the

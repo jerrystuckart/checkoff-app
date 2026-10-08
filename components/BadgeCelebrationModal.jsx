@@ -30,9 +30,11 @@ function isCheckpointBadge(badgeId) {
   return badgeId?.startsWith('points_') || ['streak_4wk', 'streak_8wk', 'streak_12wk'].includes(badgeId)
 }
 
-export default function BadgeCelebrationModal({ badges = [], onDismiss }) {
+export default function BadgeCelebrationModal({ badges = [], onDismiss, onBadgeShown }) {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [visible, setVisible]           = useState(badges.length > 0)
+  // True once the native Modal reports it is actually on screen (Modal onShow).
+  const [onScreen, setOnScreen]         = useState(false)
   const scaleAnim = useRef(new Animated.Value(0)).current
   const fadeAnim  = useRef(new Animated.Value(0)).current
 
@@ -69,6 +71,11 @@ export default function BadgeCelebrationModal({ badges = [], onDismiss }) {
       ]).start()
     }
   }, [currentIndex, visible]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Tell the owner each badge only once it is really visible (never merely because it was passed in).
+  useEffect(() => {
+    if (visible && onScreen && currentBadge) onBadgeShown?.(currentBadge)
+  }, [currentIndex, visible, onScreen]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function handleNext() {
     if (hasMore) {
@@ -107,6 +114,7 @@ export default function BadgeCelebrationModal({ badges = [], onDismiss }) {
       transparent
       visible={visible}
       animationType="fade"
+      onShow={() => setOnScreen(true)}
       onRequestClose={handleDismiss}
     >
       <View style={styles.overlay}>

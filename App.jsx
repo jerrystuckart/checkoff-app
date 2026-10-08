@@ -32,6 +32,8 @@ import { useVersionCheck }    from './hooks/useVersionCheck'
 import ErrorBoundary          from './components/ErrorBoundary'
 import UpdatePromptModal      from './components/UpdatePromptModal'
 import UpdateRestartBanner    from './components/UpdateRestartBanner'
+import BadgeCelebrationHost   from './components/BadgeCelebrationHost'
+import { useBadgeCelebrationHold, requestBadgeCelebrationCheckOnNavigation } from './lib/badgeCelebrationStore'
 import OnboardingScreen       from './screens/OnboardingScreen'
 import ListSummaryScreen      from './screens/ListSummaryScreen'
 import HomeScreen              from './screens/HomeScreen'
@@ -529,6 +531,8 @@ function App() {
   const { loading, isSignedIn, userId } = useAuth()
   const { needsOnboarding, completeOnboarding, checkingOnboarding } = useOnboarding()
   const { forceUpdate, softUpdate, updateConfig, dismissSoftUpdate } = useVersionCheck(userId)
+  // The update prompt is a native modal: badge celebrations wait for it.
+  useBadgeCelebrationHold(!!(forceUpdate || softUpdate))
 
   // OTA Update Restart Banner (2026-09-20) — tracks the active route name
   // so UpdateRestartBanner can defer itself on unsafe screens (see
@@ -544,6 +548,7 @@ function App() {
   const [currentRouteName, setCurrentRouteName] = useState(null)
   function syncCurrentRouteName() {
     setCurrentRouteName(navigationRef.getCurrentRoute()?.name ?? null)
+    requestBadgeCelebrationCheckOnNavigation()
   }
 
 
@@ -605,6 +610,7 @@ function App() {
             onDismiss={dismissSoftUpdate}
           />
           <UpdateRestartBanner currentRouteName={currentRouteName} />
+          <BadgeCelebrationHost userId={userId} />
           </NavigationContainer>
         )}
       </SafeAreaProvider>

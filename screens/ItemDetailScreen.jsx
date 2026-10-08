@@ -24,6 +24,7 @@ import { supabase } from '../lib/supabase'
 import { completeDare } from '../lib/completeDare'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
 import { updateUserLifetimePoints, getUserLifetimePoints, checkTierCrossingForUser } from '../lib/points'
+import { requestBadgeCelebrationCheck, useBadgeCelebrationHold } from '../lib/badgeCelebrationStore'
 import TierUpgradeCelebrationModal from '../components/TierUpgradeCelebrationModal'
 import { useTheme } from '../lib/ThemeContext'
 import { trackEvent } from '../lib/trackEvent'
@@ -280,9 +281,15 @@ export default function ItemDetailScreen({ route, navigation }) {
   // ONE specific item, and must never carry over silently when the user
   // navigates from one Detail screen instance to the next item).
   const [showFullBodyModal, setShowFullBodyModal] = useState(false)
+
   useEffect(() => {
     setShowFullBodyModal(false)
   }, [item?.id])
+
+  // A sheet/modal of this screen is up: the badge celebration (BadgeCelebrationHost) waits until they are gone.
+  useBadgeCelebrationHold(
+    !!postCheckoffData || !!tierUpgrade || !!pendingTierUpgrade || !!memoryModal || tripModeSheetVisible || checkInMemoryVisible || showFullBodyModal || showInviteChannels
+  )
 
   useEffect(() => {
     loadUser()
@@ -382,6 +389,7 @@ export default function ItemDetailScreen({ route, navigation }) {
     trackEvent('trip_mode_checkoff_completed', { itemId, listId })
     await loadCheckedState(userId)
     setPostCheckoffData({ itemId, listItemId: successListItemId, userId, item, pointsAwarded })
+    requestBadgeCelebrationCheck('item-detail-checkoff')
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
     supabase.functions.invoke('update-streak', { body: { user_id: userId } }).catch(() => {/* non-critical */})
     const pointsBefore = await getUserLifetimePoints(userId).catch(() => 0)
@@ -997,6 +1005,7 @@ export default function ItemDetailScreen({ route, navigation }) {
               setChecked(true)
               trackEvent('checkoff_completed', { itemId: item?.id, listId })
               setPostCheckoffData({ itemId: item?.id, listItemId, userId, item, pointsAwarded })
+              requestBadgeCelebrationCheck('item-detail-checkoff')
             } else {
               Alert.alert('Could not check off', 'Something went wrong — please try again.')
             }
@@ -1022,6 +1031,7 @@ export default function ItemDetailScreen({ route, navigation }) {
         setChecked(true)
         trackEvent('checkoff_completed', { itemId: item?.id, listId })
         setPostCheckoffData({ itemId: item?.id, listItemId, userId, item, pointsAwarded })
+        requestBadgeCelebrationCheck('item-detail-checkoff')
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
         supabase.functions.invoke('update-streak', {
           body: { user_id: userId },
@@ -1261,6 +1271,7 @@ export default function ItemDetailScreen({ route, navigation }) {
         setChecked(true)
         trackEvent('checkoff_completed', { itemId: item?.id, listId })
         setPostCheckoffData({ itemId: item?.id, listItemId, userId, item, pointsAwarded })
+        requestBadgeCelebrationCheck('item-detail-checkoff')
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
         supabase.functions.invoke('update-streak', {
           body: { user_id: userId },

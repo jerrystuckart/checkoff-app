@@ -27,10 +27,8 @@ import { useLeaderboard } from '../lib/useLeaderboard'
 import { supabase } from '../lib/supabase'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
-import { pollForNewBadges } from '../lib/badges'
-import { handleFirstCheckinReferralBonus } from '../lib/referral'
+import { requestBadgeCelebrationCheck, useBadgeCelebrationHold } from '../lib/badgeCelebrationStore'
 import SuggestPlaceSheet from './SuggestPlaceSheet'
-import BadgeCelebrationModal from '../components/BadgeCelebrationModal'
 import TierUpgradeCelebrationModal from '../components/TierUpgradeCelebrationModal'
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
 import { checkTierCrossingForUser } from '../lib/points'
@@ -251,15 +249,14 @@ export default function ListScreen({ route, navigation }) {
   // Post-checkoff sheet — replaces the old row-flash celebration
   const [postCheckoffData, setPostCheckoffData] = useState(null)
 
-  // Badge celebration modal
-  const [celebrationBadges, setCelebrationBadges] = useState([])
-
   // Tier upgrade celebration modal
   const [tierUpgrade, setTierUpgrade] = useState(null)  // { tier, newPoints }
-  const pendingBadgesRef = useRef([])
 
   // Personalized check-in memory modal
   const [memoryModal,   setMemoryModal]   = useState(null)  // { listItemId, placeLabel, noteLabel }
+
+  // Another native modal is up: the badge celebration waits (iOS cannot present two at once).
+  useBadgeCelebrationHold(!!postCheckoffData || !!tierUpgrade || !!memoryModal)
   const [memoryPlace,   setMemoryPlace]   = useState('')
   const [memoryNote,    setMemoryNote]    = useState('')
   const [memorySaving,  setMemorySaving]  = useState(false)
@@ -815,11 +812,6 @@ export default function ListScreen({ route, navigation }) {
     return result
   }, [filtered, userLifetimePts, userInsiderTier, listId, sortMode, userLocation, sessionTier])
 
-  // Called by badge-polling logic after a check-in awards one or more badges
-  function showBadgeCelebration(badges) {
-    setCelebrationBadges(badges)
-  }
-
   const handleCheckOff = useCallback(async (listItemId) => {
     Keyboard.dismiss()
     if (ended || metaLoading) return  // also block while meta is loading
@@ -895,25 +887,15 @@ export default function ListScreen({ route, navigation }) {
           return
         }
 
-        // Poll for badges + check tier crossing when a new check-in confirmed
+        // Badge celebration is owned by BadgeCelebrationHost (app root): it presents only once
+        // this screen's sheets are dismissed (see the hold below). Here we only ask it to look.
         if (!wasChecked && currentUserId) {
+          requestBadgeCelebrationCheck('list-checkoff')
           const pointsBefore = userLifetimePts
-          Promise.all([
-            pollForNewBadges(currentUserId, supabase),
-            checkTierCrossingForUser(currentUserId, pointsBefore),
-          ]).then(([earned, { crossedTier, newPoints }]) => {
+          checkTierCrossingForUser(currentUserId, pointsBefore).then(({ crossedTier, newPoints }) => {
             // Keep lifetime pts fresh so subsequent check-ins use the correct before value
             setUserLifetimePts(newPoints)
-            if (earned.some(b => b.id === 'first_checkin')) {
-              handleFirstCheckinReferralBonus(currentUserId).catch(() => {})
-            }
-            if (crossedTier) {
-              // Show tier upgrade first; release held badges after it dismisses
-              pendingBadgesRef.current = earned
-              setTierUpgrade({ tier: crossedTier, newPoints })
-            } else if (earned.length > 0) {
-              setCelebrationBadges(earned)
-            }
+            if (crossedTier) setTierUpgrade({ tier: crossedTier, newPoints })
           })
         }
 
@@ -1736,24 +1718,13 @@ export default function ListScreen({ route, navigation }) {
         navigation={navigation}
       />
 
-      <BadgeCelebrationModal
-        badges={celebrationBadges}
-        onDismiss={() => setCelebrationBadges([])}
-      />
-
       {tierUpgrade && (
         <TierUpgradeCelebrationModal
           tier={tierUpgrade.tier}
           newPoints={tierUpgrade.newPoints}
-          onDismiss={() => {
-            setTierUpgrade(null)
-            const held = pendingBadgesRef.current
-            pendingBadgesRef.current = []
-            if (held.length > 0) setCelebrationBadges(held)
-          }}
+          onDismiss={() => setTierUpgrade(null)}
           onExploreInsider={() => {
             setTierUpgrade(null)
-            pendingBadgesRef.current = []
             navigation.navigate('ProfileTab', { screen: 'InsiderAccess' })
           }}
         />
