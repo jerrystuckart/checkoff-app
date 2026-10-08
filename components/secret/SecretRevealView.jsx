@@ -322,7 +322,7 @@ const styles = StyleSheet.create({
 
   back: {
     position: 'absolute', left: 16, width: 44, height: 44, borderRadius: 22,
-    backgroundColor: 'rgba(15,15,30,0.62)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.2)',
+    backgroundColor: 'rgba(15,15,30,0.88)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.22)',
     alignItems: 'center', justifyContent: 'center',
   },
   chevron: {
