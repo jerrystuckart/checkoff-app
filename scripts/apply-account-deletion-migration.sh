@@ -1,5 +1,5 @@
 #!/bin/bash
-# Preflight and apply for the FINAL account deletion migration (rev 3).
+# Preflight and apply for the FINAL account deletion migration (rev 4). Rollback: docs/security/rollback_account_deletion_20261008d.sql
 #
 #   scripts/apply-account-deletion-migration.sh            PREFLIGHT ONLY: read only checks, changes nothing
 #   scripts/apply-account-deletion-migration.sh --apply    the same checks, then (after you type the confirmation phrase) applies the migration
@@ -11,9 +11,9 @@ set -uo pipefail
 
 EXPECTED_REF="uggusbbswybyplypkbxz"
 MIGRATION="supabase/migrations/20261008d_account_deletion_pipeline.sql"
-EXPECTED_SHA256="1e3ca1d67b548e9d106740f54dd23b43c72125d32f1de3c25cfa0d41a8441072"
-EXPECTED_MARKER="STATUS 2026-10-08 (rev 3)"
-CONFIRM_PHRASE="APPLY ACCOUNT DELETION REV3"
+EXPECTED_SHA256="2bbaf34acb5d21a323a27524bf347d76055ea2699be060e17009e907145967f0"
+EXPECTED_MARKER="STATUS 2026-10-08 (rev 4)"
+CONFIRM_PHRASE="APPLY ACCOUNT DELETION REV4"
 
 fail() { echo "PREFLIGHT FAILED: $*" >&2; exit 1; }
 ok()   { echo "  ok  $*"; }
@@ -31,8 +31,8 @@ git ls-files --error-unmatch "$MIGRATION" >/dev/null 2>&1 || fail "$MIGRATION is
 git diff --quiet HEAD -- "$MIGRATION" || fail "$MIGRATION differs from the committed version (uncommitted edits)"
 ACTUAL_SHA256="$(shasum -a 256 "$MIGRATION" | cut -d' ' -f1)"
 [ "$ACTUAL_SHA256" = "$EXPECTED_SHA256" ] || fail "sha256 is $ACTUAL_SHA256, expected $EXPECTED_SHA256 (not the reviewed final file)"
-head -1 "$MIGRATION" | grep -q "$EXPECTED_MARKER" || fail "first line is not the rev 3 marker"
-ok "branch $(git rev-parse --abbrev-ref HEAD) @ $(git rev-parse --short HEAD), file sha256 $ACTUAL_SHA256, marker rev 3"
+head -1 "$MIGRATION" | grep -q "$EXPECTED_MARKER" || fail "first line is not the rev 4 marker"
+ok "branch $(git rev-parse --abbrev-ref HEAD) @ $(git rev-parse --short HEAD), file sha256 $ACTUAL_SHA256, marker rev 4"
 
 echo "== 2. Linked Supabase project"
 LINKED_REF="$(cat "$LINK_DIR/supabase/.temp/project-ref" 2>/dev/null || true)"
@@ -48,7 +48,10 @@ SQL="select (select count(*) from storage.buckets where id in ('checkin-photos',
             (select count(*) from pg_extension where extname in ('pg_net','pg_cron','supabase_vault')) as extensions,
             (select count(*) from vault.decrypted_secrets where name = 'service_role_key') as service_key_in_vault,
             (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'public' and p.proname = 'delete_my_account') as old_function,
-            (to_regclass('public.account_deletion_requests') is not null) as already_applied,
+            coalesce((select pg_get_function_result(p.oid) from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname = 'delete_my_account' and p.pronargs = 0), 'missing') as old_function_result,
+            (select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname in ('delete_my_account_v2', 'account_deletion_process')) as new_functions,
+            ((to_regclass('public.account_deletion_requests') is not null) or (to_regclass('public.anonymous_completion_counts') is not null)
+              or (to_regclass('public.retained_checkin_photos') is not null)) as already_applied,
             (select count(*) from public.items) as items, (select count(*) from public.users) as users"
 OUT_F="$(mktemp -t acct_del_out.XXXXXX)"; ERR_F="$(mktemp -t acct_del_err.XXXXXX)"
 trap 'rm -f "$OUT_F" "$ERR_F" "${TMP:-}"' EXIT
@@ -86,7 +89,7 @@ rows = doc.get('rows') if isinstance(doc, dict) else doc
 if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
     b_fail("expected exactly one row object; got " + (f"{type(rows).__name__} of {len(rows)}" if isinstance(rows, list) else type(rows).__name__))
 r = rows[0]
-want = {"buckets": int, "extensions": int, "service_key_in_vault": int, "old_function": int, "already_applied": bool, "items": int, "users": int}
+want = {"buckets": int, "extensions": int, "service_key_in_vault": int, "old_function": int, "old_function_result": str, "new_functions": int, "already_applied": bool, "items": int, "users": int}
 bad_shape = [k for k, t in want.items() if k not in r or isinstance(r[k], bool) != (t is bool) or not isinstance(r[k], t)]
 if bad_shape or set(r) - set(want):
     b_fail("row keys or types differ from the query: " + ", ".join(bad_shape or sorted(set(r) - set(want))))
@@ -96,7 +99,8 @@ if r["buckets"] != 3: bad.append("expected the 3 CheckOff storage buckets, found
 if r["extensions"] != 3: bad.append("pg_net, pg_cron and supabase_vault must all be installed (found %d of 3)" % r["extensions"])
 if r["service_key_in_vault"] != 1: bad.append("service_role_key is not in vault")
 if r["old_function"] != 1: bad.append("public.delete_my_account() not found: this is not the expected database")
-if r["already_applied"]: bad.append("account_deletion_requests already exists: the pipeline is already applied")
+if r["old_function_result"] != "void": bad.append("delete_my_account() returns %r, not void: installed clients depend on that contract and this migration is built around it" % r["old_function_result"])
+if r["already_applied"] or r["new_functions"] != 0: bad.append("part of the pipeline already exists (tables or functions): the pipeline is already applied")
 if r["items"] < 100 or r["users"] < 10: bad.append("item and user counts do not look like production (items %d, users %d)" % (r["items"], r["users"]))
 if bad:
     print("  CLASS C: the query ran and the output is valid, but this database failed the identity checks:")
@@ -128,12 +132,16 @@ TMP="$(mktemp -t account_deletion_apply.XXXXXX)"
 sdb -f "$TMP" --linked || fail "the migration failed; the transaction was not committed"
 
 echo "== Post apply check (read only)"
-sdb "select (select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname in ('delete_my_account','account_deletion_process','account_deletion_delete_data','account_deletion_retain_inventory','account_deletion_inventory')) as functions,
+sdb --agent=no -o json "select
+  (select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname in ('delete_my_account','delete_my_account_v2','account_deletion_process','account_deletion_delete_data','account_deletion_retain_inventory','account_deletion_inventory')) as functions,
+  pg_get_function_result('public.delete_my_account()'::regprocedure) as old_function_result,
+  pg_get_function_result('public.delete_my_account_v2()'::regprocedure) as v2_result,
   (to_regclass('public.account_deletion_requests') is not null) as requests_table, (to_regclass('public.anonymous_completion_counts') is not null) as counts_table,
   (to_regclass('public.retained_checkin_photos') is not null) as retained_table,
   (select count(*) from cron.job where jobname = 'process-account-deletions' and active) as cron_job,
   has_function_privilege('anon','public.account_deletion_process()','EXECUTE') as anon_can_run_processor,
   has_function_privilege('authenticated','public.account_deletion_delete_data(uuid)','EXECUTE') as client_can_run_delete_data,
-  has_function_privilege('authenticated','public.delete_my_account()','EXECUTE') as client_can_call_delete_my_account" --linked
-echo "Applied. Expect functions=5, all three tables true, cron_job=1, anon_can_run_processor=false, client_can_run_delete_data=false, client_can_call_delete_my_account=true."
+  has_function_privilege('authenticated','public.delete_my_account()','EXECUTE') as client_can_call_old_rpc,
+  has_function_privilege('authenticated','public.delete_my_account_v2()','EXECUTE') as client_can_call_v2" --linked
+echo "Applied. Expect: functions=6, old_function_result=void, v2_result=jsonb, all three tables true, cron_job=1, anon_can_run_processor=false, client_can_run_delete_data=false, both client RPCs true."
 echo "Next: run the disposable account test BEFORE publishing the website pages or any client update."
