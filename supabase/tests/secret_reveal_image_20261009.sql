@@ -5,7 +5,9 @@ DO $$
 DECLARE out text := ''; n int; ok boolean;
 BEGIN
   -- apply the migration body inside this (rolled back) transaction
-  ALTER TABLE public.items ADD COLUMN IF NOT EXISTS secret_reveal_image_storage_path text NULL;
+  ALTER TABLE public.items ADD COLUMN IF NOT EXISTS secret_reveal_image_storage_path text NULL,
+    ADD COLUMN IF NOT EXISTS secret_reveal_image_focus_x smallint NULL CONSTRAINT items_secret_reveal_focus_x_range CHECK (secret_reveal_image_focus_x BETWEEN 0 AND 100),
+    ADD COLUMN IF NOT EXISTS secret_reveal_image_focus_y smallint NULL CONSTRAINT items_secret_reveal_focus_y_range CHECK (secret_reveal_image_focus_y BETWEEN 0 AND 100);
   DROP POLICY IF EXISTS "anyone can view secret reveal images" ON storage.objects;
   CREATE POLICY "anyone can view secret reveal images" ON storage.objects FOR SELECT USING (
     bucket_id = 'submission-photos' AND EXISTS (SELECT 1 FROM public.items WHERE items.secret_reveal_image_storage_path = storage.objects.name));
@@ -13,8 +15,8 @@ BEGIN
   SELECT count(*) INTO n FROM public.items WHERE secret_reveal_image_storage_path IS NOT NULL;
   out := out || CASE WHEN n = 0 THEN 'PASS default NULL for every existing item' ELSE '**FAIL** non-null defaults: '||n END || E'\n';
 
-  SELECT NOT (has_column_privilege('anon','public.items','secret_reveal_image_storage_path','UPDATE')
-          OR has_column_privilege('authenticated','public.items','secret_reveal_image_storage_path','UPDATE')) INTO ok;
+  SELECT NOT (has_column_privilege('anon','public.items','secret_reveal_image_storage_path','UPDATE') OR has_column_privilege('authenticated','public.items','secret_reveal_image_storage_path','UPDATE')
+          OR has_column_privilege('anon','public.items','secret_reveal_image_focus_x','UPDATE') OR has_column_privilege('authenticated','public.items','secret_reveal_image_focus_y','UPDATE')) INTO ok;
   out := out || CASE WHEN ok THEN 'PASS anon/authenticated cannot UPDATE the new column' ELSE '**FAIL** a client role can UPDATE the new column' END || E'\n';
 
   SELECT NOT (has_column_privilege('anon','public.items','secret_reveal_image_storage_path','INSERT')

@@ -7,7 +7,7 @@ Admin tool changes live in the local `checkoff_admin.html` (not in git); the exa
 | Role | Column / table | Folder | Shown |
 |---|---|---|---|
 | Locked / teaser image | `items.secret_business_photo_storage_path` | `secret-business-photos/<item_id>/` | hero of the LOCKED screen only |
-| Reveal background (optional, new) | `items.secret_reveal_image_storage_path` | `secret-reveal-images/<item_id>/` | stationary full-screen background behind the UNLOCKED card |
+| Reveal background (optional, new) | `items.secret_reveal_image_storage_path` (+ optional `secret_reveal_image_focus_x/_y`) | `secret-reveal-images/<item_id>/` | stationary full-screen background behind the UNLOCKED card |
 | Approved cover / pool | `item_cover_candidates` (`display_eligible` / `selected`) via `active_cover_candidate_id` | `admin-artwork/…`, `cover-candidates/<uid>/…` | cards everywhere; **fallback** for the reveal background |
 
 Resolution when unlocked: reveal image → approved pool/cover → locked/teaser image → branded fallback. Locked: teaser image → branded fallback (never the reveal image, cover or pool). The app requests the reveal image only after unlock. Neither image is ever blurred (the secret is the wording, not the photo).
@@ -26,6 +26,7 @@ The approved cover also feeds Home/Nearby/List cards (landscape-ish crops). A po
 - The app uses cover-crop: wider/shorter images are cropped left/right. Keep the subject centred horizontally.
 - Subject in the **upper-middle ~55%**. The bottom ~45% sits behind the dark gradient, the discovery card and the primary button; the top ~8% sits under the back button/status pill.
 - No text, logos or UI baked into the image.
+- **Crop focus:** in the admin panel, Horizontal/Vertical sliders (0–100%) choose which part stays in view (stored in `secret_reveal_image_focus_x/_y`; default 50/35). The preview marks the band above the card. Photos that are not exactly the screen shape overflow on one axis; only that axis responds. The photo is laid out in the top ~72% of the screen and fades into the dark below, so the subject stays above the card; very tall portraits are cropped vertically (use the Vertical slider).
 - Locked/teaser image: shown as a ~16:11 hero (≈1170 × 800), subject centred; landscape or portrait both work. It must not reveal the secret wording.
 
 ## Rollout (after approval)
