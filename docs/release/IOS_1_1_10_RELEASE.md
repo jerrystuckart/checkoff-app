@@ -32,3 +32,11 @@ No saved build log exists (local builds leave none). Four outputs were reproduce
 recurring four. Capture the next build with `scripts/ios-local-build.sh --build` (full redacted log in ~/Library/Logs/checkoff-builds/).
 
 Server-side availability (not code): Willcox destination_zones row is is_active=false; Positano is active.
+
+
+## Reconciliation 2026-10-07 night
+- TestFlight 1.1.10 (buildNumber 155) is a local build; it is not in `eas build:list` (newest EAS iOS record: 1.1.7 / 152). Runtime 86ac0036, channel production; latest production OTA group 9c3d0ef1.
+- Final iOS source production/1.1.10-canonical @f237aaf differs from the latest OTA only in docs and migrations: no ordinary user difference, no new binary needed for behavior.
+- Apple App Privacy answers and blockers: docs/release/STORE_DISCLOSURES_1_1_10.md section 4 and 7. Potential binary reason (optional): the location permission strings in app.json say
+  "verify GPS check-ins" and "let you know about a nearby pick", which the app does not do for ordinary users; fixing them is a native change (new runtime).
+- Optional JavaScript only parity: the Home "Turn On" button exists only on the Android release branch.

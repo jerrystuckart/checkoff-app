@@ -1,5 +1,11 @@
 # Google Play and policy drafts for Android visit recovery (REVIEW READY, NOT SUBMITTED, NOT PUBLISHED)
 
+> UPDATE 2026-10-07: the reconciled, implementation checked answers now live in docs/release/STORE_DISCLOSURES_1_1_10.md (Data safety, Background Location
+> declaration, reviewer notes, 30 second video script, Apple App Privacy, blockers). Where this file disagrees, that file wins. Known stale points here:
+> section C omits photos, notes, interaction events, push tokens and crash data; section D is superseded by the published policy (https://getcheckoff.com/privacy,
+> commit 1038955); section E step 5 (a seeded suggestion) would be a fabricated production visit, do not do it; section G is 60 seconds, Play recommends 30 or less;
+> section H item "set android_visit_recovery globally" is obsolete (that flag gates nothing; the master flag candidate_visit_detection is the kill switch and is ON).
+
 Nothing here is submitted or published. Jerry approves each item first.
 
 ## A. Background Location Permissions Declaration (Play Console, App content)

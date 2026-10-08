@@ -88,3 +88,10 @@ release name `1.1.10 (20)` → Save → Review release → Start rollout to Inte
 - `scripts/android-build-preflight.sh` enforces branch, clean tree, real node_modules, allowlisted runtime and tests before a build.
 - An OTA cannot repair vc20: its native config has no background location and its runtime differs. Install a build from this branch.
 - Accidentally tracked `node_modules` symlink (added in 703b139) removed.
+
+## Reconciliation 2026-10-07 night
+- Installed Android build: Play internal testing 1.1.10 versionCode 21, LOCAL build (`eas build --local`), source e7b8aa1, runtime 53ba13b5 (from the AAB asset `fingerprint`), channel production.
+  No Android OTA exists for this runtime. Final branch tip is 47721c3; the only difference from e7b8aa1 is admin only Diagnostics rows, so NO rebuild is needed for ordinary users.
+- Verified on the phone: Home and Profile recovery controls, disclosure, foreground then "Allow all the time". NOT verified: a real background visit, confirmation and points.
+- Store answers, background declaration, reviewer notes, video script and blockers: docs/release/STORE_DISCLOSURES_1_1_10.md.
+- Confirmed production gaps: Play deletion web link missing; Background Location declaration and video not done; Data safety not entered. Suspected: in app account deletion failing (unexercised), declaration rejection.
