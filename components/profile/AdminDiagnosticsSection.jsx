@@ -6,6 +6,7 @@ import React, { useState, useEffect } from 'react'
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 import VisitDetectionDebugPanel from '../VisitDetectionDebugPanel'
 import { shouldShowDiagnostics, buildDiagnosticsRows } from '../../lib/whatsGoodDiagnosticsPanel'
+import { getRecoveryGate, subscribeRecoveryGate, recoveryGateRows } from '../../lib/visitDetection/recoveryGateDiagnostics'
 import { getWhatsGoodDiagnostics, subscribeWhatsGoodDiagnostics } from '../../lib/whatsGoodDiagnosticsStore'
 
 export default function AdminDiagnosticsSection({ isAdmin, userId, showVisitDebug, colors }) {
@@ -13,7 +14,10 @@ export default function AdminDiagnosticsSection({ isAdmin, userId, showVisitDebu
   const [diag, setDiag] = useState(getWhatsGoodDiagnostics())
   const [refreshing, setRefreshing] = useState(false)
 
+  const [gate, setGate] = useState(getRecoveryGate())
+
   useEffect(() => subscribeWhatsGoodDiagnostics(setDiag), [])
+  useEffect(() => subscribeRecoveryGate(setGate), [])
 
   if (!shouldShowDiagnostics(isAdmin)) return null
   const { TEXT, MUTED, CARD, BORDER, AMBER } = colors
@@ -58,6 +62,14 @@ export default function AdminDiagnosticsSection({ isAdmin, userId, showVisitDebu
           >
             <Text style={[styles.refreshText, { color: AMBER }]}>{refreshing ? 'Refreshing…' : "Refresh What's Good"}</Text>
           </TouchableOpacity>
+
+          <Text style={[styles.sectionLabel, { color: MUTED, marginTop: 10 }]}>Visit recovery (admin only)</Text>
+          {recoveryGateRows(gate).map(row => (
+            <View key={row.label} style={styles.row}>
+              <Text style={[styles.rowLabel, { color: MUTED }]}>{row.label}</Text>
+              <Text style={[styles.rowValue, { color: TEXT }]}>{row.value}</Text>
+            </View>
+          ))}
 
           {showVisitDebug && (
             <View style={styles.visit}>
