@@ -220,7 +220,7 @@ def stage_cleanup():
     byb = {}
     for o in objs: byb.setdefault(o["b"], []).append(o["n"])
     for b, names in byb.items():
-        sql("""select net.http_delete(url := '%s/storage/v1/object/%s', headers := jsonb_build_object('Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'service_role_key' limit 1), 'Content-Type', 'application/json'),
+        sql("""select net.http_delete(url := '%s/storage/v1/object/%s', headers := jsonb_build_object('Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'service_role_jwt' limit 1), 'apikey', (select decrypted_secret from vault.decrypted_secrets where name = 'service_role_jwt' limit 1), 'Content-Type', 'application/json'),
                body := jsonb_build_object('prefixes', %s::jsonb), timeout_milliseconds := 30000) as request_id""" % (REF, b, "'" + json.dumps(names).replace("'", "''") + "'"))
     print("   deleting %d synthetic file(s) in %d bucket(s)" % (len(objs), len(byb)))
     time.sleep(8)
@@ -396,7 +396,100 @@ def stage_request_a():
     check("partial failure is VISIBLE: the request stays 'accepted', attempts keep rising, and last_error says why", last["status"] == "accepted" and last["attempts"] >= 2 and bool(last["last_error"]), last)
     check("partial failure does not touch anyone else: B's data fingerprint is unchanged", b_fingerprint(st) == st["b_before2"], b_fingerprint(st))
 
-STAGES = {"setup": stage_setup, "negative": stage_negative, "inline_legacy": stage_inline_legacy, "request_a": stage_request_a, "cleanup": stage_cleanup}
+def stage_controls():
+    """Control rows in the notification outbox that must SURVIVE A's deletion (unrelated, and a same name lookalike), inserted while A's request is still pending."""
+    st = load(); A = st["users"]["A"]["id"]; B = st["users"]["B"]["id"]; tag = st["tag"]
+    sql("""insert into public.notification_queue (type, payload, delivered, processed_at) values
+           ('badge', jsonb_build_object('to_user_id', '%s', 'badge_id', 'zz-control-unrelated'), false, now()),
+           ('check_in', jsonb_build_object('from_user', 'ZZ DELTEST %s A', 'list_item_id', 'zz-someone-elses-list-item', 'to_user_id', '%s'), false, now())""" % (B, tag, B))
+    n = sql("select count(*) as n from public.notification_queue where payload::text like '%%zz-control%%' or payload::text like '%%zz-someone-elses-list-item%%'")[0]["n"]
+    check("controls: two control rows inserted for B (an unrelated badge row and a same-name lookalike that is not about A's own list item)", n == 2, n)
+    rows = sql("""select count(*) filter (where payload->>'to_user_id' = '%s' or payload->>'from_user' = 'ZZ DELTEST %s A') as mentioning_a_or_name from public.notification_queue""" % (A, tag))[0]
+    st["queue_before"] = rows; save(st)
+    print("notification_queue rows mentioning A (by id or exact name) before deletion:", rows)
+
+def stage_finish_a():
+    st = load(); A = st["users"]["A"]["id"]; B = st["users"]["B"]["id"]; S = st["items"]; tag = st["tag"]; m0, m40 = months(); f = st["files"]; c = st["ids"]["cands"]
+    rid = st["a_request"]
+    deadline = time.time() + 420; req = None
+    while time.time() < deadline:
+        req = sql("select status, attempts, last_error, completed_at is not null as done, user_id is null as id_cleared, counts_recorded, storage_manifest = '[]'::jsonb as m1, retain_manifest = '[]'::jsonb as m2 from public.account_deletion_requests where id = '%s'" % rid)[0]
+        if req["done"]: break
+        time.sleep(20)
+    check("recovery: A's request, stuck while Storage failed, COMPLETED by itself once the fault was fixed (no manual action), after earlier failed attempts", req["done"] and req["status"] == "completed" and req["attempts"] >= 2, req)
+    check("recovery: the completed request holds no identifier or manifest and no error", req["id_cleared"] and req["m1"] and req["m2"] and not req["last_error"], req)
+    snap = a_snapshot(st)
+    check("deleted: A's auth account, profile, sessions, check ins, candidate visits, events, lists and attributed candidates are gone", all(snap[k] in (0, False) for k in ("profile", "auth_user", "banned", "sessions", "push_tokens", "checkins", "candidate_visits", "events", "lists_created", "candidates_attributed")), snap)
+    other = sql("""select (select count(*) from public.dares where from_user_id='%s' or to_user_id='%s') as dares, (select count(*) from public.friendships where user_a='%s' or user_b='%s') as friendships,
+                          (select count(*) from public.list_members where user_id='%s') as memberships, (select count(*) from public.visit_presence_sessions where user_id='%s') as presence,
+                          (select count(*) from public.visit_recovery_settings where user_id='%s') as settings, (select count(*) from public.campaign_sends where user_id='%s') as sends,
+                          (select count(*) from public.notification_log where user_id='%s') as notif_log, (select count(*) from public.lists where id='%s') as solo_list""" % (A, A, A, A, A, A, A, A, A, st["ids"]["solo"]))[0]
+    check("deleted: A's dares, friendships, memberships, presence sessions, recovery settings, campaign sends, notification log and SOLO list are gone", all(v == 0 for v in other.values()), other)
+    bnow = b_fingerprint(st)
+    expect_b = dict(st["b_before2"]); expect_b["shared_list_creator"] = B; expect_b["b_referred_by"] = None
+    check("shared content: the shared list survived, was handed to B, keeps its item and B's check in; B's own check ins and membership are intact; B's referral link to A is cleared", bnow == expect_b, bnow)
+    exp = {("S1", m0, "tap"): 2, ("S2", m40, "tap"): 1, ("S1", m0, "photo"): 1, ("S2", m0, "photo"): 1, ("S1", m40, "tap"): 1}
+    if st.get("confirmed_fixture"): exp[("S4", m0, "confirmed_suggestion")] = 1
+    got = cells(st)
+    check("counts: A's completions are present EXACTLY once (4 or 5 cells: same day mirror counted once, month granularity, the confirmed suggestion bucket, the PENDING suggestion NOT counted), F and D's cells unchanged", got == exp, {"got": {"|".join(k): v for k, v in got.items()}})
+    for _ in range(3): sql("select public.account_deletion_process()")
+    check("counts: three more processor runs change nothing", cells(st) == exp)
+    # ---- retained photos
+    rows = sql("""select id, status, display_eligible, is_primary, storage_path, submitted_by_user_id is null as unattributed, moderation_metadata::text like '%%%s%%' as meta_has_a, coalesce(rejection_reason,'') like '%%%s%%' as reason_has_a, rejection_reason
+                  from public.item_cover_candidates where id in ('%s','%s','%s') order by status""" % (A, A, c["cand_sel"], c["cand_pend"], c["cand_rej"]))
+    byid = {r["id"]: r for r in rows}
+    check("retained: all 3 submitted candidate photos (selected, pending, REJECTED) still exist as rows", len(rows) == 3, len(rows))
+    check("retained: attribution removed (submitter NULL, no uploader id in the path or moderation notes)", all(r["unattributed"] and (A not in r["storage_path"]) and (not r["meta_has_a"]) and (not r["reason_has_a"]) for r in rows), [{k: r[k] for k in ("status", "storage_path", "unattributed", "meta_has_a", "reason_has_a")} for r in rows])
+    check("retained: visibility fields are exactly as before (selected + eligible; pending and rejected NOT eligible)", (byid[c["cand_sel"]]["status"], byid[c["cand_sel"]]["display_eligible"], byid[c["cand_pend"]]["status"], byid[c["cand_pend"]]["display_eligible"], byid[c["cand_rej"]]["status"], byid[c["cand_rej"]]["display_eligible"]) == ("selected", True, "pending", False, "rejected", False), rows)
+    check("retained: the rejection note was scrubbed in place (kept, user id replaced)", "removed" in (byid[c["cand_rej"]]["rejection_reason"] or ""), byid[c["cand_rej"]]["rejection_reason"])
+    objs = sql("select bucket_id, name, owner_id is null as no_owner, owner is null as no_owner2, coalesce((metadata->>'size')::int, 0) as size from storage.objects where name in (%s)" % ",".join("'%s'" % byid[v]["storage_path"] for v in c.values()))
+    check("retained: the files are at the new neutral paths with no owner and their bytes intact", len(objs) == 3 and all(o["no_owner"] and o["no_owner2"] and o["size"] > 0 for o in objs), objs)
+    old = sql("select count(*) as n from storage.objects where name in (%s)" % ",".join("'%s'" % f[k]["path"] for k in ("cand_sel", "cand_pend", "cand_rej", "checkin_good", "checkin_empty")))[0]["n"]
+    check("retained: nothing remains under A's old paths (including the empty failed upload, which is deleted)", old == 0, old)
+    tb = token(st, "B"); vis = {}
+    for k in ("cand_sel", "cand_pend", "cand_rej"):
+        path = byid[c[k]]["storage_path"]; sa, ba = sign_url(None, "submission-photos", path); sb, bb = sign_url(tb, "submission-photos", path)
+        vis[k] = {"anon": sa, "B": sb, "bytes_equal_uploaded": ba == base64.b64decode(st["files"]["bytes_sel"]) if k == "cand_sel" else None}
+    check("visibility after: the SELECTED cover still resolves through a signed URL for anon and B and returns the SAME bytes that A uploaded", vis["cand_sel"]["anon"] == 200 and vis["cand_sel"]["B"] == 200 and vis["cand_sel"]["bytes_equal_uploaded"], vis["cand_sel"])
+    check("visibility after: the PENDING and REJECTED photos are still not readable by anon or B (retention did not make anything public)", all(vis[k]["anon"] != 200 and vis[k]["B"] != 200 for k in ("cand_pend", "cand_rej")), vis)
+    check("visibility after == visibility before, photo by photo", all((vis[k]["anon"] == 200) == (st["vis_before"][k]["anon"] == 200) and (vis[k]["B"] == 200) == (st["vis_before"][k]["B"] == 200) for k in vis), {"before": {k: (v["anon"], v["B"]) for k, v in st["vis_before"].items()}, "after": {k: (v["anon"], v["B"]) for k, v in vis.items()}})
+    rp = sql("select item_id::text as item_id, bucket, name, width, height from public.retained_checkin_photos where item_id in (%s)" % ",".join("'%s'" % v for v in S.values()))
+    check("retained: the check in photo is recorded attribution free (item, neutral name, size only) and exactly once", len(rp) == 1 and rp[0]["item_id"] == S["S1"] and rp[0]["name"].startswith("retained/") and A not in rp[0]["name"], rp)
+    if rp:
+        sg, bg = public_get("checkin-photos", rp[0]["name"]); so, _ = public_get("checkin-photos", f["checkin_good"]["path"])
+        check("retained: the check in photo is reachable at its new public URL with the same size, and the OLD url (which embedded A's id) no longer works", sg == 200 and len(bg) == st["checkin_before"]["good_bytes"] and so != 200, {"new": sg, "bytes": len(bg), "old_status": so})
+    # ---- no trace
+    for label, needle in (("id", A), ("email", st["users"]["A"]["email"]), ("display name", "ZZ DELTEST %s A" % tag)):
+        needle_q = needle.replace("'", "''")
+        hits = {r["t"]: r["hits"] for r in sql("""select table_schema||'.'||table_name as t, (xpath('/row/c/text()', query_to_xml(format('select count(*) as c from %%I.%%I x where x::text ilike %%L', table_schema, table_name, '%%%%%s%%%%'), false, true, '')))[1]::text::int as hits
+                                         from information_schema.tables where table_schema in ('public','auth','storage','net','cron','vault') and table_type = 'BASE TABLE'""" % needle_q) if r["hits"] > 0}
+        if label == "display name":
+            # the same-name LOOKALIKE control row (about someone else's list item) must survive by design: it is the only allowed hit
+            check("no trace: A's display name appears only in the one same-name lookalike control row (a name alone is never enough to delete another member's row)", hits == {"public.notification_queue": 1}, hits)
+        else:
+            check("no trace: A's %s appears in NO table of public, auth, storage, net, cron or vault" % label, hits == {}, hits or "no hits")
+    q = sql("select count(*) as n from public.notification_queue where payload::text like '%%zz-control%%' or payload::text like '%%zz-someone-elses-list-item%%'")[0]["n"]
+    check("notification outbox: rows about A are gone but the 2 control rows (unrelated badge; same name lookalike on someone else's list item) SURVIVED", q == 2, q)
+    save(st)
+
+def stage_replays_and_finish():
+    st = load(); B = st["users"]["B"]["id"]; A = st["users"]["A"]["id"]; m0, m40 = months()
+    before = cells(st)
+    # B deletes their own account through the real API: the shared list must disappear (no other member), B's two same day check ins count once
+    tb = token(st, "B")
+    s1, d1, _ = http("POST", REF + "/rest/v1/rpc/delete_my_account_v2", tb, body={})
+    check("final: B deletes B's own account through v2 (no stored files, so completed immediately)", s1 == 200 and (d1 or {}).get("status") == "completed", "http %s %s" % (s1, d1))
+    left = sql("select (select count(*) from public.lists where id='%s') as shared_list, (select count(*) from public.list_items where list_id='%s') as list_items, (select count(*) from public.users where id='%s') as b" % (st["ids"]["shared"], st["ids"]["shared"], B))[0]
+    check("final: with B (its last member) gone, the shared list and its items are deleted", left == {"shared_list": 0, "list_items": 0, "b": 0}, left)
+    got = cells(st); exp = dict(before); exp[("S1", m0, "tap")] = exp.get(("S1", m0, "tap"), 0) + 1
+    check("final: B's two same day check ins on the same experience added exactly ONE completion to the existing cell", got == exp, {"|".join(k): v for k, v in got.items()})
+    for _ in range(3): sql("select public.account_deletion_process()")
+    check("final: more processor runs change nothing", cells(st) == exp)
+    s2, d2, _ = http("POST", REF + "/rest/v1/rpc/delete_my_account_v2", tb, body={})
+    check("final: replaying B's request with the stale token is a harmless no-op (no new data, counts unchanged)", s2 == 200 and cells(st) == exp, "http %s %s" % (s2, (d2 or {}).get("status")))
+    save(st)
+
+STAGES = {"setup": stage_setup, "negative": stage_negative, "inline_legacy": stage_inline_legacy, "request_a": stage_request_a, "controls": stage_controls, "finish_a": stage_finish_a, "final": stage_replays_and_finish, "cleanup": stage_cleanup}
 if __name__ == "__main__":
     which = sys.argv[1] if len(sys.argv) > 1 else "setup"
     for name in (list(STAGES) if which == "all" else [which]):
