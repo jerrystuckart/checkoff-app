@@ -6,10 +6,9 @@
 // Unlike VisitRecoverySection's inbox row (which only shows once the user has
 // a pending suggestion or has already opted in), this Home entry is visible to
 // ANY signed-in user the feature is offered to — including zero candidates and
-// not-yet-opted-in — so Home always has a way in. It never duplicates the full
-// opt-in card/consent flow (that stays Profile-only, one place to turn it on);
-// tapping this always opens the inbox, and the inbox's own empty state already
-// explains how it works and points back to Profile to turn it on.
+// not-yet-opted-in — so Home always has a way in. When the user has not opted in it also offers "Turn on", which runs the
+// same user-initiated consent flow as Profile (useVisitRecovery.turnOn: disclosure, then permissions). Nothing is ever
+// turned on automatically, and the permission-aware CTAs (Open Settings / Allow all the time) show here too.
 //
 // Copy is intentionally the existing RECOVERY_COPY strings only (title +
 // intro/needsPermission/paused, already shown elsewhere) — no new wording
@@ -25,7 +24,7 @@ import { useVisitRecovery } from '../../lib/visitDetection/useVisitRecovery'
 // The status line comes from lib/visitDetection/recoveryState.js: it says "On" only when recovery can actually work.
 export default function HomeVisitRecoveryEntry({ userId, navigation, colors }) {
   const { CARD, TEXT, MUTED, BORDER, AMBER } = colors
-  const { supported, loaded, resolved, runCta } = useVisitRecovery(userId)
+  const { supported, loaded, resolved, runCta, turnOn, enabling } = useVisitRecovery(userId)
 
   if (!supported || !userId || !loaded || !resolved.visible) return null
 
@@ -52,6 +51,11 @@ export default function HomeVisitRecoveryEntry({ userId, navigation, colors }) {
       )}
       <Text style={[styles.chevron, { color: MUTED }]}>›</Text>
     </TouchableOpacity>
+    {resolved.state === 'off' ? (
+      <TouchableOpacity style={[styles.cta, { backgroundColor: AMBER }]} onPress={turnOn} disabled={enabling} activeOpacity={0.85} accessibilityRole="button">
+        <Text style={styles.ctaText}>Turn on</Text>
+      </TouchableOpacity>
+    ) : null}
     {resolved.cta ? (
       <TouchableOpacity style={[styles.cta, { backgroundColor: AMBER }]} onPress={runCta} activeOpacity={0.85} accessibilityRole="button">
         <Text style={styles.ctaText}>{resolved.cta.label}</Text>

@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Platform } from 'react-native'
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native'
 import { useTheme } from '../lib/ThemeContext'
-import { enableVisitRecovery, turnOffVisitRecovery } from '../lib/visitDetection/recoverySettings'
+import { turnOffVisitRecovery } from '../lib/visitDetection/recoverySettings'
 import { RECOVERY_COPY } from '../lib/visitDetection/recoveryPolicy'
 import { openVisitInbox } from '../lib/visitDetection/inboxNavigation'
-import { useVisitRecovery, backgroundPermissionRunner, showAndroidDisclosure } from '../lib/visitDetection/useVisitRecovery'
+import { useVisitRecovery } from '../lib/visitDetection/useVisitRecovery'
 
 // Profile section for seven-day visit recovery. The whole section is capability-gated: where visit recovery is
 // unsupported (Android) it renders nothing at all. On iOS the state shown comes from
@@ -14,37 +14,12 @@ export default function VisitRecoverySection({ userId, navigation }) {
   const { CARD, TEXT, MUTED, BORDER, AMBER } = colors
   const s = useMemo(() => makeStyles({ CARD, TEXT, MUTED, BORDER, AMBER }), [CARD, TEXT, MUTED, BORDER, AMBER])
   const [busy, setBusy] = useState(false)
-  const { supported, loaded, resolved, reload: load, runCta, openSettings } = useVisitRecovery(userId)
+  const { supported, loaded, resolved, reload: load, runCta, turnOn, enabling } = useVisitRecovery(userId)
 
   if (!supported || !loaded || !resolved.visible) return null
   const cardState = resolved.state
   const showInbox = resolved.showInbox
   const st = { suggestionCount: resolved.suggestionCount }
-
-  async function doEnable() {
-    setBusy(true)
-    try {
-      const { permission } = await enableVisitRecovery(userId, backgroundPermissionRunner())
-      if (permission !== 'granted') Alert.alert('One more step', Platform.OS === 'android' ? RECOVERY_COPY.permissionDeniedHintAndroid : RECOVERY_COPY.permissionDeniedHint, [
-        { text: 'Later', style: 'cancel' },
-        { text: 'Open Settings', onPress: openSettings },
-      ])
-    } catch (e) {
-      Alert.alert('Could not turn on', e?.message ?? 'Please try again.')
-    } finally {
-      setBusy(false)
-      load()
-    }
-  }
-
-  function turnOn() {
-    // Android: the prominent disclosure on its own, before any permission request (Google Play User Data policy).
-    if (Platform.OS === 'android') { showAndroidDisclosure({ onContinue: doEnable }); return }
-    Alert.alert(RECOVERY_COPY.title, `${RECOVERY_COPY.intro}\n\n${RECOVERY_COPY.how}\n\n${RECOVERY_COPY.privacy}`, [
-      { text: 'Not now', style: 'cancel' },
-      { text: 'Turn on', onPress: doEnable },
-    ])
-  }
 
   function turnOff() {
     Alert.alert(RECOVERY_COPY.turnOffTitle, RECOVERY_COPY.turnOffBody, [
@@ -77,8 +52,8 @@ export default function VisitRecoverySection({ userId, navigation }) {
           <>
             <Text style={s.body}>{RECOVERY_COPY.intro}</Text>
             <Text style={s.small}>{RECOVERY_COPY.how}</Text>
-            <TouchableOpacity style={s.primary} onPress={turnOn} disabled={busy} activeOpacity={0.85}>
-              {busy ? <ActivityIndicator color="#1A1A2E" /> : <Text style={s.primaryText}>Turn on</Text>}
+            <TouchableOpacity style={s.primary} onPress={turnOn} disabled={busy || enabling} activeOpacity={0.85}>
+              {(busy || enabling) ? <ActivityIndicator color="#1A1A2E" /> : <Text style={s.primaryText}>Turn on</Text>}
             </TouchableOpacity>
           </>
         )}

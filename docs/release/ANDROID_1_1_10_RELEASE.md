@@ -11,7 +11,8 @@ Supersedes the two earlier, narrower Android lines: `release/android-1.1.10-pari
 | 17 | 1.1.9 | f5bb087b… | c0dcc2c | last public Android build |
 | 18 | 1.1.10 | 56c5f2cd… | bc45eb7 | parity only, no background location. Not uploaded. Superseded |
 | 19 | 1.1.10 | 53ba13b5… | d584d17 | recovery build. Not uploaded. EAS artifact expires 2026-11-03 |
-| next | 1.1.10 | 53ba13b5… (expected) | this branch | versionCode 20 via `appVersionSource: remote` + `autoIncrement` |
+| 20 | 1.1.10 | bf330c5e… | fd1d26f (`feature/nearby-photo-categories`, dirty) | LOCAL build `eas build --local` made in the main checkout on 2026-10-07 and installed on Jerry's phone. WRONG SOURCE: no Android recovery code, no ACCESS_BACKGROUND_LOCATION, older Secret layout |
+| next | 1.1.10 | 53ba13b5… (verified, see below) | `release/android-1.1.10` | versionCode 21 |
 
 No Android 1.1.10 binary has been submitted to any Play track; EAS has no Google service-account key.
 
@@ -76,3 +77,14 @@ release name `1.1.10 (20)` → Save → Review release → Start rollout to Inte
 4. Optional hardening: RECORD_AUDIO and SYSTEM_ALERT_WINDOW come from library defaults and are not used; blocking them changes the native fingerprint (new runtime),
    so do it only deliberately, together with updating `ANDROID_RECOVERY_RUNTIMES`.
 5. Admin Diagnostics (including the Android registration rows) show for admin accounts only; a non-admin tester will not see the debug panel.
+
+## Correction 2026-10-07 (device findings)
+- Missing Home/Profile recovery controls on the installed vc20: (1) it was built from the wrong checkout, so its runtime `bf330c5e…` is not in
+  `ANDROID_RECOVERY_RUNTIMES` and it contains none of the Android recovery code; (2) even on the right build the Android audience required
+  `android_visit_recovery`/tester/admin, and that flag row does not exist on the server (master `candidate_visit_detection` is ON globally).
+  Fix: the audience is now the master flag only (kill switch); Home offers "Turn on" when recovery is off.
+- Runtime check method that is trustworthy: `expo-updates fingerprint:generate --platform android` in a checkout with a REAL node_modules
+  reproduces the installed AAB's runtime exactly (bf330c5e…). With a symlinked node_modules it does not. The release tree computes to `53ba13b5…`.
+- `scripts/android-build-preflight.sh` enforces branch, clean tree, real node_modules, allowlisted runtime and tests before a build.
+- An OTA cannot repair vc20: its native config has no background location and its runtime differs. Install a build from this branch.
+- Accidentally tracked `node_modules` symlink (added in 703b139) removed.
