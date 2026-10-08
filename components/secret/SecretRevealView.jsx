@@ -157,11 +157,14 @@ export default function SecretRevealView({
     return () => fade.stop()
   }, [phase, reduceMotion, lockedH, unlockedH])
 
-  // The unlocked photo fades in over the locked layer (business photo or
-  // branded fallback). If it is the same url as the locked photo, one layer.
-  const showUnlockedLayer = !!unlockedPhoto?.url && unlockedPhoto.url !== lockedPhoto?.url
-  const baseUrl = revealed && !showUnlockedLayer ? (unlockedPhoto?.url ?? lockedPhoto?.url) : lockedPhoto?.url
-  const unlockedScale = mix.interpolate({ inputRange: [0, 1], outputRange: [1.06, 1] })
+  // Locked: the hero photo (business photo) in the scroll content. Unlocked: the revealed
+  // image expands/crossfades into a STATIONARY full-screen background behind the content
+  // (above the tab bar, since this view only fills the area above it); the locked hero
+  // photo fades out. Same image for both states is fine: it simply expands.
+  const bgUrl = unlockedPhoto?.url ?? null
+  const bgScale = mix.interpolate({ inputRange: [0, 1], outputRange: [reduceMotion ? 1 : 1.14, 1] })
+  const heroPhotoOpacity = mix.interpolate({ inputRange: [0, 1], outputRange: [1, 0] })
+  const heroPhotoScale = mix.interpolate({ inputRange: [0, 1], outputRange: [1, reduceMotion ? 1 : 1.18] })
   const contentStyle = {
     opacity: contentIn,
     transform: [{ translateY: contentIn.interpolate({ inputRange: [0, 1], outputRange: [reduceMotion ? 0 : 14, 0] }) }],
@@ -179,44 +182,60 @@ export default function SecretRevealView({
 
   return (
     <View style={styles.root}>
+      {/* Stationary full-screen reveal background (behind the scrolling content) */}
+      <Animated.View
+        style={[StyleSheet.absoluteFill, { opacity: mix, transform: [{ scale: bgScale }] }]}
+        pointerEvents="none"
+      >
+        <BrandedHero />
+        {bgUrl ? (
+          <Image
+            source={{ uri: bgUrl }}
+            resizeMode="cover"
+            onError={onUnlockedPhotoError}
+            style={StyleSheet.absoluteFill}
+            accessibilityIgnoresInvertColors
+          />
+        ) : null}
+      </Animated.View>
+      {/* Readability gradient: light at the top (photo shows), dark behind card, utilities and the action */}
+      <Animated.View style={[StyleSheet.absoluteFill, { opacity: mix }]} pointerEvents="none">
+        <LinearGradient
+          colors={['rgba(8,8,20,0.5)', 'rgba(15,15,30,0.12)', 'rgba(15,15,30,0.5)', 'rgba(15,15,30,0.82)', 'rgba(15,15,30,0.94)']}
+          locations={[0, 0.16, 0.42, 0.7, 1]}
+          style={StyleSheet.absoluteFill}
+        />
+      </Animated.View>
+
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
         bounces={false}
       >
-        {/* ── 1. Hero ── */}
+        {/* ── 1. Hero (locked photo; fades out as the background takes over) ── */}
         <Animated.View style={{ height: heroH, overflow: 'hidden' }}>
-          <BrandedHero />
-          {baseUrl ? (
-            <Image
-              source={{ uri: baseUrl }}
-              resizeMode="cover"
-              onError={revealed && !showUnlockedLayer && unlockedPhoto?.url === baseUrl ? onUnlockedPhotoError : onLockedPhotoError}
-              style={StyleSheet.absoluteFill}
-              accessibilityIgnoresInvertColors
-            />
-          ) : null}
-          {showUnlockedLayer ? (
-            <Animated.View style={[StyleSheet.absoluteFill, { opacity: mix, transform: [{ scale: unlockedScale }] }]}>
+          <Animated.View style={[StyleSheet.absoluteFill, { opacity: heroPhotoOpacity, transform: [{ scale: heroPhotoScale }] }]}>
+            <BrandedHero />
+            {lockedPhoto?.url ? (
               <Image
-                source={{ uri: unlockedPhoto.url }}
+                source={{ uri: lockedPhoto.url }}
                 resizeMode="cover"
-                onError={onUnlockedPhotoError}
+                onError={onLockedPhotoError}
                 style={StyleSheet.absoluteFill}
                 accessibilityIgnoresInvertColors
               />
-            </Animated.View>
-          ) : null}
+            ) : null}
+            <LinearGradient
+              colors={['rgba(15,15,30,0)', 'rgba(15,15,30,0.78)', COLORS.BG]}
+              locations={[0, 0.62, 1]}
+              style={styles.bottomScrim}
+              pointerEvents="none"
+            />
+          </Animated.View>
           <LinearGradient
             colors={['rgba(8,8,20,0.55)', 'rgba(8,8,20,0)']}
             style={styles.topScrim}
-            pointerEvents="none"
-          />
-          <LinearGradient
-            colors={['rgba(15,15,30,0)', 'rgba(15,15,30,0.78)', COLORS.BG]}
-            locations={[0, 0.62, 1]}
-            style={styles.bottomScrim}
             pointerEvents="none"
           />
           <View style={[styles.statusRow, { top: insets.top + 12 }]} pointerEvents="none">
@@ -293,7 +312,7 @@ export default function SecretRevealView({
               return (
                 <TouchableOpacity
                   key={id}
-                  style={styles.chip}
+                  style={[styles.chip, revealed && styles.chipOnPhoto]}
                   onPress={() => onSecondary?.(id)}
                   activeOpacity={0.8}
                   accessibilityRole="button"
@@ -315,7 +334,7 @@ export default function SecretRevealView({
 
       {/* ── 4. Primary action, pinned above the tab bar ── */}
       {primaryId ? (
-        <View style={[styles.footer, { paddingBottom: footerBottomPad }]}>
+        <View style={[styles.footer, revealed && styles.footerOnPhoto, { paddingBottom: footerBottomPad }]}>
           {revealed && requirementText ? (
             <Text style={styles.requirement} maxFontSizeMultiplier={1.35}>{requirementText}</Text>
           ) : null}
@@ -351,7 +370,7 @@ export default function SecretRevealView({
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: COLORS.BG },
-  scroll: { flex: 1 },
+  scroll: { flex: 1, backgroundColor: 'transparent' },
   scrollContent: { flexGrow: 1, paddingBottom: 24 },
 
   glowGold: {
@@ -367,7 +386,7 @@ const styles = StyleSheet.create({
 
   back: {
     position: 'absolute', left: 16, width: 44, height: 44, borderRadius: 22,
-    backgroundColor: 'rgba(15,15,30,0.95)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.22)',
+    backgroundColor: 'rgba(15,15,30,0.95)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.22)', zIndex: 10, elevation: 6,
     alignItems: 'center', justifyContent: 'center',
   },
   chevron: {
@@ -402,7 +421,7 @@ const styles = StyleSheet.create({
 
   discoveryCard: {
     marginTop: 4, padding: 20, borderRadius: 20,
-    backgroundColor: 'rgba(245,166,35,0.07)', borderWidth: 1, borderColor: 'rgba(245,166,35,0.38)',
+    backgroundColor: 'rgba(12,12,24,0.56)', borderWidth: 1, borderColor: 'rgba(245,166,35,0.5)',
   },
   discoveryGlow: {
     ...StyleSheet.absoluteFillObject, borderRadius: 20, borderWidth: 2, borderColor: COLORS.GOLD,
@@ -413,7 +432,12 @@ const styles = StyleSheet.create({
   discoveryHeadline: { fontSize: 24, lineHeight: 30, fontWeight: '800', color: COLORS.TEXT, letterSpacing: -0.3, marginTop: 10 },
   goldRule: { width: 36, height: 3, borderRadius: 2, backgroundColor: COLORS.GOLD, marginTop: 14 },
   paragraphs: { marginTop: 16, gap: 14 },
-  description: { fontSize: 18, lineHeight: 28, color: COLORS.TEXT, textAlign: 'left' },
+  description: {
+    fontSize: 18, lineHeight: 28, color: COLORS.TEXT, textAlign: 'left',
+    textShadowColor: 'rgba(0,0,0,0.55)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4,
+  },
+  chipOnPhoto: { backgroundColor: 'rgba(12,12,24,0.6)', borderColor: 'rgba(255,255,255,0.2)' },
+  footerOnPhoto: { backgroundColor: 'rgba(12,12,24,0.7)', borderTopColor: 'rgba(255,255,255,0.14)' },
   ctaWrap: { marginTop: 4 },
   blurb: { fontSize: 15, lineHeight: 22, color: COLORS.BODY, marginTop: 14 },
 
