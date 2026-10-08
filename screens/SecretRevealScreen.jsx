@@ -45,6 +45,7 @@ export default function SecretRevealScreen({ route, navigation }) {
   const [permDenied, setPermDenied] = useState(false)
   const [partnerName, setPartnerName] = useState(null)
   const [userId, setUserId] = useState(null)
+  const [revealBroken, setRevealBroken] = useState(false) // reveal image failed to load -> fall back to the approved photo
   const [reduceMotion, setReduceMotion] = useState(false)
   const reduceMotionRef = useRef(false)
   // Same saved-items context + toggle the normal item detail uses; it also
@@ -73,13 +74,15 @@ export default function SecretRevealScreen({ route, navigation }) {
   const unlocked = useUnlockedSecretPhoto({ itemId: item?.id, enabled: isRevealed, userId })
   const heroArgs = {
     itemId: item?.id, businessPhotoUrl, pool: unlocked.pool,
-    activeCoverUrl: unlocked.activeCoverUrl, imageContext: unlocked.imageContext,
+    activeCoverUrl: unlocked.activeCoverUrl, revealImageUrl: revealBroken ? null : unlocked.revealImageUrl, imageContext: unlocked.imageContext,
   }
   const lockedPhoto = selectHeroPhoto({ ...heroArgs, phase: 'locked' })
   const unlockedPhoto = isRevealed ? selectHeroPhoto({ ...heroArgs, phase: 'revealed' }) : null
-  const onUnlockedPhotoError = () => (
-    unlockedPhoto?.source === 'business' ? reportBusinessPhotoError() : unlocked.reportApprovedPhotoError()
-  )
+  const onUnlockedPhotoError = () => {
+    if (unlockedPhoto?.source === 'reveal') setRevealBroken(true)
+    else if (unlockedPhoto?.source === 'business') reportBusinessPhotoError()
+    else unlocked.reportApprovedPhotoError()
+  }
 
   // Existing photo-contribution CTA, under the normal eligibility rules
   // (at the place, signed in, no approved image, no pending submission).
