@@ -133,7 +133,7 @@ User consent chain unchanged: user taps Turn On, disclosure, foreground then bac
 Needs a new binary? Android: NO (vc21 == final ordinary behavior). iOS: NO for behavior. Optional reasons only: iOS permission strings (section 7), Android RECORD_AUDIO and
 SYSTEM_ALERT_WINDOW removal (changes runtime and the allowlist), Sentry source maps if vc21 was built with SENTRY_DISABLE_AUTO_UPLOAD (production stack traces unsymbolicated).
 
-## 6. Account deletion (deferred by Jerry, not changed, not exercised)
+## 6. Account deletion (UPDATE 2026-10-08: rewritten and verified with disposable accounts, see docs/release/ACCOUNT_DELETION.md; the text below is the earlier state)
 Confirmed store requirements: Apple requires in app initiation, deletion of the account record and associated personal data, and says apps outside regulated industries
 "should not require" an email or support flow to complete it. Google requires an in app path AND a web link where users can request deletion without the app; the Data safety
 form asks for that link.
