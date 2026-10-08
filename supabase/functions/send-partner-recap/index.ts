@@ -85,6 +85,14 @@ interface PartnerStats {
   topItem:           { body: string; count: number } | null
 }
 
+/** Completions by accounts that were later deleted are kept only as anonymous per month counts (public.anonymous_completion_counts). Never throws. */
+async function anonymousCompletions(supabase: ReturnType<typeof createClient>, itemIds: string[], month: string): Promise<number> {
+  try {
+    const { data } = await supabase.rpc('anonymous_completions_for_items', { p_item_ids: itemIds, p_month: month })
+    return Number(data ?? 0)
+  } catch { return 0 }
+}
+
 async function getPartnerStats(
   supabase: ReturnType<typeof createClient>,
   partnerId: string,
@@ -110,8 +118,11 @@ async function getPartnerStats(
     .in('item_id', itemIds)
     .limit(5000)
 
+  const anonLast = await anonymousCompletions(supabase, itemIds, windows.lastMonthStart)
+  const anonPrev = await anonymousCompletions(supabase, itemIds, windows.prevMonthStart)
+
   if (!listItems?.length) {
-    return { checkInsLastMonth: 0, checkInsPrevMonth: 0, photosLastMonth: 0, topItem: null }
+    return { checkInsLastMonth: anonLast, checkInsPrevMonth: anonPrev, photosLastMonth: 0, topItem: null }
   }
 
   const listItemIds = listItems.map((li: { id: string }) => li.id)
@@ -156,8 +167,8 @@ async function getPartnerStats(
   }
 
   return {
-    checkInsLastMonth: cis.length,
-    checkInsPrevMonth: prevMonthCount ?? 0,
+    checkInsLastMonth: cis.length + anonLast,
+    checkInsPrevMonth: (prevMonthCount ?? 0) + anonPrev,
     photosLastMonth:   cis.filter((ci: { photo_url: string | null }) => ci.photo_url !== null).length,
     topItem,
   }
