@@ -103,6 +103,18 @@ Deno.serve(async (req) => {
     monthCheckins = month ?? 0
   }
 
+  // Completions by accounts that were later deleted survive only as anonymous per month counts (public.anonymous_completion_counts).
+  if (itemIds.length > 0) {
+    try {
+      const month = new Date(); month.setDate(1)
+      const monthKey = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}-01`
+      const { data: anonTotal } = await supabase.rpc('anonymous_completions_for_items', { p_item_ids: itemIds })
+      const { data: anonMonth } = await supabase.rpc('anonymous_completions_for_items', { p_item_ids: itemIds, p_month: monthKey })
+      totalCheckins += Number(anonTotal ?? 0)
+      monthCheckins += Number(anonMonth ?? 0)
+    } catch { /* reporting stays available without the anonymous addition */ }
+  }
+
   // ── Recent photos (last 30 days) ──────────────────────────────────────────
   let photos: Array<Record<string, unknown>> = []
   if (listItemIds.length > 0) {

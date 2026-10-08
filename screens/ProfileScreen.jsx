@@ -21,6 +21,8 @@ import AsyncStorage from '@react-native-async-storage/async-storage'
 import { stopVisitTrackingForSignOut } from '../lib/visitDetection/candidateVisitTracker'
 import { resetFlagsCache } from '../lib/featureFlags'
 import { DELETION_COPY, requestAccountDeletion, clearLocalAccountState } from '../lib/accountDeletion'
+import { revokeAppleTokenIfPossible } from '../lib/appleRevocation'
+import * as AppleAuthentication from 'expo-apple-authentication'
 
 export default function ProfileScreen({ navigation }) {
   const insets = useSafeAreaInsets()
@@ -237,6 +239,9 @@ export default function ProfileScreen({ navigation }) {
                   style: 'destructive',
                   onPress: async () => {
                     let result
+                    // Sign in with Apple users: revoke Apple's token while the session is still valid. Best effort only: it never throws and
+                    // never blocks deletion (no prompt at all unless the server side is configured).
+                    await revokeAppleTokenIfPossible({ supabase, platformOS: Platform.OS, AppleAuthentication })
                     try {
                       // The backend identifies the account from this session and blocks it immediately. If this throws,
                       // nothing was deleted and the user is still signed in, so a retry is safe.
