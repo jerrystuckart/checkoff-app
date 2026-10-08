@@ -48,6 +48,7 @@ export default function SecretRevealScreen({ route, navigation }) {
   const [reduceMotion, setReduceMotion] = useState(false)
   const reduceMotionRef = useRef(false)
   const [revealMode, setRevealMode] = useState('animate')
+  const revealUidRef = useRef(null)
   // Same saved-items context + toggle the normal item detail uses; it also
   // owns the guest sign-in prompt, so no auth handling is duplicated here.
   const { isSaved, toggleSaved } = useSavedItems()
@@ -167,8 +168,9 @@ export default function SecretRevealScreen({ route, navigation }) {
   }
 
   // The reveal plays (with the haptic) only the first time this item is
-  // unlocked on this device; later visits open settled. The marker is purely an
-  // animation hint — eligibility is still the live distance check. Unlocking
+  // unlocked on this device; later visits open settled. The marker is written
+  // by the view only AFTER the arrival animation has finished (never when it
+  // was skipped for Reduce Motion or interrupted), and is purely an animation hint — eligibility is still the live distance check. Unlocking
   // never completes the item (that only happens in PhotoCheckIn).
   async function triggerReveal() {
     let uid = null
@@ -178,7 +180,7 @@ export default function SecretRevealScreen({ route, navigation }) {
     setRevealMode(mode)
     setPhase('revealed')
     if (mode === 'animate') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
-    markRevealSeen({ userId: uid, itemId: item?.id })
+    revealUidRef.current = uid
   }
 
   function proceedToCheckIn() {
@@ -269,6 +271,7 @@ export default function SecretRevealScreen({ route, navigation }) {
       heroHeight={heroHeight}
       reduceMotion={reduceMotion}
       revealMode={revealMode}
+      onRevealPresented={() => markRevealSeen({ userId: revealUidRef.current, itemId: item?.id })}
     />
   )
 }

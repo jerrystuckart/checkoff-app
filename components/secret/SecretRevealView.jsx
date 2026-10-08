@@ -101,7 +101,10 @@ export default function SecretRevealView({
   heroHeight = 300,
   reduceMotion = false,
   revealMode = 'animate', // 'animate' (first unlock of this item) | 'settled'
+  onRevealPresented,      // called once, only after the arrival animation has actually finished
 }) {
+  const presentedCb = useRef(onRevealPresented)
+  presentedCb.current = onRevealPresented
   const revealed = phase === 'revealed'
   const lockedH = heroHeight + insets.top
   const unlockedH = unlockedHeroHeight(heroHeight) + insets.top
@@ -143,7 +146,7 @@ export default function SecretRevealView({
           ]),
         ]),
       ])
-      run.start()
+      run.start(({ finished }) => { if (finished) presentedCb.current?.() })
       return () => run.stop()
     }
     settle()
