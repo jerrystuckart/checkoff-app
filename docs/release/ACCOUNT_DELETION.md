@@ -1,6 +1,6 @@
 # Account deletion (iOS and Android), revision 4, 2026-10-08
 
-STATUS: written and unit tested, NOT applied to production, NOT exercised end to end. Production is unchanged. The website pages and client OTAs are NOT published.
+STATUS (updated 2026-10-08): APPLIED, exercised end to end with disposable accounts and one physical iPhone, website and client OTAs PUBLISHED. See "Current status" below.
 Rev 3's production apply FAILED atomically with `42P13 cannot change return type of existing function` (read only checks afterwards confirmed nothing persisted: 0 new tables, functions or cron jobs; the old
 `delete_my_account()` is intact). Rev 4 fixes it. The migration `supabase/migrations/20261008d_account_deletion_pipeline.sql` is the FINAL revision (rev 4) and supersedes rev 1 (21c7dec), rev 2 (9b9d4ab) and rev 3. Reviewable diffs:
 `docs/release/ACCOUNT_DELETION_migration_rev1_to_rev4.diff` (everything) and `docs/release/ACCOUNT_DELETION_migration_rev3_to_rev4.diff` (the 42P13 fix only).
