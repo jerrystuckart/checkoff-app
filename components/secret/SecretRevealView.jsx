@@ -14,6 +14,7 @@ import {
 } from 'react-native'
 import { LinearGradient } from 'expo-linear-gradient'
 import BookmarkIcon from '../BookmarkIcon'
+import { revealHeadline, unlockedHeroHeight } from '../../lib/secretRevealModel'
 
 export const COLORS = {
   BG: '#0F0F1E',
@@ -80,7 +81,6 @@ export default function SecretRevealView({
   venueName,             // string | null
   area,                  // string | null (neighborhood hint, never the venue)
   lockedTitle = "Something's hidden here",
-  revealedTitle = 'You found it.',
   lockedBlurb,           // string (locked body copy)
   paragraphs = [],       // revealed description paragraphs
   status,                // lockedStatus() result (locked only)
@@ -100,36 +100,62 @@ export default function SecretRevealView({
   footerBottomPad = 16,
   heroHeight = 300,
   reduceMotion = false,
+  revealMode = 'animate', // 'animate' (first unlock of this item) | 'settled'
 }) {
   const revealed = phase === 'revealed'
+  const lockedH = heroHeight + insets.top
+  const unlockedH = unlockedHeroHeight(heroHeight) + insets.top
+  const heroH = useRef(new Animated.Value(revealed ? unlockedH : lockedH)).current
   const mix = useRef(new Animated.Value(revealed ? 1 : 0)).current
   const contentIn = useRef(new Animated.Value(0)).current
+  const cardIn = useRef(new Animated.Value(revealed ? 1 : 0)).current
+  const glow = useRef(new Animated.Value(0)).current
   const prevPhase = useRef(phase)
+  const mounted = useRef(false)
+  const played = useRef(false) // the arrival plays at most once per mount
 
   useEffect(() => {
-    const justRevealed = prevPhase.current !== phase && revealed
+    const arrival = mounted.current && prevPhase.current !== phase && revealed
+    mounted.current = true
     prevPhase.current = phase
-    if (reduceMotion) {
+    const settle = () => {
+      heroH.setValue(revealed ? unlockedH : lockedH)
       mix.setValue(revealed ? 1 : 0)
+      cardIn.setValue(revealed ? 1 : 0)
+      glow.setValue(0)
+    }
+    if (arrival && revealMode === 'animate' && !reduceMotion && !played.current) {
+      played.current = true
+      contentIn.setValue(1)
+      cardIn.setValue(0)
+      glow.setValue(0)
+      const run = Animated.parallel([
+        Animated.timing(heroH, { toValue: unlockedH, duration: 700, easing: Easing.inOut(Easing.cubic), useNativeDriver: false }),
+        Animated.timing(mix, { toValue: 1, duration: 700, easing: Easing.inOut(Easing.cubic), useNativeDriver: true }),
+        Animated.sequence([
+          Animated.delay(320),
+          Animated.parallel([
+            Animated.spring(cardIn, { toValue: 1, friction: 7, tension: 70, useNativeDriver: true }),
+            Animated.sequence([
+              Animated.timing(glow, { toValue: 1, duration: 260, useNativeDriver: true }),
+              Animated.timing(glow, { toValue: 0, duration: 900, useNativeDriver: true }),
+            ]),
+          ]),
+        ]),
+      ])
+      run.start()
+      return () => run.stop()
+    }
+    settle()
+    if (reduceMotion || revealed) {
       contentIn.setValue(1)
       return undefined
     }
     contentIn.setValue(0)
-    const anims = [
-      Animated.sequence([
-        Animated.delay(justRevealed ? 280 : 0),
-        Animated.timing(contentIn, { toValue: 1, duration: justRevealed ? 460 : 320, easing: Easing.out(Easing.cubic), useNativeDriver: true }),
-      ]),
-    ]
-    if (justRevealed) {
-      anims.push(Animated.timing(mix, { toValue: 1, duration: 750, easing: Easing.inOut(Easing.cubic), useNativeDriver: true }))
-    } else {
-      mix.setValue(revealed ? 1 : 0)
-    }
-    const run = Animated.parallel(anims)
-    run.start()
-    return () => run.stop()
-  }, [phase, reduceMotion])
+    const fade = Animated.timing(contentIn, { toValue: 1, duration: 320, easing: Easing.out(Easing.cubic), useNativeDriver: true })
+    fade.start()
+    return () => fade.stop()
+  }, [phase, reduceMotion, lockedH, unlockedH])
 
   // The unlocked photo fades in over the locked layer (business photo or
   // branded fallback). If it is the same url as the locked photo, one layer.
@@ -139,6 +165,13 @@ export default function SecretRevealView({
   const contentStyle = {
     opacity: contentIn,
     transform: [{ translateY: contentIn.interpolate({ inputRange: [0, 1], outputRange: [reduceMotion ? 0 : 14, 0] }) }],
+  }
+  const cardStyle = {
+    opacity: cardIn,
+    transform: [
+      { translateY: cardIn.interpolate({ inputRange: [0, 1], outputRange: [reduceMotion ? 0 : 30, 0] }) },
+      { scale: cardIn.interpolate({ inputRange: [0, 1], outputRange: [reduceMotion ? 1 : 0.94, 1] }) },
+    ],
   }
 
   const primaryId = plan?.primary?.id ?? null
@@ -153,7 +186,7 @@ export default function SecretRevealView({
         bounces={false}
       >
         {/* ── 1. Hero ── */}
-        <View style={{ height: heroHeight + insets.top, overflow: 'hidden' }}>
+        <Animated.View style={{ height: heroH, overflow: 'hidden' }}>
           <BrandedHero />
           {baseUrl ? (
             <Image
@@ -189,33 +222,44 @@ export default function SecretRevealView({
           <View style={[styles.statusRow, { top: insets.top + 12 }]} pointerEvents="none">
             <View style={styles.statusPill}>
               {revealed ? <CheckGlyph /> : <LockGlyph />}
-              <Text style={styles.statusPillText} maxFontSizeMultiplier={1.2}>
-                {revealed ? 'Secret unlocked' : 'Secret locked'}
+              <Text style={styles.statusPillText} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                {revealed ? 'Unlocked' : 'Locked'}
               </Text>
             </View>
           </View>
-        </View>
+        </Animated.View>
 
-        {/* ── 2 + 3. Venue, title, body ── */}
-        <Animated.View style={[styles.content, contentStyle]}>
-          {venueName ? (
-            <Text style={styles.venue} accessibilityRole="header" maxFontSizeMultiplier={1.4}>{venueName}</Text>
-          ) : null}
-          <Text style={[styles.title, !venueName && styles.titleAlone]} maxFontSizeMultiplier={1.4}>
-            {revealed ? revealedTitle : lockedTitle}
-          </Text>
-          {!revealed && area ? (
-            <Text style={styles.area} maxFontSizeMultiplier={1.4}>{area}</Text>
-          ) : null}
-
+        {/* ── 2 + 3. Venue / discovery card, body ── */}
+        <View style={styles.content}>
           {revealed ? (
-            <View style={styles.paragraphs}>
-              {paragraphs.map((p, i) => (
-                <Text key={i} style={styles.description} selectable>{p}</Text>
-              ))}
-            </View>
+            <Animated.View style={[styles.discoveryCard, cardStyle]}>
+              <Animated.View
+                pointerEvents="none"
+                style={[styles.discoveryGlow, { opacity: glow }]}
+              />
+              <View style={styles.eyebrowRow}>
+                <CheckGlyph />
+                <Text style={styles.eyebrow} maxFontSizeMultiplier={1.3}>SECRET UNLOCKED</Text>
+              </View>
+              <Text style={styles.discoveryHeadline} accessibilityRole="header" maxFontSizeMultiplier={1.35}>
+                {revealHeadline(venueName)}
+              </Text>
+              <View style={styles.goldRule} />
+              <View style={styles.paragraphs}>
+                {paragraphs.map((p, i) => (
+                  <Text key={i} style={styles.description} selectable maxFontSizeMultiplier={1.6}>{p}</Text>
+                ))}
+              </View>
+            </Animated.View>
           ) : (
-            <>
+            <Animated.View style={contentStyle}>
+              {venueName ? (
+                <Text style={styles.venue} accessibilityRole="header" maxFontSizeMultiplier={1.4}>{venueName}</Text>
+              ) : null}
+              <Text style={[styles.title, !venueName && styles.titleAlone]} maxFontSizeMultiplier={1.4}>
+                {lockedTitle}
+              </Text>
+              {area ? <Text style={styles.area} maxFontSizeMultiplier={1.4}>{area}</Text> : null}
               {lockedBlurb ? <Text style={styles.blurb}>{lockedBlurb}</Text> : null}
               <View
                 style={styles.statusCard}
@@ -237,11 +281,11 @@ export default function SecretRevealView({
                 </View>
                 {status?.detail ? <Text style={styles.statusDetail} maxFontSizeMultiplier={1.4}>{status.detail}</Text> : null}
               </View>
-            </>
+            </Animated.View>
           )}
 
           {/* Secondary actions: smaller, never competing with the primary */}
-          <View style={styles.secondaryRow}>
+          <Animated.View style={[styles.secondaryRow, { opacity: revealed ? cardIn : contentIn }]}>
             {(plan?.secondary ?? []).map((id) => {
               const def = SECONDARY[id]
               if (!def) return null
@@ -263,9 +307,10 @@ export default function SecretRevealView({
                 </TouchableOpacity>
               )
             })}
-          </View>
-          {photoCTA}
-        </Animated.View>
+          </Animated.View>
+          {/* Admin/community photo contribution: last, below the reward and utilities */}
+          {photoCTA ? <Animated.View style={[styles.ctaWrap, { opacity: revealed ? cardIn : contentIn }]}>{photoCTA}</Animated.View> : null}
+        </View>
       </ScrollView>
 
       {/* ── 4. Primary action, pinned above the tab bar ── */}
@@ -322,7 +367,7 @@ const styles = StyleSheet.create({
 
   back: {
     position: 'absolute', left: 16, width: 44, height: 44, borderRadius: 22,
-    backgroundColor: 'rgba(15,15,30,0.88)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.22)',
+    backgroundColor: 'rgba(15,15,30,0.95)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.22)',
     alignItems: 'center', justifyContent: 'center',
   },
   chevron: {
@@ -330,13 +375,13 @@ const styles = StyleSheet.create({
     transform: [{ rotate: '45deg' }], marginLeft: 4,
   },
 
-  statusRow: { position: 'absolute', right: 16, left: 72, alignItems: 'flex-end' },
+  statusRow: { position: 'absolute', right: 16, left: 68, alignItems: 'flex-end' },
   statusPill: {
-    flexDirection: 'row', alignItems: 'center', gap: 7,
+    flexDirection: 'row', alignItems: 'center', gap: 7, flexShrink: 1, maxWidth: '100%',
     paddingHorizontal: 12, paddingVertical: 7, borderRadius: 999,
     backgroundColor: 'rgba(15,15,30,0.68)', borderWidth: 1, borderColor: 'rgba(212,187,255,0.35)',
   },
-  statusPillText: { fontSize: 12, fontWeight: '800', color: COLORS.LAVENDER, letterSpacing: 0.4 },
+  statusPillText: { fontSize: 12, fontWeight: '800', color: COLORS.LAVENDER, letterSpacing: 0.4, flexShrink: 1 },
   lockGlyph: { alignItems: 'center' },
   lockShackle: {
     width: 9, height: 7, borderTopLeftRadius: 5, borderTopRightRadius: 5,
@@ -349,14 +394,27 @@ const styles = StyleSheet.create({
   },
   checkGlyphText: { fontSize: 10, fontWeight: '900', color: COLORS.NAVY, lineHeight: 12 },
 
-  content: { paddingHorizontal: 20, marginTop: -44 },
+  content: { paddingHorizontal: 20, marginTop: -32 },
   venue: { fontSize: 30, lineHeight: 36, fontWeight: '800', color: COLORS.TEXT, letterSpacing: -0.6 },
   title: { fontSize: 17, lineHeight: 23, fontWeight: '700', color: COLORS.LAVENDER, marginTop: 6 },
   titleAlone: { fontSize: 26, lineHeight: 32, color: COLORS.TEXT, marginTop: 0, fontWeight: '800' },
   area: { fontSize: 13, lineHeight: 18, color: COLORS.MUTED, marginTop: 4, fontWeight: '600' },
 
-  paragraphs: { marginTop: 16, gap: 12 },
-  description: { fontSize: 16, lineHeight: 25, color: COLORS.BODY, textAlign: 'left' },
+  discoveryCard: {
+    marginTop: 4, padding: 20, borderRadius: 20,
+    backgroundColor: 'rgba(245,166,35,0.07)', borderWidth: 1, borderColor: 'rgba(245,166,35,0.38)',
+  },
+  discoveryGlow: {
+    ...StyleSheet.absoluteFillObject, borderRadius: 20, borderWidth: 2, borderColor: COLORS.GOLD,
+    shadowColor: COLORS.GOLD, shadowOpacity: 0.8, shadowRadius: 18, shadowOffset: { width: 0, height: 0 },
+  },
+  eyebrowRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  eyebrow: { fontSize: 12, fontWeight: '800', color: COLORS.GOLD, letterSpacing: 1.2, flexShrink: 1 },
+  discoveryHeadline: { fontSize: 24, lineHeight: 30, fontWeight: '800', color: COLORS.TEXT, letterSpacing: -0.3, marginTop: 10 },
+  goldRule: { width: 36, height: 3, borderRadius: 2, backgroundColor: COLORS.GOLD, marginTop: 14 },
+  paragraphs: { marginTop: 16, gap: 14 },
+  description: { fontSize: 18, lineHeight: 28, color: COLORS.TEXT, textAlign: 'left' },
+  ctaWrap: { marginTop: 4 },
   blurb: { fontSize: 15, lineHeight: 22, color: COLORS.BODY, marginTop: 14 },
 
   statusCard: {

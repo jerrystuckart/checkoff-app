@@ -13,10 +13,11 @@ import { useLockedSecretPhoto, useUnlockedSecretPhoto } from '../lib/useSecretPh
 import CoverCandidateCTA from '../components/CoverCandidateCTA'
 import SecretRevealView from '../components/secret/SecretRevealView'
 import { buildInviteMessage, buildSecretInviteMessage } from '../lib/inviteMessage'
+import { hasSeenReveal, markRevealSeen } from '../lib/secretRevealSeen'
 import { itemHasLocation, itemHasWebsite, openItemDirections, openItemWebsite } from '../lib/itemUtilityActions'
 import {
   resolveSecretVenue, selectHeroPhoto, lockedStatus, planActions,
-  pointsLabel, photoRequirementCopy, descriptionParagraphs,
+  pointsLabel, photoRequirementCopy, descriptionParagraphs, revealMode as pickRevealMode,
 } from '../lib/secretRevealModel'
 
 const DEFAULT_RADIUS_M = 150
@@ -45,6 +46,8 @@ export default function SecretRevealScreen({ route, navigation }) {
   const [partnerName, setPartnerName] = useState(null)
   const [userId, setUserId] = useState(null)
   const [reduceMotion, setReduceMotion] = useState(false)
+  const reduceMotionRef = useRef(false)
+  const [revealMode, setRevealMode] = useState('animate')
   // Same saved-items context + toggle the normal item detail uses; it also
   // owns the guest sign-in prompt, so no auth handling is duplicated here.
   const { isSaved, toggleSaved } = useSavedItems()
@@ -94,8 +97,9 @@ export default function SecretRevealScreen({ route, navigation }) {
         .then(({ data }) => { if (data?.business_name) setPartnerName(data.business_name) })
     }
     supabase.auth.getSession().then(({ data }) => setUserId(data?.session?.user?.id ?? null)).catch(() => {})
-    AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion).catch(() => {})
-    const motionSub = AccessibilityInfo.addEventListener('reduceMotionChanged', setReduceMotion)
+    const onMotion = (v) => { reduceMotionRef.current = !!v; setReduceMotion(!!v) }
+    AccessibilityInfo.isReduceMotionEnabled().then(onMotion).catch(() => {})
+    const motionSub = AccessibilityInfo.addEventListener('reduceMotionChanged', onMotion)
     return () => {
       if (watchRef.current) watchRef.current.remove()
       motionSub?.remove?.()
@@ -162,9 +166,19 @@ export default function SecretRevealScreen({ route, navigation }) {
     startWatching()
   }
 
-  function triggerReveal() {
+  // The reveal plays (with the haptic) only the first time this item is
+  // unlocked on this device; later visits open settled. The marker is purely an
+  // animation hint — eligibility is still the live distance check. Unlocking
+  // never completes the item (that only happens in PhotoCheckIn).
+  async function triggerReveal() {
+    let uid = null
+    try { uid = (await supabase.auth.getSession())?.data?.session?.user?.id ?? null } catch {}
+    const seenBefore = await hasSeenReveal({ userId: uid, itemId: item?.id })
+    const mode = pickRevealMode({ seenBefore, reduceMotion: reduceMotionRef.current })
+    setRevealMode(mode)
     setPhase('revealed')
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+    if (mode === 'animate') Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
+    markRevealSeen({ userId: uid, itemId: item?.id })
   }
 
   function proceedToCheckIn() {
@@ -254,6 +268,7 @@ export default function SecretRevealScreen({ route, navigation }) {
       footerBottomPad={tabBarHeight ? 14 : insets.bottom + 14}
       heroHeight={heroHeight}
       reduceMotion={reduceMotion}
+      revealMode={revealMode}
     />
   )
 }
