@@ -10,7 +10,7 @@ Status: OPEN, accepted for now. The local admin tool (`~/Downloads/checkoff_admi
 
 ## Where it is and is not
 - The tool and its secrets file live in `~/Downloads`, which is not a git repository and is outside both the app repo and the website repo. They are therefore not in git, not in EAS build archives (the archive root is the app repo) and not in the website deployment (`public/` has no admin file; the only JWT literal in tracked site files is the public anon key).
-- Defense in depth: `.gitignore` and `.easignore` in the app repo list `checkoff_admin.html`, `checkoff_admin_*.html` and `checkoff_admin_secrets.js`.
+- Existing rules: `.gitignore` and `.easignore` in the app repo list `checkoff_admin.html`. Do NOT edit those two files casually: `.gitignore` is part of the runtime fingerprint (adding two lines changed the iOS runtime 86ac0036 to fd1f87d3 and the Android runtime 53ba13b5 to e31ae7c8; reverted). `checkoff_admin_secrets.js` is covered by `~/Downloads/.gitignore`, and cannot reach the repo because it is outside it.
 
 ## Why the service key is NOT rotated yet
 The key is shared by consumers that have not all been inventoried: this tool, the Vault entry `service_role_jwt` (account deletion pipeline), `store-service-role-jwt.sh`, any local scripts, and the website/Vercel environment (`SUPABASE_SERVICE_ROLE_KEY`). Rotating it before a complete inventory would break the deletion pipeline and the site. The edge function environment value of `SUPABASE_SERVICE_ROLE_KEY` is a separate value that matches no project API key (see EDGE_FUNCTION_CALLERS.md).
