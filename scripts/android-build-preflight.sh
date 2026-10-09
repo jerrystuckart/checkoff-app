@@ -30,6 +30,9 @@ node --test lib/*.test.js lib/visitDetection/*.test.js 2>&1 | grep -E "^# (tests
 node --test lib/*.test.js lib/visitDetection/*.test.js >/dev/null 2>&1 || fail "unit tests failing"
 echo "pre-flight OK"
 [ "$1" = "--build" ] || exit 0
+# Gradle needs the Android SDK location; an automation shell does not load your profile. Default to the standard Android Studio location.
+if [ -z "${ANDROID_HOME:-}" ] && [ -d "$HOME/Library/Android/sdk" ]; then export ANDROID_HOME="$HOME/Library/Android/sdk"; fi
+[ -n "${ANDROID_HOME:-}" ] || fail "ANDROID_HOME is not set and ~/Library/Android/sdk does not exist"
 NO_SENTRY=0; for a in "$@"; do [ "$a" = "--no-sentry" ] && NO_SENTRY=1; done
 LOGDIR="$HOME/Library/Logs/checkoff-builds"; mkdir -p "$LOGDIR"; chmod 700 "$LOGDIR"
 LOG="$LOGDIR/android-$(date +%Y%m%d-%H%M%S).log"; : > "$LOG"; chmod 600 "$LOG"
@@ -61,6 +64,7 @@ import os, re, sys
 t = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
 tok = os.environ.get('SENTRY_AUTH_TOKEN', '')
 if tok: t = t.replace(tok, '<redacted>')
+t = re.sub(r'eyJ[A-Za-z0-9+/=_-]{200,}', '<redacted job blob>', t)
 t = re.sub(r'\x1b\[[0-9;?]*[ -/]*[@-~]', '', t).replace('\r', '').replace('\x04', '').replace('\x08', '')
 open(sys.argv[2], 'a').write(t)
 PY
@@ -72,7 +76,8 @@ if [ -t 0 ] && [ -t 1 ]; then
   RC=$?
 else
   # No terminal (CI, an automation session, output piped): a pty is impossible, so EAS runs non interactively (it fails fast instead of prompting) and its output is teed.
-  npx eas-cli build --platform android --profile production --local --non-interactive 2>&1 | tee "$RAW"
+  # EAS prints its whole job (including the upload keystore and passwords, base64) on failure: that blob must never reach the terminal or a log.
+  npx eas-cli build --platform android --profile production --local --non-interactive 2>&1 | tee "$RAW" | awk '{ gsub(/eyJ[A-Za-z0-9+\/=_-]{200,}/, "<redacted job blob>"); print; fflush() }'
   RC=${PIPESTATUS[0]}
 fi
 finish_log; trap - EXIT
