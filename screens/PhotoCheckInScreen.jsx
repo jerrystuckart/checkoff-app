@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import PhotoLicenseNotice from '../components/PhotoLicenseNotice'
 import { CHECKIN_PHOTO_SUBTITLES } from '../lib/photoConsentCopy'
+import { PHOTO_TERMS_VERSION, checkInPhotoTermsFields } from '../lib/photoConsentVersion'
 import { completeDare } from '../lib/completeDare'
 import * as Haptics from 'expo-haptics'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
@@ -213,6 +214,8 @@ export default function PhotoCheckInScreen({ route, navigation }) {
         photo_width: photo?.width ?? null,
         photo_height: photo?.height ?? null,
         points_awarded: pointsAwarded,
+        // The consent line (PhotoLicenseNotice) is on this screen's preview whenever a photo is attached.
+        ...checkInPhotoTermsFields({ photoUrl, consentPresented: true }),
       }
 
       const { data: insertData, error: ciErr } = await supabase
@@ -285,6 +288,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
           excludeListItemId: listItemId,
           checkinMethod: photoUrl ? 'photo' : 'tap',
           photoUrl,
+          photoTermsVersion: photoUrl ? PHOTO_TERMS_VERSION : null,
         }).catch(() => {})
       }
 

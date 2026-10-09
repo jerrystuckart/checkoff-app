@@ -26,6 +26,7 @@ import { fetchOptIn, emitCandidatesChanged } from '../lib/visitDetection/recover
 import { hasBackgroundLocationPermission } from '../lib/visitDetection/permissions'
 import { badgeCelebrations, requestBadgeCelebrationCheck } from '../lib/badgeCelebrationStore'
 import PhotoLicenseNotice from '../components/PhotoLicenseNotice'
+import { PHOTO_TERMS_VERSION } from '../lib/photoConsentVersion'
 
 export default function VisitInboxScreen({ navigation, route }) {
   // Deep-linked from a tapped candidate_visit_high_confidence push (see
@@ -143,13 +144,15 @@ export default function VisitInboxScreen({ navigation, route }) {
         photoWidth: photoUrl ? (attachment?.photo?.width ?? null) : null,
         photoHeight: photoUrl ? (attachment?.photo?.height ?? null) : null,
         personalNote: attachment?.note?.trim() || null,
+        // PhotoLicenseNotice is shown on the row whenever a photo is attached.
+        photoTermsVersion: photoUrl ? PHOTO_TERMS_VERSION : null,
       })
       const { error } = await supabase.from('check_ins').insert(payload)
       if (error) throw error
 
       // Same as a live check-off: mirror into any active list the user already
       // belongs to that contains this item (points-free rows, never joins a list).
-      fanOutCheckIn({ userId: user.id, itemId: row.itemId, photoUrl }).catch(() => {})
+      fanOutCheckIn({ userId: user.id, itemId: row.itemId, photoUrl, photoTermsVersion: photoUrl ? PHOTO_TERMS_VERSION : null }).catch(() => {})
       setAttachments(prev => {
         const next = { ...prev }
         delete next[row.candidateVisitId]

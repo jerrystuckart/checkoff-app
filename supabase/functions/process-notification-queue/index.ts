@@ -1,3 +1,8 @@
+// DEPLOYMENT NOTE (2026-10-09): this file is EXACTLY the code deployed in production (the previously deployed behavior) plus the caller guard.
+// It handles ONLY these queue types: check_in, leaderboard_nudge, dare, list_invite. Any other type (badge, weekly_summary, admin_broadcast,
+// the candidate visit type) is marked "Unknown notification type" and sends no push. That is intentional: do not add handlers here as part of an
+// ordinary deployment. A handler for the candidate visit type exists but is DELIBERATELY NOT in this file: see docs/release/PENDING_candidate_visit_push_handler.md.
+// supabase/functions/_shared/queueProcessorGuard.test.ts fails if a new push type is added here without updating that test.
 // supabase/functions/process-notification-queue/index.ts
 //
 // Reads pending rows from notification_queue, fetches push tokens
@@ -88,26 +93,6 @@ function buildMessage(row: NotificationRow, token: string): PushMessage | null {
       body:  `${fromName} dared you: "${itemBody.slice(0, 80)}${itemBody.length > 80 ? '…' : ''}"`,
       sound: 'default',
       data:  { screen: 'Dare' },
-    }
-  }
-
-  // Visit Reminder V1 — queued by the candidate_visits AFTER INSERT trigger
-  // (see supabase/migrations/20260902_visit_reminder_v1_notify_trigger.sql)
-  // once a departure clears the existing notify-eligible confidence
-  // threshold. Generic, non-creepy copy per product spec — no venue name,
-  // no "we saw you at X".
-  if (row.type === 'candidate_visit_high_confidence') {
-    return {
-      to:    token,
-      title: 'Did you CheckOff the Thing?',
-      body:  'You were just at a CheckOff spot 👀',
-      sound: 'default',
-      data:  {
-        screen: 'Home',
-        kind: 'candidate_visit_high_confidence',
-        item_id: p.item_id ?? null,
-        candidate_visit_id: p.candidate_visit_id ?? null,
-      },
     }
   }
 

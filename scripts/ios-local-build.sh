@@ -68,7 +68,7 @@ else
   # Validate before spending an hour: org/project from app.json. Token goes to curl on stdin (-K -), not argv.
   ORG=$(node -p "require('./app.json').expo.plugins.find(p=>Array.isArray(p)&&p[0]==='@sentry/react-native/expo')[1].organization")
   PROJ=$(node -p "require('./app.json').expo.plugins.find(p=>Array.isArray(p)&&p[0]==='@sentry/react-native/expo')[1].project")
-  CODE=$(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN" | curl -s -o /dev/null -w '%{http_code}' -m 20 -K - "https://sentry.io/api/0/projects/$ORG/$PROJ/")
+  CODE=$(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN" | curl -s -o /dev/null -w '%{http_code}' -m 20 -K - "https://sentry.io/api/0/organizations/$ORG/releases/")
   [ "$CODE" = 200 ] || fail "Sentry rejected the token for $ORG/$PROJ (HTTP $CODE) — fix the credential or use --no-sentry"
   echo "Sentry token OK for $ORG/$PROJ (upload ENABLED)"
 fi

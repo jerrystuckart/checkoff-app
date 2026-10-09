@@ -35,6 +35,7 @@ import { mapRailItem } from '../lib/mapRailItem'
 import { attachActiveCoverImages, attachDisplayEligibleImagePools } from '../lib/coverCandidates'
 import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
 import HomeVisitRecoveryEntry from '../components/home/HomeVisitRecoveryEntry'
+import PhotoTermsNotice from '../components/home/PhotoTermsNotice'
 import { deriveHomeHeroLayout } from '../lib/homeHeroLayout'
 import { selectNearYouCompactRows } from '../lib/nearYouCompact'
 import { selectHomeNearbyCandidates } from '../lib/homeNearYou'
@@ -1517,6 +1518,8 @@ async function loadNearbyRail(userId) {
             {Boolean(user) && (
               <HomeVisitRecoveryEntry userId={user.id} navigation={navigation} colors={colors} />
             )}
+
+            {Boolean(user) && <PhotoTermsNotice user={user} colors={colors} />}
 
             {heroLayout.primaryHero === 'destination' && (
               <DestinationHero

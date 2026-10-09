@@ -88,6 +88,7 @@ import DateTimePicker from '@react-native-community/datetimepicker'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../lib/supabase'
 import PhotoLicenseNotice from './PhotoLicenseNotice'
+import { PHOTO_TERMS_VERSION } from '../lib/photoConsentVersion'
 import { resolveTripModeAttachment } from '../lib/tripModeAttachment'
 import {
   deriveTripModeDateWindow,
@@ -303,6 +304,8 @@ export default function TripModeCheckOffSheet({
         personalPlace: personalPlace.trim() || null,
         personalNote: personalNote.trim() || null,
         matchedCandidateVisitId,
+        // PhotoLicenseNotice is shown below the photo preview whenever a photo is attached.
+        photoTermsVersion: photoUrl ? PHOTO_TERMS_VERSION : null,
       })
 
       const { error } = await supabase.from('check_ins').insert(payload)
