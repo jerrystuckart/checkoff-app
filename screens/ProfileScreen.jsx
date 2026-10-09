@@ -16,6 +16,7 @@ import { useTheme } from '../lib/ThemeContext'
 import * as Sentry from '@sentry/react-native'
 import AdminDiagnosticsSection from '../components/profile/AdminDiagnosticsSection'
 import VisitRecoverySection from '../components/VisitRecoverySection'
+import PhotoTermsNotice from '../components/PhotoTermsNotice'
 import { supportsVisitRecovery } from '../lib/visitDetection/recoveryPolicy'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { stopVisitTrackingForSignOut } from '../lib/visitDetection/candidateVisitTracker'
@@ -690,6 +691,9 @@ export default function ProfileScreen({ navigation }) {
           />
         </View>
       </View>
+
+      {/* Photo terms notice: existing accounts only, dismissible, below the account controls (never on Home) */}
+      {Boolean(user) && <PhotoTermsNotice user={user} colors={colors} style={{ marginHorizontal: 0, marginBottom: 16 }} />}
 
       <TouchableOpacity style={styles.signOutBtn} onPress={signOut}>
         <Text style={styles.signOutBtnText}>Sign out</Text>
