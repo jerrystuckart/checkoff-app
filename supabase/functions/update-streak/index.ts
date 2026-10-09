@@ -12,6 +12,7 @@
 // Deploy: supabase functions deploy update-streak --workdir /Users/jerrystuckart/Downloads/checkoff --project-ref uggusbbswybyplypkbxz
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { guardServerCaller } from '../_shared/serverCaller.ts'
 
 const SUPABASE_URL     = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
@@ -54,6 +55,17 @@ Deno.serve(async (req) => {
     const { user_id } = await req.json()
     if (!user_id) {
       return new Response('Missing user_id', { status: 400 })
+    }
+
+    // The app calls this with the signed in user's own session token. A user may only update their own streak; server callers
+    // (service key or campaign secret) may name any user. The public anon key is neither, so it is rejected.
+    if (guardServerCaller(req) !== null) {
+      const bearer = (req.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '').trim()
+      const { data: { user: caller } } = bearer
+        ? await createClient(SUPABASE_URL, SUPABASE_SERVICE, { auth: { persistSession: false } }).auth.getUser(bearer)
+        : { data: { user: null } }
+      if (!caller) return new Response('Unauthorized', { status: 401 })
+      if (caller.id !== user_id) return new Response('Forbidden', { status: 403 })
     }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE, {

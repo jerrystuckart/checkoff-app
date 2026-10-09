@@ -21,6 +21,7 @@
 //     --workdir /Users/jerrystuckart/Downloads/checkoff
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { guardServerCaller } from '../_shared/serverCaller.ts'
 
 const SUPABASE_URL     = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SERVICE = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
@@ -129,7 +130,10 @@ function buildMessage(row: NotificationRow, token: string): PushMessage | null {
   return null
 }
 
-Deno.serve(async () => {
+Deno.serve(async (req) => {
+  // Only the scheduler, other Edge Functions (service key) or an operator (x-campaign-secret). The public anon key and user JWTs are rejected before anything is read or sent.
+  const denied = guardServerCaller(req)
+  if (denied) return denied
   const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE, {
     auth: { persistSession: false },
   })
