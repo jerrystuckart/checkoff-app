@@ -33,8 +33,8 @@
           "remote-notification",
           "location"
         ],
-        "NSLocationWhenInUseUsageDescription": "CheckOff uses your location to show items near you and verify GPS check-ins.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "CheckOff can recognize when you're spending time at a place in our catalog, so it can help recover a CheckOff you forgot or let you know about a nearby pick. Never miss the thing.",
+        "NSLocationWhenInUseUsageDescription": "CheckOff uses your location while you use the app to show places near you and to confirm you're at a place when you check it off. For these features your location stays on your phone.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "If you turn on visit recovery, CheckOff can notice when you arrive at and leave places in our catalog, even when the app is closed, so you can recover a CheckOff you forgot. Arrivals and departures are sent to our servers to make private suggestions. Nothing is checked off until you confirm it.",
         "NSPhotoLibraryUsageDescription": "CheckOff lets you add photos to your check-ins.",
         "NSCameraUsageDescription": "CheckOff lets you take photos for check-ins.",
         "LSApplicationQueriesSchemes": [
