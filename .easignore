@@ -57,6 +57,8 @@ supabase/.temp/
 
 # Local admin / secret-bearing tools
 checkoff_admin.html
+checkoff_admin_*.html
+checkoff_admin_secrets.js
 generate-apple-jwt.js
 
 # Deployment-ready binary handoff assets — produced locally by

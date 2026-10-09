@@ -1,6 +1,7 @@
 #!/bin/bash
 # Publishes a JavaScript only EAS Update (OTA) for ONE platform, with Sentry source maps, after proving the update is compatible with the binary people actually have.
 #
+#   scripts/publish-ota.sh ios-strings    iOS OTA for the CORRECTED-STRINGS binary (branch release/ios-1.1.10-strings, its own runtime in that branch's docs/release/EXPECTED_RUNTIME)
 #   scripts/publish-ota.sh ios            CHECK ONLY: every verification, a real bundle export, and the credential check. Publishes nothing.
 #   scripts/publish-ota.sh android
 #   scripts/publish-ota.sh ios --publish  the same checks, then: upload source maps (verified) -> publish THAT SAME export. Refuses to publish without the maps.
@@ -14,16 +15,18 @@
 # Sentry token, read in this order and NEVER printed or put on a command line: $SENTRY_AUTH_TOKEN, Keychain item `checkoff-sentry-auth-token`,
 # file ~/.config/checkoff/sentry-auth-token (chmod 600). One time setup:  security add-generic-password -a "$USER" -s checkoff-sentry-auth-token -w   (it prompts)
 set -uo pipefail
-PLATFORM="${1:-}"; PUBLISH=0; [ "${2:-}" = "--publish" ] && PUBLISH=1
+PROFILE="${1:-}"; PLATFORM="$PROFILE"; [ "$PROFILE" = "ios-strings" ] && PLATFORM="ios"; PUBLISH=0; [ "${2:-}" = "--publish" ] && PUBLISH=1
 fail() { echo "STOPPED: $*" >&2; exit 1; }
 ok()   { echo "  ok  $*"; }
 cd "$(git rev-parse --show-toplevel)" || fail "not inside the repository"
-case "$PLATFORM" in
+case "$PROFILE" in
+  ios-strings) BRANCH="release/ios-1.1.10-strings"; EXPECTED_RUNTIME="$(head -1 docs/release/EXPECTED_RUNTIME 2>/dev/null | tr -d '[:space:]')"
+           ANCHOR="9a3b1a5"; INSTALLED="iOS 1.1.10 corrected strings binary (runtime from this branch's docs/release/EXPECTED_RUNTIME; the binary may not be built yet)";;
   ios)     BRANCH="production/1.1.10-canonical"; EXPECTED_RUNTIME="$(head -1 docs/release/EXPECTED_RUNTIME 2>/dev/null | tr -d '[:space:]')"
            ANCHOR="f237aaf"; INSTALLED="TestFlight 1.1.10 (runtime from docs/release/EXPECTED_RUNTIME)";;
   android) BRANCH="release/android-1.1.10"; EXPECTED_RUNTIME="53ba13b59fec2f2667b5ce1f9568e19f8f5076b3"
            ANCHOR="e7b8aa1"; INSTALLED="Play internal testing 1.1.10 (21), runtime read from the AAB asset 'fingerprint'";;
-  *) fail "usage: scripts/publish-ota.sh ios|android [--publish]";;
+  *) fail "usage: scripts/publish-ota.sh ios|ios-strings|android [--publish]";;
 esac
 [ -n "$EXPECTED_RUNTIME" ] || fail "no expected runtime on record"
 echo "== 1. Source and compatibility ($PLATFORM)"
@@ -58,7 +61,7 @@ if [ -z "${SENTRY_AUTH_TOKEN:-}" ]; then
   echo "  --  NO SENTRY TOKEN FOUND (environment, Keychain item checkoff-sentry-auth-token, file ~/.config/checkoff/sentry-auth-token)."
   echo "      Everything above passed. To enable publishing, add the token once (it prompts; nothing is echoed):"
   echo "          security add-generic-password -a \"\$USER\" -s checkoff-sentry-auth-token -w"
-  echo "      then rerun:  scripts/publish-ota.sh $PLATFORM --publish"
+  echo "      then rerun:  scripts/publish-ota.sh $PROFILE --publish"
   [ "$PUBLISH" -eq 1 ] && fail "refusing to publish without source maps"
   echo; echo "CHECK COMPLETE: compatible and ready; NOT published (no Sentry token)."; exit 2
 fi
@@ -68,7 +71,7 @@ PROJ="$(node -p "require('./app.json').expo.plugins.find(p=>Array.isArray(p)&&p[
 CODE="$(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN" | curl -s -o /dev/null -w '%{http_code}' -m 20 -K - "https://sentry.io/api/0/organizations/$ORG/releases/")"
 [ "$CODE" = 200 ] || fail "Sentry rejected the token for $ORG/$PROJ (HTTP $CODE)"
 ok "Sentry token accepted for $ORG/$PROJ"
-if [ "$PUBLISH" -ne 1 ]; then echo; echo "CHECK COMPLETE: compatible and ready, credential valid. To publish:  scripts/publish-ota.sh $PLATFORM --publish"; exit 0; fi
+if [ "$PUBLISH" -ne 1 ]; then echo; echo "CHECK COMPLETE: compatible and ready, credential valid. To publish:  scripts/publish-ota.sh $PROFILE --publish"; exit 0; fi
 echo "== 5. Upload source maps (before publishing), then publish the SAME export"
 npx --no-install eas-cli whoami >/dev/null 2>&1 || fail "not logged in to EAS (eas login)"
 SENTRY_ORG="$ORG" SENTRY_PROJECT="$PROJ" npx --no-install sentry-expo-upload-sourcemaps "$DIST" >/tmp/ota_sentry.$$ 2>&1 || { tail -5 /tmp/ota_sentry.$$ | sed -E 's/(token|Bearer)[^ ]*/\1 <redacted>/Ig'; rm -f /tmp/ota_sentry.$$; fail "source map upload failed: NOT publishing"; }
@@ -80,4 +83,4 @@ npx --no-install eas-cli update:list --branch production --limit 3 --non-interac
 import json,sys
 d=json.load(sys.stdin); g=(d.get('currentPage') or d)[0]
 print('  latest group:', g.get('group','')[:8], g.get('platforms'), 'runtime', (g.get('runtimeVersion') or '')[:8], '|', (g.get('message') or '')[:70])"
-echo "PUBLISHED $PLATFORM."
+echo "PUBLISHED $PROFILE."
