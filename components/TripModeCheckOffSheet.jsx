@@ -87,6 +87,7 @@ import {
 import DateTimePicker from '@react-native-community/datetimepicker'
 import * as ImagePicker from 'expo-image-picker'
 import { supabase } from '../lib/supabase'
+import PhotoLicenseNotice from './PhotoLicenseNotice'
 import { resolveTripModeAttachment } from '../lib/tripModeAttachment'
 import {
   deriveTripModeDateWindow,
@@ -441,6 +442,8 @@ export default function TripModeCheckOffSheet({
                     </TouchableOpacity>
                   </View>
                 )}
+
+                {photo?.uri ? <PhotoLicenseNotice variant="checkin" color={MUTED} /> : null}
 
                 <TextInput
                   style={[styles.input, { color: TEXT, borderColor: BORDER }]}

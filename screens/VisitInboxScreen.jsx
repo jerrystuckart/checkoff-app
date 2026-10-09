@@ -25,6 +25,7 @@ import { loadActionableCandidates } from '../lib/visitDetection/actionableCandid
 import { fetchOptIn, emitCandidatesChanged } from '../lib/visitDetection/recoverySettings'
 import { hasBackgroundLocationPermission } from '../lib/visitDetection/permissions'
 import { badgeCelebrations, requestBadgeCelebrationCheck } from '../lib/badgeCelebrationStore'
+import PhotoLicenseNotice from '../components/PhotoLicenseNotice'
 
 export default function VisitInboxScreen({ navigation, route }) {
   // Deep-linked from a tapped candidate_visit_high_confidence push (see
@@ -265,6 +266,8 @@ export default function VisitInboxScreen({ navigation, route }) {
                 maxLength={280}
               />
             </View>
+
+            {attachments[row.candidateVisitId]?.photo ? <PhotoLicenseNotice variant="checkin" color={MUTED} /> : null}
 
             <View style={styles.buttonRow}>
               <TouchableOpacity
