@@ -87,6 +87,7 @@ import os, re, sys
 t = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
 tok = os.environ.get('SENTRY_AUTH_TOKEN', '')
 if tok: t = t.replace(tok, '<redacted>')
+t = re.sub(r'eyJ[A-Za-z0-9+/=_-]{200,}', '<redacted job blob>', t)   # EAS prints its whole job (credentials included) on failure
 t = re.sub(r'\x1b\[[0-9;?]*[ -/]*[@-~]', '', t).replace('\r', '').replace('\x04', '').replace('\x08', '')
 open(sys.argv[2], 'a').write(t)
 PY
