@@ -17,7 +17,7 @@
 // app logic).
 
 import React, { useState, useRef } from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, Image, Alert, ActivityIndicator, ScrollView } from 'react-native'
+import { View, Text, TouchableOpacity, StyleSheet, Image, Alert, ActivityIndicator, ScrollView, Linking } from 'react-native'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
@@ -25,6 +25,7 @@ import { submitCoverCandidate } from '../lib/coverCandidates'
 import { localSanityOnlyAdapter, initialStatusFromAssessment } from '../lib/coverModeration/moderationAdapter'
 import { fetchIsPhotoAdmin, publishPhotoAsAdmin, photoAdminSuccessMessage } from '../lib/photoAdmin'
 import { bumpPhotoVersion } from '../lib/photoRefresh'
+import { PHOTO_CONSENT, TERMS_URL } from '../lib/photoConsentCopy'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
@@ -151,15 +152,15 @@ export default function CoverCandidateCaptureScreen({ route, navigation }) {
       <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 60, paddingTop: insets.top + 20 }}>
         <Image source={{ uri: photo?.uri }} style={styles.previewImage} resizeMode="cover" />
         <View style={styles.previewActions}>
-          <Text style={styles.consentTitle}>Great shot. Share it with CheckOff?</Text>
-          <Text style={styles.consentSubtitle}>Help other locals see what the thing looks like.</Text>
+          <Text style={styles.consentTitle}>{PHOTO_CONSENT.cover.title}</Text>
+          <Text style={styles.consentSubtitle}>{PHOTO_CONSENT.cover.subtitle}</Text>
           <Text style={styles.consentFine}>
-            By sharing, you're giving CheckOff permission to display this photo in the app if it's approved.
-            It won't be public until then.
+            {PHOTO_CONSENT.cover.text}{' '}
+            <Text style={{ textDecorationLine: 'underline' }} onPress={() => Linking.openURL(TERMS_URL).catch(() => {})}>{PHOTO_CONSENT.cover.linkLabel}</Text>
           </Text>
 
           <TouchableOpacity style={[styles.submitBtn, submitting && { opacity: 0.6 }]} onPress={confirmAndSubmit} disabled={submitting}>
-            {submitting ? <ActivityIndicator color={NAVY} /> : <Text style={styles.submitBtnText}>Share it with CheckOff</Text>}
+            {submitting ? <ActivityIndicator color={NAVY} /> : <Text style={styles.submitBtnText}>{PHOTO_CONSENT.cover.button}</Text>}
           </TouchableOpacity>
           <TouchableOpacity style={styles.retakeBtn} onPress={() => setMode('camera')} disabled={submitting}>
             <Text style={styles.retakeBtnText}>Retake photo</Text>

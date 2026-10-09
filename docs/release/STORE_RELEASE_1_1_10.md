@@ -224,7 +224,7 @@ Confirmed blockers before PRODUCTION on the named store:
    The ADMIN_SECRET guessable value was rotated (Supabase secret and the three functions that read it; the private admin tool now reads both secrets from browser localStorage instead of the file).
 Not blockers but must be decided/known before submitting:
 5. Apple: run the revocation test (section 7) before saying CheckOff revokes Sign in with Apple tokens; Apple "should" revoke. [Apple, strongly recommended]
-6. Terms (last updated 2026-04-17) do not mention that submitted photos are retained anonymously after deletion or the cover-photo license; the policy and delete page do. Update Terms wording before or with the release (website only).
+6. Terms (last updated 2026-04-17) do not say submitted photos survive account deletion, and give only a license to display "within the Service". Replacement Terms, in app consent copy, privacy and delete page wording are drafted and HELD for owner review: `PHOTO_TERMS_PROPOSAL.md` (app copy committed, website on an unpushed site branch). Includes an existing content consent gap needing a decision (legal uncertainty, no counsel review).
 7. Store forms: Apple age rating (alcohol), export compliance (done in build), Google content rating.
 Optional follow-ups (documented in `DELETION_PHONE_TEST.md`): badge celebration visibility, Secret Reveal design, Android delayed exits inflating dwell and noisy sentinel retries, Barley & Smoke has no visit profile, EXIF stripping on retained photos,
 removing unused Android permissions, iOS string fix, Android disclosure wording update (OTA), applying the optional reveal-image migration.

@@ -13,6 +13,8 @@ import { CameraView, useCameraPermissions } from 'expo-camera'
 import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import PhotoLicenseNotice from '../components/PhotoLicenseNotice'
+import { CHECKIN_PHOTO_SUBTITLES } from '../lib/photoConsentCopy'
 import { completeDare } from '../lib/completeDare'
 import * as Haptics from 'expo-haptics'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
@@ -341,10 +343,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
           {photoRequired ? 'Photo proof required 📸' : 'Add a photo to prove it 📸'}
         </Text>
         <Text style={styles.subtitleSub}>
-          {photoRequired
-            ? 'This item requires a photo to check off. Your crew will see it.'
-            : "Photos are optional but show up in your crew's feed."
-          }
+          {photoRequired ? CHECKIN_PHOTO_SUBTITLES.required : CHECKIN_PHOTO_SUBTITLES.optional}
         </Text>
 
         <TouchableOpacity
@@ -427,6 +426,8 @@ export default function PhotoCheckInScreen({ route, navigation }) {
 
       <View style={[styles.previewActions, { paddingHorizontal: 20 }]}>
         <Text style={styles.previewItem}>{item?.body}</Text>
+
+        <PhotoLicenseNotice variant="checkin" />
 
         <TouchableOpacity
           style={[styles.submitBtn, uploading && { opacity: 0.6 }]}
