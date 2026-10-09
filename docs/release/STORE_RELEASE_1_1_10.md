@@ -15,7 +15,7 @@ App Privacy Details (developer.apple.com/app-store/app-privacy-details), Offerin
 | | iOS | Android |
 |---|---|---|
 | Existing binary | TestFlight 1.1.10 (shows build 157), runtime `86ac0036db685dec7e1921f661d6b77ede23965e` = `docs/release/EXPECTED_RUNTIME` | Play internal testing 1.1.10 versionCode 21, runtime `53ba13b59fec2f2667b5ce1f9568e19f8f5076b3` (equals the AAB's embedded fingerprint) |
-| Submittable as is? | **Yes**, with one accepted imperfection: the "Always" location string overstates notifications (section 6) | **Yes** for closed testing/production once the Play Console items in section 9 are done. Technically eligible; approval of Background Location is the open risk (section 4) |
+| Submittable as is? | **Yes** (build 157 as is). Optional corrected build: branch `release/ios-1.1.10-strings`, NEW runtime `d4a37d58…` (section 6 and 11) | **Yes** for closed testing/production once the Play Console items in section 9 are done. Technically eligible; approval of Background Location is the open risk (section 4) |
 | Needs a new binary for correctness? | No | No |
 | OTAs (JavaScript only) | account deletion client published to production on 86ac0036 (group 4a0064b9) | account deletion client published to production on 53ba13b5 (group 5c41dbeb) |
 
@@ -184,9 +184,9 @@ Current strings in the binary (`app.json`, unchanged):
 Recommended replacement copy (for the next native build):
 - When in use: "CheckOff uses your location while you use the app to show places near you and to confirm you're at a place when you check it off. For these features your location stays on your phone."
 - Always: "If you turn on visit recovery, CheckOff can notice when you arrive at and leave places in our catalog, even when the app is closed, so you can recover a CheckOff you forgot. Arrivals and departures are sent to our servers to make private suggestions. Nothing is checked off until you confirm it."
-Needs a new iOS binary? YES (Info.plist is native; an OTA cannot change it). It changes the runtime fingerprint, so a new binary would sit on a NEW runtime and the existing 86ac0036 OTA lineage would not reach it.
-Recommendation: submit the existing binary now (the string describes the real feature; the wrong clause is a small overstatement, low rejection risk, not harmful), and put the corrected strings in the next native release.
-If you would rather not take that risk, the cost is one local iOS build plus recording the new runtime in `docs/release/EXPECTED_RUNTIME`. This task did not change native config or build anything.
+Decision (owner, 2026-10-09): build a corrected iOS binary. The strings above are applied ONLY on branch `release/ios-1.1.10-strings` (commit 9a3b1a5, based on canonical 3da4434, which contains the current JavaScript). That branch has its own runtime `d4a37d580c7ee48833857ee7c12fb4af24169068` (computed from a clean tree with a real node_modules; the committed tree reproduces it).
+HARD RULE: never merge this branch into `production/1.1.10-canonical` or `release/android-1.1.10`. Measured: the same two string edits applied to the Android line change the ANDROID runtime from `53ba13b5…` to `4ee0a09d…` (app.json is hashed for every platform), which would cut the installed Android build off from OTAs and break the recovery allowlist. The canonical line keeps producing OTAs for the existing iOS runtime `86ac0036…`.
+Runtime facts (all measured 2026-10-09): canonical iOS `86ac0036…` (unchanged by today's work, equals EXPECTED_RUNTIME); strings branch iOS `d4a37d58…`; Android line Android `53ba13b5…` (unchanged, equals the installed AAB). Android needs no new binary and ANDROID_RECOVERY_RUNTIMES needs no change. iOS has no runtime allowlist for recovery (gated by platform only), so the new iOS runtime needs no code change. Consequence for OTAs: while both iOS runtimes are in the field (86ac0036 until users update, d4a37d58 after), JavaScript updates must be published TWICE, once from canonical and once from the strings branch (after merging canonical into it). `scripts/publish-ota.sh ios` only knows the canonical line; add a strings profile (branch, its EXPECTED_RUNTIME, anchor = the build source commit) before the first OTA to d4a37d58.
 
 ## 7. Apple token revocation: simplest real-device test
 Flow in the shipped client: Profile > Delete Account > two confirmations > for accounts with an Apple identity, the app asks the `revoke-apple-token` function whether it can revoke (preflight), shows the Apple sheet once, exchanges the authorization code at
@@ -222,22 +222,38 @@ Confirmed blockers before PRODUCTION on the named store:
    NOT deployed on purpose: send-partner-renewal (not deployed in production at all; its daily cron job and the admin tool's renewal buttons 404; deploying it would start daily renewal emails and Stripe checkout creation, a product decision).
    NOT changed on purpose: the send-dormant-reminders cron job still sends an sb_ key the gateway rejects (401), so it has never run; fixing the header would START daily dormant-user pushes (decision for the owner).
    The ADMIN_SECRET guessable value was rotated (Supabase secret and the three functions that read it; the private admin tool now reads both secrets from browser localStorage instead of the file).
+4b. Security hygiene after the rollout: (a) the Resend API key is stored in plain text inside the local admin tool `checkoff_admin.html` and was printed once in an assistant tool output on 2026-10-09: rotate it in Resend, update the function secret `RESEND_API_KEY` and the tool. (b) That tool also embeds the live Supabase service role key and uses it as its session token for admin database operations (7 references): it still depends on a service key. (c) Run `scripts/admin-secrets-setup.sh` once so the tool gets the two admin secrets from `checkoff_admin_secrets.js` (no console history).
+4c. Release hygiene done 2026-10-09: `process-notification-queue` in git is now exactly the deployed code plus the guard (test pins the push types); the parked candidate visit handler is in `PENDING_candidate_visit_push_handler.md`. Dormant reminders, renewal emails and new visit pushes remain OFF.
 Not blockers but must be decided/known before submitting:
 5. Apple: run the revocation test (section 7) before saying CheckOff revokes Sign in with Apple tokens; Apple "should" revoke. [Apple, strongly recommended]
-6. Terms (last updated 2026-04-17) do not say submitted photos survive account deletion, and give only a license to display "within the Service". Replacement Terms, in app consent copy, privacy and delete page wording are drafted and HELD for owner review: `PHOTO_TERMS_PROPOSAL.md` (app copy committed, website on an unpushed site branch). Includes an existing content consent gap needing a decision (legal uncertainty, no counsel review).
+6. Photo terms (Terms last updated 2026-04-17 say nothing about retention after deletion and license only "within the Service"): FINAL wording drafted with option B (prospective license, notice for existing users, advertising still needs separate permission), per photo consent version recording built and TESTED (migration 20261009a/b applied), app copy committed on both lines, website on an unpushed branch. HELD for the owner's review of the exact wording: `PHOTO_TERMS_PROPOSAL.md`. Publication order is in that file. Legal open items marked LEGAL there (no counsel review).
 7. Store forms: Apple age rating (alcohol), export compliance (done in build), Google content rating.
 Optional follow-ups (documented in `DELETION_PHONE_TEST.md`): badge celebration visibility, Secret Reveal design, Android delayed exits inflating dwell and noisy sentinel retries, Barley & Smoke has no visit profile, EXIF stripping on retained photos,
 removing unused Android permissions, iOS string fix, Android disclosure wording update (OTA), applying the optional reveal-image migration.
 
 ## 10. Next actions in order
-1. Owner: run the phone checks for the badge celebration and Secret Reveal; tell Claude the outcome (they are JavaScript, shipped by OTA).
-2. Owner: second-Apple-ID revocation test (section 7). If it fails, keep "disconnect it yourself" wording and the Apple review note without the revocation sentence.
-3. DONE 2026-10-08: caller authorization rollout (blocker 4). Owner decisions left: dormant reminders cron, renewal emails function.
-4. Owner: create the two reviewer accounts (section 8).
-5. Owner: record the Play video (4c) and the Apple screen recording; upload the Play video unlisted.
-6. Owner: Play Console: Data safety (4d), deletion URL (4e), Background Location declaration (4a/4b), content rating, App access, listing text; upload vc21 to closed testing (and start the 12-tester clock if required).
-7. Owner: App Store Connect: App Privacy (5a), age rating, review notes (5c), demo account, attach the recording, select the existing build, manual release; submit.
-8. After approval: monitor `account_deletion_requests` and the recovery kill switch; keep the iOS string fix and the unused-permission cleanup for 1.1.11.
+1. Owner: review the exact photo wording (`PHOTO_TERMS_PROPOSAL.md`). Then set the effective date in `lib/photoConsentVersion.js` and the three site files, publish the client OTAs for 86ac0036 and 53ba13b5 (migration already applied), then merge the site branch to main.
+2. Owner: run `scripts/admin-secrets-setup.sh`; rotate the Resend key.
+3. Owner: phone checks for the badge celebration and Secret Reveal; second-Apple-ID revocation test (section 7).
+4. Owner: create the two reviewer accounts (section 8); record the Play video (4c) and the Apple recording.
+5. Owner: build the corrected iOS binary (section 11), upload to TestFlight, then App Store Connect (5a to 5c) using that build. Existing build 157 stays valid if you prefer to submit now.
+6. Owner: Play Console (4a to 4f): upload vc21 to closed testing; start the 12 tester clock if required.
+7. After approvals: monitor `account_deletion_requests` and the recovery kill switch; decide dormant reminders and renewal emails separately.
+
+## 11. Build commands (not run; you run them)
+iOS corrected binary (runtime d4a37d58…). Uses your usual local build and Sentry process: `scripts/ios-local-build.sh --build` runs `eas build --platform ios --profile production --local` with Sentry source map upload, reading the token from env, Keychain item `checkoff-sentry-auth-token` or `~/.config/checkoff/sentry-auth-token` (mode 600; the token check now accepts the CI scoped token).
+```bash
+cd /Users/jerrystuckart/Downloads/checkoff && git fetch origin
+git worktree add ../checkoff-ios-strings origin/release/ios-1.1.10-strings && cd ../checkoff-ios-strings
+git merge origin/production/1.1.10-canonical            # only if canonical moved since 3da4434; keeps the current JavaScript embedded; resolve nothing in app.json
+cp -c -R /path/to/a/real/node_modules ./node_modules     # or: npm ci   (a symlinked node_modules gives a wrong runtime)
+scripts/ios-local-build.sh --require-runtime-match       # preflight only; must print runtime d4a37d580c7ee48833857ee7c12fb4af24169068 and pass the tests
+scripts/ios-local-build.sh --build                       # build + Sentry upload; use --no-sentry only if you accept an unsymbolicated embedded bundle
+eas submit --platform ios --profile production --path ./build-*.ipa   # local builds are not on EAS: submit the .ipa the build wrote (or upload it with Transporter)
+```
+Afterwards record the build commit as the anchor for OTAs to the new runtime and confirm TestFlight shows a build number above 157 (EAS remote versioning auto increments).
+Android: NO new binary. The submittable artifact is the existing versionCode 21 AAB (runtime 53ba13b5…, ANDROID_RECOVERY_RUNTIMES unchanged). If you ever rebuild it, use your usual `SENTRY_DISABLE_AUTO_UPLOAD=true eas build --platform android --profile production --local` from a clean checkout of `release/android-1.1.10` and confirm the runtime is 53ba13b5… first (`scripts/android-build-preflight.sh`).
+JavaScript updates (after wording approval): `scripts/publish-ota.sh android --publish` from release/android-1.1.10; `scripts/publish-ota.sh ios --publish` from production/1.1.10-canonical (runtime 86ac0036…); later the same from the strings branch once its profile exists.
 
 ## Uncertainty register (resolve, do not assume)
 U1 provider request-log retention (Supabase, hosting, Sentry); U2 database backup retention of deleted rows; U3 whether the 120 km window request counts as collected approximate location (declared conservatively);
