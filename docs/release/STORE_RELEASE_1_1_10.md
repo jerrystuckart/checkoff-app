@@ -1,8 +1,8 @@
-# CheckOff 1.1.10: store release readiness (AUTHORITATIVE, 2026-10-08)
+# CheckOff 1.1.10: store release readiness (AUTHORITATIVE, updated 2026-10-08 night, Phoenix)
 
 This is the single current source of truth for submitting 1.1.10 to the App Store and Google Play. Where another file disagrees, this one wins.
 Superseded and reduced to pointers: `STORE_DISCLOSURES_1_1_10.md`, `docs/visit-recovery/APP_STORE_1.1.9.md`, `docs/visit-recovery/android/PLAY_SUBMISSION_DRAFTS.md`.
-Nothing here has been entered in App Store Connect or Play Console. No private identifiers, credentials or paths are in this file.
+Nothing here has been entered in App Store Connect or Play Console, submitted for review, uploaded to Play or released. No credentials or passwords are in this file (reviewer account passwords never go in git).
 
 Basis: the code at `production/1.1.10-canonical` and `release/android-1.1.10`, the deployed backend (read-only checks on 2026-10-08), the live pages
 https://getcheckoff.com/privacy (updated 2026-10-08) and https://getcheckoff.com/delete-account, and official guidance fetched 2026-10-08:
@@ -10,42 +10,34 @@ Google Play background location policy (support.google.com/googleplay/android-de
 Play target API level (developer.android.com/google/play/requirements/target-sdk); Apple App Review Guidelines (developer.apple.com/app-store/review/guidelines),
 App Privacy Details (developer.apple.com/app-store/app-privacy-details), Offering account deletion (developer.apple.com/support/offering-account-deletion-in-your-app).
 
-## 1. Verdict
-
+## 0. Final state at a glance (2026-10-08 night)
 | | iOS | Android |
 |---|---|---|
-| Existing binary | TestFlight 1.1.10 (shows build 157), runtime `86ac0036db685dec7e1921f661d6b77ede23965e` = `docs/release/EXPECTED_RUNTIME` | Play internal testing 1.1.10 versionCode 21, runtime `53ba13b59fec2f2667b5ce1f9568e19f8f5076b3` (equals the AAB's embedded fingerprint) |
-| Submittable as is? | **Yes** (build 157 as is). Optional corrected build: branch `release/ios-1.1.10-strings`, NEW runtime `d4a37d58…` (section 6 and 11) | **Yes** for closed testing/production once the Play Console items in section 9 are done. Technically eligible; approval of Background Location is the open risk (section 4) |
-| Needs a new binary for correctness? | No | No |
-| OTAs (JavaScript only) | account deletion client published to production on 86ac0036 (group 4a0064b9) | account deletion client published to production on 53ba13b5 (group 5c41dbeb) |
+| Final binary | TestFlight build **159**, version 1.1.10, bundle `com.checkoff.app`, runtime `d4a37d580c7ee48833857ee7c12fb4af24169068`, built from `release/ios-1.1.10-strings` @ `fde0891`; contains the corrected location strings (verified inside the .ipa) | AAB `/Users/jerrystuckart/Downloads/checkoff-build/android/build-1791526016296.aab`; versionName 1.1.10, versionCode **23**, runtime `53ba13b59fec2f2667b5ce1f9568e19f8f5076b3` (matches the recovery allowlist), built from `release/android-1.1.10` @ `452c345`; SHA-256 `da813487e41e5da8291a1c8472056fbb43f03b75fce3893b3b6c171687ab5401` |
+| Proof it is the binary in use | A phone reports build 159 and loaded the strings OTA (server records, 21:03 Phoenix); App Store Connect state not queried | Local build only; NOT uploaded anywhere (owner uploads to Play) |
+| Latest production OTA for that runtime | strings runtime `d4a37d58…`: group `9a24635c-68fe-4c5d-9ed5-85e67fa3f8fa`, update `01a11ecc-bb07-7853-8ef4-d8d1657932a6` (photo notice on Profile, not Home). Installed older iOS runtime `86ac0036…`: group `ca353d71-6a0f-426b-a559-05b515371b2f`, update `01a11ec9-783b-7d5f-97d2-d24b0284c576` | runtime `53ba13b5…`: group `60caf7fe-aaa6-44d2-b1df-c77045a80b00`, update `01a11ecb-38c4-782c-bb3e-582c1213bb5c` (older vc21 users) |
+| JavaScript embedded in the binary | build-time tip `fde0891` (still has the first, large Home notice; the OTA above replaces it on the second launch; accounts created after the 2026-10-09 01:30Z cutoff never see it) | latest tip including the Profile notice placement |
+| Branch tips (pushed) | strings `e7b7acb` (canonical `9dd381d` merged); canonical `9dd381d` | `60ce0ae (the AAB's source) plus later documentation commits` |
+Sentry source maps for the Android embedded bundle: VERIFIED in the build log: Sentry Source Map Upload Report for release com.getcheckoff.app@1.1.10+23, dist 23, bundle index.android.bundle with debug id 339400db-f961-4add-a55e-dd4cddbe45e2 (artifact bundle upload), no Sentry error lines. Optional eyeball check: Sentry > Settings > Projects > react-native-rp > Source Maps lists that debug id.
+Backend deployed and verified earlier (unchanged tonight): account deletion pipeline (rev5), consent version columns, edge function caller guards, cron headers; dormant reminders, renewal emails and the candidate visit / badge push types remain OFF.
 
-Native limitation: anything in `app.json` (Info.plist strings, permissions), `package.json`, plugins or `modules/` changes the runtime fingerprint. A binary built after such a change is
-cut off from OTAs published for the current runtimes, and the current binaries cannot receive the change by OTA. Therefore none of the native items below is fixable without a new
-binary: iOS location purpose strings, Android unused permissions (`RECORD_AUDIO`, `SYSTEM_ALERT_WINDOW`), `ACCESS_BACKGROUND_LOCATION`.
+## 1. Verdict
+| | iOS | Android |
+|---|---|---|
+| Submittable as is? | **Yes**: build 159. Select it in App Store Connect once its TestFlight processing shows complete (not verified from here). | **Yes** for Play closed testing / production after the Play Console items in section 9. The new AAB replaces vc21 (same runtime, same native config; fresh JavaScript so first launch already has the consent screens and the Profile notice). |
+| Native change pending | none | none (no native config touched; 16 KB page alignment check: verified: all 46 arm64-v8a and x86_64 native libraries have every PT_LOAD segment aligned to at least 16 KB) |
+| Platform requirements checked 2026-10-08 | Xcode 26 / iOS 26 SDK rule (since 2026-04-28; the TestFlight upload passed it), iOS 13 minimum (2026-09-09), age rating questions (must be answered), privacy manifest reasons (Expo/Sentry ship manifests; confirm the upload processed without warnings) | target API 36 (required since 2026-08-31, React Native default; confirm in Play Console), 16 KB page size (deadline 2027-02-01, native libraries only), background location declaration (section 4), Data safety, account deletion URL |
 
-What the binary contains versus what reviewers will run: the review build embeds JavaScript from build time; the app downloads the newest OTA on launch and applies it on the NEXT launch.
-Tell reviewers to launch the app twice (section 8) so they see the account deletion screens and the final behavior.
+Native limitation (unchanged): anything in `app.json` (including `.gitignore`, which is hashed), `package.json`, plugins or `modules/` changes the runtime and cuts a binary off from the OTAs published for its runtime. The iOS strings change is why there are two iOS runtimes (86ac0036 older TestFlight builds, d4a37d58 build 159); JavaScript fixes must be published twice until the older one is retired.
 
-## 2. Evidence summary (what is verified and what is not)
-
-Verified:
-- Visit recovery on both phones, real background visits: Android detected qualifying stops while the app was backgrounded (suggestions recorded server side, arrival/departure and dwell stored,
-  confirmed and points awarded per the owner's report); iPhone detected a stop through its own opt-in. Server-side candidate and registration records agree. Known quality issue (not a blocker): an
-  Android exit can be delivered late and inflate the dwell figure.
-- Account deletion, email account, iPhone: request accepted and completed within about 35 seconds; auth account and all personal rows removed; submitted photos retained at neutral paths with
-  identical size and checksum, no owner; visibility unchanged; anonymous completion counts added once; no notification-queue trace; other users and the Android test account unaffected.
-  Details: `ACCOUNT_DELETION.md` and `DELETION_PHONE_TEST.md`.
-- Live pages: privacy (updated 2026-10-08), delete-account, support, terms all return 200.
-- Android manifest of the 53ba13b5 build (inspected from a built AAB with the same runtime): ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION, ACCESS_BACKGROUND_LOCATION, CAMERA, POST_NOTIFICATIONS,
-  INTERNET, ACCESS_NETWORK_STATE, VIBRATE, WAKE_LOCK, RECEIVE_BOOT_COMPLETED, READ/WRITE_EXTERNAL_STORAGE (legacy, API 32 and below), RECORD_AUDIO and SYSTEM_ALERT_WINDOW (unused library defaults),
-  badge and install-referrer library permissions, Google Sign-In revocation. No foreground service permissions. Target SDK comes from the React Native default (36); confirm in Play Console after upload.
-
-Not verified (do not claim):
-- Apple token revocation: deployed and configured, never exercised with a real Apple account (section 7). Fake authorization codes only prove that Apple accepts the signed client secret.
-- Badge celebration and the latest Secret Reveal on a phone (owner checks pending).
-- Optional reveal image/crop migration: not applied; the feature degrades gracefully without it (see `SECRET_REVEAL_IMAGES.md`).
-- Whether Play approves background location; whether Apple accepts the purpose strings.
-- Android Doze/OEM behavior beyond the two test phones.
+## 2. Evidence: verified facts, owner accepted results, and what is not verified
+Verified by tests, server records or inspection (2026-10-08):
+- Unit tests: iOS lines 1,338 pass, Android line 1,397 pass, 122 edge function tests pass. Runtimes recomputed from clean trees: canonical iOS 86ac0036, strings iOS d4a37d58, Android 53ba13b5.
+- Account deletion pipeline and consent version evidence: tested end to end with disposable accounts (deletion completes in minutes; retained photos at neutral paths with checksums unchanged; anonymous counts once; consent version preserved without identity).
+- Live pages (terms, privacy, delete-account, support) carry the October 8, 2026 wording; the inbound email route answers 400 to an unsigned request.
+- Android manifest of the 53ba13b5 line (inspected from a built AAB): ACCESS_FINE/COARSE/BACKGROUND_LOCATION, CAMERA, POST_NOTIFICATIONS, INTERNET, ACCESS_NETWORK_STATE, VIBRATE, WAKE_LOCK, RECEIVE_BOOT_COMPLETED, READ/WRITE_EXTERNAL_STORAGE (API 32 and below), RECORD_AUDIO and SYSTEM_ALERT_WINDOW (unused library defaults), badge and install-referrer library permissions. No foreground service permissions.
+Accepted by the owner (their device results, not re-verified by me): Secret Reveal, badge celebrations, background visit recovery on both phones including confirmation and points, the iPhone email-account deletion test. Server records for the recovery and deletion runs agree. Known quality issue (not a blocker): an Android exit can be delivered late and inflate the dwell figure.
+NOT verified (do not claim): Apple token revocation with a real Apple ID (section 7); an inbound email through the new Vercel Resend key; Google's decision on background location; Apple's acceptance of the purpose strings; App Store Connect processing state of build 159; Android behavior on other OEMs.
 
 ## 3. Facts that drive every answer (implementation evidence)
 
@@ -138,7 +130,7 @@ the only marketing-like use is our own emails to account holders, covered by Dev
 - Content rating questionnaire and target audience: not child-directed; 13+ per the policy; 313 of 2,020 items reference alcohol (users can hide them). Answer the alcohol reference question honestly (U8).
 - Ads: none. Government/finance/health/news declarations: none. Foreground service declaration: not needed (no FGS permission). 
 - Store listing must describe the background location feature (Google expects the listing and website to match). Suggested sentence: "Optional visit recovery uses your location in the background, only if you turn it on, to help you recover checkoffs you forgot."
-- Upload: promote the existing internal-testing AAB (vc21) to closed testing/production rather than rebuilding. Never rebuild for a documentation change.
+- Upload: use the new AAB (versionCode 23, section 0) in Internal testing, then promote that same artifact to closed testing/production. Never rebuild for a documentation change.
 
 ## 5. Apple App Store
 
@@ -200,88 +192,46 @@ Simplest safe test:
 5. Tell Claude the time; Claude confirms server-side that the deletion completed with the same read-only comparison used for the email test.
 Do not mark revocation verified until step 4 passes. If CheckOff stays listed, capture the time and a screenshot; the function replies with a generic reason that the app discards, so check the Supabase Edge Function logs for `revoke-apple-token` around that time.
 
-## 8. Reviewer access (do not commit credentials)
-Create two dedicated accounts, one per store, on a real mailbox you control; confirm them; keep the passwords in your password manager. Never use the admin or testing accounts.
-1. Supabase dashboard > Authentication > Users > Add user, auto confirm, an address such as a role mailbox on getcheckoff.com. Do not grant admin, photo-admin or tester flags.
-2. Sign in once yourself on each platform to verify it works and that Home shows the catalog (reviewers are outside launched cities and will see the city picker; the `BROWSING` state is expected).
-3. Enter the email and password only in App Store Connect (Sign-in required) and Play Console (App access). Rotate them after review.
-4. Reviewers cannot reach a catalog place, so the located check-off gate will say they are too far; universal 'anywhere' items work. State this in the notes (done above).
-Optional: pre-enable nothing else; the recovery flag is global.
+## 8. Reviewer accounts (setup is five minutes; passwords never go in git, chat or this file)
+Create TWO plain accounts, one per store, so a review cannot disturb the other. Suggested addresses (they do not need a mailbox because you confirm them yourself): `appreview@getcheckoff.com` and `playreview@getcheckoff.com`.
+1. Supabase dashboard > Authentication > Users > Add user > Create new user. Email as above, a long random password from your password manager, TICK "Auto Confirm User". Do not touch any admin, photo admin or tester setting.
+2. Sign in once with each account on a phone (Apple account on the iPhone, Play account on the Android phone). This creates the profile row. Check Home shows the catalog (reviewers are outside launched cities: the city picker and the BROWSING state are expected) and Profile shows the recovery card and Delete Account.
+3. Verify without a password: `cd /Users/jerrystuckart/Downloads/checkoff && scripts/verify-reviewer-account.sh appreview@getcheckoff.com` (same for the Play address). It must print PASS (confirmed, not admin, not photo admin, not a tester, not banned, no deletion request, recovery flag on).
+4. Enter the email and password ONLY in App Store Connect (App Review Information > Sign in required) and Play Console (App content > App access). Rotate both passwords after review.
+5. Tell reviewers (notes in 5c and 4b already do): located items cannot be checked off from a desk (the app compares the phone to the place on the device), so use any of the roughly 290 items that are not tied to a place; background visit recovery is shown in the attached video.
+The deletion test for review must use a THIRD throwaway account, never these two and never your admin or testing accounts.
 
-## 9. Production blockers versus optional follow-ups
+## 9. Outstanding approvals and blockers (genuine only)
+Production blockers (nothing ships without these):
+1. Google Play: the Background Location declaration, review video and Google's approval (declaration review also applies to closed testing). Risk: Google may judge optional visit recovery as not core functionality; fallback is a new Android build without ACCESS_BACKGROUND_LOCATION.
+2. Google Play: Data safety, App access credentials, content rating, store listing text mentioning background location; and the 12 tester / 14 day closed test gate IF the developer account is a personal account created after 2023-11-13 (account type is not in the repo; check Play Console).
+3. Apple: App Privacy answers, updated age rating questions, a demo account in App Review Information, review notes, and selecting build 159.
+4. Reviewer accounts (section 8) must exist and work on both stores. New sign ups need email confirmation, so create them pre-confirmed.
+NOT blockers, but decisions or follow-ups: Apple Sign in revocation real-device test (Apple says apps "should" revoke; use a second Apple ID, section 7); one real inbound email to prove the new Vercel Resend key; Sentry symbolication check in the Sentry UI; rotate the admin tool service key later (separate task, `docs/security/ADMIN_TOOL_SERVICE_KEY_DEPENDENCY.md`); decide dormant reminders and renewal emails (both OFF).
 
-Confirmed blockers before PRODUCTION on the named store:
-1. Play: Background Location declaration + video submitted and approved (declaration review also applies to closed testing). Data safety entered. App access credentials. Store listing text. [Google]
-2. Play: closed-testing gate if the account is a personal one created after 2023-11-13. [Google, verify in console]
-3. Both: enter the privacy/Data safety answers above; reviewer accounts exist and work. [Both]
-4. Security (found 2026-10-08, FIXED and rolled out the same night; outside the store forms): email, push and batch Edge Functions had no caller authorization beyond the gateway JWT, which the public anon key satisfies.
-   All of these now accept only the function service key or `x-campaign-secret` (`_shared/serverCaller.ts`): send-partner-welcome, send-creator-list-live, send-monthly-recap, send-inactive-reengagement, send-never-checkedin,
-   send-notifications, send-partner-recap, process-notification-queue, streak-reminder, send-dormant-reminders. `update-streak` accepts only the signed-in user's own id (verified with two disposable accounts: own 200, other user 403, anon 401, no header 401; both accounts deleted).
-   Rejection verified live for every function (none 401, anon 403, wrong secret 403). Authorized paths verified without sending: Stripe's credential (the function's own service key) reaches send-partner-welcome and send-creator-list-live (400 validation, via a temporary probe function, deleted);
-   the per-minute queue job and the scheduler header change (migration 20261008g applied) kept returning 200. Caller audit: `EDGE_FUNCTION_CALLERS.md`.
-   NOT deployed on purpose: send-partner-renewal (not deployed in production at all; its daily cron job and the admin tool's renewal buttons 404; deploying it would start daily renewal emails and Stripe checkout creation, a product decision).
-   NOT changed on purpose: the send-dormant-reminders cron job still sends an sb_ key the gateway rejects (401), so it has never run; fixing the header would START daily dormant-user pushes (decision for the owner).
-   The ADMIN_SECRET guessable value was rotated (Supabase secret and the three functions that read it; the private admin tool now reads both secrets from browser localStorage instead of the file).
-4b. Security hygiene after the rollout: (a) the Resend API key is stored in plain text inside the local admin tool `checkoff_admin.html` and was printed once in an assistant tool output on 2026-10-09: rotate it in Resend, update the function secret `RESEND_API_KEY` and the tool. (b) That tool also embeds the live Supabase service role key and uses it as its session token for admin database operations (7 references): it still depends on a service key. (c) Run `scripts/admin-secrets-setup.sh` once so the tool gets the two admin secrets from `checkoff_admin_secrets.js` (no console history).
-4c. Release hygiene done 2026-10-09: `process-notification-queue` in git is now exactly the deployed code plus the guard (test pins the push types); the parked candidate visit handler is in `PENDING_candidate_visit_push_handler.md`. Dormant reminders, renewal emails and new visit pushes remain OFF.
-Not blockers but must be decided/known before submitting:
-5. Apple: run the revocation test (section 7) before saying CheckOff revokes Sign in with Apple tokens; Apple "should" revoke. [Apple, strongly recommended]
-6. Photo terms (Terms last updated 2026-04-17 say nothing about retention after deletion and license only "within the Service"): FINAL wording drafted with option B (prospective license, notice for existing users, advertising still needs separate permission), per photo consent version recording built and TESTED (migration 20261009a/b applied), app copy committed on both lines, website on an unpushed branch. HELD for the owner's review of the exact wording: `PHOTO_TERMS_PROPOSAL.md`. Publication order is in that file. Legal open items marked LEGAL there (no counsel review).
-7. Store forms: Apple age rating (alcohol), export compliance (done in build), Google content rating.
-Optional follow-ups (documented in `DELETION_PHONE_TEST.md`): badge celebration visibility, Secret Reveal design, Android delayed exits inflating dwell and noisy sentinel retries, Barley & Smoke has no visit profile, EXIF stripping on retained photos,
-removing unused Android permissions, iOS string fix, Android disclosure wording update (OTA), applying the optional reveal-image migration.
+Disclosure choices that need your judgment (conservative defaults are pre-filled in sections 4d and 5a; change only if you disagree):
+- Declaring Approximate location (the 120 km place-window request) and Device ID (push token, Sentry install id) as collected.
+- Diagnostics (Sentry) as not linked to the user on Apple; the conservative alternative is Linked.
+- "Other in-app messages" for dare text; "Developer communications" only for our own emails (not Advertising or marketing).
+- Alcohol content rating answers (313 of 2,020 items involve alcohol; users can hide them; no age gate).
+- Whether to describe optional visit recovery as core to the app's purpose in the Play declaration (section 4a says "optional feature supporting the core purpose").
 
-## 10. Next actions in order
-1. Owner: review the exact photo wording (`PHOTO_TERMS_PROPOSAL.md`). Then set the effective date in `lib/photoConsentVersion.js` and the three site files, publish the client OTAs for 86ac0036 and 53ba13b5 (migration already applied), then merge the site branch to main.
-2. Owner: run `scripts/admin-secrets-setup.sh`; rotate the Resend key.
-3. Owner: phone checks for the badge celebration and Secret Reveal; second-Apple-ID revocation test (section 7).
-4. Owner: create the two reviewer accounts (section 8); record the Play video (4c) and the Apple recording.
-5. Owner: build the corrected iOS binary (section 11), upload to TestFlight, then App Store Connect (5a to 5c) using that build. Existing build 157 stays valid if you prefer to submit now.
-6. Owner: Play Console (4a to 4f): upload vc21 to closed testing; start the 12 tester clock if required.
-7. After approvals: monitor `account_deletion_requests` and the recovery kill switch; decide dormant reminders and renewal emails separately.
+## 10. Next actions in order (tomorrow)
+Required, in order:
+1. Reviewer accounts (section 8): create two pre-confirmed accounts, test sign in on a phone each, store the passwords in your password manager only.
+2. Play Console: upload `/Users/jerrystuckart/Downloads/checkoff-build/android/build-1791526016296.aab` to Internal testing (versionCode 23); check the pre-launch / bundle explorer for target API 36 and 16 KB alignment; then Data safety (4d), deletion URL `https://getcheckoff.com/delete-account` (4e), content rating, App access, listing sentence, Background Location declaration (4a, 4b) with the video (4c); closed test if required.
+3. App Store Connect: confirm build 159 finished processing and select it; App Privacy (5a); updated age rating questions; review notes (5c) and demo account; manual release; submit when you are satisfied.
+Required phone checks: the Profile notice on the strings build at a large text size (card compact, details sheet scrolls and closes); one Android phone with the NEW AAB: sign in, Profile notice position, Settings recovery card still reachable.
+Optional follow-ups: second Apple ID revocation test; one inbound email; Sentry UI check; rotate keys later; badge/visit push types remain off.
 
-## 11. Build commands (not run; you run them). Every command names its directory.
-Both builds use clean standalone clones under `/Users/jerrystuckart/Downloads/checkoff-build/` (a clone has no worktree or branch-name surprises), keep version 1.1.10, and take their build number / versionCode from the existing EAS remote counter (`autoIncrement` + `appVersionSource: remote`), so you do not edit any number.
-Published JavaScript at the time of writing (embed it by building from these tips): iOS strings branch = canonical `fb79c08` + the strings change (merge `509841a`); Android line `0cdbb02`. If either branch moved, the preflight prints the tip it is building.
-
-iOS (corrected strings, runtime d4a37d580c7ee48833857ee7c12fb4af24169068). Usual local build with Sentry source map upload (token from env, Keychain `checkoff-sentry-auth-token` or `~/.config/checkoff/sentry-auth-token`, mode 600):
-```bash
-mkdir -p /Users/jerrystuckart/Downloads/checkoff-build && cd /Users/jerrystuckart/Downloads/checkoff-build
-git clone --branch release/ios-1.1.10-strings https://github.com/jerrystuckart/checkoff-app.git ios-strings
-cd /Users/jerrystuckart/Downloads/checkoff-build/ios-strings
-git log --oneline -1                                       # note the tip you are building
-npm ci                                                      # a real node_modules is required; never symlink it
-scripts/ios-local-build.sh --require-runtime-match          # preflight only: must print runtime d4a37d580c7ee48833857ee7c12fb4af24169068, run the tests, validate the Sentry token
-scripts/ios-local-build.sh --build                          # eas build --platform ios --profile production --local, Sentry upload ON (add --no-sentry only if you accept an unsymbolicated embedded bundle)
-eas submit --platform ios --profile production --path /Users/jerrystuckart/Downloads/checkoff-build/ios-strings/build-*.ipa   # or upload the .ipa with Transporter
-```
-Check afterwards: TestFlight shows 1.1.10 with a build number above 157.
-Android (fresh AAB, same native config; runtime must stay 53ba13b59fec2f2667b5ce1f9568e19f8f5076b3, so ANDROID_RECOVERY_RUNTIMES needs no change). Your usual command is `SENTRY_DISABLE_AUTO_UPLOAD=true eas build --platform android --profile production --local`; the preflight wraps it:
-```bash
-cd /Users/jerrystuckart/Downloads/checkoff-build
-git clone --branch release/android-1.1.10 https://github.com/jerrystuckart/checkoff-app.git android
-cd /Users/jerrystuckart/Downloads/checkoff-build/android
-git log --oneline -1
-npm ci
-scripts/android-build-preflight.sh                          # checks only: branch, clean tree, real node_modules, runtime 53ba13b5 in ANDROID_RECOVERY_RUNTIMES, tests
-scripts/android-build-preflight.sh --build                  # eas build --platform android --profile production --local WITH Sentry source map upload for the embedded bundle; validates the token first and fails (exit 4) if the build log has no upload report
-```
-Then upload the AAB (named build-*.aab in that directory) to Play internal testing and promote it.
-Sentry on Android: your old command `SENTRY_DISABLE_AUTO_UPLOAD=true eas build ...` uploaded NOTHING and nothing verified anything. `--build` now uploads the embedded bundle's source maps during the build (same mechanism as the iOS script), and both scripts scan the redacted build log (`~/Library/Logs/checkoff-builds/`) for the upload report and exit 4 if it is missing. Limits: Hermes bytecode does not expose debug ids and the CI scoped token cannot read artifact bundles, so the log is the only machine check; confirm once in Sentry > Settings > Projects > react-native-rp > Source Maps. `--no-sentry` restores the old no-upload behavior.
-Do not edit `.gitignore`, `.easignore` or any native input in these clones: `.gitignore` is part of the runtime fingerprint (a two line edit changed both runtimes on 2026-10-09 and was reverted).
-
-OTA status (2026-10-08, Phoenix): consent update published to production with verified Sentry source maps: iOS runtime 86ac0036, group ef39798a-6a6f-4a2e-a986-190f2b8e5fcf (update 01a11e4e-e535-765a-9147-633ef9bfcf9d, source fb79c08); Android runtime 53ba13b5, group 2ea9cff9-a1e5-4aac-be55-e8a3f3bdfeb3 (update 01a11e50-8c68-7223-af41-f5b92005ea7b, source 0cdbb02). OTAs to the strings runtime d4a37d58 use `scripts/publish-ota.sh ios-strings --publish` from a clone of `release/ios-1.1.10-strings`, only after that binary exists.
-Website (Terms, privacy, delete account, support) is live with the date October 8, 2026, matching `PHOTO_TERMS_EFFECTIVE_DATE` and the notice cutoff 2026-10-09T01:30:00Z.
-Vercel (2026-10-09): `RESEND_API_KEY` (Preview and Production, created 2026-05-13, the same day as the revoked key) was updated IN PLACE from `~/.config/checkoff/resend-vercel-key` (updatedAt changed; the variable is type sensitive, so its value cannot be read back) and the production deployment was redeployed from the current source (aliased to getcheckoff.com). `/api/resend-inbound` answers 400 "Invalid signature" to an unsigned POST (module loads, gate works); a real inbound email is the only end to end proof and will show as `last_used_at` on the key `checkoff-vercel-2026-10-09` in Resend. The earlier Vercel steps below are DONE; ignore them.
-Resend (2026-10-09): exposed key "Checkoff Prod" revoked; Supabase `RESEND_API_KEY` is now the sending-only key `checkoff-edge-functions-2026-10-09`; admin tool holds no Resend key. OPEN: the website's Vercel `RESEND_API_KEY` could not be inspected or replaced (Vercel CLI login invalid). Inbound email (webhook `email.received` to /api/resend-inbound) needs a key with receiving access, so Vercel needs the FULL ACCESS replacement already created at `~/.config/checkoff/resend-vercel-key` (name `checkoff-vercel-2026-10-09`). Steps for you:
-```bash
-cd /Users/jerrystuckart/Downloads/getcheckoff-site && npx vercel@latest login
-npx vercel@latest env rm RESEND_API_KEY production --yes
-npx vercel@latest env add RESEND_API_KEY production < ~/.config/checkoff/resend-vercel-key
-npx vercel@latest env ls production        # names only; confirm RESEND_API_KEY is present
-npx vercel@latest deploy --prod            # or push any commit to main, so the new value is picked up
-```
-(`env add` reads the value from stdin, so it never appears in history or process lists. Repeat for `preview` if you use previews.) Then tell Claude to verify without sending email.
+## 11. Build record and upload steps
+Build notes (2026-10-08 night): the first attempt failed before compiling because an automation shell has no ANDROID_HOME (it consumed versionCode 22; Play accepts gaps); the script now defaults ANDROID_HOME to ~/Library/Android/sdk. On failure EAS prints its whole job as a base64 blob that contains the upload keystore and passwords; the scripts now redact it from output and logs, and the two logs that contained it were scrubbed (the keystore is unchanged; no part of it beyond a short truncated prefix appeared in the session). If you run builds in your own terminal this does not apply, the same redaction protects your log file.
+Android (built 2026-10-08 night in `/Users/jerrystuckart/Downloads/checkoff-build/android`, clean clone of `release/android-1.1.10` @ `452c345`, `npm ci`, preflight passed: runtime 53ba13b5 in ANDROID_RECOVERY_RUNTIMES, 1,397 tests):
+- Artifact: `/Users/jerrystuckart/Downloads/checkoff-build/android/build-1791526016296.aab`; size 69,586,914 bytes; SHA-256 `da813487e41e5da8291a1c8472056fbb43f03b75fce3893b3b6c171687ab5401`; versionName 1.1.10; versionCode 23; embedded runtime asset `53ba13b59fec2f2667b5ce1f9568e19f8f5076b3`.
+- Sentry: VERIFIED in the build log: Sentry Source Map Upload Report for release com.getcheckoff.app@1.1.10+23, dist 23, bundle index.android.bundle with debug id 339400db-f961-4add-a55e-dd4cddbe45e2 (artifact bundle upload), no Sentry error lines. Optional eyeball check: Sentry > Settings > Projects > react-native-rp > Source Maps lists that debug id.
+- Upload (you): Play Console > CheckOff > Testing > Internal testing > Create new release > upload the AAB above > release name `1.1.10 (23)` > Save > Review > Start rollout; add testers. Promote the same artifact to closed testing / production later. Do not rebuild for documentation changes.
+iOS: no rebuild. Build 159 is the binary. If ever rebuilt: `cd /Users/jerrystuckart/Downloads/checkoff-build/ios-strings && git pull --ff-only && npm ci && scripts/ios-local-build.sh --require-runtime-match && scripts/ios-local-build.sh --build` (runtime must print d4a37d58…; do not edit `.gitignore`/`.easignore`).
+JavaScript updates: `OTA_MESSAGE="..." scripts/publish-ota.sh ios|ios-strings|android --publish` from a clean clone at the pushed tip with a real `node_modules`; publish to BOTH iOS runtimes.
 
 ## Uncertainty register (resolve, do not assume)
 U1 provider request-log retention (Supabase, hosting, Sentry); U2 database backup retention of deleted rows; U3 whether the 120 km window request counts as collected approximate location (declared conservatively);
