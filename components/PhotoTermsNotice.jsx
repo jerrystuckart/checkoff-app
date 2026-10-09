@@ -1,13 +1,13 @@
-// Compact photo terms card on Home for accounts created before the updated terms (lib/photoConsentVersion.js). "Read details" opens the full explanation
+// Compact photo terms card on PROFILE (below the main account controls, not on Home) for accounts created before the updated terms (lib/photoConsentVersion.js). "Read details" opens the full explanation
 // in a scrollable sheet. Dismissing or reading records nothing on the server and is never acceptance (lib/photoTermsNoticeState.js).
 import React, { useEffect, useReducer } from 'react'
 import { View, Text, TouchableOpacity, StyleSheet, Linking, Modal, ScrollView, Platform } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import AsyncStorage from '@react-native-async-storage/async-storage'
-import { PHOTO_TERMS_NOTICE, PHOTO_TERMS_NOTICE_CARD, TERMS_URL, SUPPORT_EMAIL } from '../../lib/photoConsentCopy'
-import { PHOTO_TERMS_EFFECTIVE_DATE } from '../../lib/photoConsentVersion'
-import { initialNoticeState, noticeReducer, loadNoticeClosed, saveNoticeClosed, shouldRenderNotice } from '../../lib/photoTermsNoticeState'
-import { useBadgeCelebrationHold } from '../../lib/badgeCelebrationStore'
+import { PHOTO_TERMS_NOTICE, PHOTO_TERMS_NOTICE_CARD, TERMS_URL, SUPPORT_EMAIL } from '../lib/photoConsentCopy'
+import { PHOTO_TERMS_EFFECTIVE_DATE } from '../lib/photoConsentVersion'
+import { initialNoticeState, noticeReducer, loadNoticeClosed, saveNoticeClosed, shouldRenderNotice } from '../lib/photoTermsNoticeState'
+import { useBadgeCelebrationHold } from '../lib/badgeCelebrationStore'
 
 export function formatEffectiveDate(iso = PHOTO_TERMS_EFFECTIVE_DATE) {
   const d = new Date(`${iso}T00:00:00Z`)
@@ -17,7 +17,7 @@ export function formatEffectiveDate(iso = PHOTO_TERMS_EFFECTIVE_DATE) {
 // Text in the card scales with the user's text size but is capped, and every row can wrap, so nothing clips at the largest sizes.
 const MAX_SCALE = 1.35
 
-export default function PhotoTermsNotice({ user, colors }) {
+export default function PhotoTermsNotice({ user, colors, style }) {
   const { CARD, TEXT, MUTED, BORDER, AMBER, BG } = colors
   const insets = useSafeAreaInsets()
   const [state, dispatch] = useReducer(noticeReducer, initialNoticeState)
@@ -39,7 +39,7 @@ export default function PhotoTermsNotice({ user, colors }) {
   const dismiss = () => { dispatch({ type: 'dismiss' }); saveNoticeClosed(AsyncStorage, userId) }
 
   return (
-    <View style={[styles.card, { backgroundColor: CARD, borderColor: BORDER }]}>
+    <View style={[styles.card, { backgroundColor: CARD, borderColor: BORDER }, style]}>
       <Text style={[styles.title, { color: TEXT }]} maxFontSizeMultiplier={MAX_SCALE}>{PHOTO_TERMS_NOTICE_CARD.title}</Text>
       <Text style={[styles.summary, { color: MUTED }]} maxFontSizeMultiplier={MAX_SCALE}>{PHOTO_TERMS_NOTICE_CARD.summary}</Text>
       <View style={styles.actions}>
