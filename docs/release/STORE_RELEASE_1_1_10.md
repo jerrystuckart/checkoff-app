@@ -214,10 +214,12 @@ Confirmed blockers before PRODUCTION on the named store:
 1. Play: Background Location declaration + video submitted and approved (declaration review also applies to closed testing). Data safety entered. App access credentials. Store listing text. [Google]
 2. Play: closed-testing gate if the account is a personal one created after 2023-11-13. [Google, verify in console]
 3. Both: enter the privacy/Data safety answers above; reviewer accounts exist and work. [Both]
-4. Security (found 2026-10-08, outside the store forms but should be fixed before launch publicity): several Edge Functions have NO caller authorization beyond the gateway JWT, and the gateway accepts the public anon key. By reading
-   their handlers: `send-partner-welcome` sends an email to any address supplied in the request; `send-monthly-recap`, `send-inactive-reengagement`, `send-never-checkedin` and `send-creator-list-live` have no auth check in the handler
-   (they would email users on an anonymous POST); `send-notifications`, `send-dormant-reminders` and `update-streak` need review. `send-partner-recap` was fixed today. Not exercised (sending would be abuse). Fix with the same
-   service-role or campaign-secret pattern and cron headers. Treat as a blocker for a public launch, not for store review.
+4. Security (found and mostly fixed 2026-10-08, outside the store forms): email, push and batch Edge Functions had no caller authorization beyond the gateway JWT, which the public anon key satisfies (`send-partner-welcome` emailed any address in the request).
+   DEPLOYED with a guard that accepts only the function service key or `x-campaign-secret` (`_shared/serverCaller.ts`): send-partner-welcome, send-creator-list-live, send-monthly-recap, send-inactive-reengagement, send-never-checkedin, send-notifications, send-partner-recap.
+   Verified live without sending: no header 401, anon key 403, wrong secret 403, correct secret passes the guard (400 validation on an empty body for welcome and creator-list-live). Not exercised: the stripe-webhook server-to-server path (it sends the same service key).
+   PREPARED, NOT DEPLOYED (cron-called, so migration `20261008g_cron_campaign_secret_headers.sql` must be applied FIRST, then deploy): send-partner-renewal, send-dormant-reminders, streak-reminder, process-notification-queue (runs every minute).
+   PREPARED, NOT DEPLOYED, needs a real user token test: update-streak now accepts only the signed-in user's own id (previously any caller could change any user's streak).
+   Operator tool: `checkoff_admin.html` (local) now sends `x-campaign-secret` from a new `CAMPAIGN_SECRET` constant, which you must fill in (backup `.bak-2026-10-08-auth` beside it). Its `ADMIN_SECRET` is a short guessable word; rotate it and the admin-* functions' secret.
 Not blockers but must be decided/known before submitting:
 5. Apple: run the revocation test (section 7) before saying CheckOff revokes Sign in with Apple tokens; Apple "should" revoke. [Apple, strongly recommended]
 6. Terms (last updated 2026-04-17) do not mention that submitted photos are retained anonymously after deletion or the cover-photo license; the policy and delete page do. Update Terms wording before or with the release (website only).
@@ -228,7 +230,7 @@ removing unused Android permissions, iOS string fix, Android disclosure wording 
 ## 10. Next actions in order
 1. Owner: run the phone checks for the badge celebration and Secret Reveal; tell Claude the outcome (they are JavaScript, shipped by OTA).
 2. Owner: second-Apple-ID revocation test (section 7). If it fails, keep "disconnect it yourself" wording and the Apple review note without the revocation sentence.
-3. Claude (when asked): fix caller authorization on the email/notification functions (blocker 4), then re-run the no-email rejection tests.
+3. Owner: apply migration 20261008g (cron headers); then Claude deploys the four cron-called functions and update-streak and re-runs the rejection tests (blocker 4).
 4. Owner: create the two reviewer accounts (section 8).
 5. Owner: record the Play video (4c) and the Apple screen recording; upload the Play video unlisted.
 6. Owner: Play Console: Data safety (4d), deletion URL (4e), Background Location declaration (4a/4b), content rating, App access, listing text; upload vc21 to closed testing (and start the 12-tester clock if required).
