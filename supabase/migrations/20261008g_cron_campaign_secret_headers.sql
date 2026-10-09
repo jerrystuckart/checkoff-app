@@ -1,10 +1,11 @@
--- Edge Function caller authorization (2026-10-08). The functions below now reject the public anon key and user JWTs and accept only the service key or the
--- x-campaign-secret header (supabase/functions/_shared/serverCaller.ts). These four scheduled jobs must therefore send x-campaign-secret, read from Vault at run
--- time (`campaign_admin_secret`, stored by scripts/store-campaign-secret.sh). The Authorization header carries the project's PUBLIC anon JWT only because the gateway
--- requires a valid JWT; the handlers do not accept it as authorization. Previously: process-notification-queue and streak-reminder sent the anon key,
--- send-dormant-reminders sent the vault `service_role_key` (an sb_ key the gateway does not accept as a JWT), send-partner-renewal sent a database setting that may be unset.
--- Changes ONLY the command of the four existing jobs (schedules and bodies unchanged). Aborts, changing nothing, if a job, its schedule or the vault secret is missing.
--- APPLY THIS BEFORE deploying the four functions (process-notification-queue runs every minute). Project: uggusbbswybyplypkbxz (apply with the linked project only).
+-- Edge Function caller authorization (2026-10-08). process-notification-queue and streak-reminder now reject the public anon key and user JWTs and accept only the
+-- service key or the x-campaign-secret header (supabase/functions/_shared/serverCaller.ts). The two scheduled jobs that call them must therefore send x-campaign-secret,
+-- read from Vault at run time (`campaign_admin_secret`, stored by scripts/store-campaign-secret.sh). Authorization keeps the project's PUBLIC anon JWT only because the
+-- gateway requires a valid JWT; the handlers do not accept it as authorization. The old handlers ignore the extra header, so this can be applied BEFORE the guards are deployed.
+-- Changes ONLY the command of these two existing jobs (schedules and bodies unchanged). Aborts, changing nothing, if a job, its schedule or the vault secret is missing.
+-- DELIBERATELY NOT TOUCHED: send-dormant-reminders (its job sends the vault sb_ key, which the gateway rejects with 401 "Invalid API key", so it has never reached the function;
+-- pointing it at the anon key would START daily push reminders to dormant users, a product decision) and partner-renewal-emails (send-partner-renewal is not deployed, 404).
+-- Project: uggusbbswybyplypkbxz (apply with the linked project only).
 do $$
 declare
   r record;
@@ -15,20 +16,16 @@ begin
     raise exception 'vault secret campaign_admin_secret is missing (run scripts/store-campaign-secret.sh): nothing changed';
   end if;
   for r in select * from (values
-    ('send-dormant-reminders', '0 16 * * *', 'send-dormant-reminders', $b${}$b$),
     ('process-notification-queue', '* * * * *', 'process-notification-queue', $b${}$b$),
-    ('streak-reminder-saturday', '0 18 * * 6', 'streak-reminder', $b${}$b$),
-    ('partner-renewal-emails', '0 9 * * *', 'send-partner-renewal', $b${"trigger":"cron"}$b$)
+    ('streak-reminder-saturday', '0 18 * * 6', 'streak-reminder', $b${}$b$)
   ) as t(jobname, sched, fn, body) loop
     select jobid, schedule into v_job, v_sched from cron.job where jobname = r.jobname;
     if v_job is null then raise exception 'cron job % does not exist: nothing changed', r.jobname; end if;
     if v_sched <> r.sched then raise exception 'job % has schedule %, expected %: nothing changed', r.jobname, v_sched, r.sched; end if;
   end loop;
   for r in select * from (values
-    ('send-dormant-reminders', '0 16 * * *', 'send-dormant-reminders', $b${}$b$),
     ('process-notification-queue', '* * * * *', 'process-notification-queue', $b${}$b$),
-    ('streak-reminder-saturday', '0 18 * * 6', 'streak-reminder', $b${}$b$),
-    ('partner-renewal-emails', '0 9 * * *', 'send-partner-renewal', $b${"trigger":"cron"}$b$)
+    ('streak-reminder-saturday', '0 18 * * 6', 'streak-reminder', $b${}$b$)
   ) as t(jobname, sched, fn, body) loop
     perform cron.alter_job(
       job_id  := (select jobid from cron.job where jobname = r.jobname),

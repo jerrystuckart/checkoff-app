@@ -1,0 +1,20 @@
+# Edge Function callers and credentials (2026-10-08)
+
+Guard: `supabase/functions/_shared/serverCaller.ts` (reuses `authorizeRequest`): accepts ONLY the function's own `SUPABASE_SERVICE_ROLE_KEY` as Bearer/apikey, or `CAMPAIGN_ADMIN_SECRET` in `x-campaign-secret` (at least 24 characters). The public anon key and user JWTs reach the handler through the gateway but are rejected (403; no header 401).
+Fact that shaped the design: the function's `SUPABASE_SERVICE_ROLE_KEY` value matches none of the four project API keys (digest check), so scheduled jobs and tools use the campaign secret, while server-to-server calls between functions use the env key, which the gateway accepts.
+
+| Function | Guard | Legitimate caller and credential | Verified |
+|---|---|---|---|
+| send-partner-welcome | service key or campaign secret | stripe-webhook (Bearer = its own SUPABASE_SERVICE_ROLE_KEY); admin tool (x-campaign-secret from browser localStorage) | Stripe credential replayed by a temporary probe function: 400 validation (passed gateway and guard, nothing sent); anon 403 |
+| send-creator-list-live | same | stripe-webhook (same) | same probe |
+| send-monthly-recap, send-inactive-reengagement, send-never-checkedin | same | operator only (no cron, no code caller) via x-campaign-secret | rejection only (an authorized empty-body call would email everyone) |
+| send-notifications | same | no caller found (no cron, trigger, webhook or code) | rejection only |
+| process-notification-queue | same | cron job, every minute, anon JWT for the gateway plus x-campaign-secret from Vault | scheduler changed first (old handler ignored the header), guard deployed, next run returned 200 |
+| streak-reminder | same | cron job `streak-reminder-saturday` (Saturday 18:00 UTC), same headers | rejection verified; first guarded run is the next Saturday: check `net._http_response` for 200 within 6 hours |
+| send-dormant-reminders | same | cron job `send-dormant-reminders` sends the vault `service_role_key` (an sb_ key), which the gateway rejects with 401 ("Invalid API key"), so it has never reached the function. Left as is | rejection verified; job NOT changed (activating it starts daily pushes) |
+| send-partner-renewal | guarded in source, NOT deployed | cron `partner-renewal-emails` and the admin tool's renewal buttons call a function that does not exist in production (404) | not deployed on purpose |
+| send-partner-recap | same | cron (anon JWT + campaign secret), applied earlier | zero-UUID partner: 404 after authorization |
+| update-streak | signed-in user's own id, or server caller | the app, with the user's session token | disposable accounts: own 200, other user 403, anon 401, none 401 |
+Admin tool (`checkoff_admin.html`, private, outside the repo) reads `checkoff_admin_secret` and `checkoff_campaign_secret` from browser localStorage (values in `~/.config/checkoff/admin-secret` and `campaign-admin-secret`, mode 600). Set them once in the browser console; the file holds no secret literal for these two.
+`ADMIN_SECRET` (admin-partner-link, admin-creator-link, send-confirmation-request-link, which is deployed but not in this repo) was rotated; it is distinct from CAMPAIGN_ADMIN_SECRET. Those handlers compare with `!==`, not a constant-time compare (low risk).
+Queue behavior: the live queue processor handles check_in, leaderboard_nudge, dare and list_invite only. Badge, weekly_summary, admin_broadcast and candidate_visit_high_confidence rows are marked "Unknown notification type" (or "No push tokens"), so badge pushes were never delivered by it. The repository copy additionally contains a candidate_visit_high_confidence handler that was NEVER deployed; the production deployment of process-notification-queue is the previously DEPLOYED code plus the guard (the repository copy has the guard too, but also that undeployed handler), so no new notification type was enabled. Do NOT deploy the repository copy of process-notification-queue without a decision to start those pushes. send-notifications (which handles badge) has no caller; nothing is pending (0 unprocessed rows), so no backlog exists to flush.

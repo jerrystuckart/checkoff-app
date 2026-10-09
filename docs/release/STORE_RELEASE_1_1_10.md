@@ -214,12 +214,14 @@ Confirmed blockers before PRODUCTION on the named store:
 1. Play: Background Location declaration + video submitted and approved (declaration review also applies to closed testing). Data safety entered. App access credentials. Store listing text. [Google]
 2. Play: closed-testing gate if the account is a personal one created after 2023-11-13. [Google, verify in console]
 3. Both: enter the privacy/Data safety answers above; reviewer accounts exist and work. [Both]
-4. Security (found and mostly fixed 2026-10-08, outside the store forms): email, push and batch Edge Functions had no caller authorization beyond the gateway JWT, which the public anon key satisfies (`send-partner-welcome` emailed any address in the request).
-   DEPLOYED with a guard that accepts only the function service key or `x-campaign-secret` (`_shared/serverCaller.ts`): send-partner-welcome, send-creator-list-live, send-monthly-recap, send-inactive-reengagement, send-never-checkedin, send-notifications, send-partner-recap.
-   Verified live without sending: no header 401, anon key 403, wrong secret 403, correct secret passes the guard (400 validation on an empty body for welcome and creator-list-live). Not exercised: the stripe-webhook server-to-server path (it sends the same service key).
-   PREPARED, NOT DEPLOYED (cron-called, so migration `20261008g_cron_campaign_secret_headers.sql` must be applied FIRST, then deploy): send-partner-renewal, send-dormant-reminders, streak-reminder, process-notification-queue (runs every minute).
-   PREPARED, NOT DEPLOYED, needs a real user token test: update-streak now accepts only the signed-in user's own id (previously any caller could change any user's streak).
-   Operator tool: `checkoff_admin.html` (local) now sends `x-campaign-secret` from a new `CAMPAIGN_SECRET` constant, which you must fill in (backup `.bak-2026-10-08-auth` beside it). Its `ADMIN_SECRET` is a short guessable word; rotate it and the admin-* functions' secret.
+4. Security (found 2026-10-08, FIXED and rolled out the same night; outside the store forms): email, push and batch Edge Functions had no caller authorization beyond the gateway JWT, which the public anon key satisfies.
+   All of these now accept only the function service key or `x-campaign-secret` (`_shared/serverCaller.ts`): send-partner-welcome, send-creator-list-live, send-monthly-recap, send-inactive-reengagement, send-never-checkedin,
+   send-notifications, send-partner-recap, process-notification-queue, streak-reminder, send-dormant-reminders. `update-streak` accepts only the signed-in user's own id (verified with two disposable accounts: own 200, other user 403, anon 401, no header 401; both accounts deleted).
+   Rejection verified live for every function (none 401, anon 403, wrong secret 403). Authorized paths verified without sending: Stripe's credential (the function's own service key) reaches send-partner-welcome and send-creator-list-live (400 validation, via a temporary probe function, deleted);
+   the per-minute queue job and the scheduler header change (migration 20261008g applied) kept returning 200. Caller audit: `EDGE_FUNCTION_CALLERS.md`.
+   NOT deployed on purpose: send-partner-renewal (not deployed in production at all; its daily cron job and the admin tool's renewal buttons 404; deploying it would start daily renewal emails and Stripe checkout creation, a product decision).
+   NOT changed on purpose: the send-dormant-reminders cron job still sends an sb_ key the gateway rejects (401), so it has never run; fixing the header would START daily dormant-user pushes (decision for the owner).
+   The ADMIN_SECRET guessable value was rotated (Supabase secret and the three functions that read it; the private admin tool now reads both secrets from browser localStorage instead of the file).
 Not blockers but must be decided/known before submitting:
 5. Apple: run the revocation test (section 7) before saying CheckOff revokes Sign in with Apple tokens; Apple "should" revoke. [Apple, strongly recommended]
 6. Terms (last updated 2026-04-17) do not mention that submitted photos are retained anonymously after deletion or the cover-photo license; the policy and delete page do. Update Terms wording before or with the release (website only).
@@ -230,7 +232,7 @@ removing unused Android permissions, iOS string fix, Android disclosure wording 
 ## 10. Next actions in order
 1. Owner: run the phone checks for the badge celebration and Secret Reveal; tell Claude the outcome (they are JavaScript, shipped by OTA).
 2. Owner: second-Apple-ID revocation test (section 7). If it fails, keep "disconnect it yourself" wording and the Apple review note without the revocation sentence.
-3. Owner: apply migration 20261008g (cron headers); then Claude deploys the four cron-called functions and update-streak and re-runs the rejection tests (blocker 4).
+3. DONE 2026-10-08: caller authorization rollout (blocker 4). Owner decisions left: dormant reminders cron, renewal emails function.
 4. Owner: create the two reviewer accounts (section 8).
 5. Owner: record the Play video (4c) and the Apple screen recording; upload the Play video unlisted.
 6. Owner: Play Console: Data safety (4d), deletion URL (4e), Background Location declaration (4a/4b), content rating, App access, listing text; upload vc21 to closed testing (and start the 12-tester clock if required).
