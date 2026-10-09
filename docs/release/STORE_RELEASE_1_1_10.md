@@ -240,20 +240,46 @@ removing unused Android permissions, iOS string fix, Android disclosure wording 
 6. Owner: Play Console (4a to 4f): upload vc21 to closed testing; start the 12 tester clock if required.
 7. After approvals: monitor `account_deletion_requests` and the recovery kill switch; decide dormant reminders and renewal emails separately.
 
-## 11. Build commands (not run; you run them)
-iOS corrected binary (runtime d4a37d58…). Uses your usual local build and Sentry process: `scripts/ios-local-build.sh --build` runs `eas build --platform ios --profile production --local` with Sentry source map upload, reading the token from env, Keychain item `checkoff-sentry-auth-token` or `~/.config/checkoff/sentry-auth-token` (mode 600; the token check now accepts the CI scoped token).
+## 11. Build commands (not run; you run them). Every command names its directory.
+Both builds use clean standalone clones under `/Users/jerrystuckart/Downloads/checkoff-build/` (a clone has no worktree or branch-name surprises), keep version 1.1.10, and take their build number / versionCode from the existing EAS remote counter (`autoIncrement` + `appVersionSource: remote`), so you do not edit any number.
+Published JavaScript at the time of writing (embed it by building from these tips): iOS strings branch = canonical `fb79c08` + the strings change (merge `509841a`); Android line `0cdbb02`. If either branch moved, the preflight prints the tip it is building.
+
+iOS (corrected strings, runtime d4a37d580c7ee48833857ee7c12fb4af24169068). Usual local build with Sentry source map upload (token from env, Keychain `checkoff-sentry-auth-token` or `~/.config/checkoff/sentry-auth-token`, mode 600):
 ```bash
-cd /Users/jerrystuckart/Downloads/checkoff && git fetch origin
-git worktree add ../checkoff-ios-strings origin/release/ios-1.1.10-strings && cd ../checkoff-ios-strings
-git merge origin/production/1.1.10-canonical            # only if canonical moved since 3da4434; keeps the current JavaScript embedded; resolve nothing in app.json
-cp -c -R /path/to/a/real/node_modules ./node_modules     # or: npm ci   (a symlinked node_modules gives a wrong runtime)
-scripts/ios-local-build.sh --require-runtime-match       # preflight only; must print runtime d4a37d580c7ee48833857ee7c12fb4af24169068 and pass the tests
-scripts/ios-local-build.sh --build                       # build + Sentry upload; use --no-sentry only if you accept an unsymbolicated embedded bundle
-eas submit --platform ios --profile production --path ./build-*.ipa   # local builds are not on EAS: submit the .ipa the build wrote (or upload it with Transporter)
+mkdir -p /Users/jerrystuckart/Downloads/checkoff-build && cd /Users/jerrystuckart/Downloads/checkoff-build
+git clone --branch release/ios-1.1.10-strings https://github.com/jerrystuckart/checkoff-app.git ios-strings
+cd /Users/jerrystuckart/Downloads/checkoff-build/ios-strings
+git log --oneline -1                                       # note the tip you are building
+npm ci                                                      # a real node_modules is required; never symlink it
+scripts/ios-local-build.sh --require-runtime-match          # preflight only: must print runtime d4a37d580c7ee48833857ee7c12fb4af24169068, run the tests, validate the Sentry token
+scripts/ios-local-build.sh --build                          # eas build --platform ios --profile production --local, Sentry upload ON (add --no-sentry only if you accept an unsymbolicated embedded bundle)
+eas submit --platform ios --profile production --path /Users/jerrystuckart/Downloads/checkoff-build/ios-strings/build-*.ipa   # or upload the .ipa with Transporter
 ```
-Afterwards record the build commit as the anchor for OTAs to the new runtime and confirm TestFlight shows a build number above 157 (EAS remote versioning auto increments).
-Android: NO new binary. The submittable artifact is the existing versionCode 21 AAB (runtime 53ba13b5…, ANDROID_RECOVERY_RUNTIMES unchanged). If you ever rebuild it, use your usual `SENTRY_DISABLE_AUTO_UPLOAD=true eas build --platform android --profile production --local` from a clean checkout of `release/android-1.1.10` and confirm the runtime is 53ba13b5… first (`scripts/android-build-preflight.sh`).
-JavaScript updates (after wording approval): `scripts/publish-ota.sh android --publish` from release/android-1.1.10; `scripts/publish-ota.sh ios --publish` from production/1.1.10-canonical (runtime 86ac0036…); later the same from the strings branch once its profile exists.
+Check afterwards: TestFlight shows 1.1.10 with a build number above 157.
+Android (fresh AAB, same native config; runtime must stay 53ba13b59fec2f2667b5ce1f9568e19f8f5076b3, so ANDROID_RECOVERY_RUNTIMES needs no change). Your usual command is `SENTRY_DISABLE_AUTO_UPLOAD=true eas build --platform android --profile production --local`; the preflight wraps it:
+```bash
+cd /Users/jerrystuckart/Downloads/checkoff-build
+git clone --branch release/android-1.1.10 https://github.com/jerrystuckart/checkoff-app.git android
+cd /Users/jerrystuckart/Downloads/checkoff-build/android
+git log --oneline -1
+npm ci
+scripts/android-build-preflight.sh                          # checks only: branch, clean tree, real node_modules, runtime 53ba13b5 in ANDROID_RECOVERY_RUNTIMES, tests
+scripts/android-build-preflight.sh --build                  # = SENTRY_DISABLE_AUTO_UPLOAD=true eas build --platform android --profile production --local
+```
+Then upload the AAB (named build-*.aab in that directory) to Play internal testing and promote it. If you want source maps for the embedded bundle too, run `eas build --platform android --profile production --local` without `SENTRY_DISABLE_AUTO_UPLOAD` after `export SENTRY_AUTH_TOKEN=$(cat ~/.config/checkoff/sentry-auth-token)` in the same shell.
+Do not edit `.gitignore`, `.easignore` or any native input in these clones: `.gitignore` is part of the runtime fingerprint (a two line edit changed both runtimes on 2026-10-09 and was reverted).
+
+OTA status (2026-10-08, Phoenix): consent update published to production with verified Sentry source maps: iOS runtime 86ac0036, group ef39798a-6a6f-4a2e-a986-190f2b8e5fcf (update 01a11e4e-e535-765a-9147-633ef9bfcf9d, source fb79c08); Android runtime 53ba13b5, group 2ea9cff9-a1e5-4aac-be55-e8a3f3bdfeb3 (update 01a11e50-8c68-7223-af41-f5b92005ea7b, source 0cdbb02). OTAs to the strings runtime d4a37d58 use `scripts/publish-ota.sh ios-strings --publish` from a clone of `release/ios-1.1.10-strings`, only after that binary exists.
+Website (Terms, privacy, delete account, support) is live with the date October 8, 2026, matching `PHOTO_TERMS_EFFECTIVE_DATE` and the notice cutoff 2026-10-09T01:30:00Z.
+Resend (2026-10-09): exposed key "Checkoff Prod" revoked; Supabase `RESEND_API_KEY` is now the sending-only key `checkoff-edge-functions-2026-10-09`; admin tool holds no Resend key. OPEN: the website's Vercel `RESEND_API_KEY` could not be inspected or replaced (Vercel CLI login invalid). Inbound email (webhook `email.received` to /api/resend-inbound) needs a key with receiving access, so Vercel needs the FULL ACCESS replacement already created at `~/.config/checkoff/resend-vercel-key` (name `checkoff-vercel-2026-10-09`). Steps for you:
+```bash
+cd /Users/jerrystuckart/Downloads/getcheckoff-site && npx vercel@latest login
+npx vercel@latest env rm RESEND_API_KEY production --yes
+npx vercel@latest env add RESEND_API_KEY production < ~/.config/checkoff/resend-vercel-key
+npx vercel@latest env ls production        # names only; confirm RESEND_API_KEY is present
+npx vercel@latest deploy --prod            # or push any commit to main, so the new value is picked up
+```
+(`env add` reads the value from stdin, so it never appears in history or process lists. Repeat for `preview` if you use previews.) Then tell Claude to verify without sending email.
 
 ## Uncertainty register (resolve, do not assume)
 U1 provider request-log retention (Supabase, hosting, Sentry); U2 database backup retention of deleted rows; U3 whether the 120 km window request counts as collected approximate location (declared conservatively);
