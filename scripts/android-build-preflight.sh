@@ -67,8 +67,14 @@ PY
   rm -f "$RAW"
 }
 trap finish_log EXIT
-script -q "$RAW" npx eas-cli build --platform android --profile production --local
-RC=$?
+if [ -t 0 ] && [ -t 1 ]; then
+  script -q "$RAW" npx eas-cli build --platform android --profile production --local
+  RC=$?
+else
+  # No terminal (CI, an automation session, output piped): a pty is impossible, so EAS runs non interactively (it fails fast instead of prompting) and its output is teed.
+  npx eas-cli build --platform android --profile production --local --non-interactive 2>&1 | tee "$RAW"
+  RC=${PIPESTATUS[0]}
+fi
 finish_log; trap - EXIT
 echo "build exit code: $RC (log: $LOG)"
 [ "$RC" = 0 ] || exit "$RC"
