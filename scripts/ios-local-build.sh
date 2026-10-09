@@ -83,4 +83,12 @@ eas build --platform ios --profile production --local 2>&1 | awk -v logf="$LOG" 
     print line; print line >> logf; fflush(); fflush(logf) }'
 RC=${PIPESTATUS[0]}
 echo "build exit code: $RC (log: $LOG)"
-exit "$RC"
+[ "$RC" = 0 ] || exit "$RC"
+if [ "$NO_SENTRY" = 1 ]; then echo "Sentry: upload was disabled; nothing to verify."; exit 0; fi
+# The build log is the evidence available here: the upload step must have reported success and no Sentry error line may appear.
+if grep -Eiq "Source Map Upload Report|Uploaded [0-9]+ (file|source|bundle|artifact)|sourcemaps upload|source map.*upload(ed)?|Successfully uploaded" "$LOG" && ! grep -Eiq "sentry.*(error:|failed to upload|authentication failed|401|403)" "$LOG"; then
+  echo "Sentry: upload report found in the build log and no Sentry error lines: source maps for the embedded bundle were uploaded."
+else
+  echo "Sentry: NOT VERIFIED. No upload report (or a Sentry error) in $LOG. Check: grep -i sentry \"$LOG\" | tail -30" >&2
+  exit 4
+fi
