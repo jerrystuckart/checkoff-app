@@ -34,7 +34,7 @@ import { deriveHomeMetroContext, reconcileHomeMetroState, resolveMetroChoice, no
 import { mapRailItem } from '../lib/mapRailItem'
 import { attachActiveCoverImages, attachDisplayEligibleImagePools } from '../lib/coverCandidates'
 import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
-import HomeVisitRecoveryEntry from '../components/home/HomeVisitRecoveryEntry'
+import VisitRecoveryHeaderIcon from '../components/home/VisitRecoveryHeaderIcon'
 import { deriveHomeHeroLayout } from '../lib/homeHeroLayout'
 import { selectNearYouCompactRows } from '../lib/nearYouCompact'
 import { selectHomeNearbyCandidates } from '../lib/homeNearYou'
@@ -43,6 +43,10 @@ import CompactHomeHeader from '../components/home/CompactHomeHeader'
 import DestinationHero from '../components/home/DestinationHero'
 import CityPickerModal from '../components/home/CityPickerModal'
 import NearYouCompact from '../components/home/NearYouCompact'
+import HubLinkPill from '../components/home/HubLinkPill'
+import HubChooserModal from '../components/home/HubChooserModal'
+import { useDiscoveryHubs } from '../lib/useDiscoveryHubs'
+import { HUB_LINK_KIND } from '../lib/homeHubLinks'
 import WhatsTheThingHero from '../components/home/WhatsTheThingHero'
 import WhatsGoodDiscovery from '../components/home/WhatsGoodDiscovery'
 import CheckInMemoryModal from '../components/CheckInMemoryModal'
@@ -130,6 +134,7 @@ export default function HomeScreen({ navigation }) {
 
   const [metros, setMetros] = useState([])
   const [metroPickerVisible, setMetroPickerVisible] = useState(false)
+  const [hubChooserVisible, setHubChooserVisible] = useState(false)
   const [selectedMetro, setSelectedMetro] = useState(null)
   // Why selectedMetro is selected: 'link' | 'manual' | 'nearest' | 'physical' (lib/homeMetroContext.js).
   const [selectedProvenance, setSelectedProvenanceState] = useState(null)
@@ -959,6 +964,19 @@ async function loadNearbyRail(userId) {
     () => deriveHomeMetroContext({ selectedMetro, physicalMetro, hasLiveLocation: Boolean(userLocation), provenance: selectedProvenance }),
     [selectedMetro, physicalMetro, userLocation, selectedProvenance]
   )
+  // Destination hubs explicitly connected to the SELECTED metro (never the phone's location) and published for discovery.
+  // Browsing a hub opens its existing Hub screen directly; the arrival zone is not involved and checkoffs keep their own
+  // location rules inside the hub.
+  const hubLink = useDiscoveryHubs(selectedMetro?.id ?? null)
+  function openHubFromHome(hub) {
+    setHubChooserVisible(false)
+    navigation.navigate('Hub', { destinationId: hub.id })
+  }
+  function onHubLinkPress() {
+    if (hubLink.kind === HUB_LINK_KIND.SINGLE) openHubFromHome(hubLink.hubs[0])
+    else if (hubLink.kind === HUB_LINK_KIND.MULTI) setHubChooserVisible(true)
+  }
+
   const whatsGood = useWhatsGood({
     userId: user?.id ?? null,
     rawNearbyItems,
@@ -1512,11 +1530,8 @@ async function loadNearbyRail(userId) {
               onProfilePress={() => navigation.navigate('ProfileTab')}
               showProfileStatus={Boolean(user)}
               metroBadge={homeMetroContext.badge}
+              recoverySlot={user ? <VisitRecoveryHeaderIcon userId={user.id} navigation={navigation} colors={colors} /> : null}
             />
-
-            {Boolean(user) && (
-              <HomeVisitRecoveryEntry userId={user.id} navigation={navigation} colors={colors} />
-            )}
 
             {heroLayout.primaryHero === 'destination' && (
               <DestinationHero
@@ -1545,7 +1560,16 @@ async function loadNearbyRail(userId) {
                 onSeeAllPress={() => navigation.navigate('NearbyTab')}
                 memoryItemIds={homeMemoryItemIds}
                 onViewMemory={openHomeCheckInMemory}
+                hubLink={hubLink.kind === HUB_LINK_KIND.NONE ? null : hubLink}
+                onHubLinkPress={onHubLinkPress}
               />
+            )}
+
+            {/* No Near You items to head (e.g. browsing a metro far from the phone): the link still stands alone, in the same place. */}
+            {heroLayout.showNearYouCompact && nearYouCompactItems.length === 0 && hubLink.kind !== HUB_LINK_KIND.NONE && (
+              <View style={styles.hubLinkAlone}>
+                <HubLinkPill hubLink={hubLink} onPress={onHubLinkPress} colors={colors} />
+              </View>
             )}
 
             <WhatsGoodDiscovery
@@ -2013,6 +2037,14 @@ async function loadNearbyRail(userId) {
         onClose={() => setMetroPickerVisible(false)}
       />
 
+      <HubChooserModal
+        visible={hubChooserVisible}
+        hubs={hubLink.hubs}
+        colors={colors}
+        onSelect={openHubFromHome}
+        onClose={() => setHubChooserVisible(false)}
+      />
+
       <CheckInMemoryModal
         visible={homeMemoryModalVisible}
         onClose={() => setHomeMemoryModalVisible(false)}
@@ -2288,6 +2320,7 @@ function createStyles({ BG, CARD, TEXT, MUTED, LABEL, BORDER, SOFT, SOFT_2, AMBE
     color: '#A16A00',
   },
 
+  hubLinkAlone: { marginTop: 18, paddingHorizontal: 16, flexDirection: 'row' },
   sectionHeaderBlock: {
     marginBottom: 10,
   },
