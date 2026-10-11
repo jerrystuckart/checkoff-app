@@ -3,10 +3,11 @@ import assert from 'node:assert/strict'
 import { applyOutcome, recordTick, classifyError, alertText, ALERT_THRESHOLD, type HealthState, type HealthStore, type HealthChannel, type ChannelState } from './monitorHealth'
 
 class MemHealth implements HealthStore {
+  saves = 0
   state: HealthState = { channels: {} }
   alerts: Array<{ id: string; channel: HealthChannel; text: string; open: boolean }> = []
   async load() { return JSON.parse(JSON.stringify(this.state)) as HealthState }
-  async save(s: HealthState) { this.state = JSON.parse(JSON.stringify(s)) }
+  async save(s: HealthState) { this.saves++; this.state = JSON.parse(JSON.stringify(s)) }
   async openAlert(channel: HealthChannel, c: ChannelState) {
     const id = `alert${this.alerts.length + 1}`
     this.alerts.push({ id, channel, text: alertText(channel, c).jerryRequest, open: true })
@@ -71,4 +72,12 @@ test('transient single failures do not alert', async () => {
   await recordTick(store, { pollError: null, bizdevErrors: [] }, t(3))
   await recordTick(store, { pollError: 'timeout', bizdevErrors: [] }, t(4))
   assert.equal(store.alerts.length, 0)
+})
+
+test('a healthy steady state writes nothing (no row rewrite every 15 minutes)', async () => {
+  const store = new MemHealth()
+  await recordTick(store, { pollError: null, bizdevErrors: [] }, t(1))
+  const afterFirst = store.saves
+  for (let i = 2; i <= 6; i++) await recordTick(store, { pollError: null, bizdevErrors: [] }, t(i))
+  assert.equal(store.saves, afterFirst, 'no further writes while nothing changes')
 })

@@ -1,0 +1,3 @@
+business_name,contact_email,item_id,contact_name,metro,website,source_url,confidence,excluded_reason
+Canary A,jerrystuckart@hotmail.com,44addd27-d0c5-44c6-8ecd-17201cd4d483,Jerry,Green Bay Metro,,,HIGH,
+Canary B,jerrystuckart+canaryb@gmail.com,eeff9a2f-331d-4542-be3f-b69e47c10e85,Jerry,Green Bay Metro,,,HIGH,

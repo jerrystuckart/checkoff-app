@@ -41,7 +41,7 @@ export function applyOutcome(state: HealthState, channel: HealthChannel, ok: boo
   const next: ChannelState = { ...prev }
   let action: HealthAction = 'NONE'
   if (ok) {
-    next.lastOkAt = now.toISOString()
+    if (prev.consecutive > 0 || !prev.lastOkAt) next.lastOkAt = now.toISOString() // stamp on transitions only, so a healthy steady state changes nothing
     if (prev.alertTaskId) action = 'RESOLVE_ALERT'
     next.consecutive = 0
     delete next.since
@@ -84,6 +84,7 @@ export interface TickOutcome {
 /** Returns human-readable actions taken (for the monitor log). */
 export async function recordTick(store: HealthStore, outcome: TickOutcome, now: Date = new Date()): Promise<string[]> {
   let state = await store.load()
+  const before = JSON.stringify(state)
   const actions: string[] = []
   const authFailing = outcome.pollError ? classifyError(outcome.pollError) === 'gmail_auth' : false
   const sendErrors = outcome.bizdevErrors.filter((e) => /(send failed|PAUSED|sender-configuration|template failed)/i.test(e))
@@ -108,7 +109,8 @@ export async function recordTick(store: HealthStore, outcome: TickOutcome, now: 
       actions.push(`resolved health alert for ${channel}`)
     }
   }
-  await store.save(state)
+  // Healthy steady state changes nothing: avoid rewriting the counter row every poll.
+  if (JSON.stringify(state) !== before) await store.save(state)
   return actions
 }
 

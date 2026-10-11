@@ -694,7 +694,8 @@ async function processSequence(deps: BizDevDeps, ctx: TickCtx, def: BizDevSequen
     const next = nextScheduledAt(def, state)
     if (next) {
       const isLast = state.stepsSent.length >= def.maxOutbound
-      await store.setPlan(view.taskId, { nextCheckAt: next, nextAction: isLast ? `Final email sent; close the opportunity on ${next.toISOString().slice(0, 10)} if no response. No further emails.` : `Follow-Up ${state.stepsSent.length} sent; next email due ${next.toISOString().slice(0, 10)} if no response.` })
+      const followUpsSent = state.stepsSent.filter((s) => s.kind === 'FOLLOW_UP').length // step 1 is the initial email, not a follow-up
+      await store.setPlan(view.taskId, { nextCheckAt: next, nextAction: isLast ? `Final email sent; close the opportunity on ${next.toISOString().slice(0, 10)} if no response. No further emails.` : `Follow-Up ${followUpsSent} sent; next email due ${next.toISOString().slice(0, 10)} if no response.` })
     }
     out.actions.push(`${def.key}: sent step ${step} (message ${messageId})`)
   } catch (err) {

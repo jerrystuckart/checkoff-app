@@ -93,6 +93,14 @@ test('scheduling: nothing before due, exactly one follow-up when due, no duplica
   assert.equal(s.state.stepsSent.length, 2)
 })
 
+test('task text after Follow-Up 1 says "Follow-Up 1" (step 1 is the initial email, not a follow-up)', async () => {
+  const g = new FakeGmail(), s = new MemStore()
+  await run(g, s, '2026-10-16T19:00:00Z')
+  assert.match(s.plan!.nextAction, /^Follow-Up 1 sent; next email due 2026-10-27/)
+  await run(g, s, '2026-10-27T19:00:00Z')
+  assert.match(s.plan!.nextAction, /^Final email sent; close the opportunity on 2026-11-05/)
+})
+
 test('full sequence: 3 emails max, then close with NO fourth email', async () => {
   const g = new FakeGmail(), s = new MemStore()
   await run(g, s, '2026-10-16T19:00:00Z')
