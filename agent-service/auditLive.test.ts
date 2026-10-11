@@ -209,7 +209,11 @@ test('live acceptance: Desiree Gerth is a verified contact scoped to Willcox onl
 // reconciled — updating the expected count to match, not weakening the
 // no-manufactured-contact check: Rim Country must still have none.
 test('live acceptance: exactly the five real, verified contacts exist — none manufactured for Rim Country', { skip }, async () => {
-  const totalContacts = await query<{ count: string }>(`SELECT count(*)::text FROM agent.contacts`)
+  // 2026-10-11: business-development (bizdev_outreach) and recovered-reply contacts are not destination contacts;
+  // they are excluded by source so this check keeps its original meaning (the five destination contacts, none for Rim Country).
+  const totalContacts = await query<{ count: string }>(
+    `SELECT count(*)::text FROM agent.contacts WHERE coalesce(source,'') NOT IN ('gmail_reply_recovery_2026-10-11', 'LNP newsletter 2026-10-11')`
+  )
   assert.equal(totalContacts[0]?.count, '5')
 
   const rimCountryContacts = await query<{ count: string }>(
