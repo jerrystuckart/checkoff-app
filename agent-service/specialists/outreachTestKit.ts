@@ -31,7 +31,9 @@ export class FakeGmail implements GmailAdapter {
   fullCalls = 0
   private msgs = new Map<string, Stored>()
   private seq = 0
-  private sentLog: Array<{ id: string; threadId: string; to: string }> = []
+  /** Simulated wall clock for message Date headers (tests set it to the tick time). */
+  clock: Date = new Date()
+  private sentLog: Array<{ id: string; threadId: string; to: string; at: string }> = []
 
   isConfigured() { return this.configured }
   async listSendAsIdentities(): Promise<GmailSendAsIdentity[]> {
@@ -46,18 +48,25 @@ export class FakeGmail implements GmailAdapter {
     this.sends.push(input)
     const id = `sent${++this.seq}`
     const threadId = input.threadId ?? `T-${id}`
-    this.sentLog.push({ id, threadId, to: input.to })
-    this.msgs.set(id, { labels: new Set(['SENT']), full: { id, threadId, from: input.from, to: [input.to], cc: [], replyTo: null, subject: input.subject, bodyText: input.bodyText, receivedAt: new Date().toISOString(), messageIdHeader: `<hdr-${id}@mail>` } })
+    this.sentLog.push({ id, threadId, to: input.to, at: this.clock.toISOString() })
+    this.msgs.set(id, { labels: new Set(['SENT']), full: { id, threadId, from: input.from, to: [input.to], cc: [], replyTo: null, subject: input.subject, bodyText: input.bodyText, receivedAt: this.clock.toISOString(), messageIdHeader: `<hdr-${id}@mail>` } })
     return { messageId: id, threadId }
   }
 
   /** A sent message the engine does NOT know about (simulates an uncertain send that actually went out). */
-  addGhostSent(to: string, subject: string): { id: string; threadId: string } {
+  addGhostSent(to: string, subject: string, at: Date = this.clock): { id: string; threadId: string } {
     const id = `ghost${++this.seq}`
     const threadId = `T-${id}`
-    this.sentLog.push({ id, threadId, to })
-    this.msgs.set(id, { labels: new Set(['SENT']), full: { id, threadId, from: 'jerry@getcheckoff.com', to: [to], cc: [], replyTo: null, subject, bodyText: '', receivedAt: new Date().toISOString(), messageIdHeader: `<hdr-${id}@mail>` } })
+    this.sentLog.push({ id, threadId, to, at: at.toISOString() })
+    this.msgs.set(id, { labels: new Set(['SENT']), full: { id, threadId, from: 'jerry@getcheckoff.com', to: [to], cc: [], replyTo: null, subject, bodyText: '', receivedAt: at.toISOString(), messageIdHeader: `<hdr-${id}@mail>` } })
     return { id, threadId }
+  }
+
+  /** Gmail's duplicate: a message delivered back to the account itself also gets the SENT label (different id, same subject, seconds apart). */
+  addSelfDeliveredCopy(to: string): void {
+    const original = [...this.sentLog].reverse().find((s) => s.to === to)!
+    const subject = this.msgs.get(original.id)!.full.subject
+    this.addGhostSent(to, subject, new Date(Date.parse(original.at) + 2000))
   }
 
   /** An inbound reply. `viaRelay` mimics the Resend forwarder (From=forwarder, Reply-To=the real sender). */
@@ -94,9 +103,10 @@ export class FakeGmail implements GmailAdapter {
 
   async searchMessages(q: string): Promise<GmailMessageSummary[]> {
     this.searchCalls.push(q)
-    const m = q.match(/^in:sent to:(\S+)/)
+    const m = q.match(/^in:sent to:(\S+)(?: after:(\d{4})\/(\d{2})\/(\d{2}))?/)
     if (m) {
-      return this.sentLog.filter((s) => s.to === m[1]).map((s) => {
+      const afterMs = m[2] ? Date.UTC(Number(m[2]), Number(m[3]) - 1, Number(m[4])) : -Infinity
+      return this.sentLog.filter((s) => s.to === m[1] && Date.parse(s.at) >= afterMs).map((s) => {
         const f = this.msgs.get(s.id)!.full
         return { id: s.id, threadId: s.threadId, from: f.from, to: f.to, subject: f.subject, snippet: '', receivedAt: f.receivedAt, replyTo: null }
       })

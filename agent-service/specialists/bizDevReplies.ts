@@ -62,6 +62,21 @@ export function classifyBounce(bodyText: string): 'SENDER_CONFIG' | 'RECIPIENT' 
   return 'RECIPIENT'
 }
 
+/**
+ * Is this Gmail "sent" message one of OUR sends (or Gmail's duplicate of one)? Matched by message id, or by the same
+ * subject within 5 minutes of a send we recorded. The second rule exists because Gmail stamps `SENT` on any delivered
+ * message whose From is one of the account's own addresses, so a self-addressed recipient (e.g. a +alias test address)
+ * shows up as two "sent" messages for one send.
+ */
+export function isOwnSend(m: { id: string; subject: string; receivedAt: string | null }, state: BizDevState, ourSubject: string): boolean {
+  const ids = new Set([...state.stepsSent.map((s) => s.messageId), ...(state.failedSends ?? []).map((f) => f.messageId)])
+  if (ids.has(m.id)) return true
+  const t = m.receivedAt ? Date.parse(m.receivedAt) : NaN
+  if (Number.isNaN(t)) return false
+  const mine = [...state.stepsSent.map((s) => s.sentAt), ...(state.failedSends ?? []).map((f) => f.sentAt)].map((x) => Date.parse(x))
+  return normalizeSubject(m.subject) === normalizeSubject(ourSubject) && mine.some((x) => Math.abs(x - t) <= 5 * 60_000)
+}
+
 export function safeIso(raw: string | null | undefined, fallback: Date): string {
   const t = raw ? new Date(raw) : null
   return t && !Number.isNaN(t.getTime()) ? t.toISOString() : fallback.toISOString()

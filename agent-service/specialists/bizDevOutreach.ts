@@ -35,7 +35,7 @@ import { query, withWriteTransaction } from '../db'
 import { transitionTask, updateTaskPlan } from '../mutations'
 import type { TaskStatus } from '../types'
 import {
-  resolveSender, matchesSequence, isBounce, classifyBounce, safeIso, stripQuoted, decideReply, decideCampaignReply, buildEscalation, buildCampaignEscalation, type ReplyDecision,
+  resolveSender, matchesSequence, isBounce, classifyBounce, isOwnSend, safeIso, stripQuoted, decideReply, decideCampaignReply, buildEscalation, buildCampaignEscalation, type ReplyDecision,
 } from './bizDevReplies'
 import { renderTemplate, validateOutreachCopy } from './outreachTemplates'
 import {
@@ -668,14 +668,21 @@ async function processSequence(deps: BizDevDeps, ctx: TickCtx, def: BizDevSequen
   const step = due.followUp.step
   if (state.stepsSent.length + 1 !== step) return
 
-  // If Jerry (or anything else) has emailed this contact since we started, don't pile on: hand over.
-  const sentToContact = await gmail.searchMessages(`in:sent to:${def.contactEmail}`, 25)
-  const expectedSent = state.stepsSent.length + (state.failedSends?.length ?? 0)
-  if (sentToContact.length > expectedSent) {
+  // If Jerry (or anything else) has emailed this contact SINCE WE STARTED, don't pile on: hand over. Mail sent before the sequence began,
+  // and our own sends (including Gmail's self-delivered duplicate of one), do not count.
+  const sinceDay = gmailDay(new Date(Date.parse(firstSent.sentAt) - 86_400_000))
+  const sentToContact = await gmail.searchMessages(`in:sent to:${def.contactEmail} after:${sinceDay}`, 50)
+  // Gmail's after: is day-granular, so refine by the real timestamp: only mail sent AFTER the first touch counts (5-minute tolerance for clock skew).
+  const startedMs = Date.parse(firstSent.sentAt) - 5 * 60_000
+  const foreign = sentToContact.filter((m) => !isOwnSend(m, state, ourSubject) && !(m.receivedAt && Date.parse(m.receivedAt) < startedMs))
+  if (foreign.length > 0) {
     state.sequenceStatus = 'PAUSED'
     await store.saveState(view.taskId, state)
+    const what = `Gmail shows ${foreign.length} sent message(s) to this contact since the sequence began that Winston did not send (${foreign.slice(0, 3).map((m) => `"${m.subject.slice(0, 50)}"`).join(', ')}), so someone has already emailed them.`
     await store.transition(view.taskId, 'NEEDS_JERRY', {
-      jerryRequest: `Opportunity: ${def.organization} Partnership\nContact: ${def.contactName} <${def.contactEmail}>\nCurrent Stage: NEEDS_JERRY\nConversation Summary: Follow-up ${step - 1} was due, but Gmail shows ${sentToContact.length} sent message(s) to this contact vs. ${expectedSent} Winston recorded, so someone has already emailed them.\nJerry Action Required: Confirm whether the automated sequence should resume or stay stopped. Nothing was sent.`,
+      jerryRequest: isCampaign
+        ? `Opportunity: ${def.organization} listing outreach (campaign ${def.campaignKey})\nContact: ${def.contactName} <${def.contactEmail}>\nCurrent Stage: NEEDS_JERRY\nConversation Summary: Follow-up ${step - 1} was due, but ${what}\nJerry Action Required: Confirm whether the automated sequence should resume or stay stopped. Nothing was sent. Thread: ${state.threadId}.`
+        : `Opportunity: ${def.organization} Partnership\nContact: ${def.contactName} <${def.contactEmail}>\nCurrent Stage: NEEDS_JERRY\nConversation Summary: Follow-up ${step - 1} was due, but ${what}\nJerry Action Required: Confirm whether the automated sequence should resume or stay stopped. Nothing was sent.`,
       nextAction: `Jerry: confirm resume vs. stop for ${def.contactName}; thread ${state.threadId}.`,
     })
     out.actions.push(`${def.key}: manual contact detected -> paused, NEEDS_JERRY`)
