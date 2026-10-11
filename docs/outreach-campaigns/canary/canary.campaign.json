@@ -1,0 +1,16 @@
+{
+  "key": "green-bay-canary",
+  "name": "Green Bay CANARY (2 recipients, addresses owned by Jerry)",
+  "metroSlug": "green-bay",
+  "metroLabel": "Green Bay Metro",
+  "from": "jerry@getcheckoff.com",
+  "subjectTemplate": "[CANARY TEST] We selected {{business_name}} for CheckOff",
+  "firstTouchBody": "THIS IS A CANARY TEST of Winston's campaign system. It was sent only to addresses Jerry owns.\n\nHi {{business_name}} team,\n\nWe're launching CheckOff across {{metro}}, and we selected {{business_name}} as one of the local places worth discovering.\n\nYour business is already featured in the app:\n\n{{items_block}}\n\nThere is no fee to be included, and you don't need to sign up for anything.\n\nFree graphics: {{kit_url}}\n\nYou can reply to this email any time.\n\nJerry Stuckart\nFounder, CheckOff\ngetcheckoff.com",
+  "followUp1Body": "CANARY TEST follow-up 1 (sent only because no reply or confirmation arrived).\n\nHi {{business_name}} team,\n\nFollowing up on your CheckOff feature:\n\n{{items_block}}\n\nJerry Stuckart\nFounder, CheckOff",
+  "followUp2Body": "CANARY TEST follow-up 2 (final).\n\nHi {{business_name}} team,\n\nOne last note about your CheckOff feature: {{confirm_url}}\n\nJerry Stuckart\nFounder, CheckOff",
+  "cadence": { "followUp1AfterBusinessDays": 1, "followUp2AfterBusinessDays": 1, "closeAfterBusinessDays": 1 },
+  "dailyCap": 80,
+  "faqEnabled": false,
+  "allowPriorOutreach": true,
+  "approvals": { "firstTouchTemplate": false, "followUpTemplates": false }
+}
