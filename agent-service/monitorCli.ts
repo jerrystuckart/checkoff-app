@@ -36,6 +36,7 @@ import { OpenAiAdapter } from './specialists/openAiAdapter'
 import { RealGmailAdapter, RealGoogleCalendarAdapter, RealGoogleContactsAdapter } from './specialists/googleAdapters'
 import { GoogleCredentialProvider } from './specialists/googleCredentialProvider'
 import { pollGmailForNewMessages } from './specialists/gmailInboundMonitor'
+import { runBizDevTick, DbBizDevStore } from './specialists/bizDevOutreach'
 import { applyRelationshipResumeEvent, type RelationshipDriverDeps } from './specialists/destinationRelationshipDriver'
 import { runChiefMonitorLoop, DEFAULT_POLL_INTERVAL_MS } from './chiefMonitorLoop'
 
@@ -58,6 +59,7 @@ async function main() {
   const executors = [new RemoteAiExecutor([new OpenAiAdapter(), new AnthropicMessagesAdapter()])]
   const contactDirectory = new DbContactDirectory()
   const checkpointStore = new DbGmailCheckpointStore()
+  const bizDevStore = new DbBizDevStore()
 
   const driverDeps: RelationshipDriverDeps = {
     runStore,
@@ -77,7 +79,18 @@ async function main() {
 
   await runChiefMonitorLoop({
     intervalMs,
-    pollGmail: () => pollGmailForNewMessages(gmail, checkpointStore, contactDirectory, (destinationId, event) => applyRelationshipResumeEvent(driverDeps, destinationId, event)),
+    pollGmail: async () => {
+      const result = await pollGmailForNewMessages(gmail, checkpointStore, contactDirectory, (destinationId, event) => applyRelationshipResumeEvent(driverDeps, destinationId, event))
+      // Business-development sequences (non-destination contacts). Isolated: a failure here never fails the destination poll.
+      try {
+        const bizdev = await runBizDevTick({ gmail, store: bizDevStore })
+        for (const a of bizdev.actions) console.log(`[chief-monitor] bizdev: ${a}`)
+        for (const e of bizdev.errors) console.error(`[chief-monitor] bizdev error: ${e}`)
+      } catch (err) {
+        console.error(`[chief-monitor] bizdev tick failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
+      return result
+    },
     onTick: (result) => {
       if (result.error) console.error(`[chief-monitor] poll error: ${result.error}`)
       else if (result.newMessagesFound > 0) console.log(`[chief-monitor] ${result.newMessagesFound} new message(s), ${result.resumeEventsEmitted} resumed, ${result.ambiguousOrUnassociatedCount} needs review`)
