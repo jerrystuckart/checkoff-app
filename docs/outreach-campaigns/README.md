@@ -32,7 +32,7 @@ An unknown or empty field is an error, never a blank. The first-touch email must
 ### Campaign definition
 
 See [`sample/campaign.sample.json`](sample/campaign.sample.json). Key settings: `dailyCap` (default **80**), `cadence`
-(default **5 → 7 → 7** business days), `faqEnabled` (default off), `allowPriorOutreach` (default off), and `approvals`.
+(default **5 → 7 → 7** business days), `faqEnabled` (default off), `allowPriorOutreach` (default off), optional `expiresAt` (hard stop; always use it for canaries), and `approvals`.
 The two `approvals` flags must be `true` and the templates must contain no draft markers ("DRAFT, NOT APPROVED", "TODO", …) before `approve` will run.
 
 ## Launch steps

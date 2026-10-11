@@ -31,7 +31,7 @@ Preview (read-only, already validated): `Recipients 2 · errors 0 · warnings 0 
 
 **Day 0 (Mon/Tue)**
 
-1. Read `canary/canary.campaign.json`, then set both `approvals` flags to `true` in a *copy* of it. **[APPROVAL: campaign approval and production writes]**
+1. Read `canary/canary.campaign.json`, then in a *copy* set both `approvals` flags to `true` and add `"expiresAt"` (a hard stop, e.g. start + 7 days): after it the campaign sends nothing, closes every recipient (records kept), and completes. **[APPROVAL: campaign approval and production writes]**
 2. `preview` (read-only) and check the hash is `444ad24c37ed60ea`:
    `npx tsx agent-service/outreachCampaignCli.ts preview --csv docs/outreach-campaigns/canary/green-bay-canary.csv --campaign <your copy>`
 3. **[APPROVAL]** `approve ... --confirm-recipients 2 --preview-hash 444ad24c37ed60ea --templates-approved --token-sql-out canary_tokens.sql`

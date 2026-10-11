@@ -431,3 +431,32 @@ test('a recipient whose sequence key is not an approved campaign is never sent t
   await tick(g, w, addBusinessDays(MON, 5))
   assert.equal(g.sends.length, 1)
 })
+
+test('hard expiry: after expiresAt nothing is sent, every recipient is closed (records kept), and the campaign completes', async () => {
+  const expiresAt = new Date(MON.getTime() + 3 * 86_400_000).toISOString() // Thursday
+  const { w, g } = await launch(4, { def: { expiresAt, dailyCap: 2, batchPerTick: 2 } })
+  await tick(g, w) // 2 sent, 2 still queued by the cap
+  assert.equal(g.sends.length, 2)
+  await tick(g, w, new Date(MON.getTime() + 86_400_000)) // before expiry: normal operation continues (2 more first touches next tick? cap is rolling 24h so still 2)
+  const before = g.sends.length
+  const r = await tick(g, w, new Date(new Date(expiresAt).getTime() + 60_000))
+  assert.equal(g.sends.length, before, 'no sends at or after expiry (not even due follow-ups or queued first touches)')
+  assert.ok(r.actions.some((a) => /EXPIRED/.test(a)))
+  assert.equal(w.runtimes.get('gb-test')!.state, 'COMPLETE')
+  for (const rec of w.recipients.values()) {
+    assert.equal(rec.status, 'CANCELED')
+    assert.equal(rec.state.sequenceStatus, 'EXPIRED')
+    assert.match(rec.cancelReason!, /expired/i)
+  }
+  assert.equal(w.recipients.size, 4, 'records are preserved, not deleted')
+  await tick(g, w, new Date(new Date(expiresAt).getTime() + 5 * 86_400_000))
+  assert.equal(g.sends.length, before)
+})
+
+test('a campaign that has not expired is unaffected by an expiresAt in the future', async () => {
+  const { w, g } = await launch(2, { def: { expiresAt: new Date(MON.getTime() + 30 * 86_400_000).toISOString() } })
+  await tick(g, w)
+  assert.equal(g.sends.length, 2)
+  await tick(g, w, addBusinessDays(MON, 5))
+  assert.equal(g.sends.length, 4)
+})
