@@ -134,3 +134,4 @@ assets/dev-preview/
 *.log
 scripts/tmp-vienna/
 scripts/tmp-green-bay/
+agent-service/.outreach-preview/

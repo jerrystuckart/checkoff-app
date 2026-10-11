@@ -18,17 +18,35 @@
 // explicit, code-reviewed allowlist) — a task whose metadata names any
 // other sequence key is never sent to.
 //
+// The SAME engine also drives multi-recipient campaigns (mode: 'campaign'):
+// recipients are ordinary tasks of this kind, the campaign definition lives in a
+// 'bizdev_campaign' task (see bizDevCampaign.ts), and a campaign sends only
+// after Jerry's recorded approval (standing authority bizdev_campaign.*).
+//
 // State lives in agent.tasks.metadata.bizdev (jsonb, already present).
 // Duplicate-send protection: a step is atomically CLAIMED in the DB before
 // the Gmail send; a crash after the claim can never re-send (it escalates
 // to Jerry instead), and a send failure is never retried automatically.
 
 import type { GmailAdapter, GmailFullMessage, GmailMessageSummary } from './googleAdapters'
-import { classifyReply, extractEmailAddress, type ReplyClassification } from '../playbooks/gmailRelationshipLogic'
-import { isKnownForwardingAddress } from '../playbooks/gmailForwardUnwrapping'
+import { extractEmailAddress } from '../playbooks/gmailRelationshipLogic'
+import { evaluateAuthority } from '../playbooks/standingAuthority'
 import { query, withWriteTransaction } from '../db'
 import { transitionTask, updateTaskPlan } from '../mutations'
 import type { TaskStatus } from '../types'
+import {
+  resolveSender, matchesSequence, isBounce, classifyBounce, safeIso, stripQuoted, decideReply, decideCampaignReply, buildEscalation, buildCampaignEscalation, type ReplyDecision,
+} from './bizDevReplies'
+import { renderTemplate, validateOutreachCopy } from './outreachTemplates'
+import {
+  campaignToDef, computeCapacity, campaignScanQueries, bounceRateTripped, isSystemicSendError, gmailDay, MAX_FETCH_PER_TICK, MAX_PROCESSED_IDS, type CampaignRuntime,
+} from './bizDevCampaign'
+
+// Reply logic lives in bizDevReplies.ts (pure); re-exported so existing imports keep working.
+export {
+  resolveSender, matchesSequence, isBounce, classifyBounce, safeIso, stripQuoted, isAutoReply, isOptOut, decideReply, decideCampaignReply, extractCommercialTerms, buildEscalation, buildCampaignEscalation, OWN_ADDRESSES,
+} from './bizDevReplies'
+export type { ReplyDecision, ReplyKind, ReplyClass } from './bizDevReplies'
 
 // ---------------------------------------------------------------------------
 // Sequence allowlist
@@ -57,6 +75,13 @@ export interface BizDevSequenceDef {
   maxOutbound: number
   /** Business days Winston waits after a routine-FAQ answer before asking Jerry what to do. */
   answeredWaitBusinessDays: number
+  /** 'single' (default) = one named contact on a code allowlist (Blair). 'campaign' = per-recipient fields come from each recipient's contact + merge vars. */
+  mode?: 'single' | 'campaign'
+  campaignKey?: string
+  /** Campaign only: auto-answer routine factual questions. Single-contact sequences always may. */
+  faqEnabled?: boolean
+  /** Campaign only: the literal stem of the subject, what the batched reply scan searches on. */
+  subjectSearchTerm?: string
 }
 
 const SIGNATURE = '\n\nJerry Stuckart\nFounder, CheckOff\njerry@getcheckoff.com'
@@ -107,13 +132,39 @@ export function addBusinessDays(from: Date, days: number): Date {
   return d
 }
 
-export type SequenceStatus = 'ACTIVE' | 'ANSWERED' | 'ESCALATED' | 'DECLINED' | 'OPTED_OUT' | 'COMPLETE_NO_RESPONSE' | 'PAUSED'
+export type SequenceStatus =
+  | 'QUEUED'
+  | 'ACTIVE'
+  | 'ANSWERED'
+  | 'ESCALATED'
+  | 'DECLINED'
+  | 'OPTED_OUT'
+  | 'COMPLETE_NO_RESPONSE'
+  | 'PAUSED'
+  | 'CONFIRMED'
+  | 'DEFERRED'
+  | 'BOUNCED'
+  | 'SEND_UNCERTAIN'
 
 export interface BizDevSentStep {
   step: number
   kind: 'INITIAL' | 'FOLLOW_UP' | 'FAQ_ANSWER'
   messageId: string
   sentAt: string
+}
+
+export interface BizDevSendAttempt {
+  step: number
+  at: string
+  outcome: 'ATTEMPTED' | 'ACCEPTED' | 'UNCERTAIN'
+  detail?: string
+}
+
+export interface BizDevListing {
+  itemId: string
+  text: string
+  token: string
+  confirmUrl: string
 }
 
 export interface BizDevState {
@@ -131,6 +182,17 @@ export interface BizDevState {
   deliveryFailure?: { messageId: string; detectedAt: string; reason: string }
   /** Earlier sends that bounced (never delivered). They still appear in Gmail Sent, so the manual-contact guard must count them. */
   failedSends?: Array<{ messageId: string; threadId: string; sentAt: string; bounceMessageId: string; reason: string }>
+  // ---- campaign recipients only ----
+  campaignKey?: string
+  /** The rendered first-touch subject; follow-ups are "Re: <subject>". */
+  subject?: string
+  /** Merge values frozen at approval so every message (and every re-run) renders identically. */
+  vars?: Record<string, string>
+  listings?: BizDevListing[]
+  /** Every attempted and accepted send, in order. */
+  attempts?: BizDevSendAttempt[]
+  deferredUntil?: string
+  lastReplyClass?: string
   [k: string]: unknown
 }
 
@@ -139,164 +201,13 @@ export interface BizDevSequenceView {
   taskUpdatedAt: Date
   contactId: string
   contactEmail: string
+  contactName?: string | null
+  organization?: string | null
   contactSuppressed: boolean
   state: BizDevState
 }
 
-const OWN_ADDRESSES = ['jerry@getcheckoff.com', 'forwarder@getcheckoff.com', 'jerrystuckart@gmail.com', 'jerrystuckart@hotmail.com']
-
-/** The real person behind a message: Reply-To when the Gmail-visible sender is a CheckOff relay, else From. Null when unknowable. */
-export function resolveSender(msg: { from: string; replyTo: string | null }): string | null {
-  const from = extractEmailAddress(msg.from)
-  if (isKnownForwardingAddress(from)) return msg.replyTo ? extractEmailAddress(msg.replyTo) : null
-  return from
-}
-
-const REPLY_PREFIX = /^\s*((re|aw|antw|sv|fw|fwd)\s*:\s*)+/i
-function normalizeSubject(s: string): string {
-  return s.replace(REPLY_PREFIX, '').replace(/\s+/g, ' ').trim().toLowerCase()
-}
-
-/**
- * A message counts as a response only if it is a REPLY to our outreach: it
- * sits in our Gmail thread, or its subject is a "Re:"-style echo of ours
- * (relayed replies get a new thread id). A contact's unrelated mail — e.g. a
- * weekly newsletter from the same address — must never cancel a sequence.
- * A fresh email with a new subject still reaches Jerry via the existing
- * monitor's "needs review" list.
- */
-export function matchesSequence(msg: { from: string; replyTo: string | null; threadId: string; subject?: string }, state: BizDevState, ourSubject?: string): boolean {
-  const sender = resolveSender(msg)
-  if (!sender) return false
-  const inThread = msg.threadId === state.threadId
-  const subjectEcho = !!ourSubject && !!msg.subject && REPLY_PREFIX.test(msg.subject) && normalizeSubject(msg.subject) === normalizeSubject(ourSubject)
-  if (!inThread && !subjectEcho) return false
-  if (sender === state.contactEmail.toLowerCase()) return true
-  // Someone else answering inside our own thread (e.g. a colleague of the contact) still counts as a response.
-  return inThread && !OWN_ADDRESSES.includes(sender)
-}
-
-/** Delivery-failure notices (bounces) are not responses; they mean the email never arrived. */
-export function isBounce(msg: { from: string; subject: string }): boolean {
-  return /(mailer-daemon|postmaster)@/i.test(msg.from) || /(delivery status notification|undeliverable|returned mail|mail delivery (failed|subsystem)|delivery failure)/i.test(msg.subject)
-}
-
-export function safeIso(raw: string | null | undefined, fallback: Date): string {
-  const t = raw ? new Date(raw) : null
-  return t && !Number.isNaN(t.getTime()) ? t.toISOString() : fallback.toISOString()
-}
-
-/** Drops quoted history so classification only sees what the contact actually wrote. */
-export function stripQuoted(body: string): string {
-  const lines = body.replace(/\r/g, '').split('\n')
-  const out: string[] = []
-  for (const line of lines) {
-    if (/^\s*>/.test(line)) continue
-    if (/^\s*On .{5,200}wrote:\s*$/i.test(line) || /^\s*-{2,}\s*Original Message/i.test(line) || /^\s*From:\s.+@/i.test(line)) break
-    out.push(line)
-  }
-  return out.join('\n').trim()
-}
-
-const AUTO_REPLY = /(automatic reply|auto-?reply|out of office|out-of-office|autoreply|vacation reply|i am currently out|i'm currently out|abwesenheit)/i
-export function isAutoReply(subject: string, body: string): boolean {
-  return AUTO_REPLY.test(subject) || AUTO_REPLY.test(body.slice(0, 400))
-}
-
-const OPT_OUT = /(unsubscribe|stop (emailing|contacting|sending)|do not (email|contact)|don'?t (email|contact) me|remove me|take me off|no further (contact|emails?)|please remove|opt[- ]?out|leave me alone)/i
-export function isOptOut(text: string): boolean {
-  return OPT_OUT.test(text)
-}
-
-// Routine factual questions Winston may answer alone. Every answer uses ONLY
-// facts already stated in the approved outreach email — nothing invented.
-interface Faq {
-  topic: string
-  matches: RegExp
-  answer: string
-}
-const FAQS: readonly Faq[] = [
-  {
-    topic: 'what_is_checkoff',
-    matches: /\b(what('?s| is) (checkoff|check-off|the app|it)|tell me (more )?about (checkoff|the app)|how does (it|the app|checkoff) work)\b/i,
-    answer: 'CheckOff is a local bucket list app that helps people get out and experience real local businesses, hidden gems, restaurants, and adventures. You discover experiences, explore curated lists, invite friends, and earn points for actually going and doing them.',
-  },
-  {
-    topic: 'curated_lists',
-    matches: /\b(what (are|is) (a )?curated lists?|how do (the )?(curated )?lists work)\b/i,
-    answer: 'Curated lists are collections of local experiences, restaurants, and hidden gems that you can work through and check off as you do them.',
-  },
-  {
-    topic: 'availability',
-    matches: /\b(is (it|checkoff) (available|live|in)|available (in|around)|(in|around) (north )?phoenix|where (is|are) (it|you) available)\b/i,
-    answer: 'We started in the Phoenix area and have been expanding into other cities, but the West Valley is home.',
-  },
-  {
-    topic: 'website',
-    matches: /\b(website|link|where can i (see|find|download)|how (do|can) i (get|download|try))\b/i,
-    answer: 'You can find everything at getcheckoff.com.',
-  },
-]
-const FAQ_BLOCKERS = /(advertis|sponsor|rate card|pricing|price|cost|\$\d|partner|collaborat|feature (it|checkoff|you)|newsletter|co-?brand|call\b|meet(ing)?\b|schedule|zoom|invoice|contract|exclusive|business(es)? (appear|get listed|sign)|metrics|users?|downloads?|how many)/i
-
-export interface ReplyDecision {
-  kind: 'OPT_OUT' | 'DECLINED' | 'FAQ' | 'ESCALATE' | 'AUTO_REPLY_IGNORED'
-  classification: ReplyClassification | 'AUTO_REPLY'
-  reason: string
-  faqAnswer?: string
-}
-
-export function decideReply(subject: string, rawBody: string, autoAnswersSoFar: number): ReplyDecision {
-  const text = stripQuoted(rawBody)
-  if (isAutoReply(subject, text)) return { kind: 'AUTO_REPLY_IGNORED', classification: 'AUTO_REPLY', reason: 'Automatic/out-of-office reply — not a human response.' }
-  if (isOptOut(text)) return { kind: 'OPT_OUT', classification: 'NO_INTEREST', reason: 'Contact asked for no further contact.' }
-  const cls = classifyReply(text)
-  if (cls.classification === 'NO_INTEREST') return { kind: 'DECLINED', classification: cls.classification, reason: 'Contact declined.' }
-
-  // Routine-FAQ path: short, pure question(s), every question covered by a verified FAQ, no commercial/partnership language.
-  if ((cls.classification === 'QUESTION' || cls.classification === 'INFORMATION_REQUEST') && text.length <= 600 && !FAQ_BLOCKERS.test(text) && autoAnswersSoFar < 1) {
-    const questions = text.split(/(?<=\?)/).map((s) => s.trim()).filter((s) => s.includes('?'))
-    if (questions.length > 0 && questions.length <= 3) {
-      const answers: string[] = []
-      let allCovered = true
-      for (const q of questions) {
-        const faq = FAQS.find((f) => f.matches.test(q))
-        if (!faq) { allCovered = false; break }
-        if (!answers.includes(faq.answer)) answers.push(faq.answer)
-      }
-      if (allCovered && answers.length > 0) return { kind: 'FAQ', classification: cls.classification, reason: 'Routine factual question(s) covered by verified FAQ.', faqAnswer: answers.join(' ') }
-    }
-  }
-  return { kind: 'ESCALATE', classification: cls.classification, reason: 'Needs Jerry: partnership interest, commercial terms, or a question outside the verified FAQ.' }
-}
-
-export function extractCommercialTerms(text: string): string[] {
-  const terms: string[] = []
-  for (const m of text.matchAll(/\$\s?\d[\d,]*(\.\d+)?(\s?(\/|per)\s?\w+)?/g)) terms.push(m[0].trim())
-  for (const m of text.matchAll(/\b\d[\d,]*\s?(subscribers|readers|opens?|followers|impressions)\b/gi)) terms.push(m[0])
-  for (const m of text.matchAll(/\b(sponsor(ed|ship)?|advertis\w*|rate card|media kit|banner|placement|deadline)\b/gi)) terms.push(m[0].toLowerCase())
-  return [...new Set(terms)]
-}
-
-export function buildEscalation(def: BizDevSequenceDef, state: BizDevState, decision: ReplyDecision, replyText: string, msg: { id: string; threadId: string; subject: string }): { jerryRequest: string; nextAction: string } {
-  const terms = extractCommercialTerms(replyText)
-  const commercial = terms.length > 0
-  const sent = state.stepsSent.map((s) => `step ${s.step} (${s.kind}) ${s.sentAt.slice(0, 10)}`).join('; ')
-  const wording = replyText.replace(/\s+/g, ' ').trim().slice(0, 900)
-  const jerryRequest = [
-    `Opportunity: ${def.organization} Partnership`,
-    `Contact: ${def.contactName} <${def.contactEmail}>`,
-    `Organization: ${def.organization}`,
-    `Current Stage: NEEDS_JERRY (autonomous outreach suspended; pending follow-ups cancelled)`,
-    `Conversation Summary: Winston sent from ${def.from}: ${sent}. ${def.contactName} replied. Classified ${decision.classification} (${decision.reason})`,
-    `${def.contactName}'s Response: "${wording}"`,
-    `Opportunity Assessment: ${commercial ? `Commercial/sponsorship details detected (${terms.join(', ')}); capture these exactly from the thread before deciding. No spend is authorized.` : `Local community-media contact whose "real over artificial" newsletter theme matches CheckOff's mission; reply signals ${decision.classification.toLowerCase().replace(/_/g, ' ')}.`}`,
-    `Winston's Recommendation: Reply personally from ${def.from} in the existing thread; ${commercial ? 'evaluate cost vs. audience reach before committing anything' : 'propose a short call and the "Living North Phoenix Favorites" curated-list idea'}. Nothing has been promised or scheduled.`,
-    `Jerry Action Required: Decide how to respond (and whether to take a call/commit to anything). Thread: Gmail thread ${msg.threadId}, reply message ${msg.id}, subject "${msg.subject}".`,
-  ].join('\n')
-  return { jerryRequest, nextAction: `Jerry: reply to ${def.contactName} (Gmail thread ${msg.threadId}) and decide on next steps.` }
-}
-
+/** Next scheduled instant (cadence is business days after the PREVIOUS send). */
 export type DueAction =
   | { kind: 'NONE' }
   | { kind: 'SEND'; followUp: BizDevFollowUp; dueAt: Date }
@@ -330,6 +241,16 @@ export function nextScheduledAt(def: BizDevSequenceDef, state: BizDevState): Dat
 // Store port (DB in production, in-memory in tests)
 // ---------------------------------------------------------------------------
 
+export type TransitionTarget = 'NEEDS_JERRY' | 'CANCELED' | 'DONE' | 'WAITING' | 'BLOCKED'
+
+export interface TransitionDetail {
+  jerryRequest?: string
+  nextAction?: string
+  reason?: string
+  nextCheckAt?: Date
+  blockerNote?: string
+}
+
 export interface BizDevStore {
   listActive(): Promise<BizDevSequenceView[]>
   /** Atomically latches `step`; false means it was already claimed (never send). */
@@ -338,7 +259,16 @@ export interface BizDevStore {
   recordInteraction(i: { contactId: string; taskId: string; direction: 'INBOUND' | 'OUTBOUND'; occurredAt: string; subject: string; summary: string; requiresAction: boolean; messageId: string; threadId: string; extra?: Record<string, unknown> }): Promise<void>
   suppressContact(contactId: string): Promise<void>
   setPlan(taskId: string, plan: { nextCheckAt: Date; nextAction: string }): Promise<void>
-  transition(taskId: string, to: Extract<TaskStatus, 'NEEDS_JERRY' | 'CANCELED'>, detail: { jerryRequest?: string; nextAction?: string; reason?: string }): Promise<void>
+  transition(taskId: string, to: TransitionTarget, detail: TransitionDetail): Promise<void>
+  // ---- campaign support (optional so single-contact stores/fakes stay valid) ----
+  listQueued?(): Promise<BizDevSequenceView[]>
+  listUncertain?(): Promise<BizDevSequenceView[]>
+  campaignRuntimes?(): Promise<CampaignRuntime[]>
+  /** Merge-patches the runtime and mirrors state onto the campaign task's status. `escalate` also moves the campaign task to NEEDS_JERRY. */
+  saveCampaign?(key: string, patch: Partial<CampaignRuntime> & { escalate?: { jerryRequest: string; nextAction: string } }): Promise<void>
+  setCampaignProgress?(key: string, line: string): Promise<void>
+  /** Which of these /confirm tokens exist in public.business_outreach_tokens (read-only). */
+  confirmTokensExist?(tokens: string[]): Promise<Set<string>>
 }
 
 export interface BizDevTickResult {
@@ -351,10 +281,70 @@ export interface BizDevDeps {
   store: BizDevStore
   now?: () => Date
   sequences?: Readonly<Record<string, BizDevSequenceDef>>
+  /** Injectable pacing so tests never wait. */
+  sleep?: (ms: number) => Promise<void>
 }
 
 function pushProcessed(state: BizDevState, id: string): void {
   state.processedMessageIds = [...(state.processedMessageIds ?? []), id].slice(-200)
+}
+
+// ---------------------------------------------------------------------------
+// Per-tick context (campaign scan results + the shared daily budget)
+// ---------------------------------------------------------------------------
+
+interface Budget {
+  remaining: number
+  sentLast24h: number
+  effectiveCap: number
+}
+
+interface TickCtx {
+  runtimes: Map<string, CampaignRuntime>
+  inbound: Map<string, GmailFullMessage[]>
+  fullCache: Map<string, GmailFullMessage>
+  budgets: Map<string, Budget>
+  tokensChecked: Map<string, Set<string>>
+  /** Campaign message ids fully handled this tick (merged into the campaign's scan cursor so closed recipients' mail is never re-fetched). */
+  handled: Map<string, string[]>
+}
+
+async function getFull(deps: BizDevDeps, ctx: TickCtx, id: string): Promise<GmailFullMessage> {
+  const hit = ctx.fullCache.get(id)
+  if (hit) return hit
+  const full = await deps.gmail.getFullMessage(id)
+  ctx.fullCache.set(id, full)
+  return full
+}
+
+async function listIds(gmail: GmailAdapter, q: string, max: number): Promise<Array<{ id: string; threadId: string }>> {
+  if (gmail.searchMessageIds) return gmail.searchMessageIds(q, max)
+  return (await gmail.searchMessages(q, Math.min(max, 100))).map((m) => ({ id: m.id, threadId: m.threadId }))
+}
+
+/** Everything sent from this identity in the last rolling 24h — Winston's own sends AND anything else (manual replies), per "include other outgoing activity". */
+async function getBudget(deps: BizDevDeps, ctx: TickCtx, c: CampaignRuntime): Promise<Budget> {
+  const hit = ctx.budgets.get(c.key)
+  if (hit) return hit
+  const sent = await listIds(deps.gmail, `in:sent from:${c.from} newer_than:1d`, 500)
+  const cap = computeCapacity({ dailyCap: c.dailyCap, providerLimit: c.providerLimit, reserve: c.reserve, sentLast24h: sent.length })
+  const b: Budget = { remaining: cap.remaining, sentLast24h: cap.sentLast24h, effectiveCap: cap.effectiveCap }
+  ctx.budgets.set(c.key, b)
+  return b
+}
+
+function markHandled(ctx: TickCtx, def: BizDevSequenceDef, id: string): void {
+  if (!def.campaignKey) return
+  ctx.handled.set(def.campaignKey, [...(ctx.handled.get(def.campaignKey) ?? []), id])
+}
+
+const toSummary = (m: GmailFullMessage): GmailMessageSummary => ({ id: m.id, threadId: m.threadId, from: m.from, to: m.to, subject: m.subject, snippet: '', receivedAt: m.receivedAt, replyTo: m.replyTo })
+
+function effectiveDef(def: BizDevSequenceDef, view: BizDevSequenceView): BizDevSequenceDef {
+  if (def.mode !== 'campaign') return def
+  const name = view.contactName?.trim() || view.organization?.trim() || 'there'
+  const org = view.organization?.trim() || view.contactName?.trim() || view.contactEmail
+  return { ...def, contactEmail: view.contactEmail, contactName: name, organization: org }
 }
 
 // ---------------------------------------------------------------------------
@@ -363,33 +353,140 @@ function pushProcessed(state: BizDevState, id: string): void {
 
 export async function runBizDevTick(deps: BizDevDeps): Promise<BizDevTickResult> {
   const now = (deps.now ?? (() => new Date()))()
-  const sequences = deps.sequences ?? BIZDEV_SEQUENCES
   const result: BizDevTickResult = { actions: [], errors: [] }
   if (!deps.gmail.isConfigured()) return result
 
+  const defs: Record<string, BizDevSequenceDef> = { ...(deps.sequences ?? BIZDEV_SEQUENCES) }
+  const runtimes = deps.store.campaignRuntimes ? await deps.store.campaignRuntimes() : []
+  const ctx: TickCtx = { runtimes: new Map(), inbound: new Map(), fullCache: new Map(), budgets: new Map(), tokensChecked: new Map(), handled: new Map() }
+  for (const c of runtimes) {
+    // A campaign is only ever acted on with Jerry's recorded approval (standing authority: APPROVAL_REQUIRED, satisfied only by campaign.approval).
+    if (!c.approval || c.approval.approvedBy !== 'jerry') continue
+    ctx.runtimes.set(c.key, c)
+    defs[`campaign:${c.key}`] = campaignToDef(c)
+  }
+
   const views = await deps.store.listActive()
-  for (const view of views) {
-    const def = sequences[view.state.sequenceKey]
-    if (!def || def.contactEmail.toLowerCase() !== view.contactEmail.toLowerCase()) continue // not explicitly authorized -> never touched
+
+  // 1. One batched scan per campaign (never one search per recipient).
+  const byCampaign = new Map<string, BizDevSequenceView[]>()
+  for (const v of views) {
+    const ck = v.state.campaignKey
+    if (ck && ctx.runtimes.has(ck)) byCampaign.set(ck, [...(byCampaign.get(ck) ?? []), v])
+  }
+  for (const [ck, vs] of byCampaign) {
     try {
-      await processSequence(deps, def, view, now, result)
+      await scanCampaignInbound(deps, ctx, ctx.runtimes.get(ck)!, vs, now, result)
+    } catch (err) {
+      result.errors.push(`campaign:${ck}: scan failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  // 2. Replies, bounces, follow-ups, closes.
+  for (const view of views) {
+    const def = defs[view.state.sequenceKey]
+    if (!def) continue // not explicitly authorized -> never touched
+    if (def.mode === 'campaign') {
+      if (!def.campaignKey || view.state.campaignKey !== def.campaignKey) continue
+    } else if (def.contactEmail.toLowerCase() !== view.contactEmail.toLowerCase()) continue
+    try {
+      await processSequence(deps, ctx, effectiveDef(def, view), view, now, result)
     } catch (err) {
       result.errors.push(`${def.key}: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  // 3. First touches (respecting the daily governor), uncertain-send reconciliation, completion, progress.
+  if (deps.store.listQueued) {
+    try {
+      await runCampaignSends(deps, ctx, now, result, views)
+    } catch (err) {
+      result.errors.push(`campaign sends: ${err instanceof Error ? err.message : String(err)}`)
+    }
+  }
+
+  // 4. Persist the scan cursor additions (handled mail is never fetched again).
+  for (const [key, ids] of ctx.handled) {
+    const c = ctx.runtimes.get(key)
+    if (!c || ids.length === 0) continue
+    c.scan = { ...c.scan, processedMessageIds: [...c.scan.processedMessageIds, ...ids].slice(-MAX_PROCESSED_IDS) }
+    try {
+      await deps.store.saveCampaign?.(key, { scan: c.scan })
+    } catch (err) {
+      result.errors.push(`campaign:${key}: could not save scan cursor: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
   return result
 }
 
-async function processSequence(deps: BizDevDeps, def: BizDevSequenceDef, view: BizDevSequenceView, now: Date, out: BizDevTickResult): Promise<void> {
+// ---------------------------------------------------------------------------
+// Batched inbound scan (campaigns)
+// ---------------------------------------------------------------------------
+
+async function scanCampaignInbound(deps: BizDevDeps, ctx: TickCtx, c: CampaignRuntime, views: BizDevSequenceView[], now: Date, out: BizDevTickResult): Promise<void> {
+  const idSets = await Promise.all(campaignScanQueries(c).map((q) => listIds(deps.gmail, q, 500)))
+  const seen = new Set<string>(c.scan.processedMessageIds)
+  for (const v of views) for (const id of v.state.processedMessageIds ?? []) seen.add(id)
+  const fresh: Array<{ id: string; threadId: string }> = []
+  for (const set of idSets) for (const m of set) if (!seen.has(m.id) && !fresh.some((f) => f.id === m.id)) fresh.push(m)
+  if (fresh.length === 0) return
+
+  const byEmail = new Map(views.map((v) => [v.contactEmail.toLowerCase(), v]))
+  const byThread = new Map(views.filter((v) => v.state.threadId).map((v) => [v.state.threadId, v]))
+  const batch = fresh.slice(0, MAX_FETCH_PER_TICK)
+  const unmatched: string[] = []
+  for (const m of batch) {
+    const full = await getFull(deps, ctx, m.id)
+    let view: BizDevSequenceView | undefined
+    if (isBounce(full)) view = byThread.get(full.threadId)
+    else {
+      const sender = resolveSender(full)
+      view = (sender && byEmail.get(sender)) || byThread.get(full.threadId)
+      if (view && !matchesSequence(full, view.state, view.state.subject)) view = undefined
+    }
+    if (view) ctx.inbound.set(view.taskId, [...(ctx.inbound.get(view.taskId) ?? []), full])
+    else unmatched.push(m.id)
+  }
+  // Unmatched messages are remembered so they are never re-fetched; matched ones are remembered by the recipient state once handled.
+  const merged = [...c.scan.processedMessageIds, ...unmatched].slice(-MAX_PROCESSED_IDS)
+  c.scan = { ...c.scan, processedMessageIds: merged }
+  await deps.store.saveCampaign?.(c.key, { scan: c.scan })
+  out.actions.push(`campaign:${c.key}: scanned ${batch.length} new message(s)${fresh.length > batch.length ? `, ${fresh.length - batch.length} deferred to next tick` : ''}`)
+}
+
+// ---------------------------------------------------------------------------
+// Per-sequence processing
+// ---------------------------------------------------------------------------
+
+function statusAfter(decision: ReplyDecision): SequenceStatus {
+  switch (decision.kind) {
+    case 'OPT_OUT': return 'OPTED_OUT'
+    case 'DECLINED': return 'DECLINED'
+    case 'FAQ': return 'ANSWERED'
+    case 'CONFIRMED': return 'CONFIRMED'
+    case 'DEFERRED': return 'DEFERRED'
+    default: return 'ESCALATED'
+  }
+}
+
+async function processSequence(deps: BizDevDeps, ctx: TickCtx, def: BizDevSequenceDef, view: BizDevSequenceView, now: Date, out: BizDevTickResult): Promise<void> {
   const { store, gmail } = deps
+  const isCampaign = def.mode === 'campaign'
+  const campaign = isCampaign ? ctx.runtimes.get(def.campaignKey ?? '') : undefined
   const state: BizDevState = { ...view.state, stepsSent: [...view.state.stepsSent] }
   const firstSent = state.stepsSent[0]
   if (!firstSent) return
+  const ourSubject = state.subject ?? def.subject
 
   // ---- 0. Self-heal: a stopped sequence whose task is still WAITING (e.g. a crash between saving state and moving the task) is finished off, never left to drift. ----
-  if (state.sequenceStatus === 'DECLINED' || state.sequenceStatus === 'OPTED_OUT' || state.sequenceStatus === 'COMPLETE_NO_RESPONSE') {
+  if (state.sequenceStatus === 'DECLINED' || state.sequenceStatus === 'OPTED_OUT' || state.sequenceStatus === 'COMPLETE_NO_RESPONSE' || state.sequenceStatus === 'BOUNCED') {
     await store.transition(view.taskId, 'CANCELED', { reason: `Sequence state ${state.sequenceStatus}; task closed by recovery check.` })
     out.actions.push(`${def.key}: recovered stranded ${state.sequenceStatus} -> CANCELED`)
+    return
+  }
+  if (state.sequenceStatus === 'CONFIRMED') {
+    await store.transition(view.taskId, 'DONE', {})
+    out.actions.push(`${def.key}: recovered stranded CONFIRMED -> DONE`)
     return
   }
   if (state.sequenceStatus === 'ESCALATED' || state.sequenceStatus === 'PAUSED') {
@@ -402,15 +499,26 @@ async function processSequence(deps: BizDevDeps, def: BizDevSequenceDef, view: B
   }
 
   // ---- 1. Replies first: a response always beats a scheduled follow-up. ----
-  const sinceDay = new Date(new Date(firstSent.sentAt).getTime() - 86_400_000).toISOString().slice(0, 10).replace(/-/g, '/')
-  const found: GmailMessageSummary[] = await gmail.searchMessages(`after:${sinceDay} -in:sent -in:drafts (from:${def.contactEmail} OR "${def.contactEmail}")`, 25)
+  let found: GmailMessageSummary[]
+  if (isCampaign) {
+    found = (ctx.inbound.get(view.taskId) ?? []).map(toSummary)
+  } else {
+    const sinceDay = new Date(new Date(firstSent.sentAt).getTime() - 86_400_000).toISOString().slice(0, 10).replace(/-/g, '/')
+    found = await gmail.searchMessages(`after:${sinceDay} -in:sent -in:drafts (from:${def.contactEmail} OR "${def.contactEmail}")`, 25)
+  }
   const processed = new Set(state.processedMessageIds ?? [])
-  // 1a. Bounces in our thread: the email never arrived. Pause everything and tell Jerry; this is not a response.
+
+  // 1a. Bounces in our thread: the email never arrived. This is not a response.
   const bounce = found.find((m) => !processed.has(m.id) && m.threadId === state.threadId && isBounce(m))
   if (bounce) {
-    const full = await gmail.getFullMessage(bounce.id)
+    const full = await getFull(deps, ctx, bounce.id)
     const reason = full.bodyText.replace(/\s+/g, ' ').trim().slice(0, 600)
     pushProcessed(state, bounce.id)
+    if (isCampaign) markHandled(ctx, def, bounce.id)
+    if (isCampaign && campaign) {
+      await handleCampaignBounce(deps, campaign, def, view, state, full, reason, now, out)
+      return
+    }
     state.sequenceStatus = 'PAUSED'
     state.deliveryFailure = { messageId: bounce.id, detectedAt: now.toISOString(), reason }
     await store.saveState(view.taskId, state)
@@ -423,14 +531,17 @@ async function processSequence(deps: BizDevDeps, def: BizDevSequenceDef, view: B
     return
   }
 
-  const candidates = found.filter((m) => !processed.has(m.id) && !isBounce(m) && matchesSequence(m, state, def.subject))
+  const candidates = found.filter((m) => !processed.has(m.id) && !isBounce(m) && matchesSequence(m, state, ourSubject))
   candidates.sort((a, b) => (a.receivedAt ? Date.parse(a.receivedAt) || 0 : 0) - (b.receivedAt ? Date.parse(b.receivedAt) || 0 : 0))
 
   for (const summary of candidates) {
-    const full: GmailFullMessage = await gmail.getFullMessage(summary.id)
+    const full: GmailFullMessage = await getFull(deps, ctx, summary.id)
     const text = stripQuoted(full.bodyText)
-    const decision = decideReply(full.subject, full.bodyText, state.autoAnswers ?? 0)
+    const decision = isCampaign
+      ? decideCampaignReply(full.subject, full.bodyText, { attachments: full.attachments, autoAnswersSoFar: state.autoAnswers ?? 0, faqEnabled: def.faqEnabled ?? false, now })
+      : decideReply(full.subject, full.bodyText, state.autoAnswers ?? 0)
     pushProcessed(state, summary.id)
+    if (isCampaign) markHandled(ctx, def, summary.id)
 
     if (decision.kind === 'AUTO_REPLY_IGNORED') {
       await store.saveState(view.taskId, state)
@@ -440,9 +551,16 @@ async function processSequence(deps: BizDevDeps, def: BizDevSequenceDef, view: B
 
     // Cancel pending follow-ups IMMEDIATELY (persisted before anything else can happen).
     const prevStatus = state.sequenceStatus
-    state.sequenceStatus = decision.kind === 'OPT_OUT' ? 'OPTED_OUT' : decision.kind === 'DECLINED' ? 'DECLINED' : decision.kind === 'FAQ' ? 'ANSWERED' : 'ESCALATED'
+    state.sequenceStatus = statusAfter(decision)
+    state.lastReplyClass = decision.replyClass
+    if (decision.kind === 'DEFERRED') state.deferredUntil = decision.deferredUntil
     await store.saveState(view.taskId, state)
-    await store.recordInteraction({ contactId: view.contactId, taskId: view.taskId, direction: 'INBOUND', occurredAt: safeIso(full.receivedAt, now), subject: full.subject, summary: `[${decision.classification}] ${text.slice(0, 500)}`, requiresAction: decision.kind === 'ESCALATE', messageId: summary.id, threadId: full.threadId, extra: { decision: decision.kind, previousSequenceStatus: prevStatus, transportSender: extractEmailAddress(full.from), originalSender: resolveSender(full) } })
+    const needsAction = decision.kind === 'ESCALATE' || decision.kind === 'CORRECTION' || decision.kind === 'PHOTO'
+    await store.recordInteraction({
+      contactId: view.contactId, taskId: view.taskId, direction: 'INBOUND', occurredAt: safeIso(full.receivedAt, now), subject: full.subject,
+      summary: `[${decision.replyClass ?? decision.classification}] ${text.slice(0, 500)}`, requiresAction: needsAction, messageId: summary.id, threadId: full.threadId,
+      extra: { decision: decision.kind, replyClass: decision.replyClass, previousSequenceStatus: prevStatus, transportSender: extractEmailAddress(full.from), originalSender: resolveSender(full), attachmentCount: full.attachments?.length ?? 0 },
+    })
     out.actions.push(`${def.key}: reply ${summary.id} -> ${decision.kind}; follow-ups cancelled`)
 
     if (decision.kind === 'OPT_OUT') {
@@ -450,23 +568,43 @@ async function processSequence(deps: BizDevDeps, def: BizDevSequenceDef, view: B
       await store.transition(view.taskId, 'CANCELED', { reason: `Contact opted out: "${text.slice(0, 160)}"` })
     } else if (decision.kind === 'DECLINED') {
       await store.transition(view.taskId, 'CANCELED', { reason: `Contact declined: "${text.slice(0, 160)}"` })
+    } else if (decision.kind === 'CONFIRMED') {
+      // Routine: recorded, closed, and NOT sent to Jerry. (The /confirm page remains the only writer of business_confirmation_submissions.)
+      await store.transition(view.taskId, 'DONE', {})
+    } else if (decision.kind === 'DEFERRED') {
+      await store.setPlan(view.taskId, { nextCheckAt: new Date(decision.deferredUntil ?? addBusinessDays(now, 20).toISOString()), nextAction: `Business asked to be contacted around ${(decision.deferredUntil ?? '').slice(0, 10)}; no automated outreach until then.` })
     } else if (decision.kind === 'FAQ') {
-      const sent = await sendInThread(deps, def, state, `Hey ${def.contactName.split(' ')[0]},\n\n${decision.faqAnswer}\n\nThanks, ${def.contactName.split(' ')[0]}!${SIGNATURE}`, full.messageIdHeader, 'FAQ_ANSWER', view, now)
+      const first = def.contactName.split(' ')[0]
+      const sent = await sendInThread(deps, def, state, `Hey ${first},\n\n${decision.faqAnswer}\n\nThanks, ${first}!${SIGNATURE}`, full.messageIdHeader, 'FAQ_ANSWER', view, now)
       state.autoAnswers = (state.autoAnswers ?? 0) + 1
       state.answeredAt = now.toISOString()
       await store.saveState(view.taskId, state)
       await store.setPlan(view.taskId, { nextCheckAt: addBusinessDays(now, def.answeredWaitBusinessDays), nextAction: `Answered a routine question (message ${sent}); no further automated outreach. If no reply, escalate to Jerry.` })
       out.actions.push(`${def.key}: answered routine FAQ (message ${sent})`)
     } else {
-      const esc = buildEscalation(def, state, decision, text, { id: summary.id, threadId: full.threadId, subject: full.subject })
+      const esc = isCampaign
+        ? buildCampaignEscalation(def, state, decision, text, { id: summary.id, threadId: full.threadId, subject: full.subject })
+        : buildEscalation(def, state, decision, text, { id: summary.id, threadId: full.threadId, subject: full.subject })
       await store.transition(view.taskId, 'NEEDS_JERRY', { jerryRequest: esc.jerryRequest, nextAction: esc.nextAction })
-      out.actions.push(`${def.key}: escalated to NEEDS_JERRY`)
+      out.actions.push(`${def.key}: escalated to NEEDS_JERRY (${decision.replyClass ?? decision.classification})`)
     }
     return // sequence is no longer ACTIVE; nothing else to do this tick
   }
   if (candidates.length > 0) return // only auto-replies were seen; state saved, fall through next tick
 
-  // ---- 2. ANSWERED -> after the wait, hand back to Jerry (no silent limbo). ----
+  // ---- 2. ANSWERED / DEFERRED -> after the wait, hand back to Jerry (no silent limbo). ----
+  if (state.sequenceStatus === 'DEFERRED') {
+    if (state.deferredUntil && now >= new Date(state.deferredUntil)) {
+      state.sequenceStatus = 'ESCALATED'
+      await store.saveState(view.taskId, state)
+      await store.transition(view.taskId, 'NEEDS_JERRY', {
+        jerryRequest: `Opportunity: ${def.organization}\nContact: ${def.contactName} <${def.contactEmail}>\nCurrent Stage: NEEDS_JERRY\nConversation Summary: The business asked to be contacted around ${state.deferredUntil.slice(0, 10)}. That date has arrived; Winston sent nothing further.\nJerry Action Required: Decide whether to follow up personally. Gmail thread ${state.threadId}.`,
+        nextAction: `Jerry: the requested contact date for ${def.organization} has arrived (thread ${state.threadId}).`,
+      })
+      out.actions.push(`${def.key}: deferral date reached -> NEEDS_JERRY`)
+    }
+    return
+  }
   if (state.sequenceStatus === 'ANSWERED') {
     const waitUntil = addBusinessDays(new Date(state.answeredAt ?? now.toISOString()), def.answeredWaitBusinessDays)
     if (now >= waitUntil) {
@@ -502,6 +640,15 @@ async function processSequence(deps: BizDevDeps, def: BizDevSequenceDef, view: B
     return
   }
 
+  // SEND: campaign gates first (paused campaigns send nothing; the daily governor applies to follow-ups too).
+  let budget: Budget | undefined
+  if (isCampaign) {
+    evaluateAuthority('bizdev_campaign.send_follow_up') // APPROVAL_REQUIRED: runBizDevTick only loads campaigns carrying Jerry's recorded approval
+    if (!campaign || campaign.state !== 'ACTIVE') { out.actions.push(`${def.key}: follow-up due but campaign is ${campaign?.state ?? 'unknown'}; not sent`); return }
+    budget = await getBudget(deps, ctx, campaign)
+    if (budget.remaining <= 0) { out.actions.push(`${def.key}: follow-up due but daily cap reached (${budget.sentLast24h}/${budget.effectiveCap}); deferred`); return }
+  }
+
   // SEND: guard rails, then claim, then send exactly once.
   const outboundCount = state.stepsSent.filter((s) => s.kind !== 'FAQ_ANSWER').length
   if (outboundCount >= def.maxOutbound) return
@@ -522,14 +669,27 @@ async function processSequence(deps: BizDevDeps, def: BizDevSequenceDef, view: B
     return
   }
 
+  let body = due.followUp.bodyText
+  if (isCampaign) {
+    try {
+      body = renderTemplate(due.followUp.bodyText, state.vars ?? {})
+    } catch (err) {
+      out.errors.push(`${def.key}: follow-up template could not be rendered (${err instanceof Error ? err.message : String(err)}); not sent`)
+      return
+    }
+    const check = validateOutreachCopy(body)
+    if (!check.pass) { out.errors.push(`${def.key}: follow-up copy failed validation (${check.issues.join('; ')}); not sent`); return }
+  }
+
   if (!(await store.claimStep(view.taskId, step))) {
     out.errors.push(`${def.key}: step ${step} already claimed; refusing to resend`)
     return
   }
   state.claimedStep = step
+  if (budget) budget.remaining -= 1
   try {
-    const first = await gmail.getFullMessage(firstSent.messageId)
-    const messageId = await sendInThread(deps, def, state, due.followUp.bodyText, first.messageIdHeader, 'FOLLOW_UP', view, now)
+    const first = await getFull(deps, ctx, firstSent.messageId)
+    const messageId = await sendInThread(deps, def, state, body, first.messageIdHeader, 'FOLLOW_UP', view, now)
     await store.saveState(view.taskId, state)
     const next = nextScheduledAt(def, state)
     if (next) {
@@ -547,16 +707,206 @@ async function processSequence(deps: BizDevDeps, def: BizDevSequenceDef, view: B
       nextAction: `Jerry: verify whether step ${step} reached ${def.contactName} (thread ${state.threadId}).`,
     })
     out.errors.push(`${def.key}: send failed at step ${step}: ${state.lastError}`)
+    if (campaign && isSystemicSendError(state.lastError)) {
+      await pauseCampaignForFailure(deps, campaign, `Systemic send error while sending a follow-up: ${state.lastError}`, out)
+    }
   }
 }
 
 async function sendInThread(deps: BizDevDeps, def: BizDevSequenceDef, state: BizDevState, bodyText: string, inReplyTo: string | null, kind: BizDevSentStep['kind'], view: BizDevSequenceView, now: Date): Promise<string> {
-  const subject = def.subject.toLowerCase().startsWith('re:') ? def.subject : `Re: ${def.subject}`
-  const sent = await deps.gmail.sendMessage({ to: def.contactEmail, from: def.from, subject, bodyText, threadId: state.threadId, inReplyTo, references: inReplyTo })
+  const base = state.subject ?? def.subject
+  const subject = base.toLowerCase().startsWith('re:') ? base : `Re: ${base}`
   const step = state.stepsSent.length + 1
+  state.attempts = [...(state.attempts ?? []), { step, at: now.toISOString(), outcome: 'ATTEMPTED' }]
+  const sent = await deps.gmail.sendMessage({ to: def.contactEmail, from: def.from, subject, bodyText, threadId: state.threadId, inReplyTo, references: inReplyTo })
+  state.attempts = state.attempts.map((a) => (a.step === step && a.outcome === 'ATTEMPTED' ? { ...a, outcome: 'ACCEPTED' as const } : a))
   state.stepsSent.push({ step, kind, messageId: sent.messageId, sentAt: now.toISOString() })
   await deps.store.recordInteraction({ contactId: view.contactId, taskId: view.taskId, direction: 'OUTBOUND', occurredAt: now.toISOString(), subject, summary: `${kind === 'FAQ_ANSWER' ? 'Routine FAQ answer' : `Follow-up ${step - 1}`} sent to ${def.contactName} (step ${step}).`, requiresAction: false, messageId: sent.messageId, threadId: sent.threadId, extra: { sequenceStep: step, sequenceKey: def.key, from: def.from } })
   return sent.messageId
+}
+
+// ---------------------------------------------------------------------------
+// Campaign: bounces, safety pauses, first-touch sending
+// ---------------------------------------------------------------------------
+
+async function pauseCampaignForFailure(deps: BizDevDeps, c: CampaignRuntime, reason: string, out: BizDevTickResult): Promise<void> {
+  if (c.state === 'PAUSED') return
+  c.state = 'PAUSED'
+  c.pauseReason = reason
+  await deps.store.saveCampaign?.(c.key, {
+    state: 'PAUSED',
+    pauseReason: reason,
+    escalate: {
+      jerryRequest: `Opportunity: ${c.name} (campaign ${c.key})\nCurrent Stage: NEEDS_JERRY (campaign PAUSED, no further sends)\nConversation Summary: Winston paused the whole campaign automatically.\nReason: ${reason}\nWinston's Recommendation: Fix the cause (Gmail authorization, the "Send mail as" SMTP credentials for ${c.from}, or the provider limit), check Gmail Sent for any uncertain sends, then resume the campaign.\nJerry Action Required: Repair, then run: npx tsx agent-service/outreachCampaignCli.ts resume ${c.key}`,
+      nextAction: `Jerry: campaign ${c.key} is paused (${reason.slice(0, 120)}).`,
+    },
+  })
+  out.errors.push(`campaign:${c.key}: PAUSED — ${reason}`)
+}
+
+async function handleCampaignBounce(deps: BizDevDeps, c: CampaignRuntime, def: BizDevSequenceDef, view: BizDevSequenceView, state: BizDevState, full: GmailFullMessage, reason: string, now: Date, out: BizDevTickResult): Promise<void> {
+  const kind = classifyBounce(reason)
+  state.deliveryFailure = { messageId: full.id, detectedAt: now.toISOString(), reason }
+  await deps.store.recordInteraction({ contactId: view.contactId, taskId: view.taskId, direction: 'INBOUND', occurredAt: safeIso(full.receivedAt, now), subject: full.subject, summary: `[BOUNCE:${kind}] ${reason.slice(0, 400)}`, requiresAction: kind === 'SENDER_CONFIG', messageId: full.id, threadId: full.threadId, extra: { decision: 'BOUNCE', replyClass: 'bounce', bounceKind: kind } })
+  if (kind === 'SENDER_CONFIG') {
+    state.sequenceStatus = 'PAUSED'
+    await deps.store.saveState(view.taskId, state)
+    await deps.store.transition(view.taskId, 'BLOCKED', { blockerNote: `Delivery failed because of OUR sender configuration, not the address: ${reason.slice(0, 200)}. Re-send by hand after the sender is repaired.`, nextAction: `Re-send to ${def.contactEmail} after the sender is repaired.` })
+    await pauseCampaignForFailure(deps, c, `Sender-configuration bounce: ${reason.slice(0, 300)}`, out)
+    out.actions.push(`${def.key}: SENDER bounce -> campaign paused`)
+    return
+  }
+  state.sequenceStatus = 'BOUNCED'
+  await deps.store.saveState(view.taskId, state)
+  await deps.store.transition(view.taskId, 'CANCELED', { reason: `Address bounced: ${reason.slice(0, 200)}` })
+  c.bounceCount += 1
+  await deps.store.saveCampaign?.(c.key, { bounceCount: c.bounceCount })
+  out.actions.push(`${def.key}: recipient bounced -> closed`)
+  if (bounceRateTripped(c.bounceCount, c.firstTouchSent)) await pauseCampaignForFailure(deps, c, `Bounce rate tripped: ${c.bounceCount} bounces of ${c.firstTouchSent} first touches`, out)
+}
+
+async function runCampaignSends(deps: BizDevDeps, ctx: TickCtx, now: Date, out: BizDevTickResult, activeViews: BizDevSequenceView[]): Promise<void> {
+  const store = deps.store
+  const queuedAll = await store.listQueued!()
+  const uncertainAll = store.listUncertain ? await store.listUncertain() : []
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+
+  for (const c of ctx.runtimes.values()) {
+    evaluateAuthority('bizdev_campaign.send_first_touch') // throws if the operation were ever unregistered
+    const queued = queuedAll.filter((v) => v.state.campaignKey === c.key && v.state.sequenceStatus === 'QUEUED')
+    const uncertain = uncertainAll.filter((v) => v.state.campaignKey === c.key)
+    const waiting = activeViews.filter((v) => v.state.campaignKey === c.key)
+
+    // Reconcile sends whose outcome was uncertain: look (read-only) for the message in Gmail Sent; NEVER resend.
+    for (const v of uncertain.slice(0, 10)) await reconcileUncertain(deps, c, v, now, out)
+
+    if (c.state === 'ACTIVE' && queued.length > 0) {
+      const budget = await getBudget(deps, ctx, c)
+      if (budget.remaining <= 0) {
+        out.actions.push(`campaign:${c.key}: daily cap reached (${budget.sentLast24h} sent in 24h, cap ${budget.effectiveCap}); ${queued.length} queued, waiting for capacity`)
+      } else if (!(await senderVerified(deps, c))) {
+        await pauseCampaignForFailure(deps, c, `Sending identity ${c.from} is not a verified Gmail send-as address.`, out)
+      } else {
+        const wanted = queued.slice(0, Math.min(budget.remaining, c.batchPerTick))
+        const tokens = wanted.flatMap((v) => (v.state.listings ?? []).map((l) => l.token))
+        const present = store.confirmTokensExist ? await store.confirmTokensExist(tokens) : new Set(tokens)
+        const missing = tokens.filter((t) => !present.has(t))
+        if (missing.length > 0) {
+          out.errors.push(`campaign:${c.key}: ${missing.length} confirmation token(s) are not in business_outreach_tokens yet; apply the token SQL first. Nothing sent.`)
+        } else {
+          let sentNow = 0
+          for (const v of wanted) {
+            if (c.state !== 'ACTIVE') break
+            const ok = await sendFirstTouch(deps, c, v, now, out)
+            if (ok) { budget.remaining -= 1; sentNow += 1 }
+            if (c.state !== 'ACTIVE') break
+            await sleep(c.sendDelayMs)
+          }
+          if (sentNow > 0) out.actions.push(`campaign:${c.key}: sent ${sentNow} first touch(es); ${budget.remaining} capacity left today`)
+        }
+      }
+    }
+
+    const queuedLeft = queued.length - (out.actions.filter((a) => a.startsWith(`campaign:${c.key}: first touch to`)).length)
+    if (c.state === 'ACTIVE' && queued.length === 0 && waiting.length === 0 && uncertain.length === 0 && c.firstTouchSent > 0) {
+      await store.saveCampaign?.(c.key, { state: 'COMPLETE' })
+      c.state = 'COMPLETE'
+      out.actions.push(`campaign:${c.key}: every recipient is closed; campaign COMPLETE`)
+    }
+    const budget = ctx.budgets.get(c.key)
+    await store.setCampaignProgress?.(c.key, `Campaign ${c.key} ${c.state}: ~${Math.max(queuedLeft, 0)} queued, ${waiting.length} awaiting reply${budget ? `, ${budget.sentLast24h}/${budget.effectiveCap} sent in last 24h` : ''}.`)
+  }
+}
+
+async function senderVerified(deps: BizDevDeps, c: CampaignRuntime): Promise<boolean> {
+  const ids = await deps.gmail.listSendAsIdentities()
+  return ids.some((i) => i.sendAsEmail.toLowerCase() === c.from.toLowerCase() && i.verificationStatus === 'accepted')
+}
+
+async function sendFirstTouch(deps: BizDevDeps, c: CampaignRuntime, view: BizDevSequenceView, now: Date, out: BizDevTickResult): Promise<boolean> {
+  const { store, gmail } = deps
+  const state: BizDevState = { ...view.state, stepsSent: [] }
+  const label = `campaign:${c.key}: first touch to ${view.contactEmail}`
+
+  if (view.contactSuppressed) {
+    state.sequenceStatus = 'OPTED_OUT'
+    await store.saveState(view.taskId, state)
+    await store.transition(view.taskId, 'CANCELED', { reason: 'Contact is suppressed (do-not-contact); never emailed.' })
+    out.actions.push(`${label} skipped (suppressed)`)
+    return false
+  }
+
+  // Render + validate BEFORE claiming: a template problem is certain (nothing was sent) and systemic.
+  let subject: string, body: string
+  try {
+    subject = state.subject ?? renderTemplate(c.subjectTemplate, state.vars ?? {})
+    body = renderTemplate(c.firstTouchBody, state.vars ?? {})
+    const check = validateOutreachCopy(`${subject}\n${body}`)
+    if (!check.pass) throw new Error(check.issues.join('; '))
+  } catch (err) {
+    await pauseCampaignForFailure(deps, c, `First-touch template failed to render/validate for ${view.contactEmail}: ${err instanceof Error ? err.message : String(err)}`, out)
+    return false
+  }
+
+  if (!(await store.claimStep(view.taskId, 1))) {
+    out.errors.push(`${label}: step 1 already claimed; refusing to resend`)
+    return false
+  }
+  state.claimedStep = 1
+  state.attempts = [...(state.attempts ?? []), { step: 1, at: now.toISOString(), outcome: 'ATTEMPTED' }]
+  await store.saveState(view.taskId, state) // the attempt is durable BEFORE Gmail is called
+
+  try {
+    const sent = await gmail.sendMessage({ to: view.contactEmail, from: c.from, subject, bodyText: body })
+    state.threadId = sent.threadId
+    state.subject = subject
+    state.sequenceStatus = 'ACTIVE'
+    state.stepsSent = [{ step: 1, kind: 'INITIAL', messageId: sent.messageId, sentAt: now.toISOString() }]
+    state.attempts = state.attempts.map((a) => (a.step === 1 && a.outcome === 'ATTEMPTED' ? { ...a, outcome: 'ACCEPTED' as const } : a))
+    await store.saveState(view.taskId, state)
+    await store.recordInteraction({ contactId: view.contactId, taskId: view.taskId, direction: 'OUTBOUND', occurredAt: now.toISOString(), subject, summary: `First-touch outreach sent to ${view.contactName ?? view.contactEmail} (step 1). Gmail accepted it; delivery is not yet confirmed.`, requiresAction: false, messageId: sent.messageId, threadId: sent.threadId, extra: { sequenceStep: 1, sequenceKey: state.sequenceKey, campaignKey: c.key, from: c.from } })
+    const firstFollowUp = c.followUps[0]
+    const next = addBusinessDays(now, firstFollowUp?.afterBusinessDays ?? 5)
+    await store.transition(view.taskId, 'WAITING', { nextCheckAt: next, nextAction: `Await reply; Follow-Up 1 due ${next.toISOString().slice(0, 10)} if no substantive reply or confirmation.` })
+    c.consecutiveSendFailures = 0
+    c.firstTouchSent += 1
+    await store.saveCampaign?.(c.key, { consecutiveSendFailures: 0, firstTouchSent: c.firstTouchSent })
+    out.actions.push(`${label} accepted (message ${sent.messageId})`)
+    return true
+  } catch (err) {
+    // The outcome is UNCERTAIN (it may have gone out). Never retried automatically.
+    const detail = err instanceof Error ? err.message : String(err)
+    state.sequenceStatus = 'SEND_UNCERTAIN'
+    state.lastError = detail
+    state.attempts = (state.attempts ?? []).map((a) => (a.step === 1 && a.outcome === 'ATTEMPTED' ? { ...a, outcome: 'UNCERTAIN' as const, detail: detail.slice(0, 200) } : a))
+    await store.saveState(view.taskId, state)
+    await store.transition(view.taskId, 'BLOCKED', { blockerNote: `First-touch send outcome is uncertain (${detail.slice(0, 160)}). Winston will not retry; it will look for the message in Gmail Sent.`, nextAction: `Verify in Gmail Sent whether ${view.contactEmail} received the first touch.` })
+    c.consecutiveSendFailures += 1
+    await store.saveCampaign?.(c.key, { consecutiveSendFailures: c.consecutiveSendFailures })
+    out.errors.push(`${label}: send failed, outcome uncertain: ${detail}`)
+    if (isSystemicSendError(detail) || c.consecutiveSendFailures >= 3) {
+      await pauseCampaignForFailure(deps, c, `${c.consecutiveSendFailures} consecutive send failure(s); last: ${detail}`, out)
+    }
+    return false
+  }
+}
+
+async function reconcileUncertain(deps: BizDevDeps, c: CampaignRuntime, view: BizDevSequenceView, now: Date, out: BizDevTickResult): Promise<void> {
+  const attempt = [...(view.state.attempts ?? [])].reverse().find((a) => a.step === 1 && a.outcome === 'UNCERTAIN')
+  if (!attempt) return
+  const day = gmailDay(new Date(new Date(attempt.at).getTime() - 86_400_000))
+  const hits = await deps.gmail.searchMessages(`in:sent to:${view.contactEmail} after:${day}`, 3)
+  if (hits.length === 0) return
+  const m = hits[0]
+  const state: BizDevState = { ...view.state, stepsSent: [{ step: 1, kind: 'INITIAL', messageId: m.id, sentAt: attempt.at }], threadId: m.threadId, subject: m.subject || view.state.subject, sequenceStatus: 'ACTIVE' }
+  state.attempts = (view.state.attempts ?? []).map((a) => (a === attempt ? { ...a, outcome: 'ACCEPTED' as const, detail: 'reconciled from Gmail Sent' } : a))
+  await deps.store.saveState(view.taskId, state)
+  await deps.store.recordInteraction({ contactId: view.contactId, taskId: view.taskId, direction: 'OUTBOUND', occurredAt: attempt.at, subject: m.subject, summary: 'First touch found in Gmail Sent after an uncertain send; recorded (no resend).', requiresAction: false, messageId: m.id, threadId: m.threadId, extra: { sequenceStep: 1, reconciled: true, campaignKey: c.key } })
+  const next = addBusinessDays(now, c.followUps[0]?.afterBusinessDays ?? 5)
+  await deps.store.transition(view.taskId, 'WAITING', { nextCheckAt: next, nextAction: `Await reply; Follow-Up 1 due ${next.toISOString().slice(0, 10)}.` })
+  c.firstTouchSent += 1
+  await deps.store.saveCampaign?.(c.key, { firstTouchSent: c.firstTouchSent })
+  out.actions.push(`campaign:${c.key}: reconciled uncertain send to ${view.contactEmail} from Gmail Sent`)
 }
 
 // ---------------------------------------------------------------------------
@@ -564,16 +914,78 @@ async function sendInThread(deps: BizDevDeps, def: BizDevSequenceDef, state: Biz
 // ---------------------------------------------------------------------------
 
 export const BIZDEV_SOURCE_TYPE = 'bizdev_outreach'
+export const BIZDEV_CAMPAIGN_SOURCE_TYPE = 'bizdev_campaign'
+
+interface ViewRow { id: string; updated_at: Date; contact_id: string; email: string; person_name: string | null; organization_name: string | null; relationship_status: string | null; bizdev: BizDevState }
+
+function rowToView(r: ViewRow): BizDevSequenceView {
+  return { taskId: r.id, taskUpdatedAt: r.updated_at, contactId: r.contact_id, contactEmail: r.email, contactName: r.person_name, organization: r.organization_name, contactSuppressed: r.relationship_status === 'DO_NOT_CONTACT', state: r.bizdev }
+}
 
 export class DbBizDevStore implements BizDevStore {
-  async listActive(): Promise<BizDevSequenceView[]> {
-    const rows = await query<{ id: string; updated_at: Date; contact_id: string; email: string; relationship_status: string | null; bizdev: BizDevState }>(
-      `SELECT t.id, t.updated_at, c.id AS contact_id, c.email, c.relationship_status, t.metadata->'bizdev' AS bizdev
+  private async viewsWhere(statusSql: string, extra = ''): Promise<BizDevSequenceView[]> {
+    const rows = await query<ViewRow>(
+      `SELECT t.id, t.updated_at, c.id AS contact_id, c.email, c.person_name, c.organization_name, c.relationship_status, t.metadata->'bizdev' AS bizdev
          FROM agent.tasks t JOIN agent.contacts c ON c.id = t.contact_id
-        WHERE t.source_type = $1 AND t.status = 'WAITING' AND t.metadata ? 'bizdev'`,
+        WHERE t.source_type = $1 AND ${statusSql} AND t.metadata ? 'bizdev' ${extra}
+        ORDER BY t.created_at, t.id`,
       [BIZDEV_SOURCE_TYPE]
     )
-    return rows.map((r) => ({ taskId: r.id, taskUpdatedAt: r.updated_at, contactId: r.contact_id, contactEmail: r.email, contactSuppressed: r.relationship_status === 'DO_NOT_CONTACT', state: r.bizdev }))
+    return rows.map(rowToView)
+  }
+
+  listActive(): Promise<BizDevSequenceView[]> {
+    return this.viewsWhere(`t.status = 'WAITING'`)
+  }
+
+  listQueued(): Promise<BizDevSequenceView[]> {
+    return this.viewsWhere(`t.status = 'READY'`, `AND t.metadata #>> '{bizdev,sequenceStatus}' = 'QUEUED'`)
+  }
+
+  listUncertain(): Promise<BizDevSequenceView[]> {
+    return this.viewsWhere(`t.status = 'BLOCKED'`, `AND t.metadata #>> '{bizdev,sequenceStatus}' = 'SEND_UNCERTAIN'`)
+  }
+
+  async campaignRuntimes(): Promise<CampaignRuntime[]> {
+    const rows = await query<{ id: string; campaign: CampaignRuntime }>(
+      `SELECT t.id, t.metadata->'campaign' AS campaign FROM agent.tasks t WHERE t.source_type = $1 AND t.metadata ? 'campaign' AND t.status NOT IN ('DONE','CANCELED')`,
+      [BIZDEV_CAMPAIGN_SOURCE_TYPE]
+    )
+    return rows.map((r) => ({ ...r.campaign, taskId: r.id }))
+  }
+
+  async saveCampaign(key: string, patch: Partial<CampaignRuntime> & { escalate?: { jerryRequest: string; nextAction: string } }): Promise<void> {
+    const { escalate, ...rest } = patch
+    const rows = await withWriteTransaction(async (c) => {
+      const r = await c.query<{ id: string; status: TaskStatus }>(
+        `UPDATE agent.tasks SET metadata = jsonb_set(coalesce(metadata,'{}'::jsonb), '{campaign}', coalesce(metadata->'campaign','{}'::jsonb) || $2::jsonb)
+          WHERE source_type = $3 AND source_ref = $1 RETURNING id, status`,
+        [key, JSON.stringify(rest), BIZDEV_CAMPAIGN_SOURCE_TYPE]
+      )
+      return r.rows
+    })
+    const task = rows[0]
+    if (!task) throw new Error(`campaign ${key} not found`)
+    const want: TaskStatus | null = escalate ? 'NEEDS_JERRY' : rest.state === 'ACTIVE' ? 'IN_PROGRESS' : rest.state === 'PAUSED' ? 'BLOCKED' : rest.state === 'COMPLETE' ? 'DONE' : null
+    if (!want || want === task.status) return
+    const updatedAt = await this.freshUpdatedAt(task.id)
+    if (want === 'NEEDS_JERRY') await transitionTask({ taskId: task.id, toStatus: 'NEEDS_JERRY', actorOwnerKey: 'chief', expectedUpdatedAt: updatedAt, jerryRequest: escalate!.jerryRequest, nextAction: escalate!.nextAction })
+    else if (want === 'BLOCKED') await transitionTask({ taskId: task.id, toStatus: 'BLOCKED', actorOwnerKey: 'chief', expectedUpdatedAt: updatedAt, blockerNote: rest.pauseReason ?? 'Paused', nextAction: 'Resume the campaign when ready.' })
+    else if (want === 'IN_PROGRESS') await transitionTask({ taskId: task.id, toStatus: 'IN_PROGRESS', actorOwnerKey: 'chief', ownerKey: 'chief', expectedUpdatedAt: updatedAt, nextAction: 'Campaign active: sending and following up automatically.' })
+    else await transitionTask({ taskId: task.id, toStatus: 'DONE', actorOwnerKey: 'chief', expectedUpdatedAt: updatedAt })
+  }
+
+  async setCampaignProgress(key: string, line: string): Promise<void> {
+    const rows = await query<{ id: string; status: string; next_action: string | null }>(`SELECT id, status, next_action FROM agent.tasks WHERE source_type = $1 AND source_ref = $2`, [BIZDEV_CAMPAIGN_SOURCE_TYPE, key])
+    const t = rows[0]
+    if (!t || t.status === 'DONE' || t.status === 'CANCELED' || t.next_action === line) return
+    await updateTaskPlan({ taskId: t.id, actorOwnerKey: 'chief', expectedUpdatedAt: await this.freshUpdatedAt(t.id), nextAction: line })
+  }
+
+  async confirmTokensExist(tokens: string[]): Promise<Set<string>> {
+    if (tokens.length === 0) return new Set()
+    const rows = await query<{ token: string }>(`SELECT token FROM public.business_outreach_tokens WHERE token = ANY($1::text[])`, [tokens])
+    return new Set(rows.map((r) => r.token))
   }
 
   async claimStep(taskId: string, step: number): Promise<boolean> {
@@ -620,13 +1032,12 @@ export class DbBizDevStore implements BizDevStore {
     await updateTaskPlan({ taskId, actorOwnerKey: 'chief', expectedUpdatedAt: await this.freshUpdatedAt(taskId), nextCheckAt: plan.nextCheckAt, nextAction: plan.nextAction })
   }
 
-  async transition(taskId: string, to: 'NEEDS_JERRY' | 'CANCELED', d: { jerryRequest?: string; nextAction?: string; reason?: string }): Promise<void> {
-    await transitionTask({
-      taskId,
-      toStatus: to,
-      actorOwnerKey: 'chief',
-      expectedUpdatedAt: await this.freshUpdatedAt(taskId),
-      ...(to === 'NEEDS_JERRY' ? { jerryRequest: d.jerryRequest, nextAction: d.nextAction } : { cancellationReason: d.reason ?? 'closed' }),
-    })
+  async transition(taskId: string, to: TransitionTarget, d: TransitionDetail): Promise<void> {
+    const base = { taskId, toStatus: to, actorOwnerKey: 'chief', expectedUpdatedAt: await this.freshUpdatedAt(taskId) }
+    if (to === 'NEEDS_JERRY') await transitionTask({ ...base, jerryRequest: d.jerryRequest, nextAction: d.nextAction })
+    else if (to === 'CANCELED') await transitionTask({ ...base, cancellationReason: d.reason ?? 'closed' })
+    else if (to === 'WAITING') await transitionTask({ ...base, nextAction: d.nextAction, nextCheckAt: d.nextCheckAt })
+    else if (to === 'BLOCKED') await transitionTask({ ...base, blockerNote: d.blockerNote, nextAction: d.nextAction })
+    else await transitionTask(base)
   }
 }

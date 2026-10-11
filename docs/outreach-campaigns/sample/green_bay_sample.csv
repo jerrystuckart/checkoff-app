@@ -1,0 +1,6 @@
+business_name,contact_email,item_id,contact_name,metro,website,source_url,confidence,excluded_reason
+Sample Cafe,owner@sample-cafe.example.com,00000000-0000-4000-8000-000000000101,Pat Sample,Green Bay Metro,https://sample-cafe.example.com,https://sample-cafe.example.com/contact,HIGH,
+Sample Cafe,owner@sample-cafe.example.com,00000000-0000-4000-8000-000000000102,Pat Sample,Green Bay Metro,https://sample-cafe.example.com,https://sample-cafe.example.com/contact,HIGH,
+Sample Brewing,hello@sample-brewing.example.com,00000000-0000-4000-8000-000000000103,,Green Bay Metro,https://sample-brewing.example.com,https://sample-brewing.example.com/about,MEDIUM,
+Sample Museum,info@sample-museum.example.com,00000000-0000-4000-8000-000000000104,,Green Bay Metro,https://sample-museum.example.com,,HIGH,
+Sample Chain Store,corporate@chain.example.com,00000000-0000-4000-8000-000000000105,,Green Bay Metro,https://chain.example.com,,LOW,Chain / not locally owned

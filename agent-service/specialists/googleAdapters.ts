@@ -83,6 +83,14 @@ export interface GmailFullMessage {
   receivedAt: string | null
   /** The real RFC 5322 Message-ID HEADER value (e.g. "<abc123@mail.gmail.com>") — distinct from `id`, Gmail's own internal message id. This is what a true reply's In-Reply-To/References headers must reference, per RFC 5322 §3.6.4. Null on the rare message with no such header. */
   messageIdHeader: string | null
+  /** Attachment metadata only (never content). Optional so every existing fixture/fake keeps compiling; absent means "not reported", not "none". */
+  attachments?: GmailAttachmentInfo[]
+}
+
+export interface GmailAttachmentInfo {
+  filename: string
+  mimeType: string
+  size: number
 }
 
 export interface GmailSendAsIdentity {
@@ -126,6 +134,11 @@ export interface GmailAdapter {
   isConfigured(): boolean
   /** Real Gmail search syntax (e.g. `from:someone@example.com subject:Hood River`). */
   searchMessages(query: string, maxResults?: number): Promise<GmailMessageSummary[]>
+  /**
+   * AUTO, read-only — ids only (one list call per page, NO per-message fetch). The scalable primitive for batched
+   * reply scanning and sent-volume counting. Optional so existing fakes keep compiling; callers fall back to searchMessages.
+   */
+  searchMessageIds?(query: string, maxResults?: number): Promise<Array<{ id: string; threadId: string }>>
   /**
    * AUTO, read-only — fetches the FULL message (format=full), including
    * body text. Phase 2L: searchMessages()'s format=metadata fetch never
@@ -201,7 +214,7 @@ export class RealGmailAdapter extends GoogleAdapterBase implements GmailAdapter 
     const token = await this.resolveAccessToken('RealGmailAdapter.getFullMessage')
     const res = await this.fetchImpl(`${this.baseUrl}/gmail/v1/users/me/messages/${messageId}?format=full`, { headers: { authorization: `Bearer ${token}` } })
     if (!res.ok) throw new Error(`Gmail messages.get(${messageId}, format=full) returned ${res.status}: ${await res.text().catch(() => '<no body>')}`)
-    type MimePart = { mimeType?: string; body?: { data?: string }; parts?: MimePart[] }
+    type MimePart = { mimeType?: string; filename?: string; body?: { data?: string; size?: number; attachmentId?: string }; parts?: MimePart[] }
     const msg = (await res.json()) as { id: string; threadId: string; payload?: { headers?: Array<{ name: string; value: string }> } & MimePart }
     const h = (name: string) => msg.payload?.headers?.find((x) => x.name.toLowerCase() === name.toLowerCase())?.value ?? ''
     const splitAddresses = (value: string) =>
@@ -242,6 +255,14 @@ export class RealGmailAdapter extends GoogleAdapterBase implements GmailAdapter 
     else if (htmlPart?.body?.data) bodyText = stripHtml(decodeBase64Url(htmlPart.body.data))
     else if (topLevelData) bodyText = decodeBase64Url(topLevelData)
 
+    const attachments: GmailAttachmentInfo[] = []
+    function collectAttachments(part: MimePart | undefined): void {
+      if (!part) return
+      if (part.filename && part.body?.attachmentId) attachments.push({ filename: part.filename, mimeType: part.mimeType ?? 'application/octet-stream', size: part.body.size ?? 0 })
+      for (const child of part.parts ?? []) collectAttachments(child)
+    }
+    collectAttachments(msg.payload)
+
     return {
       id: msg.id,
       threadId: msg.threadId,
@@ -253,7 +274,25 @@ export class RealGmailAdapter extends GoogleAdapterBase implements GmailAdapter 
       bodyText,
       receivedAt: h('Date') || null,
       messageIdHeader: h('Message-ID') || null,
+      attachments,
     }
+  }
+
+  async searchMessageIds(query: string, maxResults = 500): Promise<Array<{ id: string; threadId: string }>> {
+    const token = await this.resolveAccessToken('RealGmailAdapter.searchMessageIds')
+    const out: Array<{ id: string; threadId: string }> = []
+    let pageToken = ''
+    while (out.length < maxResults) {
+      const pageSize = Math.min(500, maxResults - out.length)
+      const url = `${this.baseUrl}/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=${pageSize}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`
+      const res = await this.fetchImpl(url, { headers: { authorization: `Bearer ${token}` } })
+      if (!res.ok) throw new Error(`Gmail messages.list returned ${res.status}: ${await res.text().catch(() => '<no body>')}`)
+      const json = (await res.json()) as { messages?: Array<{ id: string; threadId: string }>; nextPageToken?: string }
+      out.push(...(json.messages ?? []))
+      if (!json.nextPageToken) break
+      pageToken = json.nextPageToken
+    }
+    return out
   }
 
   async listSendAsIdentities(): Promise<GmailSendAsIdentity[]> {

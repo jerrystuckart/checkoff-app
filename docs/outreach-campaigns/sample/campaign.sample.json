@@ -1,0 +1,16 @@
+{
+  "key": "green-bay-2026-10",
+  "name": "Green Bay business outreach (SAMPLE)",
+  "metroSlug": "green-bay",
+  "metroLabel": "Green Bay Metro",
+  "from": "jerry@getcheckoff.com",
+  "subjectTemplate": "We selected {{business_name}} for CheckOff",
+  "firstTouchBody": "Hi {{business_name}} team,\n\nWe're launching CheckOff across {{metro}}, and we selected {{business_name}} as one of the local places worth discovering.\n\nYour business is already featured in the app:\n\n{{items_block}}\n\nThere is no fee to be included, and you don't need to sign up for anything. We feature exceptional businesses for free because a great CheckOff app needs great places.\n\nWe'd love your help with two quick things:\n- Use the link above to confirm the experience is still accurate, or tell us what to change.\n- If you have a photo you'd prefer us to use, you can add it there, or just reply to this email and attach it.\n\nWe also created a free set of print, social, Story, and in-business graphics you can use to help customers discover your CheckOff: {{kit_url}}\n\nYou can reply to this email any time.\n\nThanks for being part of it!\n\nJerry Stuckart\nFounder, CheckOff\ngetcheckoff.com",
+  "followUp1Body": "DRAFT, NOT APPROVED. Replace before approval.\n\nHi {{business_name}} team,\n\nJust following up on my note about your CheckOff feature:\n\n{{items_block}}\n\nA quick confirmation (or a correction) is all we need.\n\nThanks,\nJerry Stuckart\nFounder, CheckOff",
+  "followUp2Body": "DRAFT, NOT APPROVED. Replace before approval.\n\nHi {{business_name}} team,\n\nOne last note from me about your CheckOff feature. If it looks right, there is nothing more to do; if anything should change, this link takes a minute: {{confirm_url}}\n\nThanks,\nJerry Stuckart\nFounder, CheckOff",
+  "cadence": { "followUp1AfterBusinessDays": 5, "followUp2AfterBusinessDays": 7, "closeAfterBusinessDays": 7 },
+  "dailyCap": 80,
+  "faqEnabled": false,
+  "allowPriorOutreach": false,
+  "approvals": { "firstTouchTemplate": false, "followUpTemplates": false }
+}
