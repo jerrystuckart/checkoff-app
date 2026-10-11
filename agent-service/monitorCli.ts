@@ -37,6 +37,7 @@ import { RealGmailAdapter, RealGoogleCalendarAdapter, RealGoogleContactsAdapter 
 import { GoogleCredentialProvider } from './specialists/googleCredentialProvider'
 import { pollGmailForNewMessages } from './specialists/gmailInboundMonitor'
 import { runBizDevTick, DbBizDevStore } from './specialists/bizDevOutreach'
+import { recordTick, DbHealthStore } from './specialists/monitorHealth'
 import { applyRelationshipResumeEvent, type RelationshipDriverDeps } from './specialists/destinationRelationshipDriver'
 import { runChiefMonitorLoop, DEFAULT_POLL_INTERVAL_MS } from './chiefMonitorLoop'
 
@@ -60,6 +61,8 @@ async function main() {
   const contactDirectory = new DbContactDirectory()
   const checkpointStore = new DbGmailCheckpointStore()
   const bizDevStore = new DbBizDevStore()
+  const healthStore = new DbHealthStore()
+  let lastBizdevErrors: string[] = []
 
   const driverDeps: RelationshipDriverDeps = {
     runStore,
@@ -84,16 +87,24 @@ async function main() {
       // Business-development sequences (non-destination contacts). Isolated: a failure here never fails the destination poll.
       try {
         const bizdev = await runBizDevTick({ gmail, store: bizDevStore })
+        lastBizdevErrors = bizdev.errors
         for (const a of bizdev.actions) console.log(`[chief-monitor] bizdev: ${a}`)
         for (const e of bizdev.errors) console.error(`[chief-monitor] bizdev error: ${e}`)
       } catch (err) {
-        console.error(`[chief-monitor] bizdev tick failed: ${err instanceof Error ? err.message : String(err)}`)
+        lastBizdevErrors = [`bizdev tick failed: ${err instanceof Error ? err.message : String(err)}`]
+        console.error(`[chief-monitor] ${lastBizdevErrors[0]}`)
       }
       return result
     },
-    onTick: (result) => {
+    onTick: async (result) => {
       if (result.error) console.error(`[chief-monitor] poll error: ${result.error}`)
       else if (result.newMessagesFound > 0) console.log(`[chief-monitor] ${result.newMessagesFound} new message(s), ${result.resumeEventsEmitted} resumed, ${result.ambiguousOrUnassociatedCount} needs review`)
+      // Persistent health alert: repeated failures open a NEEDS_JERRY task (resolved automatically on recovery). Never allowed to break the loop.
+      try {
+        for (const a of await recordTick(healthStore, { pollError: result.error, bizdevErrors: lastBizdevErrors })) console.log(`[chief-monitor] health: ${a}`)
+      } catch (err) {
+        console.error(`[chief-monitor] health tracking failed: ${err instanceof Error ? err.message : String(err)}`)
+      }
     },
   })
 }

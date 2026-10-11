@@ -125,6 +125,14 @@ export const STANDING_AUTHORITY: Readonly<Record<string, AuthorityLevel>> = Obje
   'destination_relationship.schedule_followup': 'AUTO',
   'destination_relationship.track_sentiment': 'AUTO',
   'destination_relationship.gather_meeting_evidence': 'AUTO', // pre-call brief assembly from DVA/DAP/contact/email history
+  // --- bizdev_campaign.*: multi-recipient business outreach (bizDevOutreach.ts). Sending is APPROVAL_REQUIRED and is satisfied ONLY by the
+  // campaign-level approval Jerry records through `outreachCampaignCli.ts approve` (metadata.campaign.approval): no approval record, no send.
+  'bizdev_campaign.send_first_touch': 'APPROVAL_REQUIRED',
+  'bizdev_campaign.send_follow_up': 'APPROVAL_REQUIRED',
+  'bizdev_campaign.classify_reply': 'AUTO',
+  'bizdev_campaign.record_confirmation': 'AUTO', // a short, unambiguous "yes, accurate" closes the recipient; never publishes anything
+  'bizdev_campaign.publish_correction': 'APPROVAL_REQUIRED', // listing corrections are never applied automatically
+  'bizdev_campaign.publish_photo': 'APPROVAL_REQUIRED', // photos go through the existing cover-candidate moderation
   'destination_relationship.send_email': 'APPROVAL_REQUIRED',
   'destination_relationship.create_calendar_event': 'APPROVAL_REQUIRED',
   'destination_relationship.change_pricing': 'APPROVAL_REQUIRED',
