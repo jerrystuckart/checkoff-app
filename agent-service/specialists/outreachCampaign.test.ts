@@ -250,6 +250,19 @@ test('crash-safe approval: token SQL is handed over BEFORE any write, the campai
   assert.ok(stored.every((t) => t.startsWith('RUN2_')), 'never-sent orphans were refreshed with the second run\'s tokens')
 })
 
+test('expiresAt: validated, must be in the future at approval, and carried onto the campaign record', async () => {
+  const w = world()
+  const rows = csv(`Cafe One,a@x.com,${uuid(1)},,,,`)
+  const bad = await buildCampaignPlan({ ...DEF, expiresAt: 'not-a-date' }, rows, { lookups: w })
+  assert.ok(bad.issues.some((i) => i.code === 'DEF_EXPIRES'))
+  const past = await buildCampaignPlan({ ...DEF, expiresAt: '2026-10-01T00:00:00Z' }, rows, { lookups: w })
+  await assert.rejects(() => approveCampaign(past, { confirmRecipients: 1, previewHash: past.inputHash, templatesApproved: true, now: new Date('2026-10-12T15:00:00Z') }, w), /not in the future/)
+  assert.equal(w.runtimes.size, 0)
+  const ok = await buildCampaignPlan({ ...DEF, expiresAt: '2026-10-19T15:00:00Z' }, rows, { lookups: w })
+  await approveCampaign(ok, { confirmRecipients: 1, previewHash: ok.inputHash, templatesApproved: true, now: new Date('2026-10-12T15:00:00Z') }, w)
+  assert.equal([...w.runtimes.values()][0].expiresAt, '2026-10-19T15:00:00.000Z')
+})
+
 test('activation is blocked until approval, tokens, sender verification and the kit gate all hold', () => {
   const base = { campaign: { key: 'k', state: 'APPROVED' as const, approval: { approvedBy: 'jerry' as const, approvedAt: 'x', recipientCount: 1, inputHash: 'h', templateHash: 't' } }, tokensNeeded: ['T1', 'T2'], tokensPresent: new Set(['T1', 'T2']), senderVerified: true, kitUrlLive: true }
   assert.deepEqual(activationBlockers(base), [])

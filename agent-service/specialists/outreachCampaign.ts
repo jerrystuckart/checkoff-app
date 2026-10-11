@@ -60,6 +60,8 @@ export interface CampaignDefinition {
   batchPerTick?: number
   faqEnabled?: boolean
   allowPriorOutreach?: boolean
+  /** Optional hard stop (ISO date-time). Required in practice for canaries so they cannot run indefinitely. */
+  expiresAt?: string
   /** Jerry sets these to true only after reading the exact templates. `approve` refuses otherwise. */
   approvals: { firstTouchTemplate: boolean; followUpTemplates: boolean }
 }
@@ -75,6 +77,7 @@ export function validateDefinition(d: CampaignDefinition): Issue[] {
   }
   if (d.firstTouchBody && !/\{\{\s*(items_block|confirm_url)\s*\}\}/.test(d.firstTouchBody)) out.push(err('DEF_NO_CONFIRM_LINK', 'firstTouchBody must include {{items_block}} (or {{confirm_url}}) so each business gets its existing /confirm link'))
   if (d.subjectTemplate && /\{\{\s*(items_block|confirm_url)\s*\}\}/.test(d.subjectTemplate)) out.push(err('DEF_SUBJECT', 'subject must not contain the confirmation link'))
+  if (d.expiresAt !== undefined && Number.isNaN(Date.parse(d.expiresAt))) out.push(err('DEF_EXPIRES', 'expiresAt must be an ISO date-time'))
   const c = d.cadence ?? {}
   for (const [k, v] of Object.entries(c)) if (v !== undefined && (!Number.isInteger(v) || v < 1 || v > 30)) out.push(err('DEF_CADENCE', `cadence.${k} must be an integer from 1 to 30 business days`))
   const cap = d.dailyCap ?? CAMPAIGN_DEFAULTS.dailyCap
@@ -450,6 +453,7 @@ export function assertApprovable(plan: CampaignPlan, a: ApproveArgs): void {
   if (plan.recipients.length === 0) why.push('there are no recipients')
   if (!plan.definition.approvals?.firstTouchTemplate) why.push('definition.approvals.firstTouchTemplate is not true')
   if (!plan.definition.approvals?.followUpTemplates) why.push('definition.approvals.followUpTemplates is not true (follow-up templates must be approved before activation)')
+  if (plan.definition.expiresAt && Date.parse(plan.definition.expiresAt) <= a.now.getTime()) why.push(`expiresAt ${plan.definition.expiresAt} is not in the future`)
   if (!a.templatesApproved) why.push('--templates-approved was not passed')
   if (a.confirmRecipients !== plan.recipients.length) why.push(`--confirm-recipients ${a.confirmRecipients} does not match the ${plan.recipients.length} recipients in the plan`)
   if (a.previewHash !== plan.inputHash) why.push(`--preview-hash ${a.previewHash} does not match the current plan (${plan.inputHash}); re-run preview and review it`)
@@ -542,6 +546,7 @@ export async function approveCampaign(plan: CampaignPlan, args: ApproveArgs, wri
     reserve: d.reserve ?? CAMPAIGN_DEFAULTS.reserve,
     batchPerTick: d.batchPerTick ?? CAMPAIGN_DEFAULTS.batchPerTick,
     sendDelayMs: CAMPAIGN_DEFAULTS.sendDelayMs,
+    ...(d.expiresAt ? { expiresAt: new Date(d.expiresAt).toISOString() } : {}),
     approval: { approvedBy: 'jerry', approvedAt: args.now.toISOString(), recipientCount: plan.recipients.length, inputHash: plan.inputHash, templateHash: plan.templateHash },
     consecutiveSendFailures: 0,
     firstTouchSent: 0,
@@ -644,11 +649,13 @@ export interface CampaignReport {
   needsJerry: number
   uncertainSends: number
   closedNoResponse: number
+  expired: number
+  expiresAt?: string
   needsJerryItems: string[]
   repliesByClass: Record<string, number>
 }
 
-export function summarizeCampaign(runtime: Pick<CampaignRuntime, 'key' | 'state' | 'pauseReason' | 'bounceCount'> | null, key: string, recipients: ReportRecipient[], replyClassCounts: Record<string, number>): CampaignReport {
+export function summarizeCampaign(runtime: Pick<CampaignRuntime, 'key' | 'state' | 'pauseReason' | 'bounceCount' | 'expiresAt'> | null, key: string, recipients: ReportRecipient[], replyClassCounts: Record<string, number>): CampaignReport {
   const c = (pred: (r: ReportRecipient) => boolean) => recipients.filter(pred).length
   const sent = (r: ReportRecipient) => r.state.stepsSent.some((s) => s.kind === 'INITIAL')
   const pending = recipients.filter((r) => r.status === 'WAITING' && r.state.sequenceStatus === 'ACTIVE' && r.state.stepsSent.filter((s) => s.kind !== 'FAQ_ANSWER').length < 3)
@@ -677,6 +684,8 @@ export function summarizeCampaign(runtime: Pick<CampaignRuntime, 'key' | 'state'
     needsJerry: c((r) => r.status === 'NEEDS_JERRY'),
     uncertainSends: c((r) => r.state.sequenceStatus === 'SEND_UNCERTAIN'),
     closedNoResponse: c((r) => r.state.sequenceStatus === 'COMPLETE_NO_RESPONSE'),
+    expired: c((r) => r.state.sequenceStatus === 'EXPIRED'),
+    expiresAt: runtime?.expiresAt,
     needsJerryItems: recipients.filter((r) => r.status === 'NEEDS_JERRY').map((r) => r.nextAction ?? '(no detail)').slice(0, 20),
     repliesByClass: replyClassCounts,
   }
@@ -700,6 +709,7 @@ export function renderReport(r: CampaignReport): string {
     `  Deferred .............. ${r.deferred}`,
     `  Uncertain sends ....... ${r.uncertainSends}`,
     `  Closed, no response ... ${r.closedNoResponse}`,
+    `  Closed by expiry ...... ${r.expired}${r.expiresAt ? `  (hard stop ${r.expiresAt})` : ''}`,
     `  NEEDS_JERRY ........... ${r.needsJerry}`,
   ]
   if (r.needsJerryItems.length) L.push(...r.needsJerryItems.map((x) => `    - ${x}`))

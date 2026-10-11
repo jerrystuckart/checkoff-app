@@ -145,6 +145,7 @@ export type SequenceStatus =
   | 'DEFERRED'
   | 'BOUNCED'
   | 'SEND_UNCERTAIN'
+  | 'EXPIRED'
 
 export interface BizDevSentStep {
   step: number
@@ -366,7 +367,19 @@ export async function runBizDevTick(deps: BizDevDeps): Promise<BizDevTickResult>
     defs[`campaign:${c.key}`] = campaignToDef(c)
   }
 
-  const views = await deps.store.listActive()
+  let views = await deps.store.listActive()
+
+  // 0. Hard stop: an expired campaign sends nothing more, closes every recipient, and completes (records are preserved, not deleted).
+  for (const c of [...ctx.runtimes.values()]) {
+    if (!c.expiresAt || now < new Date(c.expiresAt)) continue
+    try {
+      await expireCampaign(deps, c, views, now, result)
+    } catch (err) {
+      result.errors.push(`campaign:${c.key}: expiry failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    ctx.runtimes.delete(c.key)
+    views = views.filter((v) => v.state.campaignKey !== c.key)
+  }
 
   // 1. One batched scan per campaign (never one search per recipient).
   const byCampaign = new Map<string, BizDevSequenceView[]>()
@@ -479,7 +492,7 @@ async function processSequence(deps: BizDevDeps, ctx: TickCtx, def: BizDevSequen
   const ourSubject = state.subject ?? def.subject
 
   // ---- 0. Self-heal: a stopped sequence whose task is still WAITING (e.g. a crash between saving state and moving the task) is finished off, never left to drift. ----
-  if (state.sequenceStatus === 'DECLINED' || state.sequenceStatus === 'OPTED_OUT' || state.sequenceStatus === 'COMPLETE_NO_RESPONSE' || state.sequenceStatus === 'BOUNCED') {
+  if (state.sequenceStatus === 'DECLINED' || state.sequenceStatus === 'OPTED_OUT' || state.sequenceStatus === 'COMPLETE_NO_RESPONSE' || state.sequenceStatus === 'BOUNCED' || state.sequenceStatus === 'EXPIRED') {
     await store.transition(view.taskId, 'CANCELED', { reason: `Sequence state ${state.sequenceStatus}; task closed by recovery check.` })
     out.actions.push(`${def.key}: recovered stranded ${state.sequenceStatus} -> CANCELED`)
     return
@@ -817,6 +830,20 @@ async function runCampaignSends(deps: BizDevDeps, ctx: TickCtx, now: Date, out: 
     const budget = ctx.budgets.get(c.key)
     await store.setCampaignProgress?.(c.key, `Campaign ${c.key} ${c.state}: ~${Math.max(queuedLeft, 0)} queued, ${waiting.length} awaiting reply${budget ? `, ${budget.sentLast24h}/${budget.effectiveCap} sent in last 24h` : ''}.`)
   }
+}
+
+async function expireCampaign(deps: BizDevDeps, c: CampaignRuntime, activeViews: BizDevSequenceView[], now: Date, out: BizDevTickResult): Promise<void> {
+  const { store } = deps
+  const queued = store.listQueued ? await store.listQueued() : []
+  const uncertain = store.listUncertain ? await store.listUncertain() : []
+  const mine = [...activeViews, ...queued, ...uncertain].filter((v) => v.state.campaignKey === c.key)
+  for (const v of mine) {
+    await store.saveState(v.taskId, { ...v.state, sequenceStatus: 'EXPIRED' })
+    await store.transition(v.taskId, 'CANCELED', { reason: `Campaign expired at ${c.expiresAt}; no further emails.` })
+  }
+  c.state = 'COMPLETE'
+  await store.saveCampaign?.(c.key, { state: 'COMPLETE', pauseReason: `Expired ${c.expiresAt}` })
+  out.actions.push(`campaign:${c.key}: EXPIRED at ${c.expiresAt}; ${mine.length} recipient(s) closed, nothing more will be sent`)
 }
 
 async function senderVerified(deps: BizDevDeps, c: CampaignRuntime): Promise<boolean> {

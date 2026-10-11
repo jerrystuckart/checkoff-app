@@ -49,6 +49,8 @@ export interface CampaignRuntime {
   batchPerTick: number
   sendDelayMs: number
   approval?: CampaignApproval
+  /** Hard stop (ISO). From this instant the campaign sends nothing, closes every recipient, and completes. Always set for canaries. */
+  expiresAt?: string
   consecutiveSendFailures: number
   firstTouchSent: number
   bounceCount: number
