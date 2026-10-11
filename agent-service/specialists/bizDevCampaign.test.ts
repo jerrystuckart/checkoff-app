@@ -37,8 +37,10 @@ async function launch(n: number, o: { def?: Partial<CampaignDefinition>; activat
   return { w, g: new FakeGmail(), runtime: w.runtimes.get(def.key)! }
 }
 
-const tick = (g: FakeGmail, w: MemWorld, now: Date = MON, sequences: Parameters<typeof runBizDevTick>[0]['sequences'] = {}) =>
-  runBizDevTick({ gmail: g, store: w, now: () => now, sleep: async () => {}, sequences })
+const tick = (g: FakeGmail, w: MemWorld, now: Date = MON, sequences: Parameters<typeof runBizDevTick>[0]['sequences'] = {}) => {
+  g.clock = now
+  return runBizDevTick({ gmail: g, store: w, now: () => now, sleep: async () => {}, sequences })
+}
 
 const emailOf = (i: number) => `biz${i}@example.com`
 
@@ -459,4 +461,31 @@ test('a campaign that has not expired is unaffected by an expiresAt in the futur
   assert.equal(g.sends.length, 2)
   await tick(g, w, addBusinessDays(MON, 5))
   assert.equal(g.sends.length, 4)
+})
+
+test('follow-up guard: older personal mail to the contact, and Gmail\'s self-delivered duplicate of OUR send, do not block a follow-up', async () => {
+  const { w, g } = await launch(2)
+  g.addGhostSent(emailOf(1), 'Hello from long ago', new Date(MON.getTime() - 90 * 86_400_000)) // Jerry\'s own old personal email to that address
+  g.addGhostSent(emailOf(1), 'Earlier today test', new Date(MON.getTime() - 3 * 3_600_000)) // same day, hours BEFORE the first touch (Gmail after: is day-granular)
+  await tick(g, w)
+  assert.equal(g.sends.length, 2)
+  g.addSelfDeliveredCopy(emailOf(2)) // a self-addressed (+alias) recipient shows two SENT-labelled messages for one send
+  const r = await tick(g, w, addBusinessDays(MON, 5))
+  assert.equal(g.sends.length, 4, 'both follow-ups went out')
+  assert.ok(!r.actions.some((a) => /manual contact/.test(a)))
+  assert.equal(w.countStatus('NEEDS_JERRY'), 0)
+})
+
+test('follow-up guard still catches a REAL manual email sent after the sequence began, with campaign wording', async () => {
+  const { w, g } = await launch(1)
+  await tick(g, w)
+  g.addGhostSent(emailOf(1), 'Quick personal note', new Date(MON.getTime() + 2 * 86_400_000))
+  const r = await tick(g, w, addBusinessDays(MON, 5))
+  assert.equal(g.sends.length, 1, 'no follow-up piled on top of a human email')
+  assert.ok(r.actions.some((a) => /manual contact detected/.test(a)))
+  const rec = w.byEmail(emailOf(1))
+  assert.equal(rec.status, 'NEEDS_JERRY')
+  assert.match(rec.jerryRequest!, /listing outreach \(campaign gb-test\)/)
+  assert.doesNotMatch(rec.jerryRequest!, /Partnership/)
+  assert.match(rec.jerryRequest!, /Quick personal note/)
 })

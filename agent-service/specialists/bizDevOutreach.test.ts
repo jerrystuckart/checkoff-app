@@ -10,13 +10,21 @@ const d = (s: string) => new Date(s)
 class FakeGmail implements GmailAdapter {
   inbox: GmailMessageSummary[] = []
   bodies: Record<string, string> = {}
-  sentSearchCount = 1 // the initial email
+  clock = new Date(SENT0)
+  /** Sent mail that Winston did NOT make (manual emails, older sends). Own sends are generated from `sends` and the initial email. */
+  extraSent: Array<{ id: string; subject: string; at: string }> = []
+  sendTimes: string[] = []
   sends: GmailSendInput[] = []
   failSend = false
   configured = true
   isConfigured() { return this.configured }
   async searchMessages(q: string): Promise<GmailMessageSummary[]> {
-    if (q.startsWith('in:sent')) return Array.from({ length: this.sentSearchCount + this.sends.length }, (_, i) => ({ id: `s${i}`, threadId: 'T1', from: DEF.from, to: [DEF.contactEmail], subject: DEF.subject, snippet: '', receivedAt: null, replyTo: null }))
+    if (q.startsWith('in:sent')) {
+      const mk = (id: string, subject: string, at: string): GmailMessageSummary => ({ id, threadId: 'T1', from: DEF.from, to: [DEF.contactEmail], subject, snippet: '', receivedAt: at, replyTo: null })
+      const m = q.match(/after:(\d{4})\/(\d{2})\/(\d{2})/)
+      const afterMs = m ? Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : -Infinity
+      return [mk('m0', DEF.subject, SENT0), ...this.sends.map((x, i) => mk(`out${i + 1}`, x.subject, this.sendTimes[i])), ...this.extraSent.map((e) => mk(e.id, e.subject, e.at))].filter((x) => Date.parse(x.receivedAt!) >= afterMs)
+    }
     return this.inbox
   }
   async getFullMessage(id: string): Promise<GmailFullMessage> {
@@ -28,6 +36,7 @@ class FakeGmail implements GmailAdapter {
   async sendMessage(input: GmailSendInput) {
     if (this.failSend) throw new Error('boom')
     this.sends.push(input)
+    this.sendTimes.push(this.clock.toISOString())
     return { messageId: `out${this.sends.length}`, threadId: input.threadId ?? 'T1' }
   }
   reply(id: string, body: string, opts: { from?: string; replyTo?: string | null; subject?: string; threadId?: string } = {}) {
@@ -66,7 +75,7 @@ class MemStore implements BizDevStore {
   }
 }
 
-const run = (g: FakeGmail, s: MemStore, now: string, sequences?: Record<string, BizDevSequenceDef>) => runBizDevTick({ gmail: g, store: s, now: () => d(now), sequences })
+const run = (g: FakeGmail, s: MemStore, now: string, sequences?: Record<string, BizDevSequenceDef>) => { g.clock = d(now); return runBizDevTick({ gmail: g, store: s, now: () => d(now), sequences }) }
 
 test('business days skip weekends: Sunday + 5 = Friday; +7 more = following Tuesday... Wed', () => {
   assert.equal(addBusinessDays(d(SENT0), 5).toISOString().slice(0, 10), '2026-10-16')
@@ -246,7 +255,7 @@ test('duplicate-send latch: an already-claimed step is never re-sent', async () 
 
 test('manual email to the contact since start pauses automation and hands to Jerry', async () => {
   const g = new FakeGmail(), s = new MemStore()
-  g.sentSearchCount = 2 // Jerry emailed Blair himself
+  g.extraSent.push({ id: 'manual1', subject: 'Quick personal note', at: '2026-10-14T12:00:00.000Z' }) // Jerry emailed Blair himself after the sequence began
   await run(g, s, '2026-10-16T19:00:00Z')
   assert.equal(g.sends.length, 0)
   assert.equal(s.status, 'NEEDS_JERRY')
@@ -255,7 +264,15 @@ test('manual email to the contact since start pauses automation and hands to Jer
 
 test('an earlier BOUNCED send is not mistaken for manual contact after a resend', async () => {
   const g = new FakeGmail(), s = new MemStore({ failedSends: [{ messageId: 'old', threadId: 'T0', sentAt: '2026-10-11T18:42:00.000Z', bounceMessageId: 'bx', reason: '535' }] })
-  g.sentSearchCount = 2 // bounced original + the resend
+  g.extraSent.push({ id: 'old', subject: DEF.subject, at: '2026-10-11T18:42:00.000Z' }) // the bounced original is Gmail-sent mail we made ourselves
+  await run(g, s, '2026-10-16T19:00:00Z')
+  assert.equal(g.sends.length, 1)
+  assert.equal(s.status, 'WAITING')
+})
+
+test('mail Jerry sent to the contact BEFORE the sequence began does not count as a manual contact', async () => {
+  const g = new FakeGmail(), s = new MemStore()
+  g.extraSent.push({ id: 'ancient', subject: 'Hello from last year', at: '2025-03-01T12:00:00.000Z' })
   await run(g, s, '2026-10-16T19:00:00Z')
   assert.equal(g.sends.length, 1)
   assert.equal(s.status, 'WAITING')
