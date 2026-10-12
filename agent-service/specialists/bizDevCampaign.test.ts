@@ -192,7 +192,7 @@ test('confirmation tokens must exist before anything is sent', async () => {
   const { w, g } = await launch(3, { tokens: false })
   const r = await tick(g, w)
   assert.equal(g.sends.length, 0)
-  assert.ok(r.errors.some((e) => /token/.test(e)))
+  assert.ok(r.actions.some((a) => /held until their confirmation token exists/.test(a)), 'recipients awaiting their token SQL are held, not errors')
 })
 
 test('the sending identity must be a verified send-as address; otherwise the campaign pauses', async () => {

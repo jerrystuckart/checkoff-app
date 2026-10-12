@@ -49,12 +49,21 @@ export interface CampaignRuntime {
   batchPerTick: number
   sendDelayMs: number
   approval?: CampaignApproval
+  /** Append-only ledger of approved batches (the first approval plus every later wave). Never read by the sender. */
+  batches?: CampaignBatch[]
   /** Hard stop (ISO). From this instant the campaign sends nothing, closes every recipient, and completes. Always set for canaries. */
   expiresAt?: string
   consecutiveSendFailures: number
   firstTouchSent: number
   bounceCount: number
   scan: { afterDay: string; processedMessageIds: string[] }
+}
+
+export interface CampaignBatch {
+  approvedAt: string
+  inputHash: string
+  recipientCount: number
+  recipients: string[]
 }
 
 export const CAMPAIGN_DEFAULTS = Object.freeze({

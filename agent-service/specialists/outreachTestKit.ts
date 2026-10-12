@@ -4,7 +4,7 @@
 
 import type { GmailAdapter, GmailFullMessage, GmailMessageSummary, GmailSendInput, GmailSendAsIdentity, GmailAttachmentInfo } from './googleAdapters'
 import type { BizDevSequenceView, BizDevState, BizDevStore, TransitionDetail, TransitionTarget } from './bizDevOutreach'
-import type { CampaignRuntime } from './bizDevCampaign'
+import type { CampaignBatch, CampaignRuntime } from './bizDevCampaign'
 import type { CampaignWriter, ContactInfo, IntakeLookups, ItemInfo } from './outreachCampaign'
 
 export const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -163,7 +163,8 @@ export class MemWorld implements BizDevStore, CampaignWriter, IntakeLookups {
   }
   async existingCampaignRecipients(key: string): Promise<Set<string>> {
     if (!this.runtimes.has(key)) return new Set() // orphans from an interrupted approval are refreshed, not excluded
-    return new Set([...this.recipients.values()].filter((r) => r.state.campaignKey === key).map((r) => r.email))
+    // A recipient that was queued but never claimed/sent is not "already in the campaign": a retried approval refreshes it.
+    return new Set([...this.recipients.values()].filter((r) => r.state.campaignKey === key && !(r.status === 'READY' && r.state.sequenceStatus === 'QUEUED' && !r.state.claimedStep)).map((r) => r.email))
   }
   gmailPriorSent?: (emails: string[]) => Promise<Set<string>>
 
@@ -176,6 +177,18 @@ export class MemWorld implements BizDevStore, CampaignWriter, IntakeLookups {
     this.contacts.set(r.email, { id, email: r.email, org: r.businessName, name: r.contactName, suppressed: false, hasOutbound: false })
     return id
   }
+  async getCampaign(key: string): Promise<CampaignRuntime | null> { const c = this.runtimes.get(key); return c ? JSON.parse(JSON.stringify(c)) : null }
+  async campaignAssignments(key: string): Promise<Array<{ email: string; itemId: string; token: string }>> {
+    if (!this.runtimes.has(key)) return []
+    return [...this.recipients.values()].filter((r) => r.state.campaignKey === key).flatMap((r) => (r.state.listings ?? []).map((l) => ({ email: r.email, itemId: l.itemId, token: l.token })))
+  }
+  failRecordBatchOnce = false
+  crashOnRecipientWrite = 0 // crash while writing the Nth recipient from now (1 = the next one)
+  async recordBatch(key: string, batch: CampaignBatch): Promise<void> {
+    if (this.failRecordBatchOnce) { this.failRecordBatchOnce = false; throw new Error('simulated crash before the batch was recorded') }
+    const c = this.runtimes.get(key)!
+    c.batches = [...(c.batches ?? []), batch]
+  }
   failCampaignCreateOnce = false
   async createCampaignTask(runtime: Omit<CampaignRuntime, 'taskId'>): Promise<string> {
     if (this.failCampaignCreateOnce) { this.failCampaignCreateOnce = false; throw new Error('simulated crash before the campaign record was written') }
@@ -186,6 +199,7 @@ export class MemWorld implements BizDevStore, CampaignWriter, IntakeLookups {
     return taskId
   }
   async createRecipientTask(i: { contactId: string; sourceRef: string; state: Record<string, unknown> }): Promise<boolean> {
+    if (this.crashOnRecipientWrite > 0 && --this.crashOnRecipientWrite === 0) throw new Error('simulated crash while writing recipients')
     const state = i.state as unknown as BizDevState
     const existing = [...this.recipients.values()].find((r) => r.email === state.contactEmail && r.state.campaignKey === state.campaignKey)
     if (existing) {
@@ -218,6 +232,12 @@ export class MemWorld implements BizDevStore, CampaignWriter, IntakeLookups {
   }
   async setCampaignProgress(_k: string, line: string) { this.progress.push(line) }
   async confirmTokensExist(tokens: string[]) { return new Set(tokens.filter((t) => this.tokens.has(t))) }
+  /** Test override: token -> the item its row points at. Absent = the row points at the item the recipient was approved for. */
+  tokenItems = new Map<string, string>()
+  async confirmTokenItems(tokens: string[]) {
+    const approved = new Map([...this.recipients.values()].flatMap((r) => (r.state.listings ?? []).map((l) => [l.token, l.itemId] as const)))
+    return new Map(tokens.filter((t) => this.tokens.has(t)).map((t) => [t, this.tokenItems.get(t) ?? approved.get(t) ?? ''] as const))
+  }
   async claimStep(taskId: string, step: number) {
     const r = this.recipients.get(taskId)!
     if ((r.state.claimedStep ?? 0) >= step) return false

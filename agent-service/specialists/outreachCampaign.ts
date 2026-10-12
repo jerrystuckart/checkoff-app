@@ -19,7 +19,7 @@
 
 import { createHash, randomBytes } from 'node:crypto'
 import { addBusinessDays } from './bizDevOutreach'
-import { CAMPAIGN_DEFAULTS, type CampaignRuntime } from './bizDevCampaign'
+import { CAMPAIGN_DEFAULTS, type CampaignRuntime, type CampaignBatch } from './bizDevCampaign'
 import { buildItemsBlock, checkTemplate, CANONICAL_KIT_URL, confirmUrlFor, extractPlaceholders, renderTemplate, validateOutreachCopy, type ListingForEmail } from './outreachTemplates'
 
 // ---------------------------------------------------------------------------
@@ -460,6 +460,41 @@ export function assertApprovable(plan: CampaignPlan, a: ApproveArgs): void {
   if (why.length) throw new ApprovalRefused(`Refusing to approve: ${why.join('; ')}.`)
 }
 
+/** Appending to a running campaign is only allowed when it cannot change anything already promised to earlier recipients. */
+export function assertAppendable(existing: CampaignRuntime, plan: CampaignPlan, a: ApproveArgs): void {
+  const why: string[] = []
+  if (existing.state === 'COMPLETE') why.push('the campaign is COMPLETE')
+  if (existing.expiresAt && Date.parse(existing.expiresAt) <= a.now.getTime()) why.push(`the campaign expired at ${existing.expiresAt}`)
+  if (!existing.approval || existing.approval.approvedBy !== 'jerry') why.push('the existing campaign has no recorded approval')
+  else if (existing.approval.templateHash !== plan.templateHash) why.push(`the templates/cadence differ from the approved campaign (stored ${existing.approval.templateHash}, this plan ${plan.templateHash}); a changed template needs a new campaign key`)
+  if ((plan.definition.from ?? 'jerry@getcheckoff.com').toLowerCase() !== existing.from.toLowerCase()) why.push('the sender differs from the approved campaign')
+  if (why.length) throw new ApprovalRefused(`Refusing to append to campaign "${existing.key}": ${why.join('; ')}.`)
+}
+
+/** No item may belong to two recipients of one campaign, and no token may be reused for a different listing. */
+export function assertNoDuplicateAssignments(minted: MintedRecipient[], assigned: Array<{ email: string; itemId: string; token: string }>): void {
+  const why: string[] = []
+  const ownerOf = new Map(assigned.map((x) => [x.itemId, x.email.toLowerCase()]))
+  const tokenOwner = new Map(assigned.map((x) => [x.token, x.itemId]))
+  const batchItem = new Map<string, string>()
+  const batchToken = new Map<string, string>()
+  for (const r of minted) {
+    for (const i of r.items) {
+      const owner = ownerOf.get(i.itemId)
+      if (owner && owner !== r.email.toLowerCase()) why.push(`item ${i.itemId} already belongs to ${owner} in this campaign`)
+      const inBatch = batchItem.get(i.itemId)
+      if (inBatch && inBatch !== r.email) why.push(`item ${i.itemId} appears for both ${inBatch} and ${r.email}`)
+      batchItem.set(i.itemId, r.email)
+      const heldFor = tokenOwner.get(i.token)
+      if (heldFor && heldFor !== i.itemId) why.push(`token ${i.token.slice(0, 6)}… is already assigned to a different item`)
+      const usedFor = batchToken.get(i.token)
+      if (usedFor && usedFor !== i.itemId) why.push(`token ${i.token.slice(0, 6)}… was minted twice in this batch`)
+      batchToken.set(i.token, i.itemId)
+    }
+  }
+  if (why.length) throw new ApprovalRefused(`Refusing to approve: ${[...new Set(why)].join('; ')}.`)
+}
+
 export function mintToken(): string {
   return randomBytes(24).toString('base64url') // 32 URL-safe characters, same shape as the existing seed tokens
 }
@@ -500,6 +535,12 @@ export interface CampaignWriter {
   ensureProject(projectKey: string, name: string, summary: string): Promise<void>
   upsertContact(r: { email: string; businessName: string; contactName: string | null; website: string | null; source: string }): Promise<string>
   createCampaignTask(runtime: Omit<CampaignRuntime, 'taskId'>, projectKey: string): Promise<string>
+  /** The stored campaign, or null when none exists. A non-null result switches approve into append mode. */
+  getCampaign(key: string): Promise<CampaignRuntime | null>
+  /** Item/token assignments of the recipients that already belong to an EXISTING campaign (empty when the campaign does not exist). */
+  campaignAssignments(key: string): Promise<Array<{ email: string; itemId: string; token: string }>>
+  /** Atomically appends one entry to the campaign's batch ledger. Touches nothing else on the campaign record. */
+  recordBatch(key: string, batch: CampaignBatch): Promise<void>
   createRecipientTask(input: { projectKey: string; title: string; contactId: string; sourceRef: string; state: Record<string, unknown> }): Promise<boolean>
 }
 
@@ -509,6 +550,8 @@ export interface ApprovalResult {
   recipientsAlreadyPresent: number
   tokenSql: string
   newTokens: number
+  /** True when the recipients were added to an already-approved campaign (its state, schedule and history were not touched). */
+  appended: boolean
 }
 
 /**
@@ -522,6 +565,9 @@ export async function approveCampaign(plan: CampaignPlan, args: ApproveArgs, wri
   const cad = cadenceOf(d)
   const minted = mintTokens(plan, mint)
   const projectKey = `bizdev-campaign-${d.key}`
+  const existing = await writer.getCampaign(d.key)
+  if (existing) assertAppendable(existing, plan, args)
+  assertNoDuplicateAssignments(minted, await writer.campaignAssignments(d.key))
   const tokenSql = buildTokenSql(d, minted)
   await beforeWrite?.(tokenSql)
   await writer.ensureProject(projectKey, `Outreach campaign: ${d.name}`, `Multi-recipient business outreach (${d.metroLabel}). Campaign definition lives on the bizdev_campaign task; recipients are bizdev_outreach tasks.`)
@@ -553,6 +599,7 @@ export async function approveCampaign(plan: CampaignPlan, args: ApproveArgs, wri
     bounceCount: 0,
     scan: { afterDay: args.now.toISOString().slice(0, 10).replace(/-/g, '/'), processedMessageIds: [] },
   }
+  const batch: CampaignBatch = { approvedAt: args.now.toISOString(), inputHash: plan.inputHash, recipientCount: plan.recipients.length, recipients: minted.map((r) => r.email) }
   let queued = 0
   let present = 0
   for (const r of minted) {
@@ -581,9 +628,12 @@ export async function approveCampaign(plan: CampaignPlan, args: ApproveArgs, wri
     if (created) queued++
     else present++
   }
-  // The campaign record is created LAST: it is the commitment point that lets the monitor act on the recipients.
-  await writer.createCampaignTask(runtime, projectKey)
-  return { campaignKey: d.key, recipientsQueued: queued, recipientsAlreadyPresent: present, tokenSql, newTokens: minted.reduce((n, r) => n + r.items.filter((i) => i.isNew).length, 0) }
+  // New campaign: the campaign record is created LAST, the commitment point that lets the monitor act on the recipients.
+  // Existing campaign (append): only the batch ledger entry is added; state, schedule, counters and history are never rewritten.
+  // Either way a queued recipient cannot be sent until the monitor verifies its token row exists and points at the approved item.
+  if (existing) { if (!existing.batches?.some((b) => b.inputHash === batch.inputHash)) await writer.recordBatch(d.key, batch) }
+  else await writer.createCampaignTask({ ...runtime, batches: [batch] }, projectKey)
+  return { campaignKey: d.key, recipientsQueued: queued, recipientsAlreadyPresent: present, tokenSql, newTokens: minted.reduce((n, r) => n + r.items.filter((i) => i.isNew).length, 0), appended: !!existing }
 }
 
 // ---------------------------------------------------------------------------
