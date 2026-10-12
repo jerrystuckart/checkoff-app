@@ -8,7 +8,7 @@ import { createTask, ensureProject } from '../mutations'
 import type { GmailAdapter } from './googleAdapters'
 import { BIZDEV_CAMPAIGN_SOURCE_TYPE, BIZDEV_SOURCE_TYPE } from './bizDevOutreach'
 import type { CampaignBatch, CampaignRuntime } from './bizDevCampaign'
-import { ApprovalRefused, summarizeCampaign, type CampaignReport, type CampaignWriter, type ContactInfo, type IntakeLookups, type ItemInfo, type ReportRecipient } from './outreachCampaign'
+import { ApprovalRefused, TEST_TOKEN_CAMPAIGN_PATTERN, summarizeCampaign, type CampaignReport, type CampaignWriter, type ContactInfo, type IntakeLookups, type ItemInfo, type ReportRecipient } from './outreachCampaign'
 
 export class DbIntakeLookups implements IntakeLookups {
   constructor(private readonly gmail?: GmailAdapter) {
@@ -28,8 +28,10 @@ export class DbIntakeLookups implements IntakeLookups {
       [ids]
     )
     const tokens = await query<{ item_id: string; token: string }>(
-      `SELECT DISTINCT ON (item_id) item_id, token FROM public.business_outreach_tokens WHERE item_id = ANY($1::uuid[]) ORDER BY item_id, created_at`,
-      [ids]
+      // Tokens minted for test/canary campaigns are retired from planning: a real campaign never reuses them, so it mints fresh production tokens.
+      // The test rows themselves stay untouched (history, opened_at, links already emailed to Jerry keep working).
+      `SELECT DISTINCT ON (item_id) item_id, token FROM public.business_outreach_tokens WHERE item_id = ANY($1::uuid[]) AND coalesce(campaign, '') !~ $2 ORDER BY item_id, created_at`,
+      [ids, TEST_TOKEN_CAMPAIGN_PATTERN]
     )
     const tokenOf = new Map(tokens.map((t) => [t.item_id, t.token]))
     for (const r of rows) out.set(r.id, { id: r.id, text: r.body, isActive: r.is_active, isSecret: r.is_secret, metroSlug: r.metro_slug, existingToken: tokenOf.get(r.id) })
