@@ -270,6 +270,8 @@ export interface BizDevStore {
   setCampaignProgress?(key: string, line: string): Promise<void>
   /** Which of these /confirm tokens exist in public.business_outreach_tokens (read-only). */
   confirmTokensExist?(tokens: string[]): Promise<Set<string>>
+  /** token -> the item_id its row points at (tokens with no row are absent). Lets the sender verify a token matches the approved item. */
+  confirmTokenItems?(tokens: string[]): Promise<Map<string, string>>
 }
 
 export interface BizDevTickResult {
@@ -786,6 +788,29 @@ async function handleCampaignBounce(deps: BizDevDeps, c: CampaignRuntime, def: B
   if (bounceRateTripped(c.bounceCount, c.firstTouchSent)) await pauseCampaignForFailure(deps, c, `Bounce rate tripped: ${c.bounceCount} bounces of ${c.firstTouchSent} first touches`, out)
 }
 
+async function tokenVerifiedRecipients(store: BizDevStore, c: CampaignRuntime, queued: BizDevSequenceView[], out: BizDevTickResult): Promise<BizDevSequenceView[]> {
+  const tokens = [...new Set(queued.flatMap((v) => (v.state.listings ?? []).map((l) => l.token)))]
+  let itemOf: Map<string, string>
+  if (store.confirmTokenItems) itemOf = await store.confirmTokenItems(tokens)
+  else {
+    const present = store.confirmTokensExist ? await store.confirmTokensExist(tokens) : new Set(tokens)
+    itemOf = new Map()
+    for (const v of queued) for (const l of v.state.listings ?? []) if (present.has(l.token)) itemOf.set(l.token, l.itemId)
+  }
+  const ready: BizDevSequenceView[] = []
+  let missing = 0
+  const wrong: string[] = []
+  for (const v of queued) {
+    const ls = v.state.listings ?? []
+    if (ls.some((l) => !itemOf.has(l.token))) { missing += 1; continue }
+    if (ls.some((l) => itemOf.get(l.token) !== l.itemId)) { wrong.push(v.contactEmail); continue }
+    ready.push(v)
+  }
+  if (missing > 0) out.actions.push(`campaign:${c.key}: ${missing} queued recipient(s) held until their confirmation token exists (apply the token SQL); ${ready.length} ready`)
+  if (wrong.length > 0) out.errors.push(`campaign:${c.key}: ${wrong.length} queued recipient(s) NOT sent because a confirmation token points at a different item than the one approved (${wrong.slice(0, 5).join(', ')}).`)
+  return ready
+}
+
 async function runCampaignSends(deps: BizDevDeps, ctx: TickCtx, now: Date, out: BizDevTickResult, activeViews: BizDevSequenceView[]): Promise<void> {
   const store = deps.store
   const queuedAll = await store.listQueued!()
@@ -808,13 +833,11 @@ async function runCampaignSends(deps: BizDevDeps, ctx: TickCtx, now: Date, out: 
       } else if (!(await senderVerified(deps, c))) {
         await pauseCampaignForFailure(deps, c, `Sending identity ${c.from} is not a verified Gmail send-as address.`, out)
       } else {
-        const wanted = queued.slice(0, Math.min(budget.remaining, c.batchPerTick))
-        const tokens = wanted.flatMap((v) => (v.state.listings ?? []).map((l) => l.token))
-        const present = store.confirmTokensExist ? await store.confirmTokensExist(tokens) : new Set(tokens)
-        const missing = tokens.filter((t) => !present.has(t))
-        if (missing.length > 0) {
-          out.errors.push(`campaign:${c.key}: ${missing.length} confirmation token(s) are not in business_outreach_tokens yet; apply the token SQL first. Nothing sent.`)
-        } else {
+        // Per-recipient gate: a queued recipient is sendable only when EVERY one of its tokens exists and points at the approved item.
+        // Recipients still waiting for their token SQL are held individually; they never block the recipients that are ready.
+        const eligible = await tokenVerifiedRecipients(store, c, queued, out)
+        const wanted = eligible.slice(0, Math.min(budget.remaining, c.batchPerTick))
+        {
           let sentNow = 0
           for (const v of wanted) {
             if (c.state !== 'ACTIVE') break
@@ -1021,6 +1044,12 @@ export class DbBizDevStore implements BizDevStore {
     if (tokens.length === 0) return new Set()
     const rows = await query<{ token: string }>(`SELECT token FROM public.business_outreach_tokens WHERE token = ANY($1::text[])`, [tokens])
     return new Set(rows.map((r) => r.token))
+  }
+
+  async confirmTokenItems(tokens: string[]): Promise<Map<string, string>> {
+    if (tokens.length === 0) return new Map()
+    const rows = await query<{ token: string; item_id: string }>(`SELECT token, item_id::text AS item_id FROM public.business_outreach_tokens WHERE token = ANY($1::text[])`, [tokens])
+    return new Map(rows.map((r) => [r.token, r.item_id]))
   }
 
   async claimStep(taskId: string, step: number): Promise<boolean> {

@@ -220,9 +220,12 @@ test('approval writes the campaign + one QUEUED recipient task each, mints token
   assert.equal(r.state.listings?.length, 2)
   assert.match(r.state.vars!.items_block, /MINTED_TOKEN_/)
   assert.equal(w.byEmail('b@x.com').state.listings![0].token, 'EXISTINGTOKEN_brew_two_00000001')
-  // approving the same campaign again is refused and does not duplicate anything
-  await assert.rejects(() => approveCampaign(plan, { confirmRecipients: 2, previewHash: plan.inputHash, templatesApproved: true, now: new Date() }, w), /exists/)
+  // approving the same plan again is an idempotent append: nothing is duplicated and the campaign record is untouched
+  const again = await approveCampaign(plan, { confirmRecipients: 2, previewHash: plan.inputHash, templatesApproved: true, now: new Date() }, w)
+  assert.equal(again.appended, true)
+  assert.equal(again.recipientsQueued, 0)
   assert.equal(w.recipients.size, 2)
+  assert.equal(w.runtimes.size, 1)
   assert.equal(buildTokenSql(DEF, mintTokens(plan, () => 'X'.repeat(32)).map((m) => ({ ...m, items: m.items.map((i) => ({ ...i, isNew: false })) }))).includes('INSERT'), false)
 })
 

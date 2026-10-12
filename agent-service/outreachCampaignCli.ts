@@ -88,9 +88,14 @@ async function main(): Promise<void> {
           fs.writeFileSync(sqlPath, sql)
         }
       )
-      console.log(`Approved campaign ${res.campaignKey}: ${res.recipientsQueued} recipients queued (${res.recipientsAlreadyPresent} already present), ${res.newTokens} new tokens.`)
-      console.log(`Token SQL written to ${sqlPath}. Review and apply it, then run: activate ${res.campaignKey}`)
-      console.log('Nothing has been sent. Sending starts only after `activate`.')
+      console.log(`${res.appended ? 'Appended to running campaign' : 'Approved campaign'} ${res.campaignKey}: ${res.recipientsQueued} recipients queued (${res.recipientsAlreadyPresent} already present), ${res.newTokens} new tokens.`)
+      if (res.appended) {
+        console.log(`Token SQL written to ${sqlPath}. Apply it: new recipients are held (never sent) until each token exists and points at its approved item. The campaign's status and schedule were not changed.`)
+        console.log('Nothing has been sent by this command. No `activate` is needed for an already-active campaign; a paused one stays paused.')
+      } else {
+        console.log(`Token SQL written to ${sqlPath}. Review and apply it, then run: activate ${res.campaignKey}`)
+        console.log('Nothing has been sent. Sending starts only after `activate`.')
+      }
       break
     }
     case 'activate':

@@ -7,7 +7,7 @@ import { query, withWriteTransaction } from '../db'
 import { createTask, ensureProject } from '../mutations'
 import type { GmailAdapter } from './googleAdapters'
 import { BIZDEV_CAMPAIGN_SOURCE_TYPE, BIZDEV_SOURCE_TYPE } from './bizDevOutreach'
-import type { CampaignRuntime } from './bizDevCampaign'
+import type { CampaignBatch, CampaignRuntime } from './bizDevCampaign'
 import { ApprovalRefused, summarizeCampaign, type CampaignReport, type CampaignWriter, type ContactInfo, type IntakeLookups, type ItemInfo, type ReportRecipient } from './outreachCampaign'
 
 export class DbIntakeLookups implements IntakeLookups {
@@ -65,7 +65,10 @@ export class DbIntakeLookups implements IntakeLookups {
     const rows = await query<{ source_ref: string }>(
       `SELECT t.source_ref FROM agent.tasks t
         WHERE t.source_type = $1 AND t.source_ref LIKE $2
-          AND EXISTS (SELECT 1 FROM agent.tasks c WHERE c.source_type = $3 AND c.source_ref = $4)`,
+          AND EXISTS (SELECT 1 FROM agent.tasks c WHERE c.source_type = $3 AND c.source_ref = $4)
+          -- A recipient that was queued but never claimed/sent is NOT "already in the campaign": a retried approval refreshes it.
+          AND NOT (t.status = 'READY' AND coalesce(t.metadata #>> '{bizdev,sequenceStatus}', 'QUEUED') = 'QUEUED'
+                   AND coalesce((t.metadata #>> '{bizdev,claimedStep}')::int, 0) = 0)`,
       [BIZDEV_SOURCE_TYPE, `${campaignKey}:%`, BIZDEV_CAMPAIGN_SOURCE_TYPE, campaignKey]
     )
     return new Set(rows.map((r) => r.source_ref.slice(campaignKey.length + 1).toLowerCase()))
@@ -87,6 +90,37 @@ export class DbCampaignWriter implements CampaignWriter {
       )
       return ins.rows[0].id
     })
+  }
+
+  async getCampaign(key: string): Promise<CampaignRuntime | null> {
+    const rows = await query<{ id: string; campaign: Omit<CampaignRuntime, 'taskId'> | null }>(`SELECT id, metadata->'campaign' AS campaign FROM agent.tasks WHERE source_type = $1 AND source_ref = $2`, [BIZDEV_CAMPAIGN_SOURCE_TYPE, key])
+    const r = rows[0]
+    if (!r) return null
+    if (!r.campaign) throw new ApprovalRefused(`Campaign task "${key}" exists but has no campaign record; refusing to append to it.`)
+    return { ...r.campaign, taskId: r.id }
+  }
+
+  async campaignAssignments(key: string): Promise<Array<{ email: string; itemId: string; token: string }>> {
+    const rows = await query<{ email: string; item_id: string; token: string }>(
+      `SELECT lower(t.metadata #>> '{bizdev,contactEmail}') AS email, l->>'itemId' AS item_id, l->>'token' AS token
+         FROM agent.tasks t, jsonb_array_elements(coalesce(t.metadata #> '{bizdev,listings}', '[]'::jsonb)) l
+        WHERE t.source_type = $1 AND t.metadata #>> '{bizdev,campaignKey}' = $2
+          AND EXISTS (SELECT 1 FROM agent.tasks c WHERE c.source_type = $3 AND c.source_ref = $2)`,
+      [BIZDEV_SOURCE_TYPE, key, BIZDEV_CAMPAIGN_SOURCE_TYPE]
+    )
+    return rows.map((r) => ({ email: r.email, itemId: r.item_id, token: r.token }))
+  }
+
+  async recordBatch(key: string, batch: CampaignBatch): Promise<void> {
+    const n = await withWriteTransaction(async (c) => {
+      const r = await c.query(
+        `UPDATE agent.tasks SET metadata = jsonb_set(metadata, '{campaign,batches}', coalesce(metadata #> '{campaign,batches}', '[]'::jsonb) || $2::jsonb)
+          WHERE source_type = $3 AND source_ref = $1 AND metadata ? 'campaign'`,
+        [key, JSON.stringify([batch]), BIZDEV_CAMPAIGN_SOURCE_TYPE]
+      )
+      return r.rowCount ?? 0
+    })
+    if (n !== 1) throw new Error(`campaign ${key} not found while recording the batch`)
   }
 
   async createCampaignTask(runtime: Omit<CampaignRuntime, 'taskId'>, projectKey: string): Promise<string> {
