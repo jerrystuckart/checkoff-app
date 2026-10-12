@@ -1,6 +1,6 @@
 # Applied migrations: Willcox Champion workflow
 
-These ten migrations are **already applied to production**. They were applied as SQL (`supabase db query --linked -f`, or the SQL editor),
+These eleven migrations are **already applied to production**. They were applied as SQL (`supabase db query --linked -f`, or the SQL editor),
 not with `supabase db push`, so Supabase's own `schema_migrations` table has no record of them (it records 1 row for the whole project).
 This file and git are the record. **Do not re-run them, rename them, or `migration repair` them without a decision.**
 
@@ -19,13 +19,18 @@ promotion function in 20261012 is superseded by the one in 20261013.
 | 8 | 20261012_destination_candidate_promotion.sql | atomic `promote_destination_candidate()`, promotion columns | 2026-10-11 |
 | 9 | 20261012b_list_completion_active_items.sql | list / secret / neighborhood completion ignore inactive items a user has not checked | 2026-10-11 |
 | 10 | 20261013_champion_permissions_and_suggestion_intake.sql | suggestion intake queue, candidate guard trigger, admin guard on `update_item_location` and `create_seasonal_list`, stricter promotion function | 2026-10-11 |
+| 11 | 20261014_destination_settings.sql | per-destination launch switch (`destination_settings`; no row or `false` = enforcement OFF; empty when created) | 2026-10-11 |
 
-The numeric prefixes of #5 to #10 are ahead of the calendar on purpose (they sort after the earlier Willcox migrations); they were all applied on 2026-10-11.
+The numeric prefixes of #5 to #11 are ahead of the calendar on purpose (they sort after the earlier Willcox migrations); they were all applied on 2026-10-11.
 
 ## Verification (2026-10-11)
 Replaying all ten files in this order inside a transaction that was rolled back left a catalog fingerprint
 (columns, constraints, triggers, indexes, policies, RLS flags, function bodies and execute privileges of the Champion tables and functions)
 **identical** to production's: `d7b1a482751a8c4470073ad5c0ee66ef`. So the files match what is applied. Nothing was reapplied.
+
+## Verification of #11 (2026-10-12)
+Replaying `20261014_destination_settings.sql` in a rolled-back transaction left the fingerprint of the table (columns, constraints, RLS flag, policies, privileges, comment)
+**identical** to production's: `0ab2d929cab948f4fcd6068a4941a442`. The ten earlier files were verified together on 2026-10-11 (`d7b1a482751a8c4470073ad5c0ee66ef`).
 
 ## Notes
 - Letter-suffixed versions (`20261006b`, `20261011b`, `20261011c`, `20261012b`) and three files sharing `20261011` cannot be distinct versions to the Supabase CLI.
