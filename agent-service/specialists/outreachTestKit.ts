@@ -85,7 +85,8 @@ export class FakeGmail implements GmailAdapter {
 
   private list(q: string): Array<{ id: string; threadId: string }> {
     if (q.startsWith('in:sent from:')) {
-      const base = this.sentLog.map((s) => ({ id: s.id, threadId: s.threadId }))
+      // Mirror Gmail's newer_than:1d: only mail sent within the 24h before the simulated clock counts.
+      const base = this.sentLog.filter((s) => Date.parse(s.at) > this.clock.getTime() - 86_400_000).map((s) => ({ id: s.id, threadId: s.threadId }))
       const filler = Array.from({ length: this.otherSent24h }, (_, i) => ({ id: `other${i}`, threadId: `T-other${i}` }))
       return [...base, ...filler]
     }
@@ -232,6 +233,9 @@ export class MemWorld implements BizDevStore, CampaignWriter, IntakeLookups {
   }
   async setCampaignProgress(_k: string, line: string) { this.progress.push(line) }
   async confirmTokensExist(tokens: string[]) { return new Set(tokens.filter((t) => this.tokens.has(t))) }
+  async countFirstTouchesSince(campaignKey: string, since: Date) {
+    return [...this.recipients.values()].filter((r) => r.state.campaignKey === campaignKey && r.state.stepsSent.length > 0 && Date.parse(r.state.stepsSent[0].sentAt) > since.getTime()).length
+  }
   /** Test override: token -> the item its row points at. Absent = the row points at the item the recipient was approved for. */
   tokenItems = new Map<string, string>()
   async confirmTokenItems(tokens: string[]) {

@@ -168,6 +168,21 @@ export class DbCampaignWriter implements CampaignWriter {
   }
 }
 
+export async function loadDigest(key: string): Promise<{ report: CampaignReport; extras: import('./outreachCampaign').DigestExtras }> {
+  const report = await loadCampaignReport(key)
+  const camp = await query<{ campaign: CampaignRuntime }>(`SELECT metadata->'campaign' AS campaign FROM agent.tasks WHERE source_type = $1 AND source_ref = $2`, [BIZDEV_CAMPAIGN_SOURCE_TYPE, key])
+  const c = camp[0]?.campaign
+  const r = await query<{ ft: string; fu: string; due: string }>(
+    `SELECT
+       count(*) FILTER (WHERE jsonb_array_length(coalesce(t.metadata #> '{bizdev,stepsSent}','[]'::jsonb)) > 0 AND (t.metadata #>> '{bizdev,stepsSent,0,sentAt}')::timestamptz >= now() - interval '24 hours')::text AS ft,
+       coalesce(sum((SELECT count(*) FROM jsonb_array_elements(coalesce(t.metadata #> '{bizdev,stepsSent}','[]'::jsonb)) s WHERE s->>'kind' = 'FOLLOW_UP' AND (s->>'sentAt')::timestamptz >= now() - interval '24 hours')), 0)::text AS fu,
+       count(*) FILTER (WHERE t.status = 'WAITING' AND t.metadata #>> '{bizdev,sequenceStatus}' = 'ACTIVE' AND jsonb_array_length(coalesce(t.metadata #> '{bizdev,stepsSent}','[]'::jsonb)) < 3 AND t.next_check_at <= now() + interval '24 hours')::text AS due
+       FROM agent.tasks t WHERE t.source_type = $1 AND t.metadata #>> '{bizdev,campaignKey}' = $2`,
+    [BIZDEV_SOURCE_TYPE, key]
+  )
+  return { report, extras: { firstTouchesLast24h: Number(r[0]?.ft ?? 0), followUpsLast24h: Number(r[0]?.fu ?? 0), followUpsDueNext24h: Number(r[0]?.due ?? 0), dailyLimit: c?.firstTouchDailyLimit ?? 50, dailyCap: c?.dailyCap ?? 80 } }
+}
+
 export async function loadCampaignReport(key: string): Promise<CampaignReport> {
   const camp = await query<{ campaign: CampaignRuntime }>(`SELECT metadata->'campaign' AS campaign FROM agent.tasks WHERE source_type = $1 AND source_ref = $2`, [BIZDEV_CAMPAIGN_SOURCE_TYPE, key])
   const rows = await query<{ status: string; bizdev: ReportRecipient['state']; next_check_at: Date | null; next_action: string | null }>(
