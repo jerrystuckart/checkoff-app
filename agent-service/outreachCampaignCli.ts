@@ -15,8 +15,8 @@ import { closePool } from './db'
 import { RealGmailAdapter } from './specialists/googleAdapters'
 import { GoogleCredentialProvider } from './specialists/googleCredentialProvider'
 import { DbBizDevStore } from './specialists/bizDevOutreach'
-import { DbCampaignWriter, DbIntakeLookups, loadCampaignReport } from './specialists/outreachCampaignDb'
-import { activationBlockers, approveCampaign, ApprovalRefused, buildCampaignPlan, renderPreviewCsv, renderPreviewMarkdown, renderReport, type CampaignDefinition } from './specialists/outreachCampaign'
+import { DbCampaignWriter, DbIntakeLookups, loadCampaignReport, loadDigest } from './specialists/outreachCampaignDb'
+import { activationBlockers, approveCampaign, ApprovalRefused, buildCampaignPlan, renderPreviewCsv, renderPreviewMarkdown, renderReport, renderDigest, type CampaignDefinition } from './specialists/outreachCampaign'
 import { CANONICAL_KIT_URL } from './specialists/outreachTemplates'
 
 function flags(argv: string[]): { pos: string[]; f: Record<string, string | true> } {
@@ -134,8 +134,15 @@ async function main(): Promise<void> {
       console.log(renderReport(await loadCampaignReport(key)))
       break
     }
+    case 'digest': {
+      // The daily check-in: one short block per active campaign (or the named ones). Read-only.
+      const keys = pos.length ? pos : (await store.campaignRuntimes()).filter((c) => c.state !== 'COMPLETE').map((c) => c.key)
+      if (!keys.length) console.log('No active campaigns.')
+      for (const k of keys) { const d = await loadDigest(k); console.log(renderDigest(d.report, d.extras)) }
+      break
+    }
     default:
-      console.log('commands: preview | approve | activate | pause | resume | report | status  (see docs/outreach-campaigns/README.md)')
+      console.log('commands: preview | approve | activate | pause | resume | report | status | digest  (see docs/outreach-campaigns/README.md)')
       process.exitCode = 1
   }
 }

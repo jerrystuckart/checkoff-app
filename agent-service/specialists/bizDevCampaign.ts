@@ -42,6 +42,8 @@ export interface CampaignRuntime {
   faqEnabled: boolean
   /** Configurable. Default 80. */
   dailyCap: number
+  /** Max NEW first touches per rolling 24h (default CAMPAIGN_DEFAULTS.firstTouchDailyLimit). Follow-ups never count against it. */
+  firstTouchDailyLimit?: number
   /** Hard provider/account ceiling (Resend free tier: 100/day). The effective cap never exceeds providerLimit - reserve. */
   providerLimit: number
   /** Headroom for outgoing mail Winston cannot see (e.g. app/notification email sent through the same Resend account). */
@@ -68,6 +70,7 @@ export interface CampaignBatch {
 
 export const CAMPAIGN_DEFAULTS = Object.freeze({
   dailyCap: 80,
+  firstTouchDailyLimit: 50,
   providerLimit: 100,
   reserve: 10,
   batchPerTick: 25,
@@ -117,6 +120,30 @@ export function computeCapacity(i: CapacityInput): Capacity {
   const providerCeiling = Math.max(0, i.providerLimit - i.reserve)
   const effectiveCap = Math.max(0, Math.min(i.dailyCap, providerCeiling))
   return { effectiveCap, remaining: Math.max(0, effectiveCap - i.sentLast24h), sentLast24h: i.sentLast24h, limitedBy: providerCeiling < i.dailyCap ? 'provider_limit' : 'campaign_cap' }
+}
+
+export interface FirstTouchAllowanceInput {
+  dailyLimit: number
+  firstTouchesLast24h: number
+  /** What is left of the shared daily cap AFTER follow-ups already sent this tick. */
+  capacityRemaining: number
+  /** Follow-ups that fall due within the next 24h: capacity held back for them so new first touches never crowd them out. */
+  reservedFollowUps: number
+}
+
+export interface FirstTouchAllowance {
+  allowed: number
+  limitedBy: 'first_touch_limit' | 'capacity' | 'follow_up_reserve' | 'none'
+}
+
+/** How many NEW first touches may go out right now. Follow-ups outrank first touches; the 50/day target never overrides the real cap. */
+export function firstTouchAllowance(i: FirstTouchAllowanceInput): FirstTouchAllowance {
+  const byLimit = Math.max(0, i.dailyLimit - i.firstTouchesLast24h)
+  const byCapacity = Math.max(0, i.capacityRemaining)
+  const byReserve = Math.max(0, i.capacityRemaining - Math.max(0, i.reservedFollowUps))
+  const allowed = Math.min(byLimit, byReserve)
+  if (byLimit <= byReserve) return { allowed, limitedBy: byLimit === 0 ? 'first_touch_limit' : 'none' }
+  return { allowed, limitedBy: i.reservedFollowUps > 0 && byReserve < byCapacity ? 'follow_up_reserve' : 'capacity' }
 }
 
 /** Gmail's after: wants YYYY/MM/DD. */

@@ -55,6 +55,8 @@ export interface CampaignDefinition {
   followUp2Body: string
   cadence?: { followUp1AfterBusinessDays?: number; followUp2AfterBusinessDays?: number; closeAfterBusinessDays?: number }
   dailyCap?: number
+  /** Max NEW first touches per rolling 24h. Defaults to 50. Follow-ups are not counted and always outrank first touches. */
+  firstTouchDailyLimit?: number
   providerLimit?: number
   reserve?: number
   batchPerTick?: number
@@ -78,6 +80,7 @@ export function validateDefinition(d: CampaignDefinition): Issue[] {
   if (d.firstTouchBody && !/\{\{\s*(items_block|confirm_url)\s*\}\}/.test(d.firstTouchBody)) out.push(err('DEF_NO_CONFIRM_LINK', 'firstTouchBody must include {{items_block}} (or {{confirm_url}}) so each business gets its existing /confirm link'))
   if (d.subjectTemplate && /\{\{\s*(items_block|confirm_url)\s*\}\}/.test(d.subjectTemplate)) out.push(err('DEF_SUBJECT', 'subject must not contain the confirmation link'))
   if (d.expiresAt !== undefined && Number.isNaN(Date.parse(d.expiresAt))) out.push(err('DEF_EXPIRES', 'expiresAt must be an ISO date-time'))
+  if (d.firstTouchDailyLimit !== undefined && (!Number.isInteger(d.firstTouchDailyLimit) || d.firstTouchDailyLimit < 1 || d.firstTouchDailyLimit > (d.dailyCap ?? CAMPAIGN_DEFAULTS.dailyCap))) out.push(err('DEF_FIRST_TOUCH_LIMIT', 'firstTouchDailyLimit must be an integer from 1 up to dailyCap'))
   const c = d.cadence ?? {}
   for (const [k, v] of Object.entries(c)) if (v !== undefined && (!Number.isInteger(v) || v < 1 || v > 30)) out.push(err('DEF_CADENCE', `cadence.${k} must be an integer from 1 to 30 business days`))
   const cap = d.dailyCap ?? CAMPAIGN_DEFAULTS.dailyCap
@@ -588,6 +591,7 @@ export async function approveCampaign(plan: CampaignPlan, args: ApproveArgs, wri
     maxOutbound: CAMPAIGN_DEFAULTS.maxOutbound,
     faqEnabled: !!d.faqEnabled,
     dailyCap: d.dailyCap ?? CAMPAIGN_DEFAULTS.dailyCap,
+    ...(d.firstTouchDailyLimit ? { firstTouchDailyLimit: d.firstTouchDailyLimit } : {}),
     providerLimit: d.providerLimit ?? CAMPAIGN_DEFAULTS.providerLimit,
     reserve: d.reserve ?? CAMPAIGN_DEFAULTS.reserve,
     batchPerTick: d.batchPerTick ?? CAMPAIGN_DEFAULTS.batchPerTick,
@@ -739,6 +743,29 @@ export function summarizeCampaign(runtime: Pick<CampaignRuntime, 'key' | 'state'
     needsJerryItems: recipients.filter((r) => r.status === 'NEEDS_JERRY').map((r) => r.nextAction ?? '(no detail)').slice(0, 20),
     repliesByClass: replyClassCounts,
   }
+}
+
+export interface DigestExtras {
+  firstTouchesLast24h: number
+  followUpsLast24h: number
+  followUpsDueNext24h: number
+  dailyLimit: number
+  dailyCap: number
+}
+
+/** The whole daily check-in in a few lines: what went out, what is next, whether anything needs Jerry. */
+export function renderDigest(r: CampaignReport, x: DigestExtras): string {
+  const days = r.queued > 0 ? Math.ceil(r.queued / Math.max(1, Math.min(x.dailyLimit, x.dailyCap))) : 0
+  const replies = [`${r.confirmations} confirmed`, `${r.corrections} corrections`, `${r.photos} photos`, `${r.questions} questions`, `${r.partnershipInterest} partnership`]
+  const attention = r.needsJerry > 0 ? `NEEDS YOU: ${r.needsJerry}${r.needsJerryItems.length ? ` (${r.needsJerryItems.slice(0, 3).join(' | ')})` : ''}` : 'Nothing needs you'
+  const problems = [r.bounces ? `${r.bounces} bounce(s)` : '', r.optOuts ? `${r.optOuts} opt-out(s)` : '', r.declines ? `${r.declines} decline(s)` : '', r.uncertainSends ? `${r.uncertainSends} uncertain send(s)` : ''].filter(Boolean)
+  return [
+    `${r.campaignKey}: ${r.state}${r.pauseReason ? ` (${r.pauseReason})` : ''}`,
+    `  Last 24h: ${x.firstTouchesLast24h} first touches (limit ${x.dailyLimit}/day), ${x.followUpsLast24h} follow-ups`,
+    `  Queue: ${r.queued} waiting${r.queued > 0 ? ` (about ${days} sending day${days === 1 ? '' : 's'} at ${Math.min(x.dailyLimit, x.dailyCap)}/day)` : ''} · follow-ups due next 24h: ${x.followUpsDueNext24h}${r.nextFollowUpDue ? ` · next ${r.nextFollowUpDue.slice(0, 10)}` : ''}`,
+    `  Totals: ${r.firstTouchesSent} first touches, ${r.followUpsSent} follow-ups, ${r.awaitingReply} awaiting reply · replies: ${replies.join(', ')}`,
+    `  Problems: ${problems.length ? problems.join(', ') : 'none'} · ${attention}${r.expiresAt ? ` · stops ${r.expiresAt.slice(0, 10)}` : ''}`,
+  ].join('\n')
 }
 
 export function renderReport(r: CampaignReport): string {

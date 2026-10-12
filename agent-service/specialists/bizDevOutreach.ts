@@ -39,7 +39,7 @@ import {
 } from './bizDevReplies'
 import { renderTemplate, validateOutreachCopy } from './outreachTemplates'
 import {
-  campaignToDef, computeCapacity, campaignScanQueries, bounceRateTripped, isSystemicSendError, gmailDay, MAX_FETCH_PER_TICK, MAX_PROCESSED_IDS, type CampaignRuntime,
+  campaignToDef, computeCapacity, firstTouchAllowance, CAMPAIGN_DEFAULTS, campaignScanQueries, bounceRateTripped, isSystemicSendError, gmailDay, MAX_FETCH_PER_TICK, MAX_PROCESSED_IDS, type CampaignRuntime,
 } from './bizDevCampaign'
 
 // Reply logic lives in bizDevReplies.ts (pure); re-exported so existing imports keep working.
@@ -272,6 +272,8 @@ export interface BizDevStore {
   confirmTokensExist?(tokens: string[]): Promise<Set<string>>
   /** token -> the item_id its row points at (tokens with no row are absent). Lets the sender verify a token matches the approved item. */
   confirmTokenItems?(tokens: string[]): Promise<Map<string, string>>
+  /** First touches this campaign sent at or after `since` (source of truth: the recipients' recorded sends). Drives the daily first-touch limit. */
+  countFirstTouchesSince?(campaignKey: string, since: Date): Promise<number>
 }
 
 export interface BizDevTickResult {
@@ -307,6 +309,9 @@ interface TickCtx {
   inbound: Map<string, GmailFullMessage[]>
   fullCache: Map<string, GmailFullMessage>
   budgets: Map<string, Budget>
+  /** Follow-ups falling due within the next 24h, per sending identity: capacity held back from new first touches. */
+  reserved: Map<string, number>
+  firstTouchStats: Map<string, { sentLast24h: number; limit: number; allowed: number; limitedBy: string }>
   tokensChecked: Map<string, Set<string>>
   /** Campaign message ids fully handled this tick (merged into the campaign's scan cursor so closed recipients' mail is never re-fetched). */
   handled: Map<string, string[]>
@@ -327,12 +332,16 @@ async function listIds(gmail: GmailAdapter, q: string, max: number): Promise<Arr
 
 /** Everything sent from this identity in the last rolling 24h — Winston's own sends AND anything else (manual replies), per "include other outgoing activity". */
 async function getBudget(deps: BizDevDeps, ctx: TickCtx, c: CampaignRuntime): Promise<Budget> {
-  const hit = ctx.budgets.get(c.key)
+  // ONE budget per sending identity, shared by every campaign that sends from it: the cap is a property of the mailbox/provider, not of a campaign.
+  const sender = c.from.toLowerCase()
+  const hit = ctx.budgets.get(sender)
   if (hit) return hit
+  const same = [...ctx.runtimes.values()].filter((r) => r.from.toLowerCase() === sender)
+  const strictest = same.length ? same : [c]
   const sent = await listIds(deps.gmail, `in:sent from:${c.from} newer_than:1d`, 500)
-  const cap = computeCapacity({ dailyCap: c.dailyCap, providerLimit: c.providerLimit, reserve: c.reserve, sentLast24h: sent.length })
+  const cap = computeCapacity({ dailyCap: Math.min(...strictest.map((r) => r.dailyCap)), providerLimit: Math.min(...strictest.map((r) => r.providerLimit)), reserve: Math.max(...strictest.map((r) => r.reserve)), sentLast24h: sent.length })
   const b: Budget = { remaining: cap.remaining, sentLast24h: cap.sentLast24h, effectiveCap: cap.effectiveCap }
-  ctx.budgets.set(c.key, b)
+  ctx.budgets.set(sender, b)
   return b
 }
 
@@ -361,7 +370,7 @@ export async function runBizDevTick(deps: BizDevDeps): Promise<BizDevTickResult>
 
   const defs: Record<string, BizDevSequenceDef> = { ...(deps.sequences ?? BIZDEV_SEQUENCES) }
   const runtimes = deps.store.campaignRuntimes ? await deps.store.campaignRuntimes() : []
-  const ctx: TickCtx = { runtimes: new Map(), inbound: new Map(), fullCache: new Map(), budgets: new Map(), tokensChecked: new Map(), handled: new Map() }
+  const ctx: TickCtx = { runtimes: new Map(), inbound: new Map(), fullCache: new Map(), budgets: new Map(), reserved: new Map(), firstTouchStats: new Map(), tokensChecked: new Map(), handled: new Map() }
   for (const c of runtimes) {
     // A campaign is only ever acted on with Jerry's recorded approval (standing authority: APPROVAL_REQUIRED, satisfied only by campaign.approval).
     if (!c.approval || c.approval.approvedBy !== 'jerry') continue
@@ -395,6 +404,16 @@ export async function runBizDevTick(deps: BizDevDeps): Promise<BizDevTickResult>
     } catch (err) {
       result.errors.push(`campaign:${ck}: scan failed: ${err instanceof Error ? err.message : String(err)}`)
     }
+  }
+
+  // 1b. Capacity held back for follow-ups that fall due in the next 24h (those already due are sent in step 2, before any first touch).
+  const horizon = new Date(now.getTime() + 86_400_000)
+  for (const v of views) {
+    const c = v.state.campaignKey ? ctx.runtimes.get(v.state.campaignKey) : undefined
+    const def = defs[v.state.sequenceKey]
+    if (!c || c.state !== 'ACTIVE' || !def || def.mode !== 'campaign') continue
+    const d = dueAction(effectiveDef(def, v), v.state, horizon)
+    if (d.kind === 'SEND' && d.dueAt > now) ctx.reserved.set(c.from.toLowerCase(), (ctx.reserved.get(c.from.toLowerCase()) ?? 0) + 1)
   }
 
   // 2. Replies, bounces, follow-ups, closes.
@@ -836,7 +855,13 @@ async function runCampaignSends(deps: BizDevDeps, ctx: TickCtx, now: Date, out: 
         // Per-recipient gate: a queued recipient is sendable only when EVERY one of its tokens exists and points at the approved item.
         // Recipients still waiting for their token SQL are held individually; they never block the recipients that are ready.
         const eligible = await tokenVerifiedRecipients(store, c, queued, out)
-        const wanted = eligible.slice(0, Math.min(budget.remaining, c.batchPerTick))
+        // Daily first-touch limit + follow-up reserve: the limit is a ceiling, never a target, and never overrides the shared cap.
+        const limit = c.firstTouchDailyLimit ?? CAMPAIGN_DEFAULTS.firstTouchDailyLimit
+        const sentLast24h = store.countFirstTouchesSince ? await store.countFirstTouchesSince(c.key, new Date(now.getTime() - 86_400_000)) : 0
+        const allowance = firstTouchAllowance({ dailyLimit: limit, firstTouchesLast24h: sentLast24h, capacityRemaining: budget.remaining, reservedFollowUps: ctx.reserved.get(c.from.toLowerCase()) ?? 0 })
+        ctx.firstTouchStats.set(c.key, { sentLast24h, limit, allowed: allowance.allowed, limitedBy: allowance.limitedBy })
+        if (eligible.length > 0 && allowance.allowed <= 0) out.actions.push(`campaign:${c.key}: ${eligible.length} ready first touch(es) waiting: ${allowance.limitedBy === 'first_touch_limit' ? `daily first-touch limit reached (${sentLast24h}/${limit} in 24h)` : allowance.limitedBy === 'follow_up_reserve' ? `capacity reserved for ${ctx.reserved.get(c.from.toLowerCase()) ?? 0} follow-up(s) due within 24h` : 'daily cap reached'}`)
+        const wanted = eligible.slice(0, Math.min(allowance.allowed, c.batchPerTick))
         {
           let sentNow = 0
           for (const v of wanted) {
@@ -857,8 +882,9 @@ async function runCampaignSends(deps: BizDevDeps, ctx: TickCtx, now: Date, out: 
       c.state = 'COMPLETE'
       out.actions.push(`campaign:${c.key}: every recipient is closed; campaign COMPLETE`)
     }
-    const budget = ctx.budgets.get(c.key)
-    await store.setCampaignProgress?.(c.key, `Campaign ${c.key} ${c.state}: ~${Math.max(queuedLeft, 0)} queued, ${waiting.length} awaiting reply${budget ? `, ${budget.sentLast24h}/${budget.effectiveCap} sent in last 24h` : ''}.`)
+    const budget = ctx.budgets.get(c.from.toLowerCase())
+    const ft = ctx.firstTouchStats.get(c.key)
+    await store.setCampaignProgress?.(c.key, `Campaign ${c.key} ${c.state}: ~${Math.max(queuedLeft, 0)} queued, ${waiting.length} awaiting reply${budget ? `, ${budget.sentLast24h}/${budget.effectiveCap} sent in last 24h` : ''}${ft ? `, first touches ${ft.sentLast24h}/${ft.limit} (+${ft.allowed} allowed now)` : ''}, ${ctx.reserved.get(c.from.toLowerCase()) ?? 0} follow-up(s) due next 24h.`)
   }
 }
 
@@ -1044,6 +1070,17 @@ export class DbBizDevStore implements BizDevStore {
     if (tokens.length === 0) return new Set()
     const rows = await query<{ token: string }>(`SELECT token FROM public.business_outreach_tokens WHERE token = ANY($1::text[])`, [tokens])
     return new Set(rows.map((r) => r.token))
+  }
+
+  async countFirstTouchesSince(campaignKey: string, since: Date): Promise<number> {
+    const rows = await query<{ n: string }>(
+      `SELECT count(*)::text AS n FROM agent.tasks t
+        WHERE t.source_type = $1 AND t.metadata #>> '{bizdev,campaignKey}' = $2
+          AND jsonb_array_length(coalesce(t.metadata #> '{bizdev,stepsSent}', '[]'::jsonb)) > 0
+          AND (t.metadata #>> '{bizdev,stepsSent,0,sentAt}')::timestamptz > $3`,
+      [BIZDEV_SOURCE_TYPE, campaignKey, since.toISOString()]
+    )
+    return Number(rows[0]?.n ?? 0)
   }
 
   async confirmTokenItems(tokens: string[]): Promise<Map<string, string>> {

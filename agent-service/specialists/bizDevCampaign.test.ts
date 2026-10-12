@@ -75,7 +75,7 @@ test('a campaign without Jerry\'s recorded approval is never acted on', async ()
 })
 
 test('governor: 80/day total across ticks, counting other outgoing mail; then it pauses instead of exceeding', async () => {
-  const { w, g } = await launch(100)
+  const { w, g } = await launch(100, { def: { firstTouchDailyLimit: 80 } }) // this test is about the cap, so lift the separate first-touch limit
   let total = 0
   const per: number[] = []
   for (let i = 0; i < 6; i++) { const before = g.sends.length; await tick(g, w); per.push(g.sends.length - before); total = g.sends.length }
@@ -87,11 +87,11 @@ test('governor: 80/day total across ticks, counting other outgoing mail; then it
 })
 
 test('governor includes OTHER outgoing activity and the stricter provider ceiling', async () => {
-  const a = await launch(100)
+  const a = await launch(100, { def: { firstTouchDailyLimit: 80 } })
   a.g.otherSent24h = 50
   for (let i = 0; i < 4; i++) await tick(a.g, a.w)
   assert.equal(a.g.sends.length, 30, '80 minus 50 already sent today by other means')
-  const b = await launch(100, { def: { dailyCap: 95 } })
+  const b = await launch(100, { def: { dailyCap: 95, firstTouchDailyLimit: 95 } })
   for (let i = 0; i < 6; i++) await tick(b.g, b.w)
   assert.equal(b.g.sends.length, 90, 'dailyCap 95 is limited to providerLimit 100 - reserve 10')
   const c = await launch(10)
@@ -243,7 +243,7 @@ test('approved cadence: Follow-Up 1 at +5 business days, Follow-Up 2 at +7 more,
 test('follow-ups share the daily cap with first touches', async () => {
   const { w, g } = await launch(5)
   await tick(g, w)
-  g.otherSent24h = 74 // 5 sent by us + 74 other = 79 of 80
+  g.otherSent24h = 79 // a week later the first touches have aged out of the 24h window; 79 other sends leave exactly one slot
   await tick(g, w, addBusinessDays(MON, 5))
   assert.equal(g.sends.length, 5 + 1, 'only one follow-up fits')
 })
