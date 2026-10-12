@@ -498,6 +498,10 @@ export function assertNoDuplicateAssignments(minted: MintedRecipient[], assigned
   if (why.length) throw new ApprovalRefused(`Refusing to approve: ${[...new Set(why)].join('; ')}.`)
 }
 
+/** Token rows whose campaign tag ends in -test or -canary belong to tests: they are never reused for a production campaign (see DbIntakeLookups.items). */
+export const TEST_TOKEN_CAMPAIGN_PATTERN = '(-test|-canary)$'
+export const isTestTokenCampaign = (campaign: string | null | undefined): boolean => new RegExp(TEST_TOKEN_CAMPAIGN_PATTERN).test(campaign ?? '')
+
 export function mintToken(): string {
   return randomBytes(24).toString('base64url') // 32 URL-safe characters, same shape as the existing seed tokens
 }

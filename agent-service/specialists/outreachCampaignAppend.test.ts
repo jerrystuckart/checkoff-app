@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { runBizDevTick } from './bizDevOutreach'
-import { buildCampaignPlan, approveCampaign, ApprovalRefused, type CampaignDefinition } from './outreachCampaign'
+import { buildCampaignPlan, approveCampaign, ApprovalRefused, isTestTokenCampaign, TEST_TOKEN_CAMPAIGN_PATTERN, type CampaignDefinition } from './outreachCampaign'
 import { FakeGmail, MemWorld, uuid } from './outreachTestKit'
 
 // Appending approved batches to an already-active campaign. FakeGmail + MemWorld only: no network, no database, no real email.
@@ -208,4 +208,10 @@ test('a fresh campaign still behaves as before: created last, with a one-entry l
   assert.equal(res.appended, false)
   assert.equal(w.runtimes.get(DEF.key)!.batches!.length, 1)
   assert.equal(w.runtimes.get(DEF.key)!.state, 'APPROVED')
+})
+
+test('test and canary token campaigns are retired from planning; production campaigns are not', () => {
+  for (const t of ['bizdev_green-bay-p1-test', 'bizdev_green-bay-canary', 'bizdev_denver-test']) assert.equal(isTestTokenCampaign(t), true, t)
+  for (const t of ['bizdev_green-bay-p1', 'bizdev_green-bay-2026-10', 'bizdev_testing-grounds-launch', null, undefined, '']) assert.equal(isTestTokenCampaign(t), false, String(t))
+  assert.equal(new RegExp(TEST_TOKEN_CAMPAIGN_PATTERN).test('bizdev_x-test'), true, 'the exact string passed to SQL behaves the same way')
 })
