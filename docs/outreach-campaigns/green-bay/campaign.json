@@ -1,0 +1,24 @@
+{
+  "key": "green-bay-p1",
+  "name": "Green Bay Priority 1, batch 1 (12 independents)",
+  "metroSlug": "green-bay",
+  "metroLabel": "Green Bay Metro",
+  "from": "jerry@getcheckoff.com",
+  "subjectTemplate": "We selected {{business_name}} for CheckOff",
+  "firstTouchBody": "Hi {{business_name}} team,\n\nWe're launching CheckOff across {{metro}}, and we selected {{business_name}} as one of the local places worth discovering.\n\nYour business is already featured in the app:\n\n{{items_block}}\n\nThere is no fee to be included, and you don't need to sign up for anything. We feature exceptional businesses for free because a great CheckOff app needs great places.\n\nWe'd love your help with two quick things:\n- Use the link above to confirm the experience is still accurate, or tell us what to change.\n- If you have a photo you'd prefer us to use, you can add it there, or just reply to this email and attach it.\n\nWe also created a free set of print, social, Story, and in-business graphics you can use to help customers discover your CheckOff: {{kit_url}}\n\nYou can reply to this email any time.\n\nThanks for being part of it!\n\nJerry Stuckart\nFounder, CheckOff\ngetcheckoff.com",
+  "followUp1Body": "Hi {{business_name}} team,\n\nJust following up on the CheckOff listing we sent over for {{business_name}}.\n\nWe're helping people discover great local places around Green Bay, and we'd love to make sure we've represented your business accurately.\n\nYou can review your listing here:\n\n{{items_block}}\n\nIf everything looks good, a quick confirmation is all we need. If something needs changing, just reply and let me know.\n\nThanks!\n\nJerry\nFounder, CheckOff\njerry@getcheckoff.com",
+  "followUp2Body": "Hi {{business_name}} team,\n\nOne last note about {{business_name}} on CheckOff.\n\nWe're building a local discovery app that encourages people to get out and experience places worth visiting around Green Bay.\n\nWe'd still love your input on the listing:\n\n{{confirm_url}}\n\nThere's no cost to confirm your information, and you're welcome to reply with corrections.\n\nI'll leave it here after this message. Thanks for everything you do for the Green Bay community!\n\nJerry\nFounder, CheckOff\njerry@getcheckoff.com",
+  "cadence": {
+    "followUp1AfterBusinessDays": 5,
+    "followUp2AfterBusinessDays": 7,
+    "closeAfterBusinessDays": 7
+  },
+  "dailyCap": 80,
+  "faqEnabled": false,
+  "allowPriorOutreach": false,
+  "approvals": {
+    "firstTouchTemplate": true,
+    "followUpTemplates": true
+  },
+  "expiresAt": "2026-11-16T07:00:00.000Z"
+}

@@ -126,3 +126,12 @@ No new tables, no new task statuses, no second scheduler, no second Gmail adapte
 - Business days are Monday to Friday with no holiday calendar.
 - Replies where the business changes the subject line are not auto-matched; they land in the monitor's existing "needs review" list.
 - The health alert runs inside the monitor; if the monitor process itself is dead, launchd restarts it, but there is no external watchdog.
+
+## Production operation (roster approval, daily queue, digest)
+
+- **One approval per roster.** `preview` the whole verified roster, then `approve` once. If the campaign already exists, `approve` *appends*: it adds only the previewed recipients and leaves status, schedule, counters and history alone. It refuses a changed template, a completed/expired campaign, an item already assigned to someone else, and duplicate tokens. It is safe to re-run after a partial failure.
+- **Tokens gate sending.** A queued recipient is held until every token exists in `business_outreach_tokens` and points at its approved item. Apply the token SQL; recipients that are ready are never blocked by ones that are not.
+- **Daily queue.** The monitor sends at most `firstTouchDailyLimit` (default **50**) NEW first touches per rolling 24h, only after due follow-ups, never beyond the shared sender cap (80/day, provider limit 100 minus reserve), and holding back capacity for follow-ups due within 24h. All campaigns on one sender share one budget. Weekend sends are allowed.
+- **Daily check-in.** `npx tsx agent-service/outreachCampaignCli.ts digest [campaignKey]` prints a five-line summary per campaign (read-only). Nothing needs approving day to day; `NEEDS YOU` in the digest is the only prompt.
+- **Test/canary tokens.** Give every test or canary campaign a key ending in `-test` or `-canary`. Their token rows are never reused by a production plan (a real campaign mints fresh tokens for those items); the rows, history and emailed links are left untouched. There is no revoke state in `business_outreach_tokens`, and the supported way to retire a token is this planning rule, not deletion.
+- **Contact evidence.** Before a roster is approved, each address must appear publicly on the business's own site or a page about the business; partner/chamber citations must be re-checked live (a 2026-10-12 check failed 2 of 3). Never guess or substitute addresses.
