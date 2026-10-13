@@ -9,6 +9,7 @@ import { supabase } from '../lib/supabase'
 import { adoptDestinationList } from '../lib/useItems'
 import { useTheme } from '../lib/ThemeContext'
 import { isWithinWindow } from '../lib/seasonWindow'
+import { activeCopyFilter, progressFraction, hubListEmoji } from '../lib/hubListPresentation'
 import { useHubLocationSection } from '../lib/useHubLocationSection'
 import HubLocationSection from '../components/hub/HubLocationSection'
 import ExpandableDescription from '../components/hub/ExpandableDescription'
@@ -74,7 +75,7 @@ export default function HubScreen({ navigation, route }) {
     try {
       const { data, error } = await supabase
         .from('destinations')
-        .select('*, destination_spotlights(*), destination_lists(*, lists!destination_lists_list_id_fkey(id,title,starts_at,ends_at))')
+        .select('*, destination_spotlights(*), destination_lists(*, lists!destination_lists_list_id_fkey(id,title,starts_at,ends_at,hero_image_url,cover_emoji))')
         .eq('id', destinationId)
         .maybeSingle()
 
@@ -147,7 +148,7 @@ export default function HubScreen({ navigation, route }) {
     setProgressByListId(result)
   }
 
-  async function handleListTap(destListId, sourceListId) {
+  async function handleListTap(destListId, sourceListId, sourceList = null) {
     if (!user) {
       Alert.alert(
         'Sign in first',
@@ -175,12 +176,12 @@ export default function HubScreen({ navigation, route }) {
         .select('id')
         .eq('source_destination_list_id', destListId)
         .eq('creator_id', user.id)
-        .gt('ends_at', today)
+        .or(activeCopyFilter(today))
         .order('created_at', { ascending: false })
         .limit(1)
 
       if (existing?.[0]?.id) {
-        navigation.push('List', { listId: existing[0].id })
+        navigation.push('List', { listId: existing[0].id, title: sourceList?.title })
         return
       }
 
@@ -197,7 +198,7 @@ export default function HubScreen({ navigation, route }) {
         return
       }
 
-      navigation.push('List', { listId: newListId })
+      navigation.push('List', { listId: newListId, title: sourceList?.title })
     } finally {
       setJoiningDestListId(null)
     }
@@ -296,7 +297,7 @@ export default function HubScreen({ navigation, route }) {
                 partnerName={dl.show_partner_credit && dl.owner_partner_id ? partnerNames[dl.owner_partner_id] : null}
                 joining={joiningDestListId === dl.id}
                 progress={dl.lists?.id ? progressByListId[dl.lists.id] : null}
-                onPress={() => handleListTap(dl.id, dl.list_id)}
+                onPress={() => handleListTap(dl.id, dl.list_id, dl.lists)}
                 styles={styles}
               />
             ))
@@ -373,21 +374,45 @@ function SpotlightCard({ spotlight, partnerName, onPress, styles, colors }) {
 }
 
 function ListCard({ destList, partnerName, joining, progress, onPress, styles }) {
+  const list = destList.lists
+  const emoji = hubListEmoji(list?.cover_emoji)
+  const title = `${emoji ? emoji + ' ' : ''}${list?.title ?? 'Untitled list'}`
+  const hasProgress = !!progress && progress.total > 0
+  const body = (onImage) => (
+    <View style={onImage ? styles.listCardImageBody : { flex: 1 }}>
+      <Text style={onImage ? styles.listCardImageTitle : styles.listCardTitle} numberOfLines={2}>{title}</Text>
+      {hasProgress && (
+        <View style={styles.listCardProgressRow}>
+          <View style={[styles.listCardBar, onImage && styles.listCardBarOnImage]}>
+            <View style={[styles.listCardBarFill, { width: `${Math.round(progressFraction(progress) * 100)}%` }]} />
+          </View>
+          <Text style={[styles.listCardProgress, onImage && styles.listCardProgressOnImage]}>{progress.checked} of {progress.total}</Text>
+        </View>
+      )}
+      {!!partnerName && <Text style={styles.creditText}>Presented by {partnerName}</Text>}
+    </View>
+  )
+  const cta = joining
+    ? <ActivityIndicator size="small" color={AMBER} />
+    : <View style={styles.listCardOpenPill}><Text style={styles.listCardOpenText}>Open →</Text></View>
+
+  if (list?.hero_image_url) {
+    return (
+      <TouchableOpacity style={styles.listCardImageWrap} activeOpacity={0.9} onPress={onPress} disabled={joining}>
+        <ImageBackground source={{ uri: list.hero_image_url }} style={styles.listCardImageBg} resizeMode="cover">
+          <LinearGradient colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.25)', 'rgba(0,0,0,0.82)']} locations={[0, 0.4, 1]} style={StyleSheet.absoluteFillObject} />
+          <View style={styles.listCardImageRow}>
+            {body(true)}
+            {cta}
+          </View>
+        </ImageBackground>
+      </TouchableOpacity>
+    )
+  }
   return (
     <TouchableOpacity style={styles.listCard} activeOpacity={0.88} onPress={onPress} disabled={joining}>
-      <View style={{ flex: 1 }}>
-        <Text style={styles.listCardTitle} numberOfLines={2}>{destList.lists?.title ?? 'Untitled list'}</Text>
-        {!!progress && progress.total > 0 && (
-          <Text style={styles.listCardProgress}>{progress.checked} of {progress.total}</Text>
-        )}
-        {!!partnerName && (
-          <Text style={styles.creditText}>Presented by {partnerName}</Text>
-        )}
-      </View>
-      {joining
-        ? <ActivityIndicator size="small" color={AMBER} />
-        : <Text style={styles.listCardCTA}>Open →</Text>
-      }
+      {body(false)}
+      {joining ? cta : <Text style={styles.listCardCTA}>Open →</Text>}
     </TouchableOpacity>
   )
 }
@@ -492,8 +517,20 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER }) {
       marginBottom: 10,
     },
     listCardTitle: { fontSize: 15, fontWeight: '800', color: TEXT },
-    listCardProgress: { fontSize: 12, fontWeight: '700', color: AMBER, marginTop: 3 },
+    listCardProgress: { fontSize: 12, fontWeight: '700', color: AMBER },
     listCardCTA: { fontSize: 13, fontWeight: '800', color: AMBER, marginLeft: 12 },
+    listCardImageWrap: { borderRadius: 18, overflow: 'hidden', marginBottom: 12, backgroundColor: CARD, borderWidth: 1, borderColor: BORDER },
+    listCardImageBg: { width: '100%', height: 168, justifyContent: 'flex-end' },
+    listCardImageRow: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', padding: 14 },
+    listCardImageBody: { flex: 1, marginRight: 10 },
+    listCardImageTitle: { fontSize: 19, fontWeight: '800', color: '#FFFFFF', textShadowColor: 'rgba(0,0,0,0.5)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 4 },
+    listCardProgressRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
+    listCardBar: { flex: 1, height: 5, borderRadius: 3, backgroundColor: BORDER, overflow: 'hidden', marginRight: 8, maxWidth: 140 },
+    listCardBarOnImage: { backgroundColor: 'rgba(255,255,255,0.3)' },
+    listCardBarFill: { height: '100%', backgroundColor: AMBER },
+    listCardProgressOnImage: { color: '#FFFFFF', marginTop: 0 },
+    listCardOpenPill: { backgroundColor: AMBER, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 999 },
+    listCardOpenText: { fontSize: 13, fontWeight: '800', color: '#1A1A2E' },
     emptySub: { fontSize: 13, color: MUTED },
     emptyTitle: { fontSize: 16, fontWeight: '800', color: TEXT },
     backText: { fontSize: 14, color: AMBER, fontWeight: '700' },
