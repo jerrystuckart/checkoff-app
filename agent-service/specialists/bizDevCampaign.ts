@@ -44,6 +44,8 @@ export interface CampaignRuntime {
   allowPriorOutreach?: boolean
   /** Configurable. Default 80. */
   dailyCap: number
+  /** 'experience-v2': every first touch carries the exact experience, its confirmation URL and public item URL, the download and kit links; the sender validates the token AND the public item before sending. */
+  firstTouchContract?: 'experience-v2'
   /** Max NEW first touches per rolling 24h (default CAMPAIGN_DEFAULTS.firstTouchDailyLimit). Follow-ups never count against it. */
   firstTouchDailyLimit?: number
   /** Hard provider/account ceiling (Resend free tier: 100/day). The effective cap never exceeds providerLimit - reserve. */

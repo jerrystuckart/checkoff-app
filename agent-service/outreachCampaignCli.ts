@@ -17,7 +17,7 @@ import { GoogleCredentialProvider } from './specialists/googleCredentialProvider
 import { DbBizDevStore } from './specialists/bizDevOutreach'
 import { DbCampaignWriter, DbIntakeLookups, loadCampaignReport, loadDigest } from './specialists/outreachCampaignDb'
 import { activationBlockers, approveCampaign, ApprovalRefused, buildCampaignPlan, renderPreviewCsv, renderPreviewMarkdown, renderReport, renderDigest, type CampaignDefinition } from './specialists/outreachCampaign'
-import { CANONICAL_KIT_URL } from './specialists/outreachTemplates'
+import { CANONICAL_KIT_URL, DOWNLOAD_URL } from './specialists/outreachTemplates'
 import { buildImportPlan, importSentRecipients, renderImportPreview, type ImportConfig, type SentMessageFacts } from './specialists/outreachImport'
 import { PriorContactIndex } from './specialists/priorContact'
 import { loadContactedRecords } from './specialists/outreachCampaignDb'
@@ -160,7 +160,9 @@ async function main(): Promise<void> {
       const senderVerified = gmail.isConfigured() && (await gmail.listSendAsIdentities()).some((i) => i.sendAsEmail.toLowerCase() === c.from.toLowerCase() && i.verificationStatus === 'accepted')
       let kitUrlLive = false
       try { kitUrlLive = (await fetch(CANONICAL_KIT_URL, { method: 'GET' })).ok } catch { kitUrlLive = false }
-      const blockers = activationBlockers({ campaign: c, tokensNeeded, tokensPresent: await store.confirmTokensExist(tokensNeeded), senderVerified, kitUrlLive })
+      let downloadUrlLive = false
+      try { downloadUrlLive = (await fetch(DOWNLOAD_URL, { method: 'GET' })).ok } catch { downloadUrlLive = false }
+      const blockers = activationBlockers({ campaign: c, tokensNeeded, tokensPresent: await store.confirmTokensExist(tokensNeeded), senderVerified, kitUrlLive, downloadUrlLive })
       if (blockers.length) { console.log(`Cannot ${cmd} ${key}:`); blockers.forEach((b) => console.log(`  - ${b}`)); process.exitCode = 2; break }
       await store.saveCampaign(key, { state: 'ACTIVE', pauseReason: '' })
       console.log(`Campaign ${key} is ACTIVE. The monitor sends up to ${c.dailyCap}/day (${c.batchPerTick} per 15-minute tick). Pause any time: pause ${key}`)

@@ -21,7 +21,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { addBusinessDays } from './bizDevOutreach'
 import { CAMPAIGN_DEFAULTS, type CampaignRuntime, type CampaignBatch } from './bizDevCampaign'
 import { PriorContactIndex, describeConflicts } from './priorContact'
-import { buildItemsBlock, checkTemplate, CANONICAL_KIT_URL, confirmUrlFor, extractPlaceholders, renderTemplate, validateOutreachCopy, type ListingForEmail } from './outreachTemplates'
+import { buildItemsBlock, buildExperiencesBlock, checkTemplate, CANONICAL_KIT_URL, DOWNLOAD_URL, confirmUrlFor, publicItemUrlFor, extractPlaceholders, renderTemplate, validateOutreachCopy, type ListingForEmail } from './outreachTemplates'
 
 // ---------------------------------------------------------------------------
 // Issues
@@ -56,6 +56,8 @@ export interface CampaignDefinition {
   followUp2Body: string
   cadence?: { followUp1AfterBusinessDays?: number; followUp2AfterBusinessDays?: number; closeAfterBusinessDays?: number }
   dailyCap?: number
+  /** 'experience-v2' (required for every NEW campaign by policy): the first touch must contain {{experiences_block}} (exact experience + confirmation URL + public item URL), {{download_url}} and {{kit_url}}, and must say "experience", never "listing". The sender then validates the token and the public item page before any first touch. */
+  firstTouchContract?: 'experience-v2'
   /** Max NEW first touches per rolling 24h. Defaults to 50. Follow-ups are not counted and always outrank first touches. */
   firstTouchDailyLimit?: number
   providerLimit?: number
@@ -94,9 +96,15 @@ export function validateDefinition(d: CampaignDefinition): Issue[] {
     if (t) out.push(...checkTemplate(t, label).errors.map((m) => err('DEF_TEMPLATE', m)))
     if (t && /(draft,? not approved|\bTODO\b|\bTBD\b|replace me|lorem ipsum|\[\[|\bSAMPLE TEXT\b)/i.test(t)) out.push(err('DEF_DRAFT_MARKER', `${label} still contains a draft/placeholder marker; replace it with the approved text (flipping the approval flag alone cannot send placeholder copy)`))
   }
-  if (d.firstTouchBody && !/\{\{\s*(items_block|confirm_url)\s*\}\}/.test(d.firstTouchBody)) out.push(err('DEF_NO_CONFIRM_LINK', 'firstTouchBody must include {{items_block}} (or {{confirm_url}}) so each business gets its existing /confirm link'))
+  if (d.firstTouchBody && !/\{\{\s*(items_block|confirm_url|experiences_block)\s*\}\}/.test(d.firstTouchBody)) out.push(err('DEF_NO_CONFIRM_LINK', 'firstTouchBody must include {{items_block}} (or {{experiences_block}}/{{confirm_url}}) so each business gets its existing /confirm link'))
   if (d.subjectTemplate && /\{\{\s*(items_block|confirm_url)\s*\}\}/.test(d.subjectTemplate)) out.push(err('DEF_SUBJECT', 'subject must not contain the confirmation link'))
   if (d.expiresAt !== undefined && Number.isNaN(Date.parse(d.expiresAt))) out.push(err('DEF_EXPIRES', 'expiresAt must be an ISO date-time'))
+  if (d.firstTouchContract !== undefined && d.firstTouchContract !== 'experience-v2') out.push(err('DEF_CONTRACT', "firstTouchContract must be 'experience-v2' when set"))
+  if (d.firstTouchContract === 'experience-v2') {
+    for (const f of ['experiences_block', 'download_url', 'kit_url']) if (d.firstTouchBody && !new RegExp(`\\{\\{\\s*${f}\\s*\\}\\}`).test(d.firstTouchBody)) out.push(err('DEF_V2_FIELD', `firstTouchBody must include {{${f}}} (experience-v2 first-touch contract)`))
+    if (d.firstTouchBody && /\b(your|our|the)\s+(\w+\s+)?listings?\b/i.test(d.firstTouchBody)) out.push(err('DEF_V2_WORDING', 'firstTouchBody must say "CheckOff experience", not "your/the listing"'))
+    if (d.firstTouchBody && !/experience/i.test(d.firstTouchBody)) out.push(err('DEF_V2_WORDING', 'firstTouchBody must explain that CheckOff features an experience'))
+  }
   if (d.firstTouchDailyLimit !== undefined && (!Number.isInteger(d.firstTouchDailyLimit) || d.firstTouchDailyLimit < 1 || d.firstTouchDailyLimit > (d.dailyCap ?? CAMPAIGN_DEFAULTS.dailyCap))) out.push(err('DEF_FIRST_TOUCH_LIMIT', 'firstTouchDailyLimit must be an integer from 1 up to dailyCap'))
   const c = d.cadence ?? {}
   for (const [k, v] of Object.entries(c)) if (v !== undefined && (!Number.isInteger(v) || v < 1 || v > 30)) out.push(err('DEF_CADENCE', `cadence.${k} must be an integer from 1 to 30 business days`))
@@ -423,11 +431,13 @@ function finalize(def: CampaignDefinition, rows: CsvRow[], recipients: PlannedRe
 }
 
 export function mergeVars(def: CampaignDefinition, r: PlannedRecipient, tokenOf: (i: PlannedItem) => string): Record<string, string> {
-  const listings: ListingForEmail[] = r.items.map((i) => ({ text: i.text, confirmUrl: confirmUrlFor(tokenOf(i)) }))
+  const listings: ListingForEmail[] = r.items.map((i) => ({ text: i.text, confirmUrl: confirmUrlFor(tokenOf(i)), publicUrl: publicItemUrlFor(i.itemId) }))
   const vars: Record<string, string> = {
     business_name: r.businessName,
     metro: def.metroLabel,
     items_block: buildItemsBlock(listings),
+    experiences_block: buildExperiencesBlock(listings),
+    download_url: DOWNLOAD_URL,
     item_text: r.items[0].text,
     item_count: String(r.items.length),
     kit_url: CANONICAL_KIT_URL,
@@ -646,6 +656,7 @@ export async function approveCampaign(plan: CampaignPlan, args: ApproveArgs, wri
     ...(d.allowPriorOutreach ? { allowPriorOutreach: true } : {}),
     dailyCap: d.dailyCap ?? CAMPAIGN_DEFAULTS.dailyCap,
     ...(d.firstTouchDailyLimit ? { firstTouchDailyLimit: d.firstTouchDailyLimit } : {}),
+    ...(d.firstTouchContract ? { firstTouchContract: d.firstTouchContract } : {}),
     providerLimit: d.providerLimit ?? CAMPAIGN_DEFAULTS.providerLimit,
     reserve: d.reserve ?? CAMPAIGN_DEFAULTS.reserve,
     batchPerTick: d.batchPerTick ?? CAMPAIGN_DEFAULTS.batchPerTick,
@@ -699,11 +710,13 @@ export async function approveCampaign(plan: CampaignPlan, args: ApproveArgs, wri
 // ---------------------------------------------------------------------------
 
 export interface ActivationFacts {
-  campaign: Pick<CampaignRuntime, 'key' | 'state' | 'approval'>
+  campaign: Pick<CampaignRuntime, 'key' | 'state' | 'approval'> & { firstTouchContract?: 'experience-v2' }
   tokensNeeded: string[]
   tokensPresent: Set<string>
   senderVerified: boolean
   kitUrlLive: boolean
+  /** Required (and checked) only for experience-v2 campaigns. */
+  downloadUrlLive?: boolean
 }
 
 export function activationBlockers(f: ActivationFacts): string[] {
@@ -713,6 +726,7 @@ export function activationBlockers(f: ActivationFacts): string[] {
   const missing = f.tokensNeeded.filter((t) => !f.tokensPresent.has(t))
   if (missing.length) out.push(`${missing.length} confirmation token(s) are not in business_outreach_tokens yet. Apply the token SQL first.`)
   if (!f.senderVerified) out.push('jerry@getcheckoff.com is not a verified Gmail send-as identity.')
+  if (f.campaign.firstTouchContract === 'experience-v2' && !f.downloadUrlLive) out.push(`${DOWNLOAD_URL} did not respond successfully (experience-v2 first touches link to it).`)
   if (!f.kitUrlLive) out.push(`${CANONICAL_KIT_URL} did not respond successfully (Business Activation Kit gate).`)
   return out
 }

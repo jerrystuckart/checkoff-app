@@ -1,29 +1,34 @@
-# Revised first touch (DRAFT, NOT APPROVED, NOT DEPLOYED)
+# Revised first touch: experience-v2 (SUPERSEDES the earlier draft; NOT APPROVED, NOT DEPLOYED)
 
-Problem (920 Sauna Co, 2026-10-14): the email said the business was "already featured in the app" but gave no way to find the experience.
-Rules applied: say "CheckOff experience" (never "listing"); include the download link; say where it appears in the app; NO private confirmation token in a cold first touch.
+Policy change (Jerry, 2026-10-14): every future first touch now carries BOTH the business's private confirmation link and the safe
+public item link, plus the download and Featured Kit links, and talks about a *CheckOff experience*, not a "listing".
 
-**Subject:** We selected {{business_name}} for CheckOff
+Definition: `docs/outreach-campaigns/green-bay/campaign.v2.json` (`firstTouchContract: "experience-v2"`, approvals flags false).
+Contract enforced in code: required fields, wording, validation of the token AND the public item page before any first touch,
+final link check at send time, download page live at activation. Existing campaigns (green-bay-p1) are untouched; nothing already sent changes.
+
+## Rendered example (920 Sauna Co; the token is a placeholder)
 
 ```
-Hi {{business_name}} team,
+Subject: We selected 920 Sauna Co for CheckOff
 
-We're launching CheckOff in {{metro}}. It's a free app that helps people discover and check off great local experiences, and we selected {{business_name}} as one of the places worth discovering.
+Hi 920 Sauna Co team,
 
-CheckOff features specific local experiences rather than traditional business profiles. The CheckOff experience we selected for {{business_name}} is:
+We're launching CheckOff in Green Bay Metro. It's a free app that helps people discover and check off great local experiences, and we selected 920 Sauna Co as one of the places worth discovering.
 
-{{experiences_block}}
+CheckOff features specific local experiences rather than creating a conventional business listing. The CheckOff experience we selected for 920 Sauna Co is:
 
-You can see it here (no sign-in or private link needed):
-{{experience_link}}
+• Settle into a private or community wood-fired sauna session with '920 Sauna Co'.
+  See it in CheckOff (public page): https://getcheckoff.com/item/b320c748-9eb2-450a-a91a-59f4fd762629
+  Confirm or update it (your private link): https://getcheckoff.com/confirm/<PRIVATE_TOKEN>
 
-To find it in the app, download CheckOff free at https://getcheckoff.com/download, then open it and browse {{metro}}. Your experience appears there, and the link above opens it directly on your phone.
+To find it in the app, download CheckOff free at https://getcheckoff.com/download, open it, and choose Green Bay Metro: your experience appears there. The public page above also opens it directly on your phone, no sign-in needed.
 
 There is no fee to be included and nothing to sign up for. We feature exceptional businesses for free because a great CheckOff app needs great places.
 
 Two quick things would help:
-- Reply and let us know if the experience is still accurate, or what you'd like changed.
-- If you have a photo you'd prefer us to use, just reply and attach it.
+- Use your private link above to confirm the experience is still accurate, or tell us what to change.
+- If you have a photo you'd prefer us to use, add it there or just reply and attach it.
 
 We also made a free set of print, social, Story, and in-business graphics you can use: https://getcheckoff.com/downloads/featured-kit
 
@@ -35,10 +40,3 @@ Jerry Stuckart
 Founder, CheckOff
 getcheckoff.com
 ```
-
-`{{experience_link}}` = `https://getcheckoff.com/item/<item_id>` (public; one line per experience when a business has several).
-
-## Needed engine changes (not made)
-- New merge fields `experiences_block` (item text only, no tokens), `experience_link` (public item URL), `download_url`.
-- `firstTouchBody` validation: require `experiences_block` OR `items_block`; add a guard that a tokenless first touch contains no `/confirm/` URL.
-- Follow-up templates: replace "listing" with "CheckOff experience" (follow-up 1 keeps its private confirm link by design).

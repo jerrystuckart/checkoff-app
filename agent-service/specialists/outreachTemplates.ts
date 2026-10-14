@@ -7,7 +7,7 @@
 
 import { validateActivationKitReference, UNIVERSAL_BUSINESS_ACTIVATION_KIT_URL } from '../playbooks/businessActivationKit'
 
-export const TEMPLATE_FIELDS = ['business_name', 'contact_name', 'metro', 'items_block', 'item_text', 'item_count', 'kit_url', 'confirm_url', 'sender_name'] as const
+export const TEMPLATE_FIELDS = ['business_name', 'contact_name', 'metro', 'items_block', 'item_text', 'item_count', 'kit_url', 'confirm_url', 'sender_name', 'experiences_block', 'download_url'] as const
 export type TemplateField = (typeof TEMPLATE_FIELDS)[number]
 export type TemplateVars = Partial<Record<TemplateField, string>>
 
@@ -43,11 +43,29 @@ export function renderTemplate(template: string, vars: Record<string, string | u
 export interface ListingForEmail {
   text: string
   confirmUrl: string
+  /** The safe public page for this exact experience (https://getcheckoff.com/item/<itemId>). Never contains a token. */
+  publicUrl?: string
 }
 
 /** One bullet per listing; consolidated businesses get every listing in ONE email. */
 export function buildItemsBlock(items: readonly ListingForEmail[]): string {
   return items.map((i) => `• ${i.text}\n  Confirm or update it here: ${i.confirmUrl}`).join('\n\n')
+}
+
+/** One experience per bullet with BOTH links: the public page anyone can open (no token) and the business's private confirmation link. */
+export function buildExperiencesBlock(items: readonly ListingForEmail[]): string {
+  return items
+    .map((i) => `• ${i.text}\n  See it in CheckOff (public page): ${i.publicUrl}\n  Confirm or update it (your private link): ${i.confirmUrl}`)
+    .join('\n\n')
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const DOWNLOAD_URL = 'https://getcheckoff.com/download'
+
+/** The canonical safe public link for an experience; throws on a malformed id so a bad link can never be rendered. */
+export function publicItemUrlFor(itemId: string): string {
+  if (!UUID.test(itemId)) throw new Error(`cannot build a public item URL from "${itemId}"`)
+  return `https://getcheckoff.com/item/${itemId.toLowerCase()}`
 }
 
 export function confirmUrlFor(token: string): string {
