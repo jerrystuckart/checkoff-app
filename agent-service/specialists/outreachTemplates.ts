@@ -7,7 +7,7 @@
 
 import { validateActivationKitReference, UNIVERSAL_BUSINESS_ACTIVATION_KIT_URL } from '../playbooks/businessActivationKit'
 
-export const TEMPLATE_FIELDS = ['business_name', 'contact_name', 'metro', 'items_block', 'item_text', 'item_count', 'kit_url', 'confirm_url', 'sender_name', 'experiences_block', 'download_url'] as const
+export const TEMPLATE_FIELDS = ['business_name', 'contact_name', 'metro', 'items_block', 'item_text', 'item_count', 'kit_url', 'confirm_url', 'sender_name', 'experiences_block', 'download_url', 'experience_intro', 'find_in_app', 'private_link_instruction', 'followup1_opening', 'review_line', 'followup2_ask', 'confirm_links'] as const
 export type TemplateField = (typeof TEMPLATE_FIELDS)[number]
 export type TemplateVars = Partial<Record<TemplateField, string>>
 
@@ -66,6 +66,29 @@ export const DOWNLOAD_URL = 'https://getcheckoff.com/download'
 export function publicItemUrlFor(itemId: string): string {
   if (!UUID.test(itemId)) throw new Error(`cannot build a public item URL from "${itemId}"`)
   return `https://getcheckoff.com/item/${itemId.toLowerCase()}`
+}
+
+/**
+ * Singular wording for ONE experience, plural wording for several, chosen automatically from the item count. The singular text is exactly
+ * what Jerry approved on 2026-10-14; the plural text follows his 2026-10-14 instruction ("The CheckOff experiences we selected are:",
+ * "Your private links"). Pure: no I/O.
+ */
+export function pluralPhrases(o: { count: number; businessName: string; metro: string; downloadUrl: string; confirmUrls: readonly string[] }): Record<'experience_intro' | 'find_in_app' | 'private_link_instruction' | 'followup1_opening' | 'review_line' | 'followup2_ask' | 'confirm_links', string> {
+  const many = o.count > 1
+  const where = `download CheckOff free at ${o.downloadUrl}, open it, and choose ${o.metro}`
+  return {
+    experience_intro: many ? 'The CheckOff experiences we selected are:' : `The CheckOff experience we selected for ${o.businessName} is:`,
+    find_in_app: many
+      ? `To find them in the app, ${where}: your experiences appear there. The public pages above also open them directly on your phone, no sign-in needed.`
+      : `To find it in the app, ${where}: your experience appears there. The public page above also opens it directly on your phone, no sign-in needed.`,
+    private_link_instruction: many
+      ? 'Use your private links above to confirm the experiences are still accurate, or tell us what to change.'
+      : 'Use your private link above to confirm the experience is still accurate, or tell us what to change.',
+    followup1_opening: many ? `Just following up on the CheckOff experiences we sent over for ${o.businessName}.` : `Just following up on the CheckOff experience we sent over for ${o.businessName}.`,
+    review_line: many ? 'You can review your CheckOff experiences here:' : 'You can review your CheckOff experience here:',
+    followup2_ask: many ? "We'd still love your input on the CheckOff experiences:" : "We'd still love your input on the CheckOff experience:",
+    confirm_links: o.confirmUrls.join('\n'),
+  }
 }
 
 export function confirmUrlFor(token: string): string {

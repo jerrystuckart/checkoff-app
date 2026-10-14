@@ -4,13 +4,21 @@ import { readFileSync } from 'node:fs'
 import * as path from 'node:path'
 import { runBizDevTick } from './bizDevOutreach'
 import { buildCampaignPlan, approveCampaign, validateDefinition, activationBlockers, type CampaignDefinition } from './outreachCampaign'
-import { buildExperiencesBlock, publicItemUrlFor, DOWNLOAD_URL } from './outreachTemplates'
+import { buildExperiencesBlock, publicItemUrlFor, pluralPhrases, renderTemplate, DOWNLOAD_URL } from './outreachTemplates'
+import { mergeVars } from './outreachCampaign'
 import { FakeGmail, MemWorld, uuid } from './outreachTestKit'
 
 // Experience-v2 first touch. FakeGmail + MemWorld only: no network, no database, no real email.
 
 const real = JSON.parse(readFileSync(path.join(__dirname, '../../docs/outreach-campaigns/green-bay/campaign.v2.json'), 'utf8')) as CampaignDefinition
 const DEF: CampaignDefinition = { ...real, key: 'gb-v2-test', eligibilityPolicy: undefined, approvals: { firstTouchTemplate: true, followUpTemplates: true } }
+
+// The singular text Jerry approved on 2026-10-14 (campaign.v2.json @0e75b69). One experience must still render EXACTLY this.
+const APPROVED_SINGULAR = {
+  "firstTouchBody": "Hi {{business_name}} team,\n\nWe're launching CheckOff in {{metro}}. It's a free app that helps people discover and check off great local experiences, and we selected {{business_name}} as one of the places worth discovering.\n\nCheckOff features specific local experiences rather than creating a conventional business listing. The CheckOff experience we selected for {{business_name}} is:\n\n{{experiences_block}}\n\nTo find it in the app, download CheckOff free at {{download_url}}, open it, and choose {{metro}}: your experience appears there. The public page above also opens it directly on your phone, no sign-in needed.\n\nThere is no fee to be included and nothing to sign up for. We feature exceptional businesses for free because a great CheckOff app needs great places.\n\nTwo quick things would help:\n- Use your private link above to confirm the experience is still accurate, or tell us what to change.\n- If you have a photo you'd prefer us to use, add it there or just reply and attach it.\n\nWe also made a free set of print, social, Story, and in-business graphics you can use: {{kit_url}}\n\nYou can reply to this email any time.\n\nThanks for being part of it!\n\nJerry Stuckart\nFounder, CheckOff\ngetcheckoff.com",
+  "followUp1Body": "Hi {{business_name}} team,\n\nJust following up on the CheckOff experience we sent over for {{business_name}}.\n\nWe're helping people discover great local places around Green Bay, and we'd love to make sure we've represented your business accurately.\n\nYou can review your CheckOff experience here:\n\n{{items_block}}\n\nIf everything looks good, a quick confirmation is all we need. If something needs changing, just reply and let me know.\n\nThanks!\n\nJerry\nFounder, CheckOff\njerry@getcheckoff.com",
+  "followUp2Body": "Hi {{business_name}} team,\n\nOne last note about {{business_name}} on CheckOff.\n\nWe're building a local discovery app that encourages people to get out and experience places worth visiting around Green Bay.\n\nWe'd still love your input on the CheckOff experience:\n\n{{confirm_url}}\n\nThere's no cost to confirm your information, and you're welcome to reply with corrections.\n\nI'll leave it here after this message. Thanks for everything you do for the Green Bay community!\n\nJerry\nFounder, CheckOff\njerry@getcheckoff.com"
+}
 const MON = new Date('2026-10-12T15:00:00Z')
 
 async function launch(n: number, def: Partial<CampaignDefinition> = {}) {
@@ -34,7 +42,7 @@ const tick = (g: FakeGmail, w: MemWorld) => { g.clock = MON; return runBizDevTic
 test('the shipped v2 template passes validation and carries every required element', () => {
   const issues = validateDefinition({ ...real, approvals: { firstTouchTemplate: true, followUpTemplates: true } }).filter((i) => i.severity === 'ERROR')
   assert.deepEqual(issues, [])
-  for (const f of ['{{experiences_block}}', '{{download_url}}', '{{kit_url}}', '{{business_name}}', '{{metro}}']) assert.ok(real.firstTouchBody.includes(f), f)
+  for (const f of ['{{experiences_block}}', '{{experience_intro}}', '{{find_in_app}}', '{{private_link_instruction}}', '{{kit_url}}', '{{business_name}}', '{{metro}}']) assert.ok(real.firstTouchBody.includes(f), f)
   assert.match(real.firstTouchBody, /rather than creating a conventional business listing/)
   assert.ok(!/\b(your|our|the)\s+(\w+\s+)?listings?\b/i.test(real.firstTouchBody + real.followUp1Body + real.followUp2Body), 'no "your/the listing" wording anywhere in the sequence')
 })
@@ -42,7 +50,7 @@ test('the shipped v2 template passes validation and carries every required eleme
 test('the v2 contract is enforced: missing links or "listing" wording are validation errors', () => {
   const bad = (body: string) => validateDefinition({ ...DEF, firstTouchBody: body }).filter((i) => i.severity === 'ERROR').map((i) => i.code)
   assert.ok(bad('Hi {{business_name}}, your experience: {{items_block}} kit {{kit_url}}').includes('DEF_V2_FIELD'), 'no experiences_block / download_url')
-  assert.ok(bad(real.firstTouchBody.replace('{{download_url}}', 'getcheckoff.com')).includes('DEF_V2_FIELD'))
+  assert.ok(bad(real.firstTouchBody.replace('{{find_in_app}}', 'Download CheckOff.')).includes('DEF_V2_FIELD'), 'no download link at all')
   assert.ok(bad(real.firstTouchBody.replace('{{kit_url}}', 'the kit')).includes('DEF_V2_FIELD'))
   assert.ok(bad(real.firstTouchBody + '\nConfirm your listing.').includes('DEF_V2_WORDING'))
   assert.equal(validateDefinition({ ...DEF, firstTouchContract: 'v3' as never }).some((i) => i.code === 'DEF_CONTRACT'), true)
@@ -115,4 +123,55 @@ test('case 12: nobody already contacted receives another first touch (existing r
   w2.contacts.set('old@example.com', { id: 'c-old', email: 'old@example.com', org: 'Old Friend', name: null, suppressed: false, hasOutbound: true })
   const prior = await buildCampaignPlan(d, ['business_name,contact_email,item_id', `Old Friend,old@example.com,${uuid(900)}`].join('\n'), { lookups: w2 })
   assert.equal(prior.recipients.length, 0, 'a business we already emailed is excluded unless the campaign explicitly allows prior outreach')
+})
+
+function renderFor(items: Array<{ itemId: string; text: string; token: string }>) {
+  const tokenOf = new Map(items.map((i) => [i.itemId, i.token]))
+  const planned: any = { businessName: 'Vintage Cantina', email: 'x@example.invalid', contactName: null, website: null, items: items.map((i) => ({ ...i, previewToken: i.token })) }
+  const vars = mergeVars(real, planned, (i: any) => tokenOf.get(i.itemId)!)
+  const render = (t: string) => renderTemplate(t, vars)
+  return { first: render(real.firstTouchBody), fu1: render(real.followUp1Body), fu2: render(real.followUp2Body) }
+}
+const ONE = [{ itemId: uuid(1), text: "Try the tacos at 'Vintage Cantina'.", token: 'TOK_ONE' }]
+const TWO = [...ONE, { itemId: uuid(2), text: "Sip a tiki cocktail at 'Vintage Cantina'.", token: 'TOK_TWO' }]
+
+test('ONE experience: the rendered first touch and both follow-ups are byte-for-byte the text Jerry approved (singular)', () => {
+  const got = renderFor(ONE)
+  const old = (t: string) => {
+    const tokenOf = new Map(ONE.map((i) => [i.itemId, i.token]))
+    const planned: any = { businessName: 'Vintage Cantina', email: 'x@example.invalid', contactName: null, website: null, items: ONE.map((i) => ({ ...i, previewToken: i.token })) }
+    return renderTemplate(t, mergeVars(real, planned, (i: any) => tokenOf.get(i.itemId)!))
+  }
+  assert.equal(got.first, old(APPROVED_SINGULAR.firstTouchBody))
+  assert.equal(got.fu1, old(APPROVED_SINGULAR.followUp1Body))
+  assert.equal(got.fu2, old(APPROVED_SINGULAR.followUp2Body))
+})
+
+test('MULTIPLE experiences: plural wording throughout, every item gets its own private link, nothing singular is left behind', () => {
+  const got = renderFor(TWO)
+  assert.match(got.first, /The CheckOff experiences we selected are:/)
+  assert.match(got.first, /Use your private links above to confirm the experiences are still accurate/)
+  assert.match(got.first, /To find them in the app, download CheckOff free at https:\/\/getcheckoff\.com\/download, open it, and choose Green Bay Metro: your experiences appear there\. The public pages above also open them directly/)
+  assert.ok(!/we selected for Vintage Cantina is:|your experience appears|Use your private link above|the experience is still/.test(got.first), 'no singular phrasing in the plural email')
+  for (const i of TWO) assert.ok(got.first.includes(`/confirm/${i.token}`) && got.first.includes(`/item/${i.itemId}`), 'both experiences carry both links')
+  assert.match(got.fu1, /Just following up on the CheckOff experiences we sent over for Vintage Cantina\./)
+  assert.match(got.fu1, /You can review your CheckOff experiences here:/)
+  assert.match(got.fu2, /We'd still love your input on the CheckOff experiences:/)
+  for (const i of TWO) assert.ok(got.fu2.includes(`/confirm/${i.token}`), 'Follow-Up 2 links EVERY experience, not just the first')
+})
+
+test('plural/singular is decided only by the item count, and the phrase table is exact', () => {
+  const p = (n: number) => pluralPhrases({ count: n, businessName: 'B', metro: 'M', downloadUrl: 'D', confirmUrls: Array.from({ length: n }, (_, i) => `U${i}`) })
+  assert.equal(p(1).experience_intro, 'The CheckOff experience we selected for B is:')
+  assert.equal(p(2).experience_intro, 'The CheckOff experiences we selected are:')
+  assert.equal(p(5).private_link_instruction, 'Use your private links above to confirm the experiences are still accurate, or tell us what to change.')
+  assert.equal(p(1).confirm_links, 'U0')
+  assert.equal(p(3).confirm_links, 'U0\nU1\nU2')
+})
+
+test('the v2 contract now also requires the plural-aware fields so an old-style template cannot slip through', () => {
+  const codes = (body: string) => validateDefinition({ ...DEF, firstTouchBody: body }).filter((i) => i.severity === 'ERROR').map((i) => i.code)
+  assert.ok(codes(real.firstTouchBody.replace('{{experience_intro}}', 'The experience is:')).includes('DEF_V2_FIELD'))
+  assert.ok(codes(real.firstTouchBody.replace('{{private_link_instruction}}', 'Use your private link.')).includes('DEF_V2_FIELD'))
+  assert.deepEqual(codes(real.firstTouchBody), [])
 })

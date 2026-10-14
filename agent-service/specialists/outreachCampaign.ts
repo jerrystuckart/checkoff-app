@@ -21,7 +21,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { addBusinessDays } from './bizDevOutreach'
 import { CAMPAIGN_DEFAULTS, type CampaignRuntime, type CampaignBatch } from './bizDevCampaign'
 import { PriorContactIndex, describeConflicts } from './priorContact'
-import { buildItemsBlock, buildExperiencesBlock, checkTemplate, CANONICAL_KIT_URL, DOWNLOAD_URL, confirmUrlFor, publicItemUrlFor, extractPlaceholders, renderTemplate, validateOutreachCopy, type ListingForEmail } from './outreachTemplates'
+import { buildItemsBlock, buildExperiencesBlock, pluralPhrases, checkTemplate, CANONICAL_KIT_URL, DOWNLOAD_URL, confirmUrlFor, publicItemUrlFor, extractPlaceholders, renderTemplate, validateOutreachCopy, type ListingForEmail } from './outreachTemplates'
 
 // ---------------------------------------------------------------------------
 // Issues
@@ -101,7 +101,10 @@ export function validateDefinition(d: CampaignDefinition): Issue[] {
   if (d.expiresAt !== undefined && Number.isNaN(Date.parse(d.expiresAt))) out.push(err('DEF_EXPIRES', 'expiresAt must be an ISO date-time'))
   if (d.firstTouchContract !== undefined && d.firstTouchContract !== 'experience-v2') out.push(err('DEF_CONTRACT', "firstTouchContract must be 'experience-v2' when set"))
   if (d.firstTouchContract === 'experience-v2') {
-    for (const f of ['experiences_block', 'download_url', 'kit_url']) if (d.firstTouchBody && !new RegExp(`\\{\\{\\s*${f}\\s*\\}\\}`).test(d.firstTouchBody)) out.push(err('DEF_V2_FIELD', `firstTouchBody must include {{${f}}} (experience-v2 first-touch contract)`))
+    const has = (f: string) => !!d.firstTouchBody && new RegExp(`\\{\\{\\s*${f}\\s*\\}\\}`).test(d.firstTouchBody)
+    for (const f of ['experiences_block', 'kit_url', 'experience_intro', 'find_in_app', 'private_link_instruction']) if (d.firstTouchBody && !has(f)) out.push(err('DEF_V2_FIELD', `firstTouchBody must include {{${f}}} (experience-v2 first-touch contract)`))
+    // The download link may be written directly or arrive inside {{find_in_app}}; the sender also verifies the rendered email contains it.
+    if (d.firstTouchBody && !has('download_url') && !has('find_in_app')) out.push(err('DEF_V2_FIELD', 'firstTouchBody must include {{download_url}} (or {{find_in_app}}, which contains it) (experience-v2 first-touch contract)'))
     if (d.firstTouchBody && /\b(your|our|the)\s+(\w+\s+)?listings?\b/i.test(d.firstTouchBody)) out.push(err('DEF_V2_WORDING', 'firstTouchBody must say "CheckOff experience", not "your/the listing"'))
     if (d.firstTouchBody && !/experience/i.test(d.firstTouchBody)) out.push(err('DEF_V2_WORDING', 'firstTouchBody must explain that CheckOff features an experience'))
   }
@@ -438,6 +441,7 @@ export function mergeVars(def: CampaignDefinition, r: PlannedRecipient, tokenOf:
     items_block: buildItemsBlock(listings),
     experiences_block: buildExperiencesBlock(listings),
     download_url: DOWNLOAD_URL,
+    ...pluralPhrases({ count: r.items.length, businessName: r.businessName, metro: def.metroLabel, downloadUrl: DOWNLOAD_URL, confirmUrls: listings.map((l) => l.confirmUrl) }),
     item_text: r.items[0].text,
     item_count: String(r.items.length),
     kit_url: CANONICAL_KIT_URL,
