@@ -24,6 +24,9 @@ import { describeEmptyInbox } from '../lib/visitDetection/inboxEmptyState'
 import { loadActionableCandidates } from '../lib/visitDetection/actionableCandidates'
 import { fetchOptIn, emitCandidatesChanged } from '../lib/visitDetection/recoverySettings'
 import { hasBackgroundLocationPermission } from '../lib/visitDetection/permissions'
+import { badgeCelebrations, requestBadgeCelebrationCheck } from '../lib/badgeCelebrationStore'
+import PhotoLicenseNotice from '../components/PhotoLicenseNotice'
+import { PHOTO_TERMS_VERSION } from '../lib/photoConsentVersion'
 
 export default function VisitInboxScreen({ navigation, route }) {
   // Deep-linked from a tapped candidate_visit_high_confidence push (see
@@ -141,13 +144,15 @@ export default function VisitInboxScreen({ navigation, route }) {
         photoWidth: photoUrl ? (attachment?.photo?.width ?? null) : null,
         photoHeight: photoUrl ? (attachment?.photo?.height ?? null) : null,
         personalNote: attachment?.note?.trim() || null,
+        // PhotoLicenseNotice is shown on the row whenever a photo is attached.
+        photoTermsVersion: photoUrl ? PHOTO_TERMS_VERSION : null,
       })
       const { error } = await supabase.from('check_ins').insert(payload)
       if (error) throw error
 
       // Same as a live check-off: mirror into any active list the user already
       // belongs to that contains this item (points-free rows, never joins a list).
-      fanOutCheckIn({ userId: user.id, itemId: row.itemId, photoUrl }).catch(() => {})
+      fanOutCheckIn({ userId: user.id, itemId: row.itemId, photoUrl, photoTermsVersion: photoUrl ? PHOTO_TERMS_VERSION : null }).catch(() => {})
       setAttachments(prev => {
         const next = { ...prev }
         delete next[row.candidateVisitId]
@@ -155,7 +160,11 @@ export default function VisitInboxScreen({ navigation, route }) {
       })
       setRows(prev => prev.filter(r => r.candidateVisitId !== row.candidateVisitId))
       emitCandidatesChanged() // Home/Profile badges refresh immediately
-      Alert.alert('Checked off!', `${row.itemBody} — added to your memory.`)
+      // The confirmation Alert is a native dialog: hold the badge celebration until it is dismissed (button or tap-away).
+      badgeCelebrations.hold('visit-inbox-confirm')
+      requestBadgeCelebrationCheck('visit-recovery')
+      const releaseBadgeHold = () => badgeCelebrations.release('visit-inbox-confirm')
+      Alert.alert('Checked off!', `${row.itemBody} — added to your memory.`, [{ text: 'OK', onPress: releaseBadgeHold }], { onDismiss: releaseBadgeHold })
     } catch (e) {
       Alert.alert('Could not confirm this visit', e?.message ?? 'Please try again.')
     } finally {
@@ -260,6 +269,8 @@ export default function VisitInboxScreen({ navigation, route }) {
                 maxLength={280}
               />
             </View>
+
+            {attachments[row.candidateVisitId]?.photo ? <PhotoLicenseNotice variant="checkin" color={MUTED} /> : null}
 
             <View style={styles.buttonRow}>
               <TouchableOpacity

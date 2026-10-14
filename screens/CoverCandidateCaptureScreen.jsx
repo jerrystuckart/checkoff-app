@@ -17,12 +17,15 @@
 // app logic).
 
 import React, { useState, useRef } from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, Image, Alert, ActivityIndicator, ScrollView } from 'react-native'
+import { View, Text, TouchableOpacity, StyleSheet, Image, Alert, ActivityIndicator, ScrollView, Linking } from 'react-native'
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
 import { submitCoverCandidate } from '../lib/coverCandidates'
 import { localSanityOnlyAdapter, initialStatusFromAssessment } from '../lib/coverModeration/moderationAdapter'
+import { fetchIsPhotoAdmin, publishPhotoAsAdmin, photoAdminSuccessMessage } from '../lib/photoAdmin'
+import { bumpPhotoVersion } from '../lib/photoRefresh'
+import { PHOTO_CONSENT, TERMS_URL } from '../lib/photoConsentCopy'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
@@ -35,6 +38,7 @@ export default function CoverCandidateCaptureScreen({ route, navigation }) {
   const [photo, setPhoto] = useState(null)
   const [mode, setMode] = useState('camera') // 'camera' | 'preview' | 'submitted'
   const [submitting, setSubmitting] = useState(false)
+  const [submittedMessage, setSubmittedMessage] = useState(null) // photo-admin confirmation; null = normal 'Submitted for review'
   const cameraRef = useRef(null)
 
   async function takePicture() {
@@ -79,6 +83,21 @@ export default function CoverCandidateCaptureScreen({ route, navigation }) {
         fileSizeBytes: arrayBuffer.byteLength,
       })
       const status = initialStatusFromAssessment(assessment)
+
+      // Photo admins publish through ONE server call that re-verifies their privilege and
+      // applies the cover/rotation rule atomically. Everyone else takes the unchanged
+      // moderated path below. (The server rejects non-admins regardless of what this says.)
+      if (await fetchIsPhotoAdmin({ userId: user.id })) {
+        const { becameCover } = await publishPhotoAsAdmin({
+          itemId: item.id,
+          storagePath,
+          moderationMetadata: assessment.signals,
+        })
+        setSubmittedMessage(photoAdminSuccessMessage(becameCover))
+        bumpPhotoVersion()
+        setMode('submitted')
+        return
+      }
 
       await submitCoverCandidate({
         userId: user.id,
@@ -133,15 +152,15 @@ export default function CoverCandidateCaptureScreen({ route, navigation }) {
       <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 60, paddingTop: insets.top + 20 }}>
         <Image source={{ uri: photo?.uri }} style={styles.previewImage} resizeMode="cover" />
         <View style={styles.previewActions}>
-          <Text style={styles.consentTitle}>Great shot. Share it with CheckOff?</Text>
-          <Text style={styles.consentSubtitle}>Help other locals see what the thing looks like.</Text>
+          <Text style={styles.consentTitle}>{PHOTO_CONSENT.cover.title}</Text>
+          <Text style={styles.consentSubtitle}>{PHOTO_CONSENT.cover.subtitle}</Text>
           <Text style={styles.consentFine}>
-            By sharing, you're giving CheckOff permission to display this photo in the app if it's approved.
-            It won't be public until then.
+            {PHOTO_CONSENT.cover.text}{' '}
+            <Text style={{ textDecorationLine: 'underline' }} onPress={() => Linking.openURL(TERMS_URL).catch(() => {})}>{PHOTO_CONSENT.cover.linkLabel}</Text>
           </Text>
 
           <TouchableOpacity style={[styles.submitBtn, submitting && { opacity: 0.6 }]} onPress={confirmAndSubmit} disabled={submitting}>
-            {submitting ? <ActivityIndicator color={NAVY} /> : <Text style={styles.submitBtnText}>Share it with CheckOff</Text>}
+            {submitting ? <ActivityIndicator color={NAVY} /> : <Text style={styles.submitBtnText}>{PHOTO_CONSENT.cover.button}</Text>}
           </TouchableOpacity>
           <TouchableOpacity style={styles.retakeBtn} onPress={() => setMode('camera')} disabled={submitting}>
             <Text style={styles.retakeBtnText}>Retake photo</Text>
@@ -154,7 +173,7 @@ export default function CoverCandidateCaptureScreen({ route, navigation }) {
   // ── Submitted confirmation ──
   return (
     <View style={[styles.container, styles.center, { paddingTop: insets.top }]}>
-      <Text style={styles.submittedText}>Submitted for review ✓</Text>
+      <Text style={styles.submittedText}>{submittedMessage ?? 'Submitted for review ✓'}</Text>
       <TouchableOpacity style={styles.doneBtn} onPress={() => navigation.goBack()}>
         <Text style={styles.doneBtnText}>Done</Text>
       </TouchableOpacity>

@@ -25,6 +25,7 @@ import {
   statusCodes,
 } from '@react-native-google-signin/google-signin'
 import { supabase } from '../lib/supabase'
+import { describeSignInError } from '../lib/accountDeletion'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
@@ -87,7 +88,7 @@ export default function SignInScreen({ navigation, route }) {
     })
     setLoading(false)
     if (error) {
-      Alert.alert('Sign in failed', error.message)
+      Alert.alert('Sign in failed', describeSignInError(error.message))
     } else {
       navigateAfterAuth()
     }

@@ -1,4 +1,5 @@
 # iOS 1.1.10 (build 155+) — consolidated release notes (2026-10-04)
+> Store submission (privacy answers, location strings, review notes, blockers): `docs/release/STORE_RELEASE_1_1_10.md` is authoritative. The TestFlight build number is 157 (app.json says 155; build number is not part of the runtime).
 
 Release source: branch `main` fast-forwarded to `feature/hub-location-section`. Runtime fingerprint `86ac0036db685dec7e1921f661d6b77ede23965e`
 (same as the TestFlight 1.1.10 binary the production OTAs target). Verify with `scripts/ios-local-build.sh`.

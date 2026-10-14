@@ -21,6 +21,7 @@
 //   supabase functions deploy send-partner-renewal --project-ref uggusbbswybyplypkbxz
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { guardServerCaller } from '../_shared/serverCaller.ts'
 
 const SUPABASE_URL    = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SVC    = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
@@ -205,6 +206,9 @@ async function sendRenewalEmail(partner: {
 
 // ── Main handler ──────────────────────────────────────────────────────────────
 Deno.serve(async (req) => {
+  // Only the scheduler, other Edge Functions (service key) or an operator (x-campaign-secret). The public anon key and user JWTs are rejected before anything is read or sent.
+  const denied = guardServerCaller(req)
+  if (denied) return denied
   if (req.method !== 'POST') return new Response('Method not allowed', { status: 405 })
 
   const supabase = createClient(SUPABASE_URL, SUPABASE_SVC, { auth: { persistSession: false } })

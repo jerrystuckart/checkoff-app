@@ -27,8 +27,9 @@
 import React from 'react'
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native'
 import EditorialCard from './EditorialCard'
+import HubLinkPill from './HubLinkPill'
 
-export default function NearYouCompact({ items, onItemPress, onSeeAllPress, colors, userId = null, navigation = null, memoryItemIds = null, onViewMemory = null }) {
+export default function NearYouCompact({ items, onItemPress, onSeeAllPress, colors, userId = null, navigation = null, memoryItemIds = null, onViewMemory = null, hubLink = null, onHubLinkPress = null }) {
   if (!items || items.length === 0) return null
   const { TEXT, MUTED } = colors
   const [featured, ...rest] = items
@@ -36,7 +37,11 @@ export default function NearYouCompact({ items, onItemPress, onSeeAllPress, colo
 
   return (
     <View style={styles.wrapper}>
-      <Text style={[styles.label, { color: MUTED }]} allowFontScaling={false}>NEAR YOU</Text>
+      <View style={styles.headingRow}>
+        <Text style={[styles.label, { color: MUTED }]} allowFontScaling={false}>NEAR YOU</Text>
+        {/* Destination hub link for the SELECTED metro (lib/homeHubLinks.js); renders nothing and takes no room when absent. */}
+        <HubLinkPill hubLink={hubLink} onPress={onHubLinkPress} colors={colors} />
+      </View>
 
       <EditorialCard
         item={featured}
@@ -74,7 +79,8 @@ export default function NearYouCompact({ items, onItemPress, onSeeAllPress, colo
 
 const styles = StyleSheet.create({
   wrapper: { marginTop: 18, paddingHorizontal: 16 },
-  label: { fontSize: 11, fontWeight: '800', letterSpacing: 0.8, marginBottom: 8 },
+  headingRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 },
+  label: { fontSize: 11, fontWeight: '800', letterSpacing: 0.8, flexShrink: 0, marginRight: 12 },
   secondaryStack: { marginTop: 10, gap: 8 },
   // DEFAULT HOME "WOW" PASS (2026-09-03): tightened from 8 — part of
   // pulling What's Good visually closer, per the Home hierarchy pass.

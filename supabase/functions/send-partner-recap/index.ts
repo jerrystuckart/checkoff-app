@@ -13,7 +13,7 @@
 //     '0 7 1 * *',
 //     $$select net.http_post(
 //       url    := 'https://uggusbbswybyplypkbxz.supabase.co/functions/v1/send-partner-recap',
-//       headers := '{"Authorization":"Bearer <SUPABASE_ANON_KEY>","Content-Type":"application/json"}'::jsonb,
+//       headers := jsonb_build_object('Authorization', 'Bearer ' || (select decrypted_secret from vault.decrypted_secrets where name = 'service_role_jwt'), 'Content-Type', 'application/json'),
 //       body   := '{}'::jsonb
 //     ) as request_id$$
 //   );
@@ -27,6 +27,7 @@
 //   supabase functions deploy send-partner-recap --project-ref uggusbbswybyplypkbxz
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { authorizeRequest } from '../_shared/campaignControls.ts'
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!
 const SUPABASE_SVC = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
@@ -85,6 +86,14 @@ interface PartnerStats {
   topItem:           { body: string; count: number } | null
 }
 
+/** Completions by accounts that were later deleted are kept only as anonymous per month counts (public.anonymous_completion_counts). Never throws. */
+async function anonymousCompletions(supabase: ReturnType<typeof createClient>, itemIds: string[], month: string): Promise<number> {
+  try {
+    const { data } = await supabase.rpc('anonymous_completions_for_items', { p_item_ids: itemIds, p_month: month })
+    return Number(data ?? 0)
+  } catch { return 0 }
+}
+
 async function getPartnerStats(
   supabase: ReturnType<typeof createClient>,
   partnerId: string,
@@ -110,8 +119,11 @@ async function getPartnerStats(
     .in('item_id', itemIds)
     .limit(5000)
 
+  const anonLast = await anonymousCompletions(supabase, itemIds, windows.lastMonthStart)
+  const anonPrev = await anonymousCompletions(supabase, itemIds, windows.prevMonthStart)
+
   if (!listItems?.length) {
-    return { checkInsLastMonth: 0, checkInsPrevMonth: 0, photosLastMonth: 0, topItem: null }
+    return { checkInsLastMonth: anonLast, checkInsPrevMonth: anonPrev, photosLastMonth: 0, topItem: null }
   }
 
   const listItemIds = listItems.map((li: { id: string }) => li.id)
@@ -156,8 +168,8 @@ async function getPartnerStats(
   }
 
   return {
-    checkInsLastMonth: cis.length,
-    checkInsPrevMonth: prevMonthCount ?? 0,
+    checkInsLastMonth: cis.length + anonLast,
+    checkInsPrevMonth: (prevMonthCount ?? 0) + anonPrev,
     photosLastMonth:   cis.filter((ci: { photo_url: string | null }) => ci.photo_url !== null).length,
     topItem,
   }
@@ -312,6 +324,16 @@ async function sendRecapEmail(partner: {
 // ── Main handler ──────────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
+  // Authorization first: only the service role key (the scheduled job) or CAMPAIGN_ADMIN_SECRET (x-campaign-secret) may send.
+  // The public anon key and every signed in user's JWT pass the gateway but are rejected here, before any read, write or email.
+  const auth = authorizeRequest(req.headers, {
+    serviceRoleKey: Deno.env.get('SUPABASE_SERVICE_ROLE_KEY'),
+    campaignSecret: Deno.env.get('CAMPAIGN_ADMIN_SECRET'),
+  })
+  if (auth.ok === false) {
+    return new Response(JSON.stringify({ error: auth.error }), { status: auth.status, headers: { 'Content-Type': 'application/json' } })
+  }
+
   if (req.method !== 'POST') {
     return new Response('Method not allowed', { status: 405 })
   }

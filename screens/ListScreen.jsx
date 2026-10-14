@@ -27,10 +27,8 @@ import { useLeaderboard } from '../lib/useLeaderboard'
 import { supabase } from '../lib/supabase'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
-import { pollForNewBadges } from '../lib/badges'
-import { handleFirstCheckinReferralBonus } from '../lib/referral'
+import { requestBadgeCelebrationCheck, useBadgeCelebrationHold } from '../lib/badgeCelebrationStore'
 import SuggestPlaceSheet from './SuggestPlaceSheet'
-import BadgeCelebrationModal from '../components/BadgeCelebrationModal'
 import TierUpgradeCelebrationModal from '../components/TierUpgradeCelebrationModal'
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
 import { checkTierCrossingForUser } from '../lib/points'
@@ -44,6 +42,7 @@ import { getSessionDensityTier } from '../lib/densityTier'
 import { isTripModeWindowOpen, DEFAULT_TRIP_MODE_GRACE_DAYS } from '../lib/tripMode'
 import { canEditTripMode } from '../lib/listTripModeSetting'
 import ListTripModeSetting from '../components/ListTripModeSetting'
+import { overlayHubSource, hubListEmoji } from '../lib/hubListPresentation'
 
 const ACCENT = '#FFB84D'
 const ACCENT_DARK = '#7A4B00'
@@ -211,15 +210,23 @@ export default function ListScreen({ route, navigation }) {
   // the header. displayHeroImage (not the raw heroImage param) so this also
   // fires once listMeta's own hero_image_url resolves, not just for the
   // param-driven seasonal-card case.
+  // Hub list copies are opened without a title param on some paths; use the list's own title instead of the generic "Items".
+  const displayTitle = title ?? listMeta?.title ?? null
   useEffect(() => {
-    if (displayHeroImage) {
+    if (!title && listMeta?.title) navigation.setOptions({ title: listMeta.title })
+  }, [title, listMeta?.title, navigation])
+
+  // Hub list copies keep the normal navigation bar (it carries the list title) and render their artwork in the page itself.
+  const isHubListCopy = !!listMeta?.source_destination_list_id
+  useEffect(() => {
+    if (displayHeroImage && !isHubListCopy) {
       navigation.setOptions({
         headerTransparent: true,
         headerTintColor: '#FFFFFF',
         headerTitleStyle: { color: '#FFFFFF', fontWeight: '800' },
       })
     }
-  }, [displayHeroImage, navigation])
+  }, [displayHeroImage, isHubListCopy, navigation])
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
@@ -251,15 +258,14 @@ export default function ListScreen({ route, navigation }) {
   // Post-checkoff sheet — replaces the old row-flash celebration
   const [postCheckoffData, setPostCheckoffData] = useState(null)
 
-  // Badge celebration modal
-  const [celebrationBadges, setCelebrationBadges] = useState([])
-
   // Tier upgrade celebration modal
   const [tierUpgrade, setTierUpgrade] = useState(null)  // { tier, newPoints }
-  const pendingBadgesRef = useRef([])
 
   // Personalized check-in memory modal
   const [memoryModal,   setMemoryModal]   = useState(null)  // { listItemId, placeLabel, noteLabel }
+
+  // Another native modal is up: the badge celebration waits (iOS cannot present two at once).
+  useBadgeCelebrationHold(!!postCheckoffData || !!tierUpgrade || !!memoryModal)
   const [memoryPlace,   setMemoryPlace]   = useState('')
   const [memoryNote,    setMemoryNote]    = useState('')
   const [memorySaving,  setMemorySaving]  = useState(false)
@@ -457,7 +463,19 @@ export default function ListScreen({ route, navigation }) {
       // List exists in navigation but not in DB — creator deleted it
       setListDeleted(true)
     } else {
-      setListMeta(data ?? null)
+      let meta = data ?? null
+      // A visitor opens a personal COPY of a Hub list. Dates, artwork and title belong to the Hub's own list, so read them from there
+      // (a permanent Hub list has no end date, so no countdown or "ended" state is shown). Best effort: any failure keeps the copy as is.
+      if (meta?.source_destination_list_id) {
+        try {
+          const { data: dl } = await supabase.from('destination_lists').select('list_id').eq('id', meta.source_destination_list_id).maybeSingle()
+          if (dl?.list_id) {
+            const { data: src } = await supabase.from('lists').select('title, cover_emoji, starts_at, ends_at, hero_image_url').eq('id', dl.list_id).maybeSingle()
+            meta = overlayHubSource(meta, src)
+          }
+        } catch (_) { /* keep the copy's own values */ }
+      }
+      setListMeta(meta)
     }
     setMetaLoading(false)
   }, [listId])
@@ -815,11 +833,6 @@ export default function ListScreen({ route, navigation }) {
     return result
   }, [filtered, userLifetimePts, userInsiderTier, listId, sortMode, userLocation, sessionTier])
 
-  // Called by badge-polling logic after a check-in awards one or more badges
-  function showBadgeCelebration(badges) {
-    setCelebrationBadges(badges)
-  }
-
   const handleCheckOff = useCallback(async (listItemId) => {
     Keyboard.dismiss()
     if (ended || metaLoading) return  // also block while meta is loading
@@ -895,25 +908,15 @@ export default function ListScreen({ route, navigation }) {
           return
         }
 
-        // Poll for badges + check tier crossing when a new check-in confirmed
+        // Badge celebration is owned by BadgeCelebrationHost (app root): it presents only once
+        // this screen's sheets are dismissed (see the hold below). Here we only ask it to look.
         if (!wasChecked && currentUserId) {
+          requestBadgeCelebrationCheck('list-checkoff')
           const pointsBefore = userLifetimePts
-          Promise.all([
-            pollForNewBadges(currentUserId, supabase),
-            checkTierCrossingForUser(currentUserId, pointsBefore),
-          ]).then(([earned, { crossedTier, newPoints }]) => {
+          checkTierCrossingForUser(currentUserId, pointsBefore).then(({ crossedTier, newPoints }) => {
             // Keep lifetime pts fresh so subsequent check-ins use the correct before value
             setUserLifetimePts(newPoints)
-            if (earned.some(b => b.id === 'first_checkin')) {
-              handleFirstCheckinReferralBonus(currentUserId).catch(() => {})
-            }
-            if (crossedTier) {
-              // Show tier upgrade first; release held badges after it dismisses
-              pendingBadgesRef.current = earned
-              setTierUpgrade({ tier: crossedTier, newPoints })
-            } else if (earned.length > 0) {
-              setCelebrationBadges(earned)
-            }
+            if (crossedTier) setTierUpgrade({ tier: crossedTier, newPoints })
           })
         }
 
@@ -1378,9 +1381,23 @@ export default function ListScreen({ route, navigation }) {
     )
   }, [navigation, route.params, listId, ended, destListInactive, handleCheckOff, userLifetimePts, userInsiderTier, sortMode, nonBonusCheckedCount])
 
+  // Title shown inside the header for Hub list copies (generic nav title otherwise); null for every other list.
+  const hubListTitle = listMeta?.source_destination_list_id
+    ? `${hubListEmoji(listMeta?.cover_emoji) ? hubListEmoji(listMeta.cover_emoji) + ' ' : ''}${displayTitle ?? ''}`.trim() || null
+    : null
+
   const headerEl = useMemo(() => (
-    <View style={[styles.headerBlock, displayHeroImage && { paddingTop: headerHeight }]}>
-      {displayHeroImage ? (
+    <View style={[styles.headerBlock, displayHeroImage && !isHubListCopy && { paddingTop: headerHeight }]}>
+      {isHubListCopy ? (
+        displayHeroImage ? (
+          <ImageBackground source={{ uri: displayHeroImage }} style={styles.hubListHero} imageStyle={{ borderRadius: 18 }}>
+            <LinearGradient colors={['rgba(0,0,0,0)', 'rgba(0,0,0,0.35)', 'rgba(0,0,0,0.78)']} locations={[0, 0.5, 1]} style={[StyleSheet.absoluteFillObject, { borderRadius: 18 }]} />
+            {hubListTitle ? <Text style={styles.hubListHeroTitle} numberOfLines={2}>{hubListTitle}</Text> : null}
+          </ImageBackground>
+        ) : hubListTitle ? (
+          <Text style={styles.hubListPlainTitle} numberOfLines={2}>{hubListTitle}</Text>
+        ) : null
+      ) : displayHeroImage ? (
         <ImageBackground
           source={{ uri: displayHeroImage }}
           style={[styles.headerHeroImage, { height: headerHeight + 180 }]}
@@ -1597,6 +1614,8 @@ export default function ListScreen({ route, navigation }) {
     navigation,
     tick,
     displayHeroImage,
+    hubListTitle,
+    isHubListCopy,
     headerHeight,
     hubDestinationId,
     destListInactive,
@@ -1683,7 +1702,7 @@ export default function ListScreen({ route, navigation }) {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={styles.container} edges={isHubListCopy ? ['left', 'right', 'bottom'] : undefined}>
       <View
         ref={kbMeasureRef}
         style={styles.container}
@@ -1736,24 +1755,13 @@ export default function ListScreen({ route, navigation }) {
         navigation={navigation}
       />
 
-      <BadgeCelebrationModal
-        badges={celebrationBadges}
-        onDismiss={() => setCelebrationBadges([])}
-      />
-
       {tierUpgrade && (
         <TierUpgradeCelebrationModal
           tier={tierUpgrade.tier}
           newPoints={tierUpgrade.newPoints}
-          onDismiss={() => {
-            setTierUpgrade(null)
-            const held = pendingBadgesRef.current
-            pendingBadgesRef.current = []
-            if (held.length > 0) setCelebrationBadges(held)
-          }}
+          onDismiss={() => setTierUpgrade(null)}
           onExploreInsider={() => {
             setTierUpgrade(null)
-            pendingBadgesRef.current = []
             navigation.navigate('ProfileTab', { screen: 'InsiderAccess' })
           }}
         />
@@ -2079,6 +2087,9 @@ function createListStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, AMBER, NAVY, EN
     paddingBottom: 12,
   },
 
+  hubListHero: { height: 190, borderRadius: 18, overflow: 'hidden', marginTop: 8, marginBottom: 12, justifyContent: 'flex-end', padding: 16 },
+  hubListHeroTitle: { fontSize: 28, fontWeight: '800', color: '#FFFFFF', textShadowColor: 'rgba(0,0,0,0.55)', textShadowOffset: { width: 0, height: 1 }, textShadowRadius: 6 },
+  hubListPlainTitle: { fontSize: 26, fontWeight: '800', color: TEXT, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 6 },
   headerHeroImage: {
     position: 'absolute',
     top: 0,

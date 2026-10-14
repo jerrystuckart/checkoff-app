@@ -1,0 +1,108 @@
+diff --git a/supabase/migrations/20261008d_account_deletion_pipeline.sql b/supabase/migrations/20261008d_account_deletion_pipeline.sql
+index 330c2a5..1d79e82 100644
+--- a/supabase/migrations/20261008d_account_deletion_pipeline.sql
++++ b/supabase/migrations/20261008d_account_deletion_pipeline.sql
+@@ -1,4 +1,4 @@
+--- STATUS 2026-10-08 (rev 3): written, NOT YET APPLIED to production. Supersedes rev 1 (21c7dec) and rev 2. See docs/release/ACCOUNT_DELETION.md.
++-- STATUS 2026-10-08 (rev 4): written, NOT YET APPLIED to production (rev 3 failed on apply with 42P13 and rolled back completely). Supersedes rev 1 to 3. See docs/release/ACCOUNT_DELETION.md.
+ --
+ -- Account deletion pipeline (iOS and Android share this one backend contract).
+ --
+@@ -28,7 +28,10 @@
+ --     detected visits, geofence sessions and pending or dismissed suggestions never are. The business association is the item's partner_id at report time.
+ --
+ -- CONTRACT
+---   client:  select public.delete_my_account()   -- identity is auth.uid(); no user id parameter exists
++--   Installed iOS and Android builds call delete_my_account() and ignore its result (they only check for an error, then sign out; they never show a success
++--   message). That function KEEPS its exact signature and return type (void), owner, SECURITY DEFINER and search_path: it is now a thin wrapper over the
++--   new contract, so a queued deletion can never be read as "completed" by an old client (it receives nothing), and errors still reach the user.
++--   new client:  select public.delete_my_account_v2()   -- identity is auth.uid(); no user id parameter exists; returns jsonb
+ --     -> inventories (BEFORE any row is removed) what to retain and what to delete, blocks access (ban + sessions revoked), runs the processor once,
+ --        returns {status:'completed'|'accepted', request_id}.  "accepted" is NOT "completed": access is blocked and cleanup is queued.
+ --   processor account_deletion_process() (postgres / service role only; no HTTP endpoint; once inside delete_my_account, then every minute from pg_cron):
+@@ -71,7 +74,7 @@ create unique index if not exists account_deletion_one_open_request on public.ac
+ -- Anonymous reporting record: CONFIRMED CheckOffs completed by accounts that were later deleted. Read by reporting (service role) only.
+ create table if not exists public.anonymous_completion_counts (
+   item_id      uuid not null references public.items(id) on delete cascade,   -- the experience; the business is items.partner_id
+-  period_month date not null check (period_month = date_trunc('month', period_month)::date),
++  period_month date not null check (extract(day from period_month) = 1),   -- first day of a calendar month, immutable check
+   method       text not null check (method in ('tap','photo','confirmed_suggestion','retroactive')),
+   completions  int  not null check (completions > 0),
+   primary key (item_id, period_month, method)
+@@ -144,13 +147,13 @@ create or replace function public.account_deletion_inventory(p_uid uuid)
+ returns jsonb language sql security definer set search_path = public, storage as $$
+   with retained as (
+     select r->>'bucket' as bucket, r->>'from' as name from jsonb_array_elements(public.account_deletion_retain_inventory(p_uid)) r
+-  ), found as (
++  ), owned as (
+     select o.bucket_id as bucket, o.name from storage.objects o where o.owner_id = p_uid::text
+     union
+     select o.bucket_id, o.name from storage.objects o where o.bucket_id = 'checkin-photos' and o.name like p_uid::text || '/%'
+   )
+   select coalesce(jsonb_agg(distinct jsonb_build_object('bucket', f.bucket, 'name', f.name)), '[]'::jsonb)
+-    from found f
++    from owned f
+    where f.name is not null and f.name <> ''
+      and not exists (select 1 from retained t where t.bucket = f.bucket and t.name = f.name);
+ $$;
+@@ -194,7 +197,7 @@ begin
+   -- 0. Anonymous completion counts, exactly once. One qualifying completion = one confirmed check in per experience per day (fan out mirror rows on other
+   --    lists are the same real action). Only confirmed check ins are read: candidate_visits, presence sessions and suggestions are never counted.
+   if not v_counted then
+-    with real as (
++    with completions_by_day as (
+       select coalesce(c.item_id, li.item_id) as item_id,
+              (c.checked_at at time zone 'UTC')::date as d,
+              (array_agg(case when c.verification_method = 'historical_visit_confirmed' then 'confirmed_suggestion'
+@@ -209,7 +212,7 @@ begin
+        group by 1, 2
+     ), monthly as (
+       select r.item_id, date_trunc('month', r.d)::date as period_month, r.method, count(*)::int as completions
+-        from real r join public.items i on i.id = r.item_id
++        from completions_by_day r join public.items i on i.id = r.item_id
+        group by 1, 2, 3
+     )
+     insert into public.anonymous_completion_counts (item_id, period_month, method, completions)
+@@ -372,8 +375,8 @@ begin
+   return jsonb_build_object('completed', done_n, 'pending', pending_n);
+ end $$;
+ 
+--- Client facing entry point. Same name as before so every installed iOS and Android build keeps working.
+-create or replace function public.delete_my_account()
++-- Client facing entry point for the new contract (returns jsonb: {status:'completed'|'accepted', request_id, already_requested}).
++create or replace function public.delete_my_account_v2()
+ returns jsonb language plpgsql security definer set search_path = public, auth as $$
+ declare v_uid uuid := auth.uid(); v_req public.account_deletion_requests%rowtype;
+ begin
+@@ -407,7 +410,15 @@ begin
+     'request_id', v_req.id, 'already_requested', false);
+ end $$;
+ 
+--- Privileges: clients may call only delete_my_account (signed in). Everything else is service role only.
++-- Compatibility wrapper for every already installed client. CREATE OR REPLACE with the SAME signature and return type (void) is legal and keeps the owner
++-- and ACL. search_path is the old function's exact setting. Errors propagate unchanged (sole administrator message, not authenticated).
++create or replace function public.delete_my_account()
++returns void language plpgsql security definer set search_path = public as $$
++begin
++  perform public.delete_my_account_v2();
++end $$;
++
++-- Privileges: clients may call only delete_my_account / delete_my_account_v2 (signed in). Everything else is service role only.
+ revoke all on function public.anonymous_completions_for_items(uuid[], date) from public, anon, authenticated;
+ revoke all on function public.account_deletion_retain_inventory(uuid)   from public, anon, authenticated;
+ revoke all on function public.account_deletion_inventory(uuid)          from public, anon, authenticated;
+@@ -419,9 +430,13 @@ grant execute on function public.anonymous_completions_for_items(uuid[], date),
+                           public.account_deletion_inventory(uuid), public.account_deletion_objects_remaining(uuid),
+                           public.account_deletion_scrub_json(jsonb, uuid), public.account_deletion_process(),
+                           public.account_deletion_delete_data(uuid) to service_role;
+-revoke all on function public.delete_my_account() from public, anon;
++revoke all on function public.delete_my_account_v2() from public, anon;
++grant execute on function public.delete_my_account_v2() to authenticated, service_role;
++revoke all on function public.delete_my_account() from public, anon;      -- anon could only ever get 'Not authenticated'; authenticated and service_role keep EXECUTE
+ grant execute on function public.delete_my_account() to authenticated, service_role;
+ 
+ -- Resume anything that is not finished (every minute; a no-op when nothing is open), and drop finished request rows after 30 days.
+ select cron.schedule('process-account-deletions', '* * * * *',
+   $$select public.account_deletion_process(); delete from public.account_deletion_requests where completed_at < now() - interval '30 days';$$);
++
++notify pgrst, 'reload schema';

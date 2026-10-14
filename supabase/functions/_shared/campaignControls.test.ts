@@ -45,7 +45,7 @@ Deno.test('authorize: the service key is also accepted as the apikey header; the
 });
 
 Deno.test('authorize: the shared ADMIN_SECRET header and short campaign secrets are never accepted', () => {
-  assertEquals(authorizeRequest(h({ authorization: `Bearer ${ANON}`, 'x-admin-secret': 'checkoff-admin-2026' }), { ...ENV }).ok, false);
+  assertEquals(authorizeRequest(h({ authorization: `Bearer ${ANON}`, 'x-admin-secret': 'retired-admin-secret-value' }), { ...ENV }).ok, false);
   const weak = { serviceRoleKey: ENV.serviceRoleKey, campaignSecret: 'short-secret' };
   assertEquals(authorizeRequest(h({ authorization: `Bearer ${ANON}`, 'x-campaign-secret': 'short-secret' }), weak).ok, false);
 });

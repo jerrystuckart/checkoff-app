@@ -16,7 +16,14 @@ import { useTheme } from '../lib/ThemeContext'
 import * as Sentry from '@sentry/react-native'
 import AdminDiagnosticsSection from '../components/profile/AdminDiagnosticsSection'
 import VisitRecoverySection from '../components/VisitRecoverySection'
+import PhotoTermsNotice from '../components/PhotoTermsNotice'
 import { supportsVisitRecovery } from '../lib/visitDetection/recoveryPolicy'
+import AsyncStorage from '@react-native-async-storage/async-storage'
+import { stopVisitTrackingForSignOut } from '../lib/visitDetection/candidateVisitTracker'
+import { resetFlagsCache } from '../lib/featureFlags'
+import { DELETION_COPY, requestAccountDeletion, clearLocalAccountState } from '../lib/accountDeletion'
+import { revokeAppleTokenIfPossible } from '../lib/appleRevocation'
+import * as AppleAuthentication from 'expo-apple-authentication'
 
 export default function ProfileScreen({ navigation }) {
   const insets = useSafeAreaInsets()
@@ -212,19 +219,19 @@ export default function ProfileScreen({ navigation }) {
   ])
 }
   async function deleteAccount() {
-    // Step 1 — first confirmation
+    // Step 1: first confirmation
     Alert.alert(
-      'Delete account',
-      'This will permanently delete your account, all your check-ins, badges, and lists. This cannot be undone.',
+      DELETION_COPY.confirmTitle,
+      DELETION_COPY.confirmBody,
       [
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Continue',
           style: 'destructive',
           onPress: () => {
-            // Step 2 — second confirmation, Apple requires explicit confirmation
+            // Step 2: second confirmation (Apple requires explicit confirmation)
             Alert.alert(
-              'Are you absolutely sure?',
+              DELETION_COPY.confirmAgainTitle,
               `Your account for ${user?.email} will be permanently deleted. There is no way to recover it.`,
               [
                 { text: 'Cancel', style: 'cancel' },
@@ -232,21 +239,29 @@ export default function ProfileScreen({ navigation }) {
                   text: 'Delete my account',
                   style: 'destructive',
                   onPress: async () => {
+                    let result
+                    // Sign in with Apple users: revoke Apple's token while the session is still valid. Best effort only: it never throws and
+                    // never blocks deletion (no prompt at all unless the server side is configured).
+                    await revokeAppleTokenIfPossible({ supabase, platformOS: Platform.OS, AppleAuthentication })
                     try {
-                      const { error } = await supabase.rpc('delete_my_account')
-                      if (error) throw error
-
-                      await authSignOut()
-                      setUser(null)
-                      setProfile(null)
-                      navigation.getParent()?.navigate('HomeTab')
+                      // The backend identifies the account from this session and blocks it immediately. If this throws,
+                      // nothing was deleted and the user is still signed in, so a retry is safe.
+                      result = await requestAccountDeletion(supabase)
                     } catch (e) {
-                      Alert.alert(
-                        'Could not delete account',
-                        e.message ?? 'Please try again or contact support@getcheckoff.com',
-                        [{ text: 'OK' }]
-                      )
+                      Alert.alert(DELETION_COPY.failedTitle, e?.message ? `${e.message}\n\nYour account was not deleted.` : DELETION_COPY.failedFallback, [{ text: 'OK' }])
+                      return
                     }
+                    // Accepted: clear this phone's account state (visit recovery and geofences, flag cache, per account keys), then sign out.
+                    await clearLocalAccountState({ stopVisitTracking: stopVisitTrackingForSignOut, resetFlagsCache, storage: AsyncStorage })
+                    try { await authSignOut() } catch {}   // the session is already revoked server side; local sign out still clears the app state
+                    setUser(null)
+                    setProfile(null)
+                    navigation.getParent()?.navigate('HomeTab')
+                    Alert.alert(
+                      result.kind === 'completed' ? DELETION_COPY.completedTitle : DELETION_COPY.acceptedTitle,
+                      result.kind === 'completed' ? DELETION_COPY.completedBody : DELETION_COPY.acceptedBody,
+                      [{ text: 'OK' }]
+                    )
                   },
                 },
               ]
@@ -676,6 +691,9 @@ export default function ProfileScreen({ navigation }) {
           />
         </View>
       </View>
+
+      {/* Photo terms notice: existing accounts only, dismissible, below the account controls (never on Home) */}
+      {Boolean(user) && <PhotoTermsNotice user={user} colors={colors} style={{ marginHorizontal: 0, marginBottom: 16 }} />}
 
       <TouchableOpacity style={styles.signOutBtn} onPress={signOut}>
         <Text style={styles.signOutBtnText}>Sign out</Text>

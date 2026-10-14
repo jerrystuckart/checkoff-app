@@ -6,6 +6,7 @@
 //          weekly_summary, promotion
 
 import { createClient } from 'npm:@supabase/supabase-js@2'
+import { guardServerCaller } from '../_shared/serverCaller.ts'
 
 const EXPO_PUSH_URL = 'https://exp.host/--/api/v2/push/send'
 
@@ -27,7 +28,10 @@ const BADGE_NAMES = {
   dare_issued:        { name: 'Dare Master',       icon: '😈' },
 }
 
-Deno.serve(async (_req) => {
+Deno.serve(async (req) => {
+  // Only the scheduler, other Edge Functions (service key) or an operator (x-campaign-secret). The public anon key and user JWTs are rejected before anything is read or sent.
+  const denied = guardServerCaller(req)
+  if (denied) return denied
   const supabase = createClient(
     Deno.env.get('SUPABASE_URL'),
     Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')

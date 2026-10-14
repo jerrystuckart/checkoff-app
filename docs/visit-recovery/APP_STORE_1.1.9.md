@@ -1,3 +1,5 @@
+> SUPERSEDED 2026-10-08 by `docs/release/STORE_RELEASE_1_1_10.md` (1.1.10). Historical only: do not follow the steps, privacy rows or reviewer-account SQL below.
+
 # CheckOff 1.1.9 — App Store submission (visit recovery)
 
 Build to submit: **1.1.9 (154)** — the binary already in TestFlight, runtime fingerprint `81dbd1f1dac8165466982bb95e3625a76d9ea841`.

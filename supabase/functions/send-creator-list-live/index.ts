@@ -12,6 +12,7 @@
 // Deploy:
 //   supabase functions deploy send-creator-list-live --project-ref uggusbbswybyplypkbxz
 
+import { guardServerCaller } from '../_shared/serverCaller.ts'
 const RESEND_KEY  = Deno.env.get('RESEND_API_KEY')!
 const FROM_EMAIL  = Deno.env.get('RESEND_FROM_EMAIL') ?? 'hello@getcheckoff.com'
 
@@ -21,6 +22,9 @@ const cors = {
 }
 
 Deno.serve(async (req) => {
+  // Only the scheduler, other Edge Functions (service key) or an operator (x-campaign-secret). The public anon key and user JWTs are rejected before anything is read or sent.
+  const denied = guardServerCaller(req)
+  if (denied) return denied
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
   if (req.method !== 'POST')    return new Response('Method not allowed', { status: 405 })
 

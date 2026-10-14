@@ -68,7 +68,7 @@ else
   # Validate before spending an hour: org/project from app.json. Token goes to curl on stdin (-K -), not argv.
   ORG=$(node -p "require('./app.json').expo.plugins.find(p=>Array.isArray(p)&&p[0]==='@sentry/react-native/expo')[1].organization")
   PROJ=$(node -p "require('./app.json').expo.plugins.find(p=>Array.isArray(p)&&p[0]==='@sentry/react-native/expo')[1].project")
-  CODE=$(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN" | curl -s -o /dev/null -w '%{http_code}' -m 20 -K - "https://sentry.io/api/0/projects/$ORG/$PROJ/")
+  CODE=$(printf 'header = "Authorization: Bearer %s"\n' "$SENTRY_AUTH_TOKEN" | curl -s -o /dev/null -w '%{http_code}' -m 20 -K - "https://sentry.io/api/0/organizations/$ORG/releases/")
   [ "$CODE" = 200 ] || fail "Sentry rejected the token for $ORG/$PROJ (HTTP $CODE) — fix the credential or use --no-sentry"
   echo "Sentry token OK for $ORG/$PROJ (upload ENABLED)"
 fi
@@ -76,11 +76,34 @@ fi
 LOGDIR="$HOME/Library/Logs/checkoff-builds"; mkdir -p "$LOGDIR"; chmod 700 "$LOGDIR"
 LOG="$LOGDIR/ios-$(date +%Y%m%d-%H%M%S).log"; : > "$LOG"; chmod 600 "$LOG"
 echo "full log: $LOG"
-# Redact the token (plain substring replace, no regex, token not in any argv) while teeing.
-eas build --platform ios --profile production --local 2>&1 | awk -v logf="$LOG" '
-  { line=$0; t=ENVIRON["SENTRY_AUTH_TOKEN"];
-    if (t != "") { while ((i=index(line,t))>0) line=substr(line,1,i-1) "<redacted>" substr(line,i+length(t)) }
-    print line; print line >> logf; fflush(); fflush(logf) }'
-RC=${PIPESTATUS[0]}
+
+# Run EAS under a pseudo terminal (macOS `script`) so it sees an interactive stdin AND stdout: its prompts (Apple login, credentials, keystore) are visible and
+# answerable. The previous `eas ... 2>&1 | awk` made stdout a pipe: prompts have no trailing newline, so awk held them back and the build looked stuck.
+# The raw transcript is redacted (Sentry token, ANSI codes, carriage returns) into $LOG when the run ends, then deleted. The token is never in an argument.
+RAW="$(mktemp -t eas-raw.XXXXXX)"; chmod 600 "$RAW"
+finish_log() {
+  [ -s "$RAW" ] && python3 - "$RAW" "$LOG" <<'PY'
+import os, re, sys
+t = open(sys.argv[1], 'rb').read().decode('utf-8', 'replace')
+tok = os.environ.get('SENTRY_AUTH_TOKEN', '')
+if tok: t = t.replace(tok, '<redacted>')
+t = re.sub(r'eyJ[A-Za-z0-9+/=_-]{200,}', '<redacted job blob>', t)   # EAS prints its whole job (credentials included) on failure
+t = re.sub(r'\x1b\[[0-9;?]*[ -/]*[@-~]', '', t).replace('\r', '').replace('\x04', '').replace('\x08', '')
+open(sys.argv[2], 'a').write(t)
+PY
+  rm -f "$RAW"
+}
+trap finish_log EXIT
+script -q "$RAW" eas build --platform ios --profile production --local
+RC=$?
+finish_log; trap - EXIT
 echo "build exit code: $RC (log: $LOG)"
-exit "$RC"
+[ "$RC" = 0 ] || exit "$RC"
+if [ "$NO_SENTRY" = 1 ]; then echo "Sentry: upload was disabled; nothing to verify."; exit 0; fi
+# The build log is the evidence available here: the upload step must have reported success and no Sentry error line may appear.
+if grep -Eiq "Source Map Upload Report|Uploaded [0-9]+ (file|source|bundle|artifact)|sourcemaps upload|source map.*upload(ed)?|Successfully uploaded" "$LOG" && ! grep -Eiq "sentry.*(error:|failed to upload|authentication failed|401|403)" "$LOG"; then
+  echo "Sentry: upload report found in the build log and no Sentry error lines: source maps for the embedded bundle were uploaded."
+else
+  echo "Sentry: NOT VERIFIED. No upload report (or a Sentry error) in $LOG. Check: grep -i sentry \"$LOG\" | tail -30" >&2
+  exit 4
+fi

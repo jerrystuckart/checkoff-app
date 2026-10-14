@@ -1,4 +1,5 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+import { guardServerCaller } from '../_shared/serverCaller.ts'
 import { createClient } from 'npm:@supabase/supabase-js@2'
 import { renderCheckOffEmail, neverCheckedInSubject } from '../email-templates/render-helpers.ts'
 
@@ -24,6 +25,9 @@ const templateHtml = `<!doctype html>
 </table></td></tr></table></body></html>`
 
 serve(async (req) => {
+  // Only the scheduler, other Edge Functions (service key) or an operator (x-campaign-secret). The public anon key and user JWTs are rejected before anything is read or sent.
+  const denied = guardServerCaller(req)
+  if (denied) return denied
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
 
   try {

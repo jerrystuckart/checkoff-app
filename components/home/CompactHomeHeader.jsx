@@ -41,6 +41,8 @@ export default function CompactHomeHeader({
   onProfilePress,
   showProfileStatus,
   metroBadge = null,
+  // Compact visit-recovery icon (components/home/VisitRecoveryHeaderIcon.jsx); renders itself away when not applicable.
+  recoverySlot = null,
 }) {
   const { TEXT, MUTED, BORDER, AMBER, NAVY } = colors
 
@@ -69,6 +71,7 @@ export default function CompactHomeHeader({
               </Text>
             </View>
           )}
+          {recoverySlot}
           <TouchableOpacity onPress={onToggleTheme} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }} style={styles.iconBtn}>
             <Text style={styles.iconBtnText}>{isDark ? '☀️' : '🌙'}</Text>
           </TouchableOpacity>

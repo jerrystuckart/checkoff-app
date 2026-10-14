@@ -13,12 +13,16 @@ import { CameraView, useCameraPermissions } from 'expo-camera'
 import * as ImagePicker from 'expo-image-picker'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { supabase } from '../lib/supabase'
+import PhotoLicenseNotice from '../components/PhotoLicenseNotice'
+import { CHECKIN_PHOTO_SUBTITLES } from '../lib/photoConsentCopy'
+import { PHOTO_TERMS_VERSION, checkInPhotoTermsFields } from '../lib/photoConsentVersion'
 import { completeDare } from '../lib/completeDare'
 import * as Haptics from 'expo-haptics'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
 import { fanOutCheckIn } from '../lib/checkInFanOut'
 import { checkGeoFence, presentGeoFenceFailure } from '../lib/geoFence'
 import { updateUserLifetimePoints } from '../lib/points'
+import { requestBadgeCelebrationCheck, useBadgeCelebrationHold } from '../lib/badgeCelebrationStore'
 import { isWithinWindow, getCurrentSeasonWindow } from '../lib/seasonWindow'
 import { resolveCheckOffAttachment } from '../lib/checkOffAttachment'
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
@@ -46,6 +50,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
   const [uploading, setUploading] = useState(false)
   const [fenceOk, setFenceOk] = useState(false)
   const [postCheckoffData, setPostCheckoffData] = useState(null)
+  useBadgeCelebrationHold(!!postCheckoffData)
   const cameraRef = useRef(null)
 
   // Gate on entry, before the camera or library ever opens — reached from
@@ -209,6 +214,8 @@ export default function PhotoCheckInScreen({ route, navigation }) {
         photo_width: photo?.width ?? null,
         photo_height: photo?.height ?? null,
         points_awarded: pointsAwarded,
+        // The consent line (PhotoLicenseNotice) is on this screen's preview whenever a photo is attached.
+        ...checkInPhotoTermsFields({ photoUrl, consentPresented: true }),
       }
 
       const { data: insertData, error: ciErr } = await supabase
@@ -238,6 +245,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
           const { data: existingRows } = await verifyQuery
           if (existingRows?.length) {
             setPostCheckoffData({ itemId: item?.id, listItemId, userId: user.id, item })
+            requestBadgeCelebrationCheck('photo-checkin')
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
           } else {
             Alert.alert('Something went wrong', 'Please try again.')
@@ -264,6 +272,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
       // (not even while the photo is still uploading), so a slow/failed
       // check-in can't show a false "Checked off" moment.
       setPostCheckoffData({ itemId: item?.id, listItemId, userId: user.id, item })
+      requestBadgeCelebrationCheck('photo-checkin')
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
 
       // Mirror this check-off into every other active list containing the
@@ -279,6 +288,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
           excludeListItemId: listItemId,
           checkinMethod: photoUrl ? 'photo' : 'tap',
           photoUrl,
+          photoTermsVersion: photoUrl ? PHOTO_TERMS_VERSION : null,
         }).catch(() => {})
       }
 
@@ -337,10 +347,7 @@ export default function PhotoCheckInScreen({ route, navigation }) {
           {photoRequired ? 'Photo proof required 📸' : 'Add a photo to prove it 📸'}
         </Text>
         <Text style={styles.subtitleSub}>
-          {photoRequired
-            ? 'This item requires a photo to check off. Your crew will see it.'
-            : "Photos are optional but show up in your crew's feed."
-          }
+          {photoRequired ? CHECKIN_PHOTO_SUBTITLES.required : CHECKIN_PHOTO_SUBTITLES.optional}
         </Text>
 
         <TouchableOpacity
@@ -423,6 +430,8 @@ export default function PhotoCheckInScreen({ route, navigation }) {
 
       <View style={[styles.previewActions, { paddingHorizontal: 20 }]}>
         <Text style={styles.previewItem}>{item?.body}</Text>
+
+        <PhotoLicenseNotice variant="checkin" />
 
         <TouchableOpacity
           style={[styles.submitBtn, uploading && { opacity: 0.6 }]}

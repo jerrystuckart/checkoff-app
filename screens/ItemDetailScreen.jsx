@@ -24,6 +24,7 @@ import { supabase } from '../lib/supabase'
 import { completeDare } from '../lib/completeDare'
 import { notifyCrewCheckIn } from '../lib/notifyCrewCheckIn'
 import { updateUserLifetimePoints, getUserLifetimePoints, checkTierCrossingForUser } from '../lib/points'
+import { requestBadgeCelebrationCheck, useBadgeCelebrationHold } from '../lib/badgeCelebrationStore'
 import TierUpgradeCelebrationModal from '../components/TierUpgradeCelebrationModal'
 import { useTheme } from '../lib/ThemeContext'
 import { trackEvent } from '../lib/trackEvent'
@@ -33,8 +34,10 @@ import { resolveCheckOffAttachment } from '../lib/checkOffAttachment'
 import { cancelAtPlaceReminder } from '../lib/visitDetection/atPlaceReminder'
 import { checkGeoFence, presentGeoFenceFailure } from '../lib/geoFence'
 import * as Location from 'expo-location'
+import { youAreHereLabel } from '../lib/youAreHere'
 import { isAtPlace } from '../lib/whatsGoodAtPlace'
 import { useCoverCandidateCTA } from '../lib/useCoverCandidateCTA'
+import { usePhotoVersion } from '../lib/photoRefresh'
 import CoverCandidateCTA from '../components/CoverCandidateCTA'
 import { fetchActiveCoverImageUrl, fetchDisplayEligibleImagePool } from '../lib/coverCandidates'
 import PostCheckoffSheet from '../components/PostCheckoffSheet'
@@ -43,6 +46,7 @@ import { getMemoryDetailForItem, hasMemoryContent } from '../lib/checkInMemory'
 import DetailArtwork from '../components/itemDetail/DetailArtwork'
 import { buildInviteMessage, buildInviteAskLine } from '../lib/inviteMessage'
 import { useSavedItems } from '../lib/SavedItemsContext'
+import { openItemDirections, openItemWebsite } from '../lib/itemUtilityActions'
 import BookmarkIcon from '../components/BookmarkIcon'
 import { deriveTitlePresentation } from '../lib/detailTitlePresentation'
 import { isTripModeAvailableForList, isTripModeWindowOpen, DEFAULT_TRIP_MODE_GRACE_DAYS } from '../lib/tripMode'
@@ -278,9 +282,15 @@ export default function ItemDetailScreen({ route, navigation }) {
   // ONE specific item, and must never carry over silently when the user
   // navigates from one Detail screen instance to the next item).
   const [showFullBodyModal, setShowFullBodyModal] = useState(false)
+
   useEffect(() => {
     setShowFullBodyModal(false)
   }, [item?.id])
+
+  // A sheet/modal of this screen is up: the badge celebration (BadgeCelebrationHost) waits until they are gone.
+  useBadgeCelebrationHold(
+    !!postCheckoffData || !!tierUpgrade || !!pendingTierUpgrade || !!memoryModal || tripModeSheetVisible || checkInMemoryVisible || showFullBodyModal || showInviteChannels
+  )
 
   useEffect(() => {
     loadUser()
@@ -380,6 +390,7 @@ export default function ItemDetailScreen({ route, navigation }) {
     trackEvent('trip_mode_checkoff_completed', { itemId, listId })
     await loadCheckedState(userId)
     setPostCheckoffData({ itemId, listItemId: successListItemId, userId, item, pointsAwarded })
+    requestBadgeCelebrationCheck('item-detail-checkoff')
     await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
     supabase.functions.invoke('update-streak', { body: { user_id: userId } }).catch(() => {/* non-critical */})
     const pointsBefore = await getUserLifetimePoints(userId).catch(() => 0)
@@ -406,6 +417,7 @@ export default function ItemDetailScreen({ route, navigation }) {
   // feeds both the eligibility check below and the image render further
   // down, so a selected cover is never missed and the "no contribution CTA
   // once a cover exists" rule holds no matter how this screen was reached.
+  const photoVersion = usePhotoVersion()
   const [fetchedCoverUrl, setFetchedCoverUrl] = useState(null)
   useEffect(() => {
     let cancelled = false
@@ -414,7 +426,7 @@ export default function ItemDetailScreen({ route, navigation }) {
       if (!cancelled && url) setFetchedCoverUrl(url)
     })
     return () => { cancelled = true }
-  }, [item?.id])
+  }, [item?.id, photoVersion])
 
   // Multi-Image Rotation (2026-09-03) — fetch the full display-eligible
   // pool directly (fresh signed URLs), same reasoning as fetchedCoverUrl
@@ -434,7 +446,7 @@ export default function ItemDetailScreen({ route, navigation }) {
       if (!cancelled && pool.length > 0) setFetchedImagePool(pool)
     })
     return () => { cancelled = true }
-  }, [item?.id])
+  }, [item?.id, photoVersion])
 
   const resolvedItem = {
     ...item,
@@ -994,6 +1006,7 @@ export default function ItemDetailScreen({ route, navigation }) {
               setChecked(true)
               trackEvent('checkoff_completed', { itemId: item?.id, listId })
               setPostCheckoffData({ itemId: item?.id, listItemId, userId, item, pointsAwarded })
+              requestBadgeCelebrationCheck('item-detail-checkoff')
             } else {
               Alert.alert('Could not check off', 'Something went wrong — please try again.')
             }
@@ -1019,6 +1032,7 @@ export default function ItemDetailScreen({ route, navigation }) {
         setChecked(true)
         trackEvent('checkoff_completed', { itemId: item?.id, listId })
         setPostCheckoffData({ itemId: item?.id, listItemId, userId, item, pointsAwarded })
+        requestBadgeCelebrationCheck('item-detail-checkoff')
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
         supabase.functions.invoke('update-streak', {
           body: { user_id: userId },
@@ -1258,6 +1272,7 @@ export default function ItemDetailScreen({ route, navigation }) {
         setChecked(true)
         trackEvent('checkoff_completed', { itemId: item?.id, listId })
         setPostCheckoffData({ itemId: item?.id, listItemId, userId, item, pointsAwarded })
+        requestBadgeCelebrationCheck('item-detail-checkoff')
         await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success)
         supabase.functions.invoke('update-streak', {
           body: { user_id: userId },
@@ -1356,27 +1371,13 @@ export default function ItemDetailScreen({ route, navigation }) {
   function openDirections() {
     if (!item) return
     trackEvent('directions_click', { itemId: item.id })
-    // Support both snake_case (useNearby) and camelCase (useItems) field names
-    const lat = item.maps_lat ?? item.mapsLat
-    const lng = item.maps_lng ?? item.mapsLng
-    if (lat && lng) {
-      const url = `maps://?daddr=${lat},${lng}&dirflg=d`
-      Linking.canOpenURL(url).then(ok =>
-        Linking.openURL(ok ? url : `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`).catch(() => {})
-      )
-    } else if (item.maps_query) {
-      const encoded = encodeURIComponent(item.maps_query)
-      const url = `maps://?q=${encoded}`
-      Linking.canOpenURL(url).then(ok =>
-        Linking.openURL(ok ? url : `https://maps.google.com/?q=${encoded}`).catch(() => {})
-      )
-    }
+    openItemDirections(item)
   }
 
   function openWebsite() {
     if (!item?.website_url) return
     trackEvent('url_click', { itemId: item.id })
-    Linking.openURL(item.website_url).catch(() => {})
+    openItemWebsite(item)
   }
 
   async function shareVia(channelKey) {
@@ -1666,6 +1667,12 @@ export default function ItemDetailScreen({ route, navigation }) {
 
           {item.neighborhoodName ? (
             <Text style={styles.heroVenue} numberOfLines={1}>{item.neighborhoodName}</Text>
+          ) : null}
+
+          {youAreHereLabel(item, detailUserLocation) ? (
+            <View style={styles.youAreHerePill} accessibilityLabel="You are here">
+              <Text style={styles.youAreHereText}>{youAreHereLabel(item, detailUserLocation)}</Text>
+            </View>
           ) : null}
 
           <View style={styles.heroMetaRow}>
@@ -2407,6 +2414,10 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     lineHeight: 27,
     marginBottom: 4,
   },
+
+  youAreHerePill: { alignSelf: 'flex-start', marginTop: 6, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: 'rgba(245,166,35,0.95)' },
+
+  youAreHereText: { color: '#1A1A2E', fontSize: 12, fontWeight: '800' },
 
   heroVenue: {
     fontSize: 13,

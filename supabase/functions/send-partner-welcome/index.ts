@@ -1,11 +1,15 @@
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+import { guardServerCaller } from '../_shared/serverCaller.ts'
 
 const cors = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-campaign-secret',
 }
 
 serve(async (req) => {
+  // Only the scheduler, other Edge Functions (service key) or an operator (x-campaign-secret). The public anon key and user JWTs are rejected before anything is read or sent.
+  const denied = guardServerCaller(req)
+  if (denied) return denied
   if (req.method === 'OPTIONS') return new Response('ok', { headers: cors })
 
   try {
