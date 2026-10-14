@@ -35,6 +35,7 @@ import { mapRailItem } from '../lib/mapRailItem'
 import { attachActiveCoverImages, attachDisplayEligibleImagePools } from '../lib/coverCandidates'
 import { useAtPlaceReminder } from '../lib/visitDetection/useAtPlaceReminder'
 import VisitRecoveryHeaderIcon from '../components/home/VisitRecoveryHeaderIcon'
+import HomeMetroSearchEntry from '../components/HomeMetroSearchEntry'
 import { deriveHomeHeroLayout } from '../lib/homeHeroLayout'
 import { selectNearYouCompactRows } from '../lib/nearYouCompact'
 import { selectHomeNearbyCandidates } from '../lib/homeNearYou'
@@ -1532,6 +1533,8 @@ async function loadNearbyRail(userId) {
               metroBadge={homeMetroContext.badge}
               recoverySlot={user ? <VisitRecoveryHeaderIcon userId={user.id} navigation={navigation} colors={colors} /> : null}
             />
+
+            <HomeMetroSearchEntry metro={selectedMetro} colors={colors} navigation={navigation} />
 
             {heroLayout.primaryHero === 'destination' && (
               <DestinationHero

@@ -34,6 +34,7 @@ import { resolveCheckOffAttachment } from '../lib/checkOffAttachment'
 import { cancelAtPlaceReminder } from '../lib/visitDetection/atPlaceReminder'
 import { checkGeoFence, presentGeoFenceFailure } from '../lib/geoFence'
 import * as Location from 'expo-location'
+import { youAreHereLabel } from '../lib/youAreHere'
 import { isAtPlace } from '../lib/whatsGoodAtPlace'
 import { useCoverCandidateCTA } from '../lib/useCoverCandidateCTA'
 import { usePhotoVersion } from '../lib/photoRefresh'
@@ -1668,6 +1669,12 @@ export default function ItemDetailScreen({ route, navigation }) {
             <Text style={styles.heroVenue} numberOfLines={1}>{item.neighborhoodName}</Text>
           ) : null}
 
+          {youAreHereLabel(item, detailUserLocation) ? (
+            <View style={styles.youAreHerePill} accessibilityLabel="You are here">
+              <Text style={styles.youAreHereText}>{youAreHereLabel(item, detailUserLocation)}</Text>
+            </View>
+          ) : null}
+
           <View style={styles.heroMetaRow}>
             <Text style={styles.heroMetaText}>{heroPointsLabel}</Text>
             {(item.dist_label ?? item.distance_label) ? (
@@ -2407,6 +2414,10 @@ function createItemStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, 
     lineHeight: 27,
     marginBottom: 4,
   },
+
+  youAreHerePill: { alignSelf: 'flex-start', marginTop: 6, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999, backgroundColor: 'rgba(245,166,35,0.95)' },
+
+  youAreHereText: { color: '#1A1A2E', fontSize: 12, fontWeight: '800' },
 
   heroVenue: {
     fontSize: 13,
