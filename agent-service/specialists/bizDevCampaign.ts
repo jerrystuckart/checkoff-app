@@ -40,6 +40,8 @@ export interface CampaignRuntime {
   maxOutbound: number
   /** Auto-answers to routine factual questions. Off unless the campaign definition turns it on. */
   faqEnabled: boolean
+  /** When true the Gmail-Sent leg of the send-time prior-contact barrier is skipped (Winston-recorded contacts are still enforced). */
+  allowPriorOutreach?: boolean
   /** Configurable. Default 80. */
   dailyCap: number
   /** Max NEW first touches per rolling 24h (default CAMPAIGN_DEFAULTS.firstTouchDailyLimit). Follow-ups never count against it. */
@@ -62,6 +64,8 @@ export interface CampaignRuntime {
 }
 
 export interface CampaignBatch {
+  /** QUEUED = approved recipients waiting for their first touch (default). IMPORTED_SENT = recipients whose first touch had already been sent from Gmail. */
+  kind?: 'QUEUED' | 'IMPORTED_SENT'
   approvedAt: string
   inputHash: string
   recipientCount: number

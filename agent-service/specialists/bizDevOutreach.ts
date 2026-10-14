@@ -35,9 +35,10 @@ import { query, withWriteTransaction } from '../db'
 import { transitionTask, updateTaskPlan } from '../mutations'
 import type { TaskStatus } from '../types'
 import {
-  resolveSender, matchesSequence, isBounce, classifyBounce, isOwnSend, safeIso, stripQuoted, decideReply, decideCampaignReply, buildEscalation, buildCampaignEscalation, type ReplyDecision,
+  resolveSender, matchesSequence, isBounce, classifyBounce, isOwnSend, safeIso, stripQuoted, decideReply, decideCampaignReply, buildEscalation, buildCampaignEscalation, OWN_ADDRESSES, type ReplyDecision,
 } from './bizDevReplies'
 import { renderTemplate, validateOutreachCopy } from './outreachTemplates'
+import { PriorContactIndex, describeConflicts, normalizeEmail, type ContactedRecord } from './priorContact'
 import {
   campaignToDef, computeCapacity, firstTouchAllowance, CAMPAIGN_DEFAULTS, campaignScanQueries, bounceRateTripped, isSystemicSendError, gmailDay, MAX_FETCH_PER_TICK, MAX_PROCESSED_IDS, type CampaignRuntime,
 } from './bizDevCampaign'
@@ -146,6 +147,7 @@ export type SequenceStatus =
   | 'BOUNCED'
   | 'SEND_UNCERTAIN'
   | 'EXPIRED'
+  | 'PRIOR_CONTACT'
 
 export interface BizDevSentStep {
   step: number
@@ -270,6 +272,8 @@ export interface BizDevStore {
   setCampaignProgress?(key: string, line: string): Promise<void>
   /** Which of these /confirm tokens exist in public.business_outreach_tokens (read-only). */
   confirmTokensExist?(tokens: string[]): Promise<Set<string>>
+  /** Everything already recorded as contacted (all campaigns, test/canary excluded). Feeds the send-time prior-contact barrier. */
+  contactedRecords?(): Promise<ContactedRecord[]>
   /** token -> the item_id its row points at (tokens with no row are absent). Lets the sender verify a token matches the approved item. */
   confirmTokenItems?(tokens: string[]): Promise<Map<string, string>>
   /** First touches this campaign sent at or after `since` (source of truth: the recipients' recorded sends). Drives the daily first-touch limit. */
@@ -513,7 +517,7 @@ async function processSequence(deps: BizDevDeps, ctx: TickCtx, def: BizDevSequen
   const ourSubject = state.subject ?? def.subject
 
   // ---- 0. Self-heal: a stopped sequence whose task is still WAITING (e.g. a crash between saving state and moving the task) is finished off, never left to drift. ----
-  if (state.sequenceStatus === 'DECLINED' || state.sequenceStatus === 'OPTED_OUT' || state.sequenceStatus === 'COMPLETE_NO_RESPONSE' || state.sequenceStatus === 'BOUNCED' || state.sequenceStatus === 'EXPIRED') {
+  if (state.sequenceStatus === 'DECLINED' || state.sequenceStatus === 'OPTED_OUT' || state.sequenceStatus === 'COMPLETE_NO_RESPONSE' || state.sequenceStatus === 'BOUNCED' || state.sequenceStatus === 'EXPIRED' || state.sequenceStatus === 'PRIOR_CONTACT') {
     await store.transition(view.taskId, 'CANCELED', { reason: `Sequence state ${state.sequenceStatus}; task closed by recovery check.` })
     out.actions.push(`${def.key}: recovered stranded ${state.sequenceStatus} -> CANCELED`)
     return
@@ -542,8 +546,21 @@ async function processSequence(deps: BizDevDeps, ctx: TickCtx, def: BizDevSequen
   }
   const processed = new Set(state.processedMessageIds ?? [])
 
+  // 1-pre. A follow-up is about to go out. Do not rely on the batched scan alone: ask Gmail DIRECTLY whether THIS business
+  // has replied or bounced since the first touch. Anything found goes through the normal reply/bounce handling below, and
+  // handling a reply cancels the follow-up before it can be sent.
+  const forced = new Set<string>()
+  if (isCampaign && dueAction(def, state, now).kind === 'SEND') {
+    const extra = await preSendInboundCheck(deps, ctx, def, state, firstSent.sentAt, processed)
+    for (const m of extra) {
+      forced.add(m.id)
+      if (!found.some((x) => x.id === m.id)) found.push(toSummary(m))
+    }
+    out.actions.push(`${def.key}: pre-follow-up Gmail check for ${def.contactEmail}: ${extra.length === 0 ? 'no reply or bounce' : `${extra.length} message(s) to handle first`}`)
+  }
+
   // 1a. Bounces in our thread: the email never arrived. This is not a response.
-  const bounce = found.find((m) => !processed.has(m.id) && m.threadId === state.threadId && isBounce(m))
+  const bounce = found.find((m) => !processed.has(m.id) && (m.threadId === state.threadId || forced.has(m.id)) && isBounce(m))
   if (bounce) {
     const full = await getFull(deps, ctx, bounce.id)
     const reason = full.bodyText.replace(/\s+/g, ' ').trim().slice(0, 600)
@@ -565,7 +582,7 @@ async function processSequence(deps: BizDevDeps, ctx: TickCtx, def: BizDevSequen
     return
   }
 
-  const candidates = found.filter((m) => !processed.has(m.id) && !isBounce(m) && matchesSequence(m, state, ourSubject))
+  const candidates = found.filter((m) => !processed.has(m.id) && !isBounce(m) && (matchesSequence(m, state, ourSubject) || forced.has(m.id)))
   candidates.sort((a, b) => (a.receivedAt ? Date.parse(a.receivedAt) || 0 : 0) - (b.receivedAt ? Date.parse(b.receivedAt) || 0 : 0))
 
   for (const summary of candidates) {
@@ -710,6 +727,11 @@ async function processSequence(deps: BizDevDeps, ctx: TickCtx, def: BizDevSequen
     return
   }
 
+  if (isCampaign && !(await followUpTokensOk(store, state))) {
+    out.errors.push(`${def.key}: follow-up HELD, a confirmation token is missing or points at a different item than the one recorded; nothing sent`)
+    return
+  }
+
   let body = due.followUp.bodyText
   if (isCampaign) {
     try {
@@ -807,6 +829,85 @@ async function handleCampaignBounce(deps: BizDevDeps, c: CampaignRuntime, def: B
   if (bounceRateTripped(c.bounceCount, c.firstTouchSent)) await pauseCampaignForFailure(deps, c, `Bounce rate tripped: ${c.bounceCount} bounces of ${c.firstTouchSent} first touches`, out)
 }
 
+/** Replies and bounces for ONE recipient, fetched on demand right before a follow-up. Two cheap id-only list queries; full fetches only for unseen mail. */
+async function preSendInboundCheck(deps: BizDevDeps, ctx: TickCtx, def: BizDevSequenceDef, state: BizDevState, firstSentAt: string, processed: ReadonlySet<string>): Promise<GmailFullMessage[]> {
+  const email = def.contactEmail.toLowerCase()
+  const day = gmailDay(new Date(Date.parse(firstSentAt) - 86_400_000))
+  const [fromThem, bounces] = await Promise.all([
+    listIds(deps.gmail, `after:${day} -in:sent -in:drafts (from:${email} OR "${email}")`, 25),
+    listIds(deps.gmail, `after:${day} from:(mailer-daemon OR postmaster) "${email}"`, 25),
+  ])
+  const out: GmailFullMessage[] = []
+  const seen = new Set<string>()
+  for (const m of [...fromThem, ...bounces]) {
+    if (seen.has(m.id) || processed.has(m.id)) continue
+    seen.add(m.id)
+    if (out.length >= 10) break
+    const full = await getFull(deps, ctx, m.id)
+    if (isBounce(full)) {
+      if (full.threadId === state.threadId || full.bodyText.toLowerCase().includes(email)) out.push(full)
+      continue
+    }
+    const sender = resolveSender(full)
+    if (sender === email || (full.threadId === state.threadId && sender !== null && !OWN_ADDRESSES.includes(sender))) out.push(full)
+  }
+  return out
+}
+
+/** A follow-up may only carry confirm links that exist and point at the recorded items. */
+async function followUpTokensOk(store: BizDevStore, state: BizDevState): Promise<boolean> {
+  const listings = state.listings ?? []
+  if (listings.length === 0) return true
+  const tokens = listings.map((l) => l.token)
+  if (store.confirmTokenItems) {
+    const itemOf = await store.confirmTokenItems(tokens)
+    return listings.every((l) => itemOf.get(l.token) === l.itemId)
+  }
+  if (store.confirmTokensExist) {
+    const present = await store.confirmTokensExist(tokens)
+    return tokens.every((t) => present.has(t))
+  }
+  return true
+}
+
+/** Gmail Sent history for these addresses, as prior-contact records (one batched query per 20 addresses). */
+async function gmailSentRecords(gmail: GmailAdapter, emails: string[]): Promise<ContactedRecord[]> {
+  const records: ContactedRecord[] = []
+  const want = new Map(emails.map((e) => [normalizeEmail(e), e]))
+  for (let i = 0; i < emails.length; i += 20) {
+    const chunk = emails.slice(i, i + 20)
+    const hits = await gmail.searchMessages(`in:sent (${chunk.map((e) => `to:${e}`).join(' OR ')})`, 100)
+    for (const m of hits) {
+      for (const to of m.to) {
+        const addr = (to.match(/<([^<>]+)>/)?.[1] ?? to).trim().toLowerCase()
+        if (want.has(normalizeEmail(addr))) records.push({ via: 'gmail', ref: `gmail:${m.id}`, email: addr, messageIds: [m.id] })
+      }
+    }
+  }
+  return records
+}
+
+/**
+ * Last barrier before a first touch: anyone already contacted (by email, Gmail message id, business or item, in ANY campaign or in Gmail Sent)
+ * is closed as PRIOR_CONTACT instead of being emailed. Independent of how the recipient got into the queue.
+ */
+async function dropPriorContacts(deps: BizDevDeps, c: CampaignRuntime, wanted: BizDevSequenceView[], out: BizDevTickResult): Promise<BizDevSequenceView[]> {
+  const { store, gmail } = deps
+  if (!store.contactedRecords || wanted.length === 0) return wanted
+  const records = await store.contactedRecords()
+  const fromGmail = c.allowPriorOutreach ? [] : await gmailSentRecords(gmail, wanted.map((v) => v.contactEmail))
+  const index = new PriorContactIndex([...records, ...fromGmail])
+  const keep: BizDevSequenceView[] = []
+  for (const v of wanted) {
+    const conflicts = index.check({ email: v.contactEmail, businessName: v.organization ?? undefined, itemIds: (v.state.listings ?? []).map((l) => l.itemId), messageIds: v.state.stepsSent.map((s) => s.messageId) }, { ignoreRef: v.taskId })
+    if (conflicts.length === 0) { keep.push(v); continue }
+    await store.saveState(v.taskId, { ...v.state, sequenceStatus: 'PRIOR_CONTACT' })
+    await store.transition(v.taskId, 'CANCELED', { reason: `Prior contact: ${describeConflicts(conflicts).slice(0, 300)}. No first touch sent.` })
+    out.actions.push(`campaign:${c.key}: SUPPRESSED ${v.contactEmail} (prior contact: ${conflicts.map((x) => x.key).join(', ')}); no first touch sent`)
+  }
+  return keep
+}
+
 async function tokenVerifiedRecipients(store: BizDevStore, c: CampaignRuntime, queued: BizDevSequenceView[], out: BizDevTickResult): Promise<BizDevSequenceView[]> {
   const tokens = [...new Set(queued.flatMap((v) => (v.state.listings ?? []).map((l) => l.token)))]
   let itemOf: Map<string, string>
@@ -861,7 +962,7 @@ async function runCampaignSends(deps: BizDevDeps, ctx: TickCtx, now: Date, out: 
         const allowance = firstTouchAllowance({ dailyLimit: limit, firstTouchesLast24h: sentLast24h, capacityRemaining: budget.remaining, reservedFollowUps: ctx.reserved.get(c.from.toLowerCase()) ?? 0 })
         ctx.firstTouchStats.set(c.key, { sentLast24h, limit, allowed: allowance.allowed, limitedBy: allowance.limitedBy })
         if (eligible.length > 0 && allowance.allowed <= 0) out.actions.push(`campaign:${c.key}: ${eligible.length} ready first touch(es) waiting: ${allowance.limitedBy === 'first_touch_limit' ? `daily first-touch limit reached (${sentLast24h}/${limit} in 24h)` : allowance.limitedBy === 'follow_up_reserve' ? `capacity reserved for ${ctx.reserved.get(c.from.toLowerCase()) ?? 0} follow-up(s) due within 24h` : 'daily cap reached'}`)
-        const wanted = eligible.slice(0, Math.min(allowance.allowed, c.batchPerTick))
+        const wanted = await dropPriorContacts(deps, c, eligible.slice(0, Math.min(allowance.allowed, c.batchPerTick)), out)
         {
           let sentNow = 0
           for (const v of wanted) {
@@ -1064,6 +1165,21 @@ export class DbBizDevStore implements BizDevStore {
     const t = rows[0]
     if (!t || t.status === 'DONE' || t.status === 'CANCELED' || t.next_action === line) return
     await updateTaskPlan({ taskId: t.id, actorOwnerKey: 'chief', expectedUpdatedAt: await this.freshUpdatedAt(t.id), nextAction: line })
+  }
+
+  async contactedRecords(): Promise<ContactedRecord[]> {
+    const rows = await query<{ id: string; email: string; business: string | null; items: string[] | null; msgs: string[] | null }>(
+      `SELECT t.id::text AS id, lower(c.email) AS email, c.organization_name AS business,
+              (SELECT array_agg(l->>'itemId') FROM jsonb_array_elements(coalesce(t.metadata #> '{bizdev,listings}', '[]'::jsonb)) l) AS items,
+              (SELECT array_agg(s->>'messageId') FROM jsonb_array_elements(coalesce(t.metadata #> '{bizdev,stepsSent}', '[]'::jsonb)) s) AS msgs
+         FROM agent.tasks t JOIN agent.contacts c ON c.id = t.contact_id
+        WHERE t.source_type = $1
+          AND jsonb_array_length(coalesce(t.metadata #> '{bizdev,stepsSent}', '[]'::jsonb)) > 0
+          -- Test and canary campaigns are not correspondence with a business (they email Jerry's own addresses).
+          AND coalesce(t.metadata #>> '{bizdev,campaignKey}', '') !~ '(-test|-canary)$'`,
+      [BIZDEV_SOURCE_TYPE]
+    )
+    return rows.map((r) => ({ via: 'winston' as const, ref: r.id, email: r.email, businessName: r.business ?? undefined, itemIds: r.items ?? [], messageIds: r.msgs ?? [] }))
   }
 
   async confirmTokensExist(tokens: string[]): Promise<Set<string>> {

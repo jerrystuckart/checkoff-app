@@ -20,6 +20,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { addBusinessDays } from './bizDevOutreach'
 import { CAMPAIGN_DEFAULTS, type CampaignRuntime, type CampaignBatch } from './bizDevCampaign'
+import { PriorContactIndex, describeConflicts } from './priorContact'
 import { buildItemsBlock, checkTemplate, CANONICAL_KIT_URL, confirmUrlFor, extractPlaceholders, renderTemplate, validateOutreachCopy, type ListingForEmail } from './outreachTemplates'
 
 // ---------------------------------------------------------------------------
@@ -62,10 +63,26 @@ export interface CampaignDefinition {
   batchPerTick?: number
   faqEnabled?: boolean
   allowPriorOutreach?: boolean
+  /**
+   * A row is only eligible once EVERY configured confirmation is present in the CSV. Rows that fail are EXCLUDED (never queued, never an error)
+   * so a whole research workbook can be previewed without any risk of activating an unconfirmed row.
+   */
+  eligibilityPolicy?: EligibilityPolicy
   /** Optional hard stop (ISO date-time). Required in practice for canaries so they cannot run indefinitely. */
   expiresAt?: string
   /** Jerry sets these to true only after reading the exact templates. `approve` refuses otherwise. */
   approvals: { firstTouchTemplate: boolean; followUpTemplates: boolean }
+}
+
+export interface EligibilityPolicy {
+  /** A public page that shows the business publishes this email address (column: email_evidence_url). */
+  requireEmailEvidenceUrl?: boolean
+  /** Someone confirmed the business is a local, independent business (column: local_business_confirmed = yes). */
+  requireLocalBusinessConfirmation?: boolean
+  /** The row carries an explicit send approval (column: send_approval = APPROVED or SENT). */
+  requireSendApproval?: boolean
+  /** Case-insensitive substrings of the `category` column that are never contacted (public assets, parks, museums, government, major corporate, HOLD…). */
+  blockedCategories?: string[]
 }
 
 export function validateDefinition(d: CampaignDefinition): Issue[] {
@@ -139,6 +156,10 @@ const ALIASES: Record<string, string[]> = {
   source_url: ['source_url', 'research_source_url', 'contact_ownership_source'],
   confidence: ['confidence'],
   excluded_reason: ['excluded_reason'],
+  email_evidence_url: ['email_evidence_url', 'email_evidence', 'evidence_url'],
+  local_business_confirmed: ['local_business_confirmed', 'local_confirmed'],
+  category: ['category', 'business_type'],
+  send_approval: ['send_approval'],
   exact_checkoff_item: ['exact_checkoff_item', 'exact_checkoff_item_wording', 'current_checkoff_item'],
 }
 
@@ -154,6 +175,10 @@ export interface CsvRow {
   confidence: string
   excluded_reason: string
   exact_checkoff_item: string
+  email_evidence_url: string
+  local_business_confirmed: string
+  category: string
+  send_approval: string
 }
 
 export function readCampaignCsv(text: string): { rows: CsvRow[]; issues: Issue[] } {
@@ -173,7 +198,7 @@ export function readCampaignCsv(text: string): { rows: CsvRow[]; issues: Issue[]
     const cells = table[r]
     if (cells.every((c) => !c.trim())) continue
     const get = (k: string) => (idx[k] !== undefined ? (cells[idx[k]] ?? '').trim() : '')
-    rows.push({ rowNumber: r + 1, business_name: get('business_name'), contact_email: get('contact_email'), item_id: get('item_id'), contact_name: get('contact_name'), metro: get('metro'), website: get('website'), source_url: get('source_url'), confidence: get('confidence'), excluded_reason: get('excluded_reason'), exact_checkoff_item: get('exact_checkoff_item') })
+    rows.push({ rowNumber: r + 1, business_name: get('business_name'), contact_email: get('contact_email'), item_id: get('item_id'), contact_name: get('contact_name'), metro: get('metro'), website: get('website'), source_url: get('source_url'), confidence: get('confidence'), excluded_reason: get('excluded_reason'), exact_checkoff_item: get('exact_checkoff_item'), email_evidence_url: get('email_evidence_url'), local_business_confirmed: get('local_business_confirmed'), category: get('category'), send_approval: get('send_approval') })
   }
   return { rows, issues }
 }
@@ -205,6 +230,8 @@ export interface IntakeLookups {
   gmailPriorSent?(emails: string[]): Promise<Set<string>>
   /** Emails already queued in THIS campaign (re-running approve after a partial run). */
   existingCampaignRecipients(campaignKey: string): Promise<Set<string>>
+  /** Everything already contacted (email, message id, business, item). When provided, a match on ANY key excludes the contact. */
+  priorContactIndex?(): Promise<PriorContactIndex>
 }
 
 // ---------------------------------------------------------------------------
@@ -253,6 +280,18 @@ export interface CampaignPlan {
 
 const sha = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex').slice(0, 16)
 
+/** Why a row may not be activated yet (undefined = eligible). Every configured confirmation must be present. */
+export function ineligibleReason(p: EligibilityPolicy | undefined, r: Pick<CsvRow, 'category' | 'email_evidence_url' | 'local_business_confirmed' | 'send_approval'>): string | undefined {
+  if (!p) return undefined
+  const cat = r.category.toLowerCase()
+  const blocked = (p.blockedCategories ?? []).find((b) => b && cat.includes(b.toLowerCase()))
+  if (blocked) return `category "${r.category}" is suppressed (${blocked})`
+  if (p.requireSendApproval && !/^(approved|sent)$/i.test(r.send_approval.trim())) return `no send approval (send_approval="${r.send_approval || 'blank'}")`
+  if (p.requireEmailEvidenceUrl && !/^https?:\/\//i.test(r.email_evidence_url.trim())) return 'no public email evidence URL'
+  if (p.requireLocalBusinessConfirmation && !/^(yes|true|confirmed|y)$/i.test(r.local_business_confirmed.trim())) return 'local-business eligibility not confirmed'
+  return undefined
+}
+
 export function templateHashOf(d: CampaignDefinition): string {
   return sha({ s: d.subjectTemplate, f: d.firstTouchBody, a: d.followUp1Body, b: d.followUp2Body, c: cadenceOf(d), faq: !!d.faqEnabled })
 }
@@ -277,6 +316,8 @@ export async function buildCampaignPlan(def: CampaignDefinition, csvText: string
   for (const r of rows) {
     const at = { row: r.rowNumber }
     if (r.excluded_reason) { excluded.push({ rowNumber: r.rowNumber, email: r.contact_email, business: r.business_name, reason: `Sheet marks this row excluded: ${r.excluded_reason}` }); continue }
+    const notEligible = ineligibleReason(def.eligibilityPolicy, r)
+    if (notEligible) { excluded.push({ rowNumber: r.rowNumber, email: r.contact_email, business: r.business_name, reason: `NOT ELIGIBLE: ${notEligible}` }); continue }
     if (!r.business_name) { issues.push(err('ROW_NO_BUSINESS', 'business_name is empty', at)); continue }
     if (!r.item_id) { issues.push(err('ROW_NO_ITEM', `"${r.business_name}": item_id is empty`, at)); continue }
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(r.item_id)) { issues.push(err('ROW_BAD_ITEM_ID', `"${r.business_name}": item_id "${r.item_id}" is not a UUID`, at)); continue }
@@ -322,6 +363,7 @@ export async function buildCampaignPlan(def: CampaignDefinition, csvText: string
   const known = emails.length ? await opts.lookups.contactsByEmail(emails) : new Map<string, ContactInfo>()
   const gmailPrior = emails.length && opts.lookups.gmailPriorSent ? await opts.lookups.gmailPriorSent(emails) : new Set<string>()
   const already = await opts.lookups.existingCampaignRecipients(def.key)
+  const priorIndex = opts.lookups.priorContactIndex ? await opts.lookups.priorContactIndex() : undefined
 
   const recipients: PlannedRecipient[] = []
   for (const [email, group] of byEmail) {
@@ -334,6 +376,13 @@ export async function buildCampaignPlan(def: CampaignDefinition, csvText: string
     const prior = !!c?.hasOutbound || gmailPrior.has(email)
     if (prior && !def.allowPriorOutreach) { excluded.push({ email, business, reason: `Prior outreach exists (${c?.hasOutbound ? 'recorded interaction' : 'Gmail Sent'}); set allowPriorOutreach to include` }); continue }
     if (prior) issues.push(warn('PRIOR_OUTREACH', `${email} was contacted before; included because allowPriorOutreach is on`, { email }))
+    if (priorIndex) {
+      const conflicts = priorIndex.check({ email, businessName: business, itemIds: group.map((g) => g.item_id) })
+      if (conflicts.length > 0) {
+        if (!def.allowPriorOutreach) { excluded.push({ email, business, reason: `PRIOR CONTACT: ${describeConflicts(conflicts).slice(0, 260)}` }); continue }
+        issues.push(warn('PRIOR_CONTACT', `${email} matches prior contact (${conflicts.map((x) => x.key).join(', ')}); included because allowPriorOutreach is on`, { email }))
+      }
+    }
 
     const planned: PlannedItem[] = group.map((g, i) => ({ itemId: g.item_id, text: g.info.text, existingToken: g.info.existingToken, previewToken: `NEW_TOKEN_${i + 1}` }))
     const contactName = group.map((g) => g.contact_name).find(Boolean) ?? null
@@ -594,6 +643,7 @@ export async function approveCampaign(plan: CampaignPlan, args: ApproveArgs, wri
     closeAfterBusinessDays: cad.close,
     maxOutbound: CAMPAIGN_DEFAULTS.maxOutbound,
     faqEnabled: !!d.faqEnabled,
+    ...(d.allowPriorOutreach ? { allowPriorOutreach: true } : {}),
     dailyCap: d.dailyCap ?? CAMPAIGN_DEFAULTS.dailyCap,
     ...(d.firstTouchDailyLimit ? { firstTouchDailyLimit: d.firstTouchDailyLimit } : {}),
     providerLimit: d.providerLimit ?? CAMPAIGN_DEFAULTS.providerLimit,
@@ -708,6 +758,8 @@ export interface CampaignReport {
   uncertainSends: number
   closedNoResponse: number
   expired: number
+  /** Closed by the send-time prior-contact barrier (never emailed). */
+  suppressed?: number
   expiresAt?: string
   needsJerryItems: string[]
   repliesByClass: Record<string, number>
@@ -743,6 +795,7 @@ export function summarizeCampaign(runtime: Pick<CampaignRuntime, 'key' | 'state'
     uncertainSends: c((r) => r.state.sequenceStatus === 'SEND_UNCERTAIN'),
     closedNoResponse: c((r) => r.state.sequenceStatus === 'COMPLETE_NO_RESPONSE'),
     expired: c((r) => r.state.sequenceStatus === 'EXPIRED'),
+    suppressed: c((r) => r.state.sequenceStatus === 'PRIOR_CONTACT'),
     expiresAt: runtime?.expiresAt,
     needsJerryItems: recipients.filter((r) => r.status === 'NEEDS_JERRY').map((r) => r.nextAction ?? '(no detail)').slice(0, 20),
     repliesByClass: replyClassCounts,

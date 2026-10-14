@@ -6,11 +6,18 @@
 import { query, withWriteTransaction } from '../db'
 import { createTask, ensureProject } from '../mutations'
 import type { GmailAdapter } from './googleAdapters'
-import { BIZDEV_CAMPAIGN_SOURCE_TYPE, BIZDEV_SOURCE_TYPE } from './bizDevOutreach'
+import { BIZDEV_CAMPAIGN_SOURCE_TYPE, BIZDEV_SOURCE_TYPE, DbBizDevStore } from './bizDevOutreach'
 import type { CampaignBatch, CampaignRuntime } from './bizDevCampaign'
+import { PriorContactIndex, type ContactedRecord } from './priorContact'
+import type { ImportWriter, ImportedRecipientWrite } from './outreachImport'
 import { ApprovalRefused, TEST_TOKEN_CAMPAIGN_PATTERN, summarizeCampaign, type CampaignReport, type CampaignWriter, type ContactInfo, type IntakeLookups, type ItemInfo, type ReportRecipient } from './outreachCampaign'
 
 export class DbIntakeLookups implements IntakeLookups {
+  /** Winston's contacted-records (all campaigns, test/canary excluded). Gmail Sent history is added by the existing gmailPriorSent check. */
+  async priorContactIndex(): Promise<PriorContactIndex> {
+    return new PriorContactIndex(await loadContactedRecords())
+  }
+
   constructor(private readonly gmail?: GmailAdapter) {
     if (gmail) this.gmailPriorSent = (emails: string[]) => this.priorSent(emails)
   }
@@ -62,6 +69,16 @@ export class DbIntakeLookups implements IntakeLookups {
     return found
   }
 
+  /** Gmail message ids already recorded on recipients of a campaign (for idempotent re-imports). */
+  async importedMessageIds(campaignKey: string): Promise<Set<string>> {
+    const rows = await query<{ id: string }>(
+      `SELECT s->>'messageId' AS id FROM agent.tasks t, jsonb_array_elements(coalesce(t.metadata #> '{bizdev,stepsSent}', '[]'::jsonb)) s
+        WHERE t.source_type = $1 AND t.metadata #>> '{bizdev,campaignKey}' = $2`,
+      [BIZDEV_SOURCE_TYPE, campaignKey]
+    )
+    return new Set(rows.map((r) => r.id))
+  }
+
   async existingCampaignRecipients(campaignKey: string): Promise<Set<string>> {
     // Only recipients of a campaign that actually EXISTS count: orphans from an interrupted approval are refreshed by the next approve, not excluded.
     const rows = await query<{ source_ref: string }>(
@@ -77,7 +94,7 @@ export class DbIntakeLookups implements IntakeLookups {
   }
 }
 
-export class DbCampaignWriter implements CampaignWriter {
+export class DbCampaignWriter implements CampaignWriter, ImportWriter {
   async ensureProject(projectKey: string, name: string, summary: string): Promise<void> {
     await ensureProject({ projectKey, name, projectType: 'INTERNAL', ownerKey: 'chief', summary })
   }
@@ -143,6 +160,36 @@ export class DbCampaignWriter implements CampaignWriter {
     return res.task.id
   }
 
+  /**
+   * Imported recipient: WAITING, first touch already recorded and latched. Idempotent and crash-safe: the task is keyed by source_ref,
+   * the bizdev state is only ever written to a task that does not have one yet, and the interaction is keyed by the Gmail message id.
+   * An existing recipient is never overwritten.
+   */
+  async createSentRecipient(w: ImportedRecipientWrite): Promise<boolean> {
+    const res = await createTask({
+      title: w.title,
+      projectKey: w.projectKey,
+      status: 'WAITING',
+      changedByOwnerKey: 'chief',
+      ownerKey: 'chief',
+      contactId: w.contactId,
+      nextAction: w.nextAction,
+      nextCheckAt: w.nextCheckAt,
+      sourceType: BIZDEV_SOURCE_TYPE,
+      sourceRef: w.sourceRef,
+    })
+    await withWriteTransaction(async (c) => {
+      await c.query(`UPDATE agent.tasks SET metadata = jsonb_set(coalesce(metadata,'{}'::jsonb), '{bizdev}', $2::jsonb) WHERE id = $1 AND NOT (coalesce(metadata,'{}'::jsonb) ? 'bizdev')`, [res.task.id, JSON.stringify(w.state)])
+      await c.query(
+        `INSERT INTO agent.interactions (contact_id, project_id, task_id, channel, direction, occurred_at, subject, summary, requires_action, source_ref, metadata)
+         SELECT $1, t.project_id, t.id, 'EMAIL', 'OUTBOUND', $3::timestamptz, $4, $5, false, $6, $7::jsonb FROM agent.tasks t WHERE t.id = $2
+         ON CONFLICT DO NOTHING`,
+        [w.contactId, res.task.id, w.interaction.occurredAt, w.interaction.subject, w.interaction.summary, `gmail:${w.interaction.messageId}`, JSON.stringify({ gmailMessageId: w.interaction.messageId, gmailThreadId: w.interaction.threadId, ...w.interaction.extra })]
+      )
+    })
+    return res.created
+  }
+
   async createRecipientTask(i: { projectKey: string; title: string; contactId: string; sourceRef: string; state: Record<string, unknown> }): Promise<boolean> {
     const res = await createTask({
       title: i.title,
@@ -203,4 +250,9 @@ export async function loadCampaignReport(key: string): Promise<CampaignReport> {
   for (const c of classes) if (c.rc) counts[c.rc] = Number(c.n)
   const recips: ReportRecipient[] = rows.map((r) => ({ status: r.status, state: r.bizdev, nextCheckAt: r.next_check_at ? r.next_check_at.toISOString() : null, nextAction: r.next_action }))
   return summarizeCampaign(camp[0]?.campaign ?? null, key, recips, counts)
+}
+
+/** Everything Winston has recorded as actually CONTACTED (test and canary campaigns excluded), for the prior-contact index. */
+export function loadContactedRecords(): Promise<ContactedRecord[]> {
+  return new DbBizDevStore().contactedRecords()
 }

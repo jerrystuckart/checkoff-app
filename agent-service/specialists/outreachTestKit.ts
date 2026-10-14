@@ -5,6 +5,8 @@
 import type { GmailAdapter, GmailFullMessage, GmailMessageSummary, GmailSendInput, GmailSendAsIdentity, GmailAttachmentInfo } from './googleAdapters'
 import type { BizDevSequenceView, BizDevState, BizDevStore, TransitionDetail, TransitionTarget } from './bizDevOutreach'
 import type { CampaignBatch, CampaignRuntime } from './bizDevCampaign'
+import { PriorContactIndex, type ContactedRecord } from './priorContact'
+import type { ImportWriter, ImportedRecipientWrite } from './outreachImport'
 import type { CampaignWriter, ContactInfo, IntakeLookups, ItemInfo } from './outreachCampaign'
 
 export const uuid = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -54,11 +56,11 @@ export class FakeGmail implements GmailAdapter {
   }
 
   /** A sent message the engine does NOT know about (simulates an uncertain send that actually went out). */
-  addGhostSent(to: string, subject: string, at: Date = this.clock): { id: string; threadId: string } {
+  addGhostSent(to: string, subject: string, at: Date = this.clock, bodyText = ''): { id: string; threadId: string } {
     const id = `ghost${++this.seq}`
     const threadId = `T-${id}`
     this.sentLog.push({ id, threadId, to, at: at.toISOString() })
-    this.msgs.set(id, { labels: new Set(['SENT']), full: { id, threadId, from: 'jerry@getcheckoff.com', to: [to], cc: [], replyTo: null, subject, bodyText: '', receivedAt: at.toISOString(), messageIdHeader: `<hdr-${id}@mail>` } })
+    this.msgs.set(id, { labels: new Set(['SENT']), full: { id, threadId, from: 'jerry@getcheckoff.com', to: [to], cc: [], replyTo: null, subject, bodyText, receivedAt: at.toISOString(), messageIdHeader: `<hdr-${id}@mail>` } })
     return { id, threadId }
   }
 
@@ -91,9 +93,15 @@ export class FakeGmail implements GmailAdapter {
       return [...base, ...filler]
     }
     const all = [...this.msgs.values()].filter((m) => m.labels.has('INBOX')).map((m) => m.full)
-    if (q.includes('mailer-daemon')) return all.filter((m) => /mailer-daemon|postmaster/i.test(m.from)).map((m) => ({ id: m.id, threadId: m.threadId }))
+    // Targeted per-recipient query: (from:EMAIL OR "EMAIL") or, for bounces, "EMAIL" in the body.
+    const quoted = q.match(/"([^"\s]+@[^"\s]+)"/)?.[1]?.toLowerCase()
+    if (q.includes('mailer-daemon')) {
+      const bounces = all.filter((m) => /mailer-daemon|postmaster/i.test(m.from))
+      return (quoted ? bounces.filter((m) => m.bodyText.toLowerCase().includes(quoted)) : bounces).map((m) => ({ id: m.id, threadId: m.threadId }))
+    }
     const stem = q.match(/subject:"([^"]+)"/)?.[1]
     if (stem) return all.filter((m) => m.subject.toLowerCase().includes(stem.toLowerCase())).map((m) => ({ id: m.id, threadId: m.threadId }))
+    if (quoted) return all.filter((m) => `${m.from} ${m.replyTo ?? ''} ${m.bodyText}`.toLowerCase().includes(quoted)).map((m) => ({ id: m.id, threadId: m.threadId }))
     return all.map((m) => ({ id: m.id, threadId: m.threadId }))
   }
 
@@ -108,6 +116,14 @@ export class FakeGmail implements GmailAdapter {
     if (m) {
       const afterMs = m[2] ? Date.UTC(Number(m[2]), Number(m[3]) - 1, Number(m[4])) : -Infinity
       return this.sentLog.filter((s) => s.to === m[1] && Date.parse(s.at) >= afterMs).map((s) => {
+        const f = this.msgs.get(s.id)!.full
+        return { id: s.id, threadId: s.threadId, from: f.from, to: f.to, subject: f.subject, snippet: '', receivedAt: f.receivedAt, replyTo: null }
+      })
+    }
+    const batched = q.match(/^in:sent \((.+)\)$/)
+    if (batched) {
+      const wanted = new Set([...batched[1].matchAll(/to:(\S+)/g)].map((x) => x[1].toLowerCase()))
+      return this.sentLog.filter((s) => wanted.has(s.to.toLowerCase())).map((s) => {
         const f = this.msgs.get(s.id)!.full
         return { id: s.id, threadId: s.threadId, from: f.from, to: f.to, subject: f.subject, snippet: '', receivedAt: f.receivedAt, replyTo: null }
       })
@@ -143,7 +159,7 @@ export interface MemRecipient {
   blockerNote: string | null
 }
 
-export class MemWorld implements BizDevStore, CampaignWriter, IntakeLookups {
+export class MemWorld implements BizDevStore, CampaignWriter, IntakeLookups, ImportWriter {
   recipients = new Map<string, MemRecipient>()
   contacts = new Map<string, { id: string; email: string; org: string; name: string | null; suppressed: boolean; hasOutbound: boolean }>()
   runtimes = new Map<string, CampaignRuntime>()
@@ -171,7 +187,7 @@ export class MemWorld implements BizDevStore, CampaignWriter, IntakeLookups {
 
   // ---- CampaignWriter ----
   async ensureProject(projectKey: string): Promise<void> { if (!this.projects.includes(projectKey)) this.projects.push(projectKey) }
-  async upsertContact(r: { email: string; businessName: string; contactName: string | null }): Promise<string> {
+  async upsertContact(r: { email: string; businessName: string; contactName: string | null; website?: string | null; source?: string }): Promise<string> {
     const ex = this.contacts.get(r.email)
     if (ex) return ex.id
     const id = `c${++this.n}`
@@ -199,7 +215,7 @@ export class MemWorld implements BizDevStore, CampaignWriter, IntakeLookups {
     this.campaignStatus.set(runtime.key, { status: 'READY' })
     return taskId
   }
-  async createRecipientTask(i: { contactId: string; sourceRef: string; state: Record<string, unknown> }): Promise<boolean> {
+  async createRecipientTask(i: { projectKey?: string; title?: string; contactId: string; sourceRef: string; state: Record<string, unknown> }): Promise<boolean> {
     if (this.crashOnRecipientWrite > 0 && --this.crashOnRecipientWrite === 0) throw new Error('simulated crash while writing recipients')
     const state = i.state as unknown as BizDevState
     const existing = [...this.recipients.values()].find((r) => r.email === state.contactEmail && r.state.campaignKey === state.campaignKey)
@@ -233,6 +249,27 @@ export class MemWorld implements BizDevStore, CampaignWriter, IntakeLookups {
   }
   async setCampaignProgress(_k: string, line: string) { this.progress.push(line) }
   async confirmTokensExist(tokens: string[]) { return new Set(tokens.filter((t) => this.tokens.has(t))) }
+  /** Everything contacted (a first touch exists), test/canary campaigns excluded: mirrors DbBizDevStore.contactedRecords. */
+  async contactedRecords(): Promise<ContactedRecord[]> {
+    return [...this.recipients.values()]
+      .filter((r) => r.state.stepsSent.length > 0 && !/(-test|-canary)$/.test(r.state.campaignKey ?? ''))
+      .map((r) => ({ via: 'winston' as const, ref: r.taskId, email: r.email, businessName: this.contacts.get(r.email)?.org, itemIds: (r.state.listings ?? []).map((l) => l.itemId), messageIds: r.state.stepsSent.map((s) => s.messageId) }))
+  }
+  async priorContactIndex(): Promise<PriorContactIndex> {
+    return new PriorContactIndex(await this.contactedRecords())
+  }
+  async importedMessageIds(key: string): Promise<Set<string>> {
+    return new Set([...this.recipients.values()].filter((r) => r.state.campaignKey === key).flatMap((r) => r.state.stepsSent.map((s) => s.messageId)))
+  }
+  /** Imported recipient: WAITING with the first touch recorded. Never overwrites an existing recipient. */
+  async createSentRecipient(w: ImportedRecipientWrite): Promise<boolean> {
+    const state = w.state as unknown as BizDevState
+    if ([...this.recipients.values()].some((r) => r.email === state.contactEmail && r.state.campaignKey === state.campaignKey)) return false
+    const taskId = `t${++this.n}`
+    this.recipients.set(taskId, { taskId, contactId: w.contactId, email: state.contactEmail, status: 'WAITING', state, nextCheckAt: w.nextCheckAt, nextAction: w.nextAction, jerryRequest: null, cancelReason: null, blockerNote: null })
+    this.interactions.push({ taskId, direction: 'OUTBOUND', messageId: w.interaction.messageId, summary: w.interaction.summary })
+    return true
+  }
   async countFirstTouchesSince(campaignKey: string, since: Date) {
     return [...this.recipients.values()].filter((r) => r.state.campaignKey === campaignKey && r.state.stepsSent.length > 0 && Date.parse(r.state.stepsSent[0].sentAt) > since.getTime()).length
   }
