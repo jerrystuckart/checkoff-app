@@ -20,5 +20,24 @@
     "firstTouchTemplate": true,
     "followUpTemplates": true
   },
-  "expiresAt": "2026-11-16T07:00:00.000Z"
+  "expiresAt": "2026-11-16T07:00:00.000Z",
+  "eligibilityPolicy": {
+    "requireEmailEvidenceUrl": true,
+    "requireLocalBusinessConfirmation": true,
+    "requireSendApproval": true,
+    "blockedCategories": [
+      "public attraction",
+      "large institution",
+      "institution",
+      "park",
+      "museum",
+      "government",
+      "major corporate",
+      "corporate",
+      "retired",
+      "restricted",
+      "hold",
+      "review"
+    ]
+  }
 }

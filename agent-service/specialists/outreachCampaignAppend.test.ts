@@ -113,7 +113,15 @@ test('duplicates are refused: existing recipient, an item already assigned to so
   assert.equal(dupe.recipients.length, 0)
   await assert.rejects(() => approveCampaign(dupe, { confirmRecipients: 0, previewHash: dupe.inputHash, templatesApproved: true, now: MON }, w), /no recipients/)
   // 2. A DIFFERENT address for an item that already belongs to biz1.
-  const other = await buildCampaignPlan(DEF, ['business_name,contact_email,item_id', `Biz 1 again,other@example.com,${uuid(101)}`].join('\n'), { lookups: w })
+  const csv2 = ['business_name,contact_email,item_id', `Biz 1 again,other@example.com,${uuid(101)}`].join('\n')
+  // Planning now stops this first (prior-contact suppression: the ITEM was already contacted via biz1)...
+  const stopped = await buildCampaignPlan(DEF, csv2, { lookups: w })
+  assert.equal(stopped.recipients.length, 0)
+  assert.match(stopped.excluded[0].reason, /PRIOR CONTACT: item/)
+  // ...and the approval-time check remains as defense in depth: with the index bypassed the conflict is still refused before any write.
+  const noIndex = Object.create(w) as typeof w
+  ;(noIndex as unknown as { priorContactIndex?: unknown }).priorContactIndex = undefined
+  const other = await buildCampaignPlan(DEF, csv2, { lookups: noIndex })
   assert.equal(other.recipients.length, 1)
   await assert.rejects(() => approve(w, other), /already belongs to biz1@example\.com/)
   assert.equal([...w.recipients.values()].some((r) => r.email === 'other@example.com'), false)

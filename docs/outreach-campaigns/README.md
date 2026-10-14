@@ -135,3 +135,54 @@ No new tables, no new task statuses, no second scheduler, no second Gmail adapte
 - **Daily check-in.** `npx tsx agent-service/outreachCampaignCli.ts digest [campaignKey]` prints a five-line summary per campaign (read-only). Nothing needs approving day to day; `NEEDS YOU` in the digest is the only prompt.
 - **Test/canary tokens.** Give every test or canary campaign a key ending in `-test` or `-canary`. Their token rows are never reused by a production plan (a real campaign mints fresh tokens for those items); the rows, history and emailed links are left untouched. There is no revoke state in `business_outreach_tokens`, and the supported way to retire a token is this planning rule, not deletion.
 - **Contact evidence.** Before a roster is approved, each address must appear publicly on the business's own site or a page about the business; partner/chamber citations must be re-checked live (a 2026-10-12 check failed 2 of 3). Never guess or substitute addresses.
+
+
+## Importing recipients that were already contacted (`import-sent`)
+
+For businesses that were emailed from Gmail outside Winston (for example the 16 reply-only Green Bay first touches of 2026-10-14).
+
+```bash
+CLI="npx tsx agent-service/outreachCampaignCli.ts"
+# 1. PREVIEW (read-only: reads Gmail and the database, writes only a preview file)
+$CLI import-sent --csv sent.csv --campaign-key green-bay-p1 --metro green-bay --source "<workbook name>"
+# 2. APPLY: needs the exact count and the preview hash
+$CLI import-sent --csv sent.csv --campaign-key green-bay-p1 --metro green-bay --apply \
+  --confirm-recipients 16 --preview-hash <hash> --token-sql-out ./import_tokens.sql
+# 3. Apply the token SQL (follow-ups are HELD until each token exists and points at its item)
+supabase db query -f ./import_tokens.sql --linked
+```
+
+CSV columns: `business_name, contact_email, item_id, gmail_message_id` (+ optional `sent_at`, `website`); one row per item,
+several items under one message become one recipient.
+
+- **Gmail is the authority.** The recipient, sender, send time, thread and subject come from the Gmail message. A spreadsheet time that
+  differs is warned about and Gmail's is used; a different recipient or sender, or a message Gmail does not have, is an error.
+- **Mapping is verified against what was actually sent**: each item's text must appear in the Gmail message body.
+- **Never another first touch.** Imported recipients are `WAITING` with the first touch recorded and latched (`claimedStep = 1`),
+  so they are never in the first-touch queue, and the prior-contact barrier (below) stops any re-queue.
+- **The follow-up clock starts at the actual Gmail send time** (`+5` business days for Follow-Up 1, then the campaign's own cadence),
+  using the campaign's own token-enabled follow-up templates. The reply-only first touch is not changed.
+- Idempotent and crash-safe: re-running skips recipients whose Gmail message id is already recorded; the token SQL is handed over before any write.
+
+## Prior-contact suppression
+
+A business already contacted never receives another first touch. Four independent keys are compared: **normalized email**
+(case, `+tags`, Gmail dots), **Gmail message id**, **business name** (case, accents, punctuation, "the", LLC/Inc/Co), and **CheckOff item id**.
+It is enforced at three points: when a campaign is **planned** (excluded with the matching keys listed), when an import is planned,
+and again at **send time** (a queued recipient that now matches is closed as `PRIOR_CONTACT`, including anything found in Gmail Sent
+history unless the campaign sets `allowPriorOutreach`). Test and canary campaigns do not count as contact with a business.
+
+## Before every follow-up
+
+Right before any campaign follow-up, Winston searches Gmail directly for that recipient: replies from the address (even with a new
+subject) and delivery failures mentioning it. Anything found is handled first (a reply cancels the follow-up; a bounce closes the
+recipient). The batched scan still runs every poll. A follow-up is also held, not sent, if its confirmation token is missing or points at
+a different item.
+
+## Eligibility policy for research workbooks
+
+A campaign definition may carry `eligibilityPolicy` (`requireEmailEvidenceUrl`, `requireLocalBusinessConfirmation`, `requireSendApproval`,
+`blockedCategories`). A row is only eligible when every confirmation is present; every other row is **excluded with a reason** (never queued,
+never an error), so a whole workbook can be previewed without risk. `green-bay/workbook_to_csv.py` converts a workbook and leaves
+`local_business_confirmed` blank on purpose: a person sets it to `yes` after confirming the business is a local, independent business.
+Public attractions, parks, museums, government, major corporate venues and HOLD rows are blocked by category regardless.

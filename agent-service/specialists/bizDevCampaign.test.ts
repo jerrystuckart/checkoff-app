@@ -465,10 +465,12 @@ test('a campaign that has not expired is unaffected by an expiresAt in the futur
 
 test('follow-up guard: older personal mail to the contact, and Gmail\'s self-delivered duplicate of OUR send, do not block a follow-up', async () => {
   const { w, g } = await launch(2)
-  g.addGhostSent(emailOf(1), 'Hello from long ago', new Date(MON.getTime() - 90 * 86_400_000)) // Jerry\'s own old personal email to that address
-  g.addGhostSent(emailOf(1), 'Earlier today test', new Date(MON.getTime() - 3 * 3_600_000)) // same day, hours BEFORE the first touch (Gmail after: is day-granular)
   await tick(g, w)
   assert.equal(g.sends.length, 2)
+  // Mail that pre-dates the sequence (Jerry\'s own old personal email, and one from hours before the first touch). This test is about the
+  // FOLLOW-UP guard, so it is seeded after the first touches: at first-touch time such history is, correctly, prior contact (see the barrier tests).
+  g.addGhostSent(emailOf(1), 'Hello from long ago', new Date(MON.getTime() - 90 * 86_400_000))
+  g.addGhostSent(emailOf(1), 'Earlier today test', new Date(MON.getTime() - 3 * 3_600_000)) // same day, hours BEFORE the first touch (Gmail after: is day-granular)
   g.addSelfDeliveredCopy(emailOf(2)) // a self-addressed (+alias) recipient shows two SENT-labelled messages for one send
   const r = await tick(g, w, addBusinessDays(MON, 5))
   assert.equal(g.sends.length, 4, 'both follow-ups went out')
