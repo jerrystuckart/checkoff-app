@@ -79,6 +79,26 @@
               "scheme": "https",
               "host": "getcheckoff.com",
               "pathPrefix": "/auth/confirm"
+            },
+            {
+              "scheme": "https",
+              "host": "getcheckoff.com",
+              "pathPrefix": "/open"
+            },
+            {
+              "scheme": "https",
+              "host": "getcheckoff.com",
+              "pathPrefix": "/item"
+            },
+            {
+              "scheme": "https",
+              "host": "getcheckoff.com",
+              "pathPrefix": "/list"
+            },
+            {
+              "scheme": "https",
+              "host": "getcheckoff.com",
+              "pathPrefix": "/metro"
             }
           ],
           "category": [
@@ -95,7 +115,7 @@
       [
         "expo-location",
         {
-          "isAndroidBackgroundLocationEnabled": false,
+          "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": false
         }
       ],

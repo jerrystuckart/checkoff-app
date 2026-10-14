@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react'
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native'
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Platform } from 'react-native'
 import { useFocusEffect } from '@react-navigation/native'
 import { supabase } from '../lib/supabase'
 import { isFlagEnabled } from '../lib/featureFlags'
@@ -15,6 +15,7 @@ import { describeRegistrationState } from '../lib/visitDetection/registrationSta
 import { describeClientBundle } from '../lib/visitDetection/clientBundle'
 import { groupRegistrationRows, missingConfigHeadline } from '../lib/visitDetection/registrationRowGroups'
 import { movementStatus } from '../lib/visitDetection/movementNative'
+import { loadAndroidDiagnosticRows } from '../lib/visitDetection/androidDiagnostics'
 
 // TEMPORARY — Phase 1 pilot only. Visible exclusively to
 // users.visit_detection_tester accounts (gated by the caller, ProfileScreen).
@@ -30,6 +31,7 @@ export default function VisitDetectionDebugPanel({ userId }) {
   const [lastLog, setLastLog] = useState(null)
   const [monitoredRows, setMonitoredRows] = useState([])
   const [movement, setMovement] = useState('…')
+  const [androidRows, setAndroidRows] = useState([])
 
   const refreshStatus = useCallback(async () => {
     if (!userId) return
@@ -56,6 +58,7 @@ export default function VisitDetectionDebugPanel({ userId }) {
 
       setStatus({ hasBgPermission, detectionEnabled })
       setMovement(await movementStatus())
+      if (Platform.OS === 'android') setAndroidRows(await loadAndroidDiagnosticRows(userId))
       setLastLog(log ?? null)
       setMonitoredRows(monitored ?? [])
     } catch (e) {
@@ -98,6 +101,9 @@ export default function VisitDetectionDebugPanel({ userId }) {
           </Text>
         )
       })()}
+      {androidRows.map(([label, value]) => (
+        <Text key={label} style={[styles.meta, { color: TEXT }]}>{label}: {value}</Text>
+      ))}
       <Row label="Background location permission" ok={status?.hasBgPermission} color={TEXT} />
       <Row label="candidate_visit_detection flag" ok={status?.detectionEnabled} color={TEXT} />
       <Text style={[styles.row, { color: movement === 'running' ? TEXT : MUTED }]}>

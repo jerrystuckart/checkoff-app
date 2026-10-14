@@ -57,7 +57,7 @@ export default function VisitRecoverySection({ userId, navigation }) {
             </TouchableOpacity>
           </>
         )}
-        {(cardState === 'needs_always' || cardState === 'needs_foreground' || cardState === 'services_disabled') && (
+        {(cardState === 'needs_always' || cardState === 'needs_foreground' || cardState === 'needs_precise' || cardState === 'services_disabled' || cardState === 'registration_error' || cardState === 'registering') && (
           <>
             <Text style={s.body}>{resolved.status}</Text>
             {resolved.cta && (

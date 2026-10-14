@@ -16,8 +16,8 @@ import { useTheme } from '../lib/ThemeContext'
 import * as Sentry from '@sentry/react-native'
 import AdminDiagnosticsSection from '../components/profile/AdminDiagnosticsSection'
 import VisitRecoverySection from '../components/VisitRecoverySection'
+import { deviceSupportsVisitRecovery } from '../lib/visitDetection/deviceCapability'
 import PhotoTermsNotice from '../components/PhotoTermsNotice'
-import { supportsVisitRecovery } from '../lib/visitDetection/recoveryPolicy'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { stopVisitTrackingForSignOut } from '../lib/visitDetection/candidateVisitTracker'
 import { resetFlagsCache } from '../lib/featureFlags'
@@ -387,7 +387,7 @@ export default function ProfileScreen({ navigation }) {
         <AdminDiagnosticsSection
           isAdmin={profile?.is_admin}
           userId={user?.id}
-          showVisitDebug={supportsVisitRecovery(Platform.OS) && !!profile?.visit_detection_tester}
+          showVisitDebug={deviceSupportsVisitRecovery() && !!profile?.visit_detection_tester}
           colors={colors}
         />
         {/* Tier badge pill */}
