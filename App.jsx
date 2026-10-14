@@ -61,6 +61,7 @@ import DeepLinkListResolverScreen from './screens/DeepLinkListResolverScreen'
 import DeepLinkMetroResolverScreen from './screens/DeepLinkMetroResolverScreen'
 import DeepLinkExperienceResolverScreen from './screens/DeepLinkExperienceResolverScreen'
 import DeepLinkItemResolverScreen from './screens/DeepLinkItemResolverScreen'
+import MetroSearchScreen from './screens/MetroSearchScreen'
 import CreatorProfileScreen        from './screens/CreatorProfileScreen'
 import CreatorListScreen           from './screens/CreatorListScreen'
 import DestinationsScreen          from './screens/DestinationsScreen'
@@ -201,6 +202,11 @@ function HomeStack() {
         name="DeepLinkExperienceResolver"
         component={DeepLinkExperienceResolverScreen}
         options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="MetroSearch"
+        component={MetroSearchScreen}
+        options={({ route }) => ({ title: 'Search ' + ((route.params?.metroName ?? '').replace(' Metro', '') || 'city') })}
       />
       <Stack.Screen
         name="DeepLinkItemResolver"
