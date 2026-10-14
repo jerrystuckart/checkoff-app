@@ -1,0 +1,43 @@
+{
+  "key": "green-bay-v2",
+  "name": "Green Bay (experience-v2 template)",
+  "metroSlug": "green-bay",
+  "metroLabel": "Green Bay Metro",
+  "from": "jerry@getcheckoff.com",
+  "subjectTemplate": "We selected {{business_name}} for CheckOff",
+  "firstTouchBody": "Hi {{business_name}} team,\n\nWe're launching CheckOff in {{metro}}. It's a free app that helps people discover and check off great local experiences, and we selected {{business_name}} as one of the places worth discovering.\n\nCheckOff features specific local experiences rather than creating a conventional business listing. The CheckOff experience we selected for {{business_name}} is:\n\n{{experiences_block}}\n\nTo find it in the app, download CheckOff free at {{download_url}}, open it, and choose {{metro}}: your experience appears there. The public page above also opens it directly on your phone, no sign-in needed.\n\nThere is no fee to be included and nothing to sign up for. We feature exceptional businesses for free because a great CheckOff app needs great places.\n\nTwo quick things would help:\n- Use your private link above to confirm the experience is still accurate, or tell us what to change.\n- If you have a photo you'd prefer us to use, add it there or just reply and attach it.\n\nWe also made a free set of print, social, Story, and in-business graphics you can use: {{kit_url}}\n\nYou can reply to this email any time.\n\nThanks for being part of it!\n\nJerry Stuckart\nFounder, CheckOff\ngetcheckoff.com",
+  "followUp1Body": "Hi {{business_name}} team,\n\nJust following up on the CheckOff experience we sent over for {{business_name}}.\n\nWe're helping people discover great local places around Green Bay, and we'd love to make sure we've represented your business accurately.\n\nYou can review your CheckOff experience here:\n\n{{items_block}}\n\nIf everything looks good, a quick confirmation is all we need. If something needs changing, just reply and let me know.\n\nThanks!\n\nJerry\nFounder, CheckOff\njerry@getcheckoff.com",
+  "followUp2Body": "Hi {{business_name}} team,\n\nOne last note about {{business_name}} on CheckOff.\n\nWe're building a local discovery app that encourages people to get out and experience places worth visiting around Green Bay.\n\nWe'd still love your input on the CheckOff experience:\n\n{{confirm_url}}\n\nThere's no cost to confirm your information, and you're welcome to reply with corrections.\n\nI'll leave it here after this message. Thanks for everything you do for the Green Bay community!\n\nJerry\nFounder, CheckOff\njerry@getcheckoff.com",
+  "cadence": {
+    "followUp1AfterBusinessDays": 5,
+    "followUp2AfterBusinessDays": 7,
+    "closeAfterBusinessDays": 7
+  },
+  "dailyCap": 80,
+  "faqEnabled": false,
+  "allowPriorOutreach": false,
+  "approvals": {
+    "firstTouchTemplate": false,
+    "followUpTemplates": false
+  },
+  "eligibilityPolicy": {
+    "requireEmailEvidenceUrl": true,
+    "requireLocalBusinessConfirmation": true,
+    "requireSendApproval": true,
+    "blockedCategories": [
+      "public attraction",
+      "large institution",
+      "institution",
+      "park",
+      "museum",
+      "government",
+      "major corporate",
+      "corporate",
+      "retired",
+      "restricted",
+      "hold",
+      "review"
+    ]
+  },
+  "firstTouchContract": "experience-v2"
+}

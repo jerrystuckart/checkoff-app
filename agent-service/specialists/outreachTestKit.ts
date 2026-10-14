@@ -270,6 +270,11 @@ export class MemWorld implements BizDevStore, CampaignWriter, IntakeLookups, Imp
     this.interactions.push({ taskId, direction: 'OUTBOUND', messageId: w.interaction.messageId, summary: w.interaction.summary })
     return true
   }
+  /** Test override: item ids whose public page is unavailable even though the item row exists. */
+  publicHidden = new Set<string>()
+  async publicItemsVisible(itemIds: string[]) {
+    return new Set(itemIds.filter((id) => { const r = this.itemRows.get(id); return !!r && r.isActive && !r.isSecret && !this.publicHidden.has(id) }))
+  }
   async countFirstTouchesSince(campaignKey: string, since: Date) {
     return [...this.recipients.values()].filter((r) => r.state.campaignKey === campaignKey && r.state.stepsSent.length > 0 && Date.parse(r.state.stepsSent[0].sentAt) > since.getTime()).length
   }

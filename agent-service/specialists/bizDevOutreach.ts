@@ -278,6 +278,8 @@ export interface BizDevStore {
   confirmTokenItems?(tokens: string[]): Promise<Map<string, string>>
   /** First touches this campaign sent at or after `since` (source of truth: the recipients' recorded sends). Drives the daily first-touch limit. */
   countFirstTouchesSince?(campaignKey: string, since: Date): Promise<number>
+  /** Which of these items the PUBLIC item page will actually show (active, approved, not secret). Used by experience-v2 campaigns. */
+  publicItemsVisible?(itemIds: string[]): Promise<Set<string>>
 }
 
 export interface BizDevTickResult {
@@ -917,15 +919,21 @@ async function tokenVerifiedRecipients(store: BizDevStore, c: CampaignRuntime, q
     itemOf = new Map()
     for (const v of queued) for (const l of v.state.listings ?? []) if (present.has(l.token)) itemOf.set(l.token, l.itemId)
   }
+  // experience-v2: the email links to the public item page, so every item must be publicly visible before ANY first touch goes out.
+  const needsPublic = c.firstTouchContract === 'experience-v2'
+  const publicOk = needsPublic ? (store.publicItemsVisible ? await store.publicItemsVisible([...new Set(queued.flatMap((v) => (v.state.listings ?? []).map((l) => l.itemId)))]) : null) : null
   const ready: BizDevSequenceView[] = []
   let missing = 0
+  let notPublic = 0
   const wrong: string[] = []
   for (const v of queued) {
     const ls = v.state.listings ?? []
     if (ls.some((l) => !itemOf.has(l.token))) { missing += 1; continue }
     if (ls.some((l) => itemOf.get(l.token) !== l.itemId)) { wrong.push(v.contactEmail); continue }
+    if (needsPublic && (!publicOk || ls.some((l) => !publicOk.has(l.itemId)))) { notPublic += 1; continue }
     ready.push(v)
   }
+  if (notPublic > 0) out.errors.push(`campaign:${c.key}: ${notPublic} queued recipient(s) held: the public item page is not available for their experience (inactive, unapproved, secret, or the check could not run). Nothing sent to them.`)
   if (missing > 0) out.actions.push(`campaign:${c.key}: ${missing} queued recipient(s) held until their confirmation token exists (apply the token SQL); ${ready.length} ready`)
   if (wrong.length > 0) out.errors.push(`campaign:${c.key}: ${wrong.length} queued recipient(s) NOT sent because a confirmation token points at a different item than the one approved (${wrong.slice(0, 5).join(', ')}).`)
   return ready
@@ -1028,6 +1036,11 @@ async function sendFirstTouch(deps: BizDevDeps, c: CampaignRuntime, view: BizDev
     body = renderTemplate(c.firstTouchBody, state.vars ?? {})
     const check = validateOutreachCopy(`${subject}\n${body}`)
     if (!check.pass) throw new Error(check.issues.join('; '))
+    if (c.firstTouchContract === 'experience-v2') {
+      const missingLinks = (state.listings ?? []).flatMap((l) => [l.confirmUrl, `https://getcheckoff.com/item/${l.itemId}`]).filter((u) => !body.includes(u))
+      if (missingLinks.length) throw new Error(`experience-v2 first touch is missing required link(s): ${missingLinks.join(', ')}`)
+      if (!body.includes('https://getcheckoff.com/download')) throw new Error('experience-v2 first touch is missing the download link')
+    }
   } catch (err) {
     await pauseCampaignForFailure(deps, c, `First-touch template failed to render/validate for ${view.contactEmail}: ${err instanceof Error ? err.message : String(err)}`, out)
     return false
@@ -1197,6 +1210,12 @@ export class DbBizDevStore implements BizDevStore {
       [BIZDEV_SOURCE_TYPE, campaignKey, since.toISOString()]
     )
     return Number(rows[0]?.n ?? 0)
+  }
+
+  async publicItemsVisible(itemIds: string[]): Promise<Set<string>> {
+    if (itemIds.length === 0) return new Set()
+    const rows = await query<{ id: string }>(`SELECT id::text AS id FROM public.items WHERE id = ANY($1::uuid[]) AND is_active = true AND is_approved = true AND is_secret = false`, [itemIds])
+    return new Set(rows.map((r) => r.id))
   }
 
   async confirmTokenItems(tokens: string[]): Promise<Map<string, string>> {
