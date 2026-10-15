@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { classifyGmailError, isTransientGmailError, isTransientQuotaError, retryAfterMs, withGmailRetry, GmailPacer } from './gmailResilience'
 import { RealGmailAdapter } from './googleAdapters'
-import { isTransientConnectError, retryOnConnectError } from '../db'
+import { isTransientConnectError, retryOnConnectError, appName } from '../db'
 
 const QUOTA = `Gmail messages.list returned 403: {"error":{"code":403,"message":"Quota exceeded for quota metric 'Total Query Cost' and limit 'Total Query Cost per minute per user'"}}`
 
@@ -103,4 +103,16 @@ test('db: connection-slot exhaustion and DNS/refused errors are connect-phase tr
   await assert.rejects(retryOnConnectError(async () => { m++; throw Object.assign(new Error('permission denied'), { code: '42501' }) }, { sleep: async () => {} }), /permission denied/)
   assert.equal(m, 1, 'a SQL error is never retried')
   await assert.rejects(retryOnConnectError(async () => { throw Object.assign(new Error('slots'), { code: '53300' }) }, { attempts: 2, sleep: async () => {} }), /slots/)
+})
+
+test('db: application_name is the safe default unless the override is a plain identifier', () => {
+  const prev = process.env.AGENT_DB_APP_NAME
+  try {
+    delete process.env.AGENT_DB_APP_NAME
+    assert.equal(appName(), 'winston-agent-service')
+    process.env.AGENT_DB_APP_NAME = "x'; drop table y; --"
+    assert.equal(appName(), 'winston-agent-service', 'unsafe values are ignored')
+    process.env.AGENT_DB_APP_NAME = 'winston-dryrun'
+    assert.equal(appName(), 'winston-dryrun')
+  } finally { if (prev === undefined) delete process.env.AGENT_DB_APP_NAME; else process.env.AGENT_DB_APP_NAME = prev }
 })
