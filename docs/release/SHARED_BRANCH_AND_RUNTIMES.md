@@ -26,3 +26,20 @@ for links, and building one would change the runtime and strand the current Andr
 `https://getcheckoff.com/.well-known/assetlinks.json` lists `com.getcheckoff.app` with two certificate fingerprints; Google's Digital Asset Links
 service reports both `linked: true`. The first (`95:3C:29:…`) is the upload key that signed the AAB; the second is expected to be the Play App Signing key
 (confirm in Play Console > App integrity; Play re-signs internal/production installs with it).
+
+## Device verification (reported by Jerry, 2026-10-14)
+Confirmed on real devices after the Search Metro / "You Are Here" OTAs (iOS `86ac0036` update `01a13ca5-a2ba-7730-bda7-7803813480e5`, iOS `d4a37d58` update
+`01a13ca7-3053-77c1-9af1-72cb8390fde0`, Android `53ba13b5` update `01a13ca8-d669-7555-be82-2fcf5af572e6`):
+
+| Check | iPhone | Android |
+|---|---|---|
+| Public item link `https://getcheckoff.com/item/<itemId>` opens the exact item | confirmed | confirmed (App Links open CheckOff) |
+| Metro search finds experiences without being nearby | confirmed, across all cities | confirmed |
+| Android App Links open CheckOff | n/a | confirmed |
+
+Outcome: the shipped Android binary (versionCode 21 / 23, runtime `53ba13b5`) already carries the App Links for `/open`, `/item`, `/list` and `/metro`,
+so **no new Android native build is needed** and none was made. No further OTA was published. Not covered by this record: Play Console confirmation that the second
+`assetlinks.json` fingerprint is the Play App Signing certificate (Google's Digital Asset Links service reports both fingerprints as linked).
+
+The shared branch `feature/nearby-photo-categories` was pushed to `origin/feature/nearby-photo-categories` at `fe928bd` with upstream tracking set.
+The tagged stash `claude-preserve-5718bc7-wip-20261014` is intentionally kept.
