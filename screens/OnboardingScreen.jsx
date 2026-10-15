@@ -52,7 +52,7 @@ export default function OnboardingScreen({ onComplete }) {
       key: 'discovery',
       accent: TEAL,
       title: 'Your city has more\nto discover.',
-      body: 'Hidden gems. Local favorites. Unexpected adventures. Find your next experience and CheckOff the good stuff.',
+      body: 'Hidden gems. Local favorites. Unexpected adventures. Find your next experience.',
       cta: 'Start Exploring',
       preview: (
         <View style={{ gap: 8 }}>
