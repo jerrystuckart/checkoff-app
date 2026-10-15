@@ -142,7 +142,7 @@ export default function SignInScreen({ navigation, route }) {
     } else {
       Alert.alert(
         'Check your email',
-        `We sent a confirmation link to ${email.trim()}. Tap it to activate your account, then sign in.`,
+        `We sent a confirmation link to ${email.trim()}. Confirm it and you're ready to start exploring.`,
         [{ text: 'OK', onPress: () => setIsSignUp(false) }]
       )
     }
@@ -302,17 +302,17 @@ export default function SignInScreen({ navigation, route }) {
           Check<Text style={styles.logoOff}>Off</Text>
         </Text>
         <Text style={styles.sub}>
-          Stop saying "I don't know what to do."{'\n'}
-          Challenge your crew.
+          Your city has more to discover.{'\n'}
+          Free to join. More to experience.
         </Text>
       </View>
 
       <View style={styles.bullets}>
         {[
-          'Browse 400+ things to do in your city',
-          'Check off items and track your progress',
-          'Challenge friends to beat your score',
-          'Discover local spots with insider tips',
+          'Curated local lists and hidden gems',
+          'Find something new to do, near or far',
+          'Save what catches your eye',
+          'Check off experiences worth remembering',
         ].map((b, i) => (
           <View key={i} style={styles.bulletRow}>
             <View style={styles.bulletDot} />
