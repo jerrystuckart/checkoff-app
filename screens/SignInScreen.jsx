@@ -26,6 +26,7 @@ import {
 } from '@react-native-google-signin/google-signin'
 import { supabase } from '../lib/supabase'
 import { describeSignInError } from '../lib/accountDeletion'
+import { dismissSignInRoute } from '../lib/signInNavigation'
 
 const AMBER = '#F5A623'
 const NAVY = '#1A1A2E'
@@ -56,6 +57,8 @@ export default function SignInScreen({ navigation, route }) {
 
   function navigateAfterAuth() {
     Keyboard.dismiss()
+    // Remove this SignIn route from the tab stack it was pushed on, before navigating away (see lib/signInNavigation.js).
+    dismissSignInRoute(navigation)
     // Guest Save/Check-off return trip (2026-09-28) — same nested-navigate
     // shape as returnToInvite just below. Carries the exact item object
     // ItemDetailScreen was already showing (it never re-fetches by id) plus
