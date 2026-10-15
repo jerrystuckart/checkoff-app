@@ -44,3 +44,10 @@ Full suite: only the pre-existing environment-dependent failures remain (`destin
 **Rollback:** `git revert` the merge commit (or reset the branch pointer to the previous commit, which only this patch touches) and kickstart. No schema, data or token changes are involved.
 
 **Residual risks:** the Mac sleeping delays ticks regardless; the Resend free tier 100/day shared cap is unchanged; a sustained Gmail outage defers follow-ups indefinitely (visible via the summary line and the existing health alert on repeated tick errors only if errors persist, since deferrals are not errors).
+
+## Deployed state (2026-10-15)
+- The launchd monitor (`com.checkoff.chief-monitor`) runs the **working tree of the shared checkout** `/Users/jerrystuckart/Downloads/checkoff` (`tsx agent-service/monitorCli.ts`). It follows whatever branch that checkout has out, so Winston code only stays live while that branch contains it.
+- 11:26 MST (18:26Z): commit `1938236` fast-forwarded into the shared checkout's branch `copy/retire-founding-500` (PID 25452).
+- 11:49 MST (18:49Z): commit `284b93a` (per-session `application_name`; Supavisor overrides the startup value and resets it to `Supavisor` while a session is idle, so the label shows only while the monitor is actually running a query) fast-forwarded the same way (PID 26827).
+- Branch `winston/resilience` holds the same two commits on top of `1a52942`. Both branches share history; the other session's branch work was not rewritten.
+- To see what is live: `git -C /Users/jerrystuckart/Downloads/checkoff log -1 --format=%H` and `ps -axo pid,lstart,command | grep monitorCli`.
