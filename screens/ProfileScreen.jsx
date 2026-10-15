@@ -23,6 +23,7 @@ import { stopVisitTrackingForSignOut } from '../lib/visitDetection/candidateVisi
 import { resetFlagsCache } from '../lib/featureFlags'
 import { DELETION_COPY, requestAccountDeletion, clearLocalAccountState } from '../lib/accountDeletion'
 import { revokeAppleTokenIfPossible } from '../lib/appleRevocation'
+import { foundingMemberDisplay } from '../lib/foundingMember'
 import * as AppleAuthentication from 'expo-apple-authentication'
 
 export default function ProfileScreen({ navigation }) {
@@ -374,9 +375,10 @@ export default function ProfileScreen({ navigation }) {
         </TouchableOpacity>
         <Text style={styles.email}>{user?.email}</Text>
         <Text style={styles.memberSince}>Member since {memberSince(profile?.created_at)}</Text>
-        {profile?.founding_number != null && (
+        {foundingMemberDisplay(profile?.founding_number) && (
           <View style={styles.foundingBadge}>
-            <Text style={styles.foundingBadgeText}>⭐ Founding Member #{profile.founding_number}</Text>
+            <Text style={styles.foundingBadgeText}>⭐ {foundingMemberDisplay(profile.founding_number).title}</Text>
+            <Text style={styles.foundingBadgeSub}>{foundingMemberDisplay(profile.founding_number).subtitle}</Text>
           </View>
         )}
         {profile?.is_admin && (
@@ -772,8 +774,9 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER, SOFT, SOFT_2, AMBER, NAVY
   memberSince:       { fontSize: 12, color: MUTED, fontWeight: '600' },
   adminBadge:        { marginTop: 10, backgroundColor: SOFT, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 5, borderWidth: 1, borderColor: '#E8C98E' },
   adminBadgeText:    { fontSize: 11, color: '#A16A00', fontWeight: '800' },
-  foundingBadge:     { marginTop: 8, backgroundColor: SOFT, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 5, borderWidth: 1, borderColor: '#F0D29D' },
-  foundingBadgeText: { fontSize: 12, color: AMBER, fontWeight: '800' },
+  foundingBadge:     { marginTop: 8, backgroundColor: SOFT, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 6, borderWidth: 1, borderColor: '#F0D29D', alignItems: 'center' },
+  foundingBadgeText: { fontSize: 12, color: AMBER, fontWeight: '800', textAlign: 'center' },
+  foundingBadgeSub:  { fontSize: 11, color: 'rgba(255,255,255,0.5)', fontWeight: '500', textAlign: 'center', marginTop: 1 },
 
   tierPill:          { borderRadius: 999, paddingHorizontal: 14, paddingVertical: 5 },
   tierPillText:      { fontSize: 11, fontWeight: '800', letterSpacing: 1.2 },

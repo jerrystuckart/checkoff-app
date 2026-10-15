@@ -187,7 +187,7 @@ function landingPage(list: any, errorMsg?: string) {
       <p class="list-title">${title}</p>
       <p class="list-sub">Check off experiences together, challenge your crew, discover local spots.</p>
       <div class="bullets">
-        <div class="bullet"><div class="dot"></div><span>Browse 500+ things to do nearby</span></div>
+        <div class="bullet"><div class="dot"></div><span>Discover local spots and hidden gems</span></div>
         <div class="bullet"><div class="dot"></div><span>Check off items and track your score</span></div>
         <div class="bullet"><div class="dot"></div><span>See your crew's progress live</span></div>
       </div>

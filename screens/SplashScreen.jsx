@@ -10,9 +10,9 @@ const NAVY  = '#070714'
 const WHITE = '#F7F7FB'
 
 const TAGLINES = [
-  `Stop saying "I don't know what to do."`,
-  'Hundreds of things to check off in Your City.',
-  'Challenge your crew. Beat their score.',
+  'Your city has more to discover.',
+  'Hidden gems. Local favorites. Unexpected adventures.',
+  'Find your next experience.',
   'Discover places locals actually go.',
   'Every weekend is a new adventure.',
 ]
