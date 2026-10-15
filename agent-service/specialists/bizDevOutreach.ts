@@ -38,6 +38,7 @@ import {
   resolveSender, matchesSequence, isBounce, classifyBounce, isOwnSend, safeIso, stripQuoted, decideReply, decideCampaignReply, buildEscalation, buildCampaignEscalation, OWN_ADDRESSES, type ReplyDecision,
 } from './bizDevReplies'
 import { renderTemplate, validateOutreachCopy } from './outreachTemplates'
+import { isTransientGmailError, isTransientQuotaError } from './gmailResilience'
 import { PriorContactIndex, describeConflicts, normalizeEmail, type ContactedRecord } from './priorContact'
 import {
   campaignToDef, computeCapacity, firstTouchAllowance, CAMPAIGN_DEFAULTS, campaignScanQueries, bounceRateTripped, isSystemicSendError, gmailDay, MAX_FETCH_PER_TICK, MAX_PROCESSED_IDS, type CampaignRuntime,
@@ -258,6 +259,8 @@ export interface BizDevStore {
   listActive(): Promise<BizDevSequenceView[]>
   /** Atomically latches `step`; false means it was already claimed (never send). */
   claimStep(taskId: string, step: number): Promise<boolean>
+  /** Undo ONLY our own claim of `step` after Gmail rejected the send at admission (nothing was sent). Guarded: a no-op unless the latch is still exactly `step`. */
+  releaseStep?(taskId: string, step: number, restoreTo: number): Promise<void>
   saveState(taskId: string, state: BizDevState): Promise<void>
   recordInteraction(i: { contactId: string; taskId: string; direction: 'INBOUND' | 'OUTBOUND'; occurredAt: string; subject: string; summary: string; requiresAction: boolean; messageId: string; threadId: string; extra?: Record<string, unknown> }): Promise<void>
   suppressContact(contactId: string): Promise<void>
@@ -321,6 +324,20 @@ interface TickCtx {
   tokensChecked: Map<string, Set<string>>
   /** Campaign message ids fully handled this tick (merged into the campaign's scan cursor so closed recipients' mail is never re-fetched). */
   handled: Map<string, string[]>
+  /** Gmail per-minute quota / transient failures: once hit, remaining Gmail-heavy work this tick is deferred to the next tick (never a pause). */
+  gmailBackoff: { hit: boolean; deferred: number; reason?: string }
+}
+
+/** A thrown error from a Gmail READ. Transient (per-minute quota, 5xx, network) -> defer to the next tick; anything else is a real error. */
+function noteGmailProblem(ctx: TickCtx, out: BizDevTickResult, who: string, err: unknown): void {
+  const msg = err instanceof Error ? err.message : String(err)
+  if (isTransientGmailError(msg)) {
+    ctx.gmailBackoff.hit = true
+    ctx.gmailBackoff.deferred += 1
+    ctx.gmailBackoff.reason ??= msg.replace(/\s+/g, ' ').slice(0, 140)
+    return
+  }
+  out.errors.push(`${who}: ${msg}`)
 }
 
 async function getFull(deps: BizDevDeps, ctx: TickCtx, id: string): Promise<GmailFullMessage> {
@@ -376,7 +393,7 @@ export async function runBizDevTick(deps: BizDevDeps): Promise<BizDevTickResult>
 
   const defs: Record<string, BizDevSequenceDef> = { ...(deps.sequences ?? BIZDEV_SEQUENCES) }
   const runtimes = deps.store.campaignRuntimes ? await deps.store.campaignRuntimes() : []
-  const ctx: TickCtx = { runtimes: new Map(), inbound: new Map(), fullCache: new Map(), budgets: new Map(), reserved: new Map(), firstTouchStats: new Map(), tokensChecked: new Map(), handled: new Map() }
+  const ctx: TickCtx = { runtimes: new Map(), inbound: new Map(), fullCache: new Map(), budgets: new Map(), reserved: new Map(), firstTouchStats: new Map(), tokensChecked: new Map(), handled: new Map(), gmailBackoff: { hit: false, deferred: 0 } }
   for (const c of runtimes) {
     // A campaign is only ever acted on with Jerry's recorded approval (standing authority: APPROVAL_REQUIRED, satisfied only by campaign.approval).
     if (!c.approval || c.approval.approvedBy !== 'jerry') continue
@@ -408,7 +425,7 @@ export async function runBizDevTick(deps: BizDevDeps): Promise<BizDevTickResult>
     try {
       await scanCampaignInbound(deps, ctx, ctx.runtimes.get(ck)!, vs, now, result)
     } catch (err) {
-      result.errors.push(`campaign:${ck}: scan failed: ${err instanceof Error ? err.message : String(err)}`)
+      noteGmailProblem(ctx, result, `campaign:${ck}: scan`, err)
     }
   }
 
@@ -429,10 +446,15 @@ export async function runBizDevTick(deps: BizDevDeps): Promise<BizDevTickResult>
     if (def.mode === 'campaign') {
       if (!def.campaignKey || view.state.campaignKey !== def.campaignKey) continue
     } else if (def.contactEmail.toLowerCase() !== view.contactEmail.toLowerCase()) continue
+    // Gmail is rate limiting us: do not hammer it. Work that needs fresh Gmail reads waits for the next tick; nothing is paused or changed.
+    if (ctx.gmailBackoff.hit && def.mode === 'campaign' && dueAction(effectiveDef(def, view), view.state, now).kind === 'SEND') {
+      ctx.gmailBackoff.deferred += 1
+      continue
+    }
     try {
       await processSequence(deps, ctx, effectiveDef(def, view), view, now, result)
     } catch (err) {
-      result.errors.push(`${def.key}: ${err instanceof Error ? err.message : String(err)}`)
+      noteGmailProblem(ctx, result, def.key, err)
     }
   }
 
@@ -441,7 +463,7 @@ export async function runBizDevTick(deps: BizDevDeps): Promise<BizDevTickResult>
     try {
       await runCampaignSends(deps, ctx, now, result, views)
     } catch (err) {
-      result.errors.push(`campaign sends: ${err instanceof Error ? err.message : String(err)}`)
+      noteGmailProblem(ctx, result, 'campaign sends', err)
     }
   }
 
@@ -455,6 +477,9 @@ export async function runBizDevTick(deps: BizDevDeps): Promise<BizDevTickResult>
     } catch (err) {
       result.errors.push(`campaign:${key}: could not save scan cursor: ${err instanceof Error ? err.message : String(err)}`)
     }
+  }
+  if (ctx.gmailBackoff.deferred > 0) {
+    result.actions.push(`gmail: rate limit / transient error (${ctx.gmailBackoff.reason ?? 'unknown'}); ${ctx.gmailBackoff.deferred} item(s) deferred to the next tick; nothing paused, no state changed`)
   }
   return result
 }
@@ -746,6 +771,10 @@ async function processSequence(deps: BizDevDeps, ctx: TickCtx, def: BizDevSequen
     if (!check.pass) { out.errors.push(`${def.key}: follow-up copy failed validation (${check.issues.join('; ')}); not sent`); return }
   }
 
+  // READ before the claim: a Gmail read failure here (e.g. per-minute quota) leaves everything untouched, to be retried next tick.
+  const first = await getFull(deps, ctx, firstSent.messageId)
+
+  const claimedBefore = view.state.claimedStep // captured before the claim (the claim updates the stored state)
   if (!(await store.claimStep(view.taskId, step))) {
     out.errors.push(`${def.key}: step ${step} already claimed; refusing to resend`)
     return
@@ -753,7 +782,6 @@ async function processSequence(deps: BizDevDeps, ctx: TickCtx, def: BizDevSequen
   state.claimedStep = step
   if (budget) budget.remaining -= 1
   try {
-    const first = await getFull(deps, ctx, firstSent.messageId)
     const messageId = await sendInThread(deps, def, state, body, first.messageIdHeader, 'FOLLOW_UP', view, now)
     await store.saveState(view.taskId, state)
     const next = nextScheduledAt(def, state)
@@ -764,9 +792,24 @@ async function processSequence(deps: BizDevDeps, ctx: TickCtx, def: BizDevSequen
     }
     out.actions.push(`${def.key}: sent step ${step} (message ${messageId})`)
   } catch (err) {
+    const sendError = err instanceof Error ? err.message : String(err)
+    if (isTransientQuotaError(sendError)) {
+      // Gmail refused the request at admission (per-minute quota): the message was NOT accepted. Release the claim and try again next
+      // tick; this is not a failed recipient and not a reason to pause the campaign. (A daily SENDING limit or an auth error is not
+      // matched here and still takes the pause path below.)
+      state.claimedStep = claimedBefore
+      state.attempts = (state.attempts ?? []).filter((a) => !(a.step === step && a.outcome === 'ATTEMPTED'))
+      await store.saveState(view.taskId, state)
+      await store.releaseStep?.(view.taskId, step, claimedBefore ?? 0)
+      if (budget) budget.remaining += 1
+      ctx.gmailBackoff.hit = true
+      ctx.gmailBackoff.deferred += 1
+      ctx.gmailBackoff.reason ??= sendError.replace(/\s+/g, ' ').slice(0, 140)
+      return
+    }
     // Never auto-retry a send that may or may not have gone out.
     state.sequenceStatus = 'PAUSED'
-    state.lastError = err instanceof Error ? err.message : String(err)
+    state.lastError = sendError
     await store.saveState(view.taskId, state)
     await store.transition(view.taskId, 'NEEDS_JERRY', {
       jerryRequest: `Opportunity: ${def.organization} Partnership\nContact: ${def.contactName} <${def.contactEmail}>\nCurrent Stage: NEEDS_JERRY\nConversation Summary: Follow-up step ${step} failed while sending (${state.lastError}). Winston did NOT retry, to avoid a duplicate in case it went out.\nJerry Action Required: Check Gmail Sent for thread ${state.threadId}; resume or send by hand.`,
@@ -975,7 +1018,8 @@ async function runCampaignSends(deps: BizDevDeps, ctx: TickCtx, now: Date, out: 
           let sentNow = 0
           for (const v of wanted) {
             if (c.state !== 'ACTIVE') break
-            const ok = await sendFirstTouch(deps, c, v, now, out)
+            if (ctx.gmailBackoff.hit) { ctx.gmailBackoff.deferred += 1; continue }
+            const ok = await sendFirstTouch(deps, ctx, c, v, now, out)
             if (ok) { budget.remaining -= 1; sentNow += 1 }
             if (c.state !== 'ACTIVE') break
             await sleep(c.sendDelayMs)
@@ -1016,7 +1060,7 @@ async function senderVerified(deps: BizDevDeps, c: CampaignRuntime): Promise<boo
   return ids.some((i) => i.sendAsEmail.toLowerCase() === c.from.toLowerCase() && i.verificationStatus === 'accepted')
 }
 
-async function sendFirstTouch(deps: BizDevDeps, c: CampaignRuntime, view: BizDevSequenceView, now: Date, out: BizDevTickResult): Promise<boolean> {
+async function sendFirstTouch(deps: BizDevDeps, ctx: TickCtx, c: CampaignRuntime, view: BizDevSequenceView, now: Date, out: BizDevTickResult): Promise<boolean> {
   const { store, gmail } = deps
   const state: BizDevState = { ...view.state, stepsSent: [] }
   const label = `campaign:${c.key}: first touch to ${view.contactEmail}`
@@ -1072,8 +1116,8 @@ async function sendFirstTouch(deps: BizDevDeps, c: CampaignRuntime, view: BizDev
     out.actions.push(`${label} accepted (message ${sent.messageId})`)
     return true
   } catch (err) {
-    // The outcome is UNCERTAIN (it may have gone out). Never retried automatically.
     const detail = err instanceof Error ? err.message : String(err)
+    // The outcome is UNCERTAIN (it may have gone out). Never retried automatically.
     state.sequenceStatus = 'SEND_UNCERTAIN'
     state.lastError = detail
     state.attempts = (state.attempts ?? []).map((a) => (a.step === 1 && a.outcome === 'ATTEMPTED' ? { ...a, outcome: 'UNCERTAIN' as const, detail: detail.slice(0, 200) } : a))
@@ -1232,6 +1276,16 @@ export class DbBizDevStore implements BizDevStore {
         [taskId, step]
       )
       return (r.rowCount ?? 0) === 1
+    })
+  }
+
+  async releaseStep(taskId: string, step: number, restoreTo: number): Promise<void> {
+    await withWriteTransaction(async (c) => {
+      await c.query(
+        `UPDATE agent.tasks SET metadata = jsonb_set(coalesce(metadata,'{}'::jsonb), '{bizdev,claimedStep}', to_jsonb($3::int))
+          WHERE id = $1 AND coalesce((metadata #>> '{bizdev,claimedStep}')::int, 0) = $2`,
+        [taskId, step, restoreTo]
+      )
     })
   }
 

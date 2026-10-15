@@ -28,6 +28,8 @@ export class FakeGmail implements GmailAdapter {
   otherSent24h = 0
   failNext: Array<Error | null> = []
   failAll: Error | null = null
+  /** Inject a failure into a Gmail READ (list ids / search / full fetch). Return an Error to throw it, or null to let the call through. */
+  readFault: ((kind: 'ids' | 'search' | 'full', arg: string) => Error | null) | null = null
   idCalls: string[] = []
   searchCalls: string[] = []
   fullCalls = 0
@@ -107,11 +109,13 @@ export class FakeGmail implements GmailAdapter {
 
   async searchMessageIds(q: string): Promise<Array<{ id: string; threadId: string }>> {
     this.idCalls.push(q)
+    const f = this.readFault?.('ids', q); if (f) throw f
     return this.list(q)
   }
 
   async searchMessages(q: string): Promise<GmailMessageSummary[]> {
     this.searchCalls.push(q)
+    const fault = this.readFault?.('search', q); if (fault) throw fault
     const m = q.match(/^in:sent to:(\S+)(?: after:(\d{4})\/(\d{2})\/(\d{2}))?/)
     if (m) {
       const afterMs = m[2] ? Date.UTC(Number(m[2]), Number(m[3]) - 1, Number(m[4])) : -Infinity
@@ -136,6 +140,7 @@ export class FakeGmail implements GmailAdapter {
 
   async getFullMessage(id: string): Promise<GmailFullMessage> {
     this.fullCalls++
+    const fault = this.readFault?.('full', id); if (fault) throw fault
     const s = this.msgs.get(id)
     if (!s) throw new Error(`FakeGmail: no message ${id}`)
     return s.full
@@ -289,6 +294,10 @@ export class MemWorld implements BizDevStore, CampaignWriter, IntakeLookups, Imp
     if ((r.state.claimedStep ?? 0) >= step) return false
     r.state = { ...r.state, claimedStep: step }
     return true
+  }
+  async releaseStep(taskId: string, step: number, restoreTo: number) {
+    const r = this.recipients.get(taskId)!
+    if (r.state.claimedStep === step) r.state = { ...r.state, claimedStep: restoreTo || undefined }
   }
   async saveState(taskId: string, state: BizDevState) {
     const r = this.recipients.get(taskId)!
