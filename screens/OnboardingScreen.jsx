@@ -51,9 +51,9 @@ export default function OnboardingScreen({ onComplete }) {
     {
       key: 'discovery',
       accent: TEAL,
-      title: 'Your city is\nwaiting.',
-      body: 'Pick a curated list, find real spots nearby, and never wonder what to do again.',
-      cta: 'Get started',
+      title: 'Your city has more\nto discover.',
+      body: 'Hidden gems. Local favorites. Unexpected adventures. Find your next experience and CheckOff the good stuff.',
+      cta: 'Start Exploring',
       preview: (
         <View style={{ gap: 8 }}>
           <SeasonalHeroCard emoji="🍂" title="Phoenix Fall 30" cityTag="Phoenix" />
