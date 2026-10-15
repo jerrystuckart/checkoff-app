@@ -36,6 +36,12 @@ const connectionString = process.env.AGENT_SERVICE_DATABASE_URL
 // other tool. Winston runs one sequential loop, so a small pool is plenty; keep it small and identifiable.
 //   AGENT_DB_POOL_MAX    max connections held by this process (default 3, clamped 1..10)
 //   AGENT_DB_APP_NAME    application_name shown in pg_stat_activity (default 'winston-agent-service')
+/** application_name for pg_stat_activity: letters, digits and `_ . : -` only (it is interpolated into a SET). */
+export function appName(): string {
+  const n = process.env.AGENT_DB_APP_NAME ?? ''
+  return /^[A-Za-z0-9_.:-]{1,63}$/.test(n) ? n : 'winston-agent-service'
+}
+
 function poolMax(): number {
   const n = Number(process.env.AGENT_DB_POOL_MAX)
   return Number.isFinite(n) && n >= 1 ? Math.min(10, Math.floor(n)) : 3
@@ -94,7 +100,7 @@ function getPool(): Pool {
     max: poolMax(),
     idleTimeoutMillis: 10_000,
     connectionTimeoutMillis: 15_000,
-    application_name: process.env.AGENT_DB_APP_NAME ?? 'winston-agent-service',
+    application_name: appName(),
 
     // Defense-in-depth: agent_service DOES have INSERT/UPDATE privileges on
     // several agent.* tables (projects, contacts, tasks, runs, and a
@@ -132,6 +138,8 @@ function getPool(): Pool {
     // handed out at all.
     onConnect: async (client) => {
       await client.query('SET default_transaction_read_only = on')
+      // Supavisor (the pooler) replaces the startup application_name with 'Supavisor', so set it per session as well.
+      await client.query(`SET application_name = '${appName()}'`)
     },
   })
 
