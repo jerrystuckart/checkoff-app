@@ -32,6 +32,44 @@ loadEnvFile('.env')
 
 const connectionString = process.env.AGENT_SERVICE_DATABASE_URL
 
+// The Supabase project allows only ~60 Postgres connections in total (3 reserved), shared with PostgREST, the app and every
+// other tool. Winston runs one sequential loop, so a small pool is plenty; keep it small and identifiable.
+//   AGENT_DB_POOL_MAX    max connections held by this process (default 3, clamped 1..10)
+//   AGENT_DB_APP_NAME    application_name shown in pg_stat_activity (default 'winston-agent-service')
+function poolMax(): number {
+  const n = Number(process.env.AGENT_DB_POOL_MAX)
+  return Number.isFinite(n) && n >= 1 ? Math.min(10, Math.floor(n)) : 3
+}
+
+/**
+ * Errors raised while ESTABLISHING a connection (the statement never ran), so retrying is always safe, including for writes:
+ * connection slots exhausted (53300), server starting up / shutting down (57P03), DNS/refused/connect-timeout.
+ */
+export function isTransientConnectError(err: unknown): boolean {
+  const e = err as { code?: string; message?: string } | null
+  const code = e?.code ?? ''
+  const msg = e?.message ?? String(err ?? '')
+  if (['53300', '57P03', 'ENOTFOUND', 'EAI_AGAIN', 'ECONNREFUSED'].includes(code)) return true
+  return /remaining connection slots|too many (?:clients|connections)|timeout exceeded when trying to connect|getaddrinfo (?:ENOTFOUND|EAI_AGAIN)|ECONNREFUSED/i.test(msg)
+}
+
+/** Retries `fn` only for connect-phase failures: waits 1s, 3s, 9s (with jitter). Any other error throws immediately. */
+export async function retryOnConnectError<T>(fn: () => Promise<T>, opts: { attempts?: number; baseMs?: number; sleep?: (ms: number) => Promise<void> } = {}): Promise<T> {
+  const attempts = opts.attempts ?? 4
+  const base = opts.baseMs ?? 1000
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)))
+  for (let i = 1; ; i++) {
+    try {
+      return await fn()
+    } catch (err) {
+      if (i >= attempts || !isTransientConnectError(err)) throw err
+      const wait = base * 3 ** (i - 1) + Math.floor(Math.random() * 250)
+      console.error(`[agent-service/db] connect failed (${(err as Error)?.message?.slice(0, 80)}); retry ${i}/${attempts - 1} in ${wait}ms`)
+      await sleep(wait)
+    }
+  }
+}
+
 let pool: Pool | null = null
 
 // Lazy singleton: importing this module (e.g. for types or in a context
@@ -53,7 +91,10 @@ function getPool(): Pool {
     // approach for a first-class Postgres client against Supabase. Revisit
     // if/when this service is deployed somewhere that wants a pinned CA.
     ssl: { rejectUnauthorized: false },
-    max: 5,
+    max: poolMax(),
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 15_000,
+    application_name: process.env.AGENT_DB_APP_NAME ?? 'winston-agent-service',
 
     // Defense-in-depth: agent_service DOES have INSERT/UPDATE privileges on
     // several agent.* tables (projects, contacts, tasks, runs, and a
@@ -110,7 +151,8 @@ export async function query<T extends QueryResultRow = QueryResultRow>(
   params: unknown[] = []
 ): Promise<T[]> {
   try {
-    const result = await getPool().query<T>(text, params)
+    // Reads only (the pool is read-only by default): safe to retry when the connection could not be established.
+    const result = await retryOnConnectError(() => getPool().query<T>(text, params))
     return result.rows
   } catch (err) {
     console.error('[agent-service/db] query failed', { text, params, error: err })
@@ -158,7 +200,7 @@ export async function closePool(): Promise<void> {
 // application-layer half of "read-only by default, explicitly writable
 // only inside approved mutation code."
 export async function withWriteTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
-  const client = await getPool().connect()
+  const client = await retryOnConnectError(() => getPool().connect()) // nothing has run yet, so a connect-phase retry cannot duplicate a write
   try {
     await client.query('BEGIN')
     await client.query('SET TRANSACTION READ WRITE')

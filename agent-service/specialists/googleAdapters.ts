@@ -23,6 +23,7 @@
 // completes the one-time authorization flow (agent-service/googleAuthorize.ts).
 
 import { GoogleCredentialProvider } from './googleCredentialProvider'
+import { GmailPacer, withGmailRetry, type RetryOptions } from './gmailResilience'
 
 export interface GoogleAdapterOptions {
   /** Hard override — bypasses the credential provider entirely. Mainly for tests/manual pinning; a real long-running Chief should rely on credentialProvider since a bare token expires. */
@@ -31,6 +32,10 @@ export interface GoogleAdapterOptions {
   credentialProvider?: GoogleCredentialProvider
   baseUrl?: string
   fetchImpl?: typeof fetch
+  /** Gmail READ resilience: retry transient errors (per-minute quota, 5xx, network) with backoff. `false` disables. Sends are never retried here. */
+  retry?: RetryOptions | false
+  /** Minimum gap between consecutive Gmail read requests (default 120ms) to stay under the per-minute query-cost quota. */
+  minIntervalMs?: number
 }
 
 abstract class GoogleAdapterBase {
@@ -172,26 +177,38 @@ function buildRfc2822Message(input: { to: string; from: string; subject: string;
 
 export class RealGmailAdapter extends GoogleAdapterBase implements GmailAdapter {
   private readonly baseUrl: string
+  private readonly retryOptions: RetryOptions | false
+  private readonly pacer: GmailPacer
 
   constructor(options: GoogleAdapterOptions = {}) {
     super(options)
     this.baseUrl = options.baseUrl ?? 'https://gmail.googleapis.com'
+    this.retryOptions = options.retry ?? {}
+    const retrySleep = options.retry ? options.retry.sleep : undefined
+    this.pacer = new GmailPacer(options.minIntervalMs ?? 120, retrySleep)
+  }
+
+  /** One paced, retried Gmail READ. Throws the same `Gmail <label> returned <status>: <body>` error as before once retries are exhausted. */
+  private async readJson<T>(url: string, token: string, label: string): Promise<T> {
+    const once = async (): Promise<T> => {
+      await this.pacer.wait()
+      const res = await this.fetchImpl(url, { headers: { authorization: `Bearer ${token}` } })
+      if (!res.ok) throw new Error(`Gmail ${label} returned ${res.status}: ${await res.text().catch(() => '<no body>')}`)
+      return (await res.json()) as T
+    }
+    return this.retryOptions === false ? once() : withGmailRetry(once, this.retryOptions)
   }
 
   async searchMessages(query: string, maxResults = 10): Promise<GmailMessageSummary[]> {
     const token = await this.resolveAccessToken('RealGmailAdapter.searchMessages')
-    const listRes = await this.fetchImpl(`${this.baseUrl}/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}`, { headers: { authorization: `Bearer ${token}` } })
-    if (!listRes.ok) throw new Error(`Gmail messages.list returned ${listRes.status}: ${await listRes.text().catch(() => '<no body>')}`)
-    const list = (await listRes.json()) as { messages?: Array<{ id: string; threadId: string }> }
+    const list = await this.readJson<{ messages?: Array<{ id: string; threadId: string }> }>(`${this.baseUrl}/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=${maxResults}`, token, 'messages.list')
     const ids = list.messages ?? []
 
     const summaries: GmailMessageSummary[] = []
     for (const { id, threadId } of ids) {
       const headers = ['From', 'To', 'Subject', 'Date', 'Reply-To']
       const params = headers.map((h) => `metadataHeaders=${h}`).join('&')
-      const msgRes = await this.fetchImpl(`${this.baseUrl}/gmail/v1/users/me/messages/${id}?format=metadata&${params}`, { headers: { authorization: `Bearer ${token}` } })
-      if (!msgRes.ok) throw new Error(`Gmail messages.get(${id}) returned ${msgRes.status}: ${await msgRes.text().catch(() => '<no body>')}`)
-      const msg = (await msgRes.json()) as { id: string; threadId: string; snippet?: string; payload?: { headers?: Array<{ name: string; value: string }> } }
+      const msg = await this.readJson<{ id: string; threadId: string; snippet?: string; payload?: { headers?: Array<{ name: string; value: string }> } }>(`${this.baseUrl}/gmail/v1/users/me/messages/${id}?format=metadata&${params}`, token, `messages.get(${id})`)
       const h = (name: string) => msg.payload?.headers?.find((x) => x.name.toLowerCase() === name.toLowerCase())?.value ?? ''
       summaries.push({
         id: msg.id,
@@ -212,10 +229,8 @@ export class RealGmailAdapter extends GoogleAdapterBase implements GmailAdapter 
 
   async getFullMessage(messageId: string): Promise<GmailFullMessage> {
     const token = await this.resolveAccessToken('RealGmailAdapter.getFullMessage')
-    const res = await this.fetchImpl(`${this.baseUrl}/gmail/v1/users/me/messages/${messageId}?format=full`, { headers: { authorization: `Bearer ${token}` } })
-    if (!res.ok) throw new Error(`Gmail messages.get(${messageId}, format=full) returned ${res.status}: ${await res.text().catch(() => '<no body>')}`)
     type MimePart = { mimeType?: string; filename?: string; body?: { data?: string; size?: number; attachmentId?: string }; parts?: MimePart[] }
-    const msg = (await res.json()) as { id: string; threadId: string; payload?: { headers?: Array<{ name: string; value: string }> } & MimePart }
+    const msg = await this.readJson<{ id: string; threadId: string; payload?: { headers?: Array<{ name: string; value: string }> } & MimePart }>(`${this.baseUrl}/gmail/v1/users/me/messages/${messageId}?format=full`, token, `messages.get(${messageId}, format=full)`)
     const h = (name: string) => msg.payload?.headers?.find((x) => x.name.toLowerCase() === name.toLowerCase())?.value ?? ''
     const splitAddresses = (value: string) =>
       value
@@ -285,9 +300,7 @@ export class RealGmailAdapter extends GoogleAdapterBase implements GmailAdapter 
     while (out.length < maxResults) {
       const pageSize = Math.min(500, maxResults - out.length)
       const url = `${this.baseUrl}/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=${pageSize}${pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : ''}`
-      const res = await this.fetchImpl(url, { headers: { authorization: `Bearer ${token}` } })
-      if (!res.ok) throw new Error(`Gmail messages.list returned ${res.status}: ${await res.text().catch(() => '<no body>')}`)
-      const json = (await res.json()) as { messages?: Array<{ id: string; threadId: string }>; nextPageToken?: string }
+      const json = await this.readJson<{ messages?: Array<{ id: string; threadId: string }>; nextPageToken?: string }>(url, token, 'messages.list')
       out.push(...(json.messages ?? []))
       if (!json.nextPageToken) break
       pageToken = json.nextPageToken
