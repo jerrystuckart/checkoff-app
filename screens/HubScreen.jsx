@@ -430,7 +430,7 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER }) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: BG },
     centerFill: { alignItems: 'center', justifyContent: 'center' },
-    heroWrap: { width: '100%', height: 190, backgroundColor: CARD },
+    heroWrap: { width: '100%', height: 240, backgroundColor: CARD },
     heroNameLabel: { position: 'absolute', left: 14, bottom: 12, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 12, paddingVertical: 5, borderRadius: 8, maxWidth: '75%' },
     heroNameText: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
     heroImage: { width: '100%', height: '100%' },
