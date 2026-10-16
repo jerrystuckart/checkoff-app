@@ -164,8 +164,25 @@ function base64UrlEncode(s: string): string {
   return Buffer.from(s, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
+/**
+ * RFC 2047: a header with any non-ASCII character (an em dash, a curly quote) must be sent as encoded-words, or mail clients read the raw
+ * UTF-8 bytes as Latin-1 and show "Ã¢Â€Â”". Pure-ASCII subjects are returned unchanged. Each encoded-word stays within 75 characters
+ * and never splits a character.
+ */
+export function encodeHeaderValue(value: string): string {
+  if (/^[\x20-\x7e]*$/.test(value)) return value
+  const words: string[] = []
+  let cur = ''
+  for (const ch of value) {
+    if (Buffer.byteLength(cur + ch, 'utf8') > 45) { words.push(cur); cur = '' }
+    cur += ch
+  }
+  if (cur) words.push(cur)
+  return words.map((w) => `=?UTF-8?B?${Buffer.from(w, 'utf8').toString('base64')}?=`).join('\r\n ')
+}
+
 function buildRfc2822Message(input: { to: string; from: string; subject: string; bodyText: string; inReplyTo?: string | null; references?: string | null }): string {
-  const headers = [`From: ${input.from}`, `To: ${input.to}`, `Subject: ${input.subject}`]
+  const headers = [`From: ${input.from}`, `To: ${input.to}`, `Subject: ${encodeHeaderValue(input.subject)}`]
   // A true reply's In-Reply-To/References headers — these, not the
   // Gmail threadId param, are what most mail clients actually use to
   // render "this is a reply" and thread it visually.
