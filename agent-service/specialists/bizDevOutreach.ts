@@ -78,6 +78,8 @@ export interface BizDevSequenceDef {
   /** Business days Winston waits after a routine-FAQ answer before asking Jerry what to do. */
   answeredWaitBusinessDays: number
   /** 'single' (default) = one named contact on a code allowlist (Blair). 'campaign' = per-recipient fields come from each recipient's contact + merge vars. */
+  /** Follow-up and close steps are held (never due) until released in FOLLOW_UPS_HELD_CAMPAIGNS. */
+  followUpsHeld?: boolean
   mode?: 'single' | 'campaign'
   campaignKey?: string
   /** Campaign only: auto-answer routine factual questions. Single-contact sequences always may. */
@@ -221,7 +223,7 @@ export type DueAction =
 export function dueAction(def: BizDevSequenceDef, state: BizDevState, now: Date): DueAction {
   if (state.sequenceStatus !== 'ACTIVE') return { kind: 'NONE' }
   const sent = state.stepsSent.length
-  if (sent === 0) return { kind: 'NONE' }
+  if (sent === 0 || def.followUpsHeld) return { kind: 'NONE' }
   const last = state.stepsSent[sent - 1]
   const nextFollowUp = def.followUps.find((f) => f.step === sent + 1)
   if (nextFollowUp && sent < def.maxOutbound) {

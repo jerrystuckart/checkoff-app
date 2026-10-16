@@ -45,7 +45,7 @@ export interface CampaignRuntime {
   /** Configurable. Default 80. */
   dailyCap: number
   /** 'experience-v2': every first touch carries the exact experience, its confirmation URL and public item URL, the download and kit links; the sender validates the token AND the public item before sending. */
-  firstTouchContract?: 'experience-v2'
+  firstTouchContract?: 'experience-v2' | 'invitation-v1'
   /** Max NEW first touches per rolling 24h (default CAMPAIGN_DEFAULTS.firstTouchDailyLimit). Follow-ups never count against it. */
   firstTouchDailyLimit?: number
   /** Hard provider/account ceiling (Resend free tier: 100/day). The effective cap never exceeds providerLimit - reserve. */
@@ -86,6 +86,12 @@ export const CAMPAIGN_DEFAULTS = Object.freeze({
   followUpDays: [5, 7] as const,
 })
 
+/**
+ * Campaigns whose follow-up (and close) steps are HELD until Jerry separately approves the follow-up wording. The first touch, replies,
+ * bounces and opt-outs are unaffected. Release a campaign by removing its key here (a reviewed commit) after the wording is approved.
+ */
+export const FOLLOW_UPS_HELD_CAMPAIGNS: ReadonlySet<string> = new Set(['willcox-launch-featured-v1', 'willcox-launch-invitation-v1'])
+
 /** Instantiates the shared sequence engine's definition from a stored campaign. Per-recipient fields are filled by the caller. */
 export function campaignToDef(c: CampaignRuntime): BizDevSequenceDef {
   return {
@@ -103,6 +109,7 @@ export function campaignToDef(c: CampaignRuntime): BizDevSequenceDef {
     answeredWaitBusinessDays: 10,
     faqEnabled: c.faqEnabled,
     subjectSearchTerm: staticSubjectStem(c.subjectTemplate),
+    ...(FOLLOW_UPS_HELD_CAMPAIGNS.has(c.key) ? { followUpsHeld: true } : {}),
   }
 }
 

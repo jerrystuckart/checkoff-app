@@ -1,0 +1,36 @@
+{
+  "key": "willcox-launch-invitation-v1",
+  "name": "Willcox launch: invitation to participate",
+  "metroSlug": "willcox",
+  "metroLabel": "Willcox",
+  "subjectTemplate": "CheckOff just launched in Willcox \u2014 we'd love to include your business",
+  "firstTouchBody": "Hi {{contact_name}},\n\nCheckOff is launching in Willcox today!\n\nWe're partnering with the Willcox Chamber of Commerce to help locals and visitors discover the businesses, experiences, and hidden gems that make this community special.\n\nI'm Jerry, the founder of CheckOff, and I'm in Willcox through Sunday for the Wine Festival. I'll be visiting local businesses throughout the weekend and would love to meet you.\n\nWe're continuing to build out Willcox's presence in CheckOff, and I'd love for your business to be part of the conversation.\n\nIf you're interested in having your business considered for CheckOff, please connect with the Willcox Chamber of Commerce about membership and participation.\n\nI'm also carrying CheckOff window clings and promotional materials, and you can explore the Willcox kit here:\n{{kit_url}}\n\nIf we don't meet while I'm visiting businesses, look for me at the Wine Festival!\n\nHope to see you this weekend,\nJerry Stuckart\nFounder, CheckOff\nhttps://getcheckoff.com",
+  "followUp1Body": "Hi {{contact_name}},\n\nJust a quick follow-up on my note about CheckOff in Willcox. If you'd like your business considered, the Willcox Chamber of Commerce is the place to start, and you can see the Willcox kit here:\n{{kit_url}}\n\nThanks!\n\nJerry Stuckart\nFounder, CheckOff\nhttps://getcheckoff.com",
+  "followUp2Body": "Hi {{contact_name}},\n\nOne last note about CheckOff in Willcox. If you'd like your business considered, please connect with the Willcox Chamber of Commerce. I'll leave it here after this message.\n\nThanks for everything you do for the Willcox community!\n\nJerry Stuckart\nFounder, CheckOff\nhttps://getcheckoff.com",
+  "cadence": {
+    "followUp1AfterBusinessDays": 30,
+    "followUp2AfterBusinessDays": 30,
+    "closeAfterBusinessDays": 30
+  },
+  "dailyCap": 100,
+  "firstTouchDailyLimit": 100,
+  "providerLimit": 100,
+  "reserve": 10,
+  "kitUrl": "https://getcheckoff.com/willcox/kit",
+  "faqEnabled": false,
+  "allowPriorOutreach": false,
+  "approvals": {
+    "firstTouchTemplate": true,
+    "followUpTemplates": true
+  },
+  "eligibilityPolicy": {
+    "requireEmailEvidenceUrl": true,
+    "requireLocalBusinessConfirmation": true,
+    "requireSendApproval": true,
+    "blockedCategories": []
+  },
+  "firstTouchContract": "invitation-v1",
+  "expiresAt": "2027-01-15T07:00:00.000Z",
+  "from": "jerry@getcheckoff.com",
+  "destinationCampaign": true
+}

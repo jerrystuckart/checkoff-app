@@ -56,8 +56,12 @@ export interface CampaignDefinition {
   followUp2Body: string
   cadence?: { followUp1AfterBusinessDays?: number; followUp2AfterBusinessDays?: number; closeAfterBusinessDays?: number }
   dailyCap?: number
+  /** Destination-Hub campaigns (Willcox) point {{kit_url}} at their own kit page instead of the universal Featured Kit. Must be a https://getcheckoff.com/ URL. */
+  kitUrl?: string
+  /** Destination Hubs (Willcox) are not metros: their items carry no metro, so the metro-match check is replaced by 'the item must have no metro'. */
+  destinationCampaign?: boolean
   /** 'experience-v2' (required for every NEW campaign by policy): the first touch must contain {{experiences_block}} (exact experience + confirmation URL + public item URL), {{download_url}} and {{kit_url}}, and must say "experience", never "listing". The sender then validates the token and the public item page before any first touch. */
-  firstTouchContract?: 'experience-v2'
+  firstTouchContract?: 'experience-v2' | 'invitation-v1'
   /** Max NEW first touches per rolling 24h. Defaults to 50. Follow-ups are not counted and always outrank first touches. */
   firstTouchDailyLimit?: number
   providerLimit?: number
@@ -96,10 +100,17 @@ export function validateDefinition(d: CampaignDefinition): Issue[] {
     if (t) out.push(...checkTemplate(t, label).errors.map((m) => err('DEF_TEMPLATE', m)))
     if (t && /(draft,? not approved|\bTODO\b|\bTBD\b|replace me|lorem ipsum|\[\[|\bSAMPLE TEXT\b)/i.test(t)) out.push(err('DEF_DRAFT_MARKER', `${label} still contains a draft/placeholder marker; replace it with the approved text (flipping the approval flag alone cannot send placeholder copy)`))
   }
-  if (d.firstTouchBody && !/\{\{\s*(items_block|confirm_url|experiences_block)\s*\}\}/.test(d.firstTouchBody)) out.push(err('DEF_NO_CONFIRM_LINK', 'firstTouchBody must include {{items_block}} (or {{experiences_block}}/{{confirm_url}}) so each business gets its existing /confirm link'))
+  if (d.firstTouchContract !== 'invitation-v1' && d.firstTouchBody && !/\{\{\s*(items_block|confirm_url|experiences_block)\s*\}\}/.test(d.firstTouchBody)) out.push(err('DEF_NO_CONFIRM_LINK', 'firstTouchBody must include {{items_block}} (or {{experiences_block}}/{{confirm_url}}) so each business gets its existing /confirm link'))
   if (d.subjectTemplate && /\{\{\s*(items_block|confirm_url)\s*\}\}/.test(d.subjectTemplate)) out.push(err('DEF_SUBJECT', 'subject must not contain the confirmation link'))
   if (d.expiresAt !== undefined && Number.isNaN(Date.parse(d.expiresAt))) out.push(err('DEF_EXPIRES', 'expiresAt must be an ISO date-time'))
-  if (d.firstTouchContract !== undefined && d.firstTouchContract !== 'experience-v2') out.push(err('DEF_CONTRACT', "firstTouchContract must be 'experience-v2' when set"))
+  if (d.firstTouchContract !== undefined && d.firstTouchContract !== 'experience-v2' && d.firstTouchContract !== 'invitation-v1') out.push(err('DEF_CONTRACT', "firstTouchContract must be 'experience-v2' or 'invitation-v1' when set"))
+  if (d.firstTouchContract === 'invitation-v1') {
+    // An invitation promises nothing: no experience, no confirmation token, no item link in ANY of its templates, so it can never imply a listing.
+    const ITEM_FIELDS = ['items_block', 'experiences_block', 'confirm_url', 'confirm_links', 'item_text', 'item_count', 'experience_intro', 'find_in_app', 'private_link_instruction', 'followup1_opening', 'review_line', 'followup2_ask']
+    for (const [label, t] of [['subjectTemplate', d.subjectTemplate], ['firstTouchBody', d.firstTouchBody], ['followUp1Body', d.followUp1Body], ['followUp2Body', d.followUp2Body]] as const)
+      for (const f of ITEM_FIELDS) if (t && new RegExp(`\\{\\{\\s*${f}\\s*\\}\\}`).test(t)) out.push(err('DEF_INVITATION_FIELD', `${label} must not use {{${f}}} (invitation-v1 carries no experience, token or item link)`))
+    if (d.firstTouchBody && /getcheckoff\.com\/(confirm|item)\//i.test(d.firstTouchBody)) out.push(err('DEF_INVITATION_LINK', 'invitation-v1 firstTouchBody must not contain a /confirm or /item link'))
+  }
   if (d.firstTouchContract === 'experience-v2') {
     const has = (f: string) => !!d.firstTouchBody && new RegExp(`\\{\\{\\s*${f}\\s*\\}\\}`).test(d.firstTouchBody)
     for (const f of ['experiences_block', 'kit_url', 'experience_intro', 'find_in_app', 'private_link_instruction']) if (d.firstTouchBody && !has(f)) out.push(err('DEF_V2_FIELD', `firstTouchBody must include {{${f}}} (experience-v2 first-touch contract)`))
@@ -108,6 +119,7 @@ export function validateDefinition(d: CampaignDefinition): Issue[] {
     if (d.firstTouchBody && /\b(your|our|the)\s+(\w+\s+)?listings?\b/i.test(d.firstTouchBody)) out.push(err('DEF_V2_WORDING', 'firstTouchBody must say "CheckOff experience", not "your/the listing"'))
     if (d.firstTouchBody && !/experience/i.test(d.firstTouchBody)) out.push(err('DEF_V2_WORDING', 'firstTouchBody must explain that CheckOff features an experience'))
   }
+  if (d.kitUrl !== undefined && !/^https:\/\/getcheckoff\.com\/[A-Za-z0-9/_-]+$/.test(d.kitUrl)) out.push(err('DEF_KIT_URL', 'kitUrl must be a https://getcheckoff.com/ URL'))
   if (d.firstTouchDailyLimit !== undefined && (!Number.isInteger(d.firstTouchDailyLimit) || d.firstTouchDailyLimit < 1 || d.firstTouchDailyLimit > (d.dailyCap ?? CAMPAIGN_DEFAULTS.dailyCap))) out.push(err('DEF_FIRST_TOUCH_LIMIT', 'firstTouchDailyLimit must be an integer from 1 up to dailyCap'))
   const c = d.cadence ?? {}
   for (const [k, v] of Object.entries(c)) if (v !== undefined && (!Number.isInteger(v) || v < 1 || v > 30)) out.push(err('DEF_CADENCE', `cadence.${k} must be an integer from 1 to 30 business days`))
@@ -192,7 +204,7 @@ export interface CsvRow {
   send_approval: string
 }
 
-export function readCampaignCsv(text: string): { rows: CsvRow[]; issues: Issue[] } {
+export function readCampaignCsv(text: string, opts: { itemRequired?: boolean } = {}): { rows: CsvRow[]; issues: Issue[] } {
   const issues: Issue[] = []
   const table = parseCsv(text)
   if (table.length === 0) return { rows: [], issues: [err('CSV_EMPTY', 'The CSV is empty')] }
@@ -202,7 +214,7 @@ export function readCampaignCsv(text: string): { rows: CsvRow[]; issues: Issue[]
     const i = header.findIndex((h) => names.includes(h))
     if (i >= 0) idx[canon] = i
   }
-  for (const req of ['business_name', 'contact_email', 'item_id']) if (idx[req] === undefined) issues.push(err('CSV_COLUMN', `Missing required column "${req}" (accepted headers: ${ALIASES[req].join(', ')})`))
+  for (const req of opts.itemRequired === false ? ['business_name', 'contact_email'] : ['business_name', 'contact_email', 'item_id']) if (idx[req] === undefined) issues.push(err('CSV_COLUMN', `Missing required column "${req}" (accepted headers: ${ALIASES[req].join(', ')})`))
   if (issues.length) return { rows: [], issues }
   const rows: CsvRow[] = []
   for (let r = 1; r < table.length; r++) {
@@ -313,7 +325,8 @@ export interface PlanOptions {
 
 export async function buildCampaignPlan(def: CampaignDefinition, csvText: string, opts: PlanOptions): Promise<CampaignPlan> {
   const issues: Issue[] = [...validateDefinition(def)]
-  const { rows, issues: csvIssues } = readCampaignCsv(csvText)
+  const invitation = def.firstTouchContract === 'invitation-v1'
+  const { rows, issues: csvIssues } = readCampaignCsv(csvText, { itemRequired: !invitation })
   issues.push(...csvIssues)
   const excluded: ExcludedRow[] = []
   const cap = Math.max(1, Math.min(def.dailyCap ?? CAMPAIGN_DEFAULTS.dailyCap, (def.providerLimit ?? CAMPAIGN_DEFAULTS.providerLimit) - (def.reserve ?? CAMPAIGN_DEFAULTS.reserve)))
@@ -330,8 +343,9 @@ export async function buildCampaignPlan(def: CampaignDefinition, csvText: string
     const notEligible = ineligibleReason(def.eligibilityPolicy, r)
     if (notEligible) { excluded.push({ rowNumber: r.rowNumber, email: r.contact_email, business: r.business_name, reason: `NOT ELIGIBLE: ${notEligible}` }); continue }
     if (!r.business_name) { issues.push(err('ROW_NO_BUSINESS', 'business_name is empty', at)); continue }
-    if (!r.item_id) { issues.push(err('ROW_NO_ITEM', `"${r.business_name}": item_id is empty`, at)); continue }
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(r.item_id)) { issues.push(err('ROW_BAD_ITEM_ID', `"${r.business_name}": item_id "${r.item_id}" is not a UUID`, at)); continue }
+    if (invitation) { if (r.item_id) { issues.push(err('ROW_INVITATION_ITEM', `"${r.business_name}": an invitation row must not carry an item_id (it would imply a listing)`, at)); continue } }
+    else if (!r.item_id) { issues.push(err('ROW_NO_ITEM', `"${r.business_name}": item_id is empty`, at)); continue }
+    if (!invitation && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(r.item_id)) { issues.push(err('ROW_BAD_ITEM_ID', `"${r.business_name}": item_id "${r.item_id}" is not a UUID`, at)); continue }
     if (!r.contact_email) { issues.push(err('ROW_NO_EMAIL', `"${r.business_name}": contact_email is empty (a contact form or social-only business cannot be emailed)`, at)); continue }
     const email = r.contact_email.toLowerCase()
     if (/[;,\s]/.test(email)) { issues.push(err('ROW_MULTI_EMAIL', `"${r.business_name}": more than one address in one cell ("${r.contact_email}"); put one per row`, { ...at, email })); continue }
@@ -346,22 +360,23 @@ export async function buildCampaignPlan(def: CampaignDefinition, csvText: string
   }
 
   // ---- item validation ----
-  const items = await opts.lookups.items([...new Set(good.map((g) => g.item_id))])
+  const items = invitation ? new Map<string, ItemInfo>() : await opts.lookups.items([...new Set(good.map((g) => g.item_id))])
   const withItem: Array<Good & { info: ItemInfo }> = []
   for (const g of good) {
+    if (invitation) { withItem.push({ ...g, info: { id: '', text: '', isActive: true, isSecret: false, metroSlug: null } }); continue }
     const info = items.get(g.item_id)
     const at = { row: g.rowNumber, email: g.email }
     if (!info) { issues.push(err('ITEM_NOT_FOUND', `"${g.business_name}": item ${g.item_id} does not exist`, at)); continue }
     if (!info.isActive) { issues.push(err('ITEM_INACTIVE', `"${g.business_name}": item ${g.item_id} is not active`, at)); continue }
     if (info.isSecret) { excluded.push({ rowNumber: g.rowNumber, email: g.email, business: g.business_name, reason: 'Secret/spoiler item: excluded from confirmation outreach (existing Secret Item Protection rule)' }); continue }
-    if (info.metroSlug !== def.metroSlug) { issues.push(err('ITEM_WRONG_METRO', `"${g.business_name}": item ${g.item_id} belongs to metro "${info.metroSlug ?? 'none'}", not "${def.metroSlug}"`, at)); continue }
+    if (def.destinationCampaign ? info.metroSlug !== null : info.metroSlug !== def.metroSlug) { issues.push(err('ITEM_WRONG_METRO', `"${g.business_name}": item ${g.item_id} belongs to metro "${info.metroSlug ?? 'none'}", not "${def.metroSlug}"`, at)); continue }
     if (g.exact_checkoff_item && g.exact_checkoff_item.replace(/\s+/g, ' ') !== info.text.replace(/\s+/g, ' ')) issues.push(warn('ITEM_TEXT_DIFFERS', `"${g.business_name}": the sheet's item wording differs from the live item; the LIVE wording will be used`, at))
     withItem.push({ ...g, info })
   }
 
   // ---- one owner per item ----
   const owners = new Map<string, Set<string>>()
-  for (const g of withItem) owners.set(g.item_id, (owners.get(g.item_id) ?? new Set()).add(g.email))
+  for (const g of invitation ? [] : withItem) owners.set(g.item_id, (owners.get(g.item_id) ?? new Set()).add(g.email))
   const conflicted = new Set<string>()
   for (const [itemId, emails] of owners) if (emails.size > 1) { conflicted.add(itemId); issues.push(err('ITEM_MULTI_OWNER', `Item ${itemId} is assigned to ${emails.size} different contacts (${[...emails].join(', ')}); choose one`)) }
 
@@ -388,14 +403,14 @@ export async function buildCampaignPlan(def: CampaignDefinition, csvText: string
     if (prior && !def.allowPriorOutreach) { excluded.push({ email, business, reason: `Prior outreach exists (${c?.hasOutbound ? 'recorded interaction' : 'Gmail Sent'}); set allowPriorOutreach to include` }); continue }
     if (prior) issues.push(warn('PRIOR_OUTREACH', `${email} was contacted before; included because allowPriorOutreach is on`, { email }))
     if (priorIndex) {
-      const conflicts = priorIndex.check({ email, businessName: business, itemIds: group.map((g) => g.item_id) })
+      const conflicts = priorIndex.check({ email, businessName: business, itemIds: invitation ? [] : group.map((g) => g.item_id) })
       if (conflicts.length > 0) {
         if (!def.allowPriorOutreach) { excluded.push({ email, business, reason: `PRIOR CONTACT: ${describeConflicts(conflicts).slice(0, 260)}` }); continue }
         issues.push(warn('PRIOR_CONTACT', `${email} matches prior contact (${conflicts.map((x) => x.key).join(', ')}); included because allowPriorOutreach is on`, { email }))
       }
     }
 
-    const planned: PlannedItem[] = group.map((g, i) => ({ itemId: g.item_id, text: g.info.text, existingToken: g.info.existingToken, previewToken: `NEW_TOKEN_${i + 1}` }))
+    const planned: PlannedItem[] = invitation ? [] : group.map((g, i) => ({ itemId: g.item_id, text: g.info.text, existingToken: g.info.existingToken, previewToken: `NEW_TOKEN_${i + 1}` }))
     const contactName = group.map((g) => g.contact_name).find(Boolean) ?? null
     const rec: PlannedRecipient = { email, businessName: business, contactName, website: group.map((g) => g.website).find(Boolean) ?? null, items: planned, subject: '', body: '', sourceRows: group.map((g) => g.rowNumber) }
     try {
@@ -442,12 +457,10 @@ export function mergeVars(def: CampaignDefinition, r: PlannedRecipient, tokenOf:
     experiences_block: buildExperiencesBlock(listings),
     download_url: DOWNLOAD_URL,
     ...pluralPhrases({ count: r.items.length, businessName: r.businessName, metro: def.metroLabel, downloadUrl: DOWNLOAD_URL, confirmUrls: listings.map((l) => l.confirmUrl) }),
-    item_text: r.items[0].text,
-    item_count: String(r.items.length),
-    kit_url: CANONICAL_KIT_URL,
-    confirm_url: listings[0].confirmUrl,
+    kit_url: def.kitUrl ?? CANONICAL_KIT_URL,
     sender_name: 'Jerry Stuckart',
   }
+  if (r.items.length > 0) Object.assign(vars, { item_text: r.items[0].text, item_count: String(r.items.length), confirm_url: listings[0].confirmUrl })
   if (r.contactName) vars.contact_name = r.contactName
   return vars
 }
@@ -714,7 +727,7 @@ export async function approveCampaign(plan: CampaignPlan, args: ApproveArgs, wri
 // ---------------------------------------------------------------------------
 
 export interface ActivationFacts {
-  campaign: Pick<CampaignRuntime, 'key' | 'state' | 'approval'> & { firstTouchContract?: 'experience-v2' }
+  campaign: Pick<CampaignRuntime, 'key' | 'state' | 'approval'> & { firstTouchContract?: 'experience-v2' | 'invitation-v1' }
   tokensNeeded: string[]
   tokensPresent: Set<string>
   senderVerified: boolean
