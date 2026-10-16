@@ -251,24 +251,26 @@ export default function HubScreen({ navigation, route }) {
           >
             <Text style={styles.backBtnText}>← Back</Text>
           </TouchableOpacity>
+          {/* Hub name: a small translucent label on the hero (replaces the separate large title) */}
+          <View style={styles.heroNameLabel}>
+            <Text style={styles.heroNameText} numberOfLines={1}>{destination.name}</Text>
+          </View>
         </View>
 
-        {/* Name / description */}
-        <View style={styles.headerBlock}>
-          <Text style={styles.destName}>{destination.name}</Text>
-          {!!destination.description && (
-            // key resets to collapsed when a different Hub opens
+        {/* Description, only when one is configured */}
+        {!!destination.description && (
+          <View style={styles.headerBlock}>
+            {/* key resets to collapsed when a different Hub opens */}
             <ExpandableDescription key={destination.id} text={destination.description} textStyle={styles.destDescription} />
-          )}
-        </View>
+          </View>
+        )}
 
         {/* Spotlights — RLS already filters to active/visible rows, so an
             empty array here means genuinely nothing to show. No placeholder.
             Full-width banner cards, stacked (not a horizontal carousel) —
             these are meant to pop, not compete for space in a small tile. */}
         {spotlights.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>✨ Spotlight</Text>
+          <View style={styles.sectionTight}>
             {spotlights.map(s => (
               <SpotlightCard
                 key={s.id}
@@ -334,14 +336,21 @@ function SpotlightCard({ spotlight, partnerName, onPress, styles, colors }) {
       >
         {spotlight.title}
       </Text>
-      {!!spotlight.subtitle && (
-        <Text
-          style={[styles.spotlightSubtitle, !hasImage && { color: colors?.MUTED }]}
-          numberOfLines={3}
-        >
-          {spotlight.subtitle}
-        </Text>
-      )}
+      <View style={styles.spotlightTextRow}>
+        {!!spotlight.subtitle && (
+          <Text
+            style={[styles.spotlightSubtitle, { flex: 1 }, !hasImage && { color: colors?.MUTED }]}
+            numberOfLines={2}
+          >
+            {spotlight.subtitle}
+          </Text>
+        )}
+        {tappable && (
+          <View style={styles.spotlightDetailsPill}>
+            <Text style={styles.spotlightDetailsText}>Details →</Text>
+          </View>
+        )}
+      </View>
       {!!partnerName && (
         <Text style={styles.creditText}>Presented by {partnerName}</Text>
       )}
@@ -421,7 +430,9 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER }) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: BG },
     centerFill: { alignItems: 'center', justifyContent: 'center' },
-    heroWrap: { width: '100%', height: 240, backgroundColor: CARD },
+    heroWrap: { width: '100%', height: 190, backgroundColor: CARD },
+    heroNameLabel: { position: 'absolute', left: 14, bottom: 12, backgroundColor: 'rgba(0,0,0,0.6)', paddingHorizontal: 12, paddingVertical: 5, borderRadius: 8, maxWidth: '75%' },
+    heroNameText: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
     heroImage: { width: '100%', height: '100%' },
     heroFallback: { backgroundColor: CARD },
     backBtn: {
@@ -433,16 +444,17 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER }) {
       borderRadius: 999,
     },
     backBtnText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
-    headerBlock: { padding: 20, paddingBottom: 8 },
+    headerBlock: { paddingHorizontal: 20, paddingTop: 10, paddingBottom: 0 },
     destName: { fontSize: 24, fontWeight: '800', color: TEXT },
     destDescription: { fontSize: 14, color: MUTED, marginTop: 6, lineHeight: 20 },
-    section: { paddingHorizontal: 20, paddingTop: 20 },
-    sectionTitle: { fontSize: 16, fontWeight: '800', color: TEXT, marginBottom: 12 },
+    section: { paddingHorizontal: 20, paddingTop: 12 },
+    sectionTight: { paddingHorizontal: 20, paddingTop: 12 },
+    sectionTitle: { fontSize: 16, fontWeight: '800', color: TEXT, marginBottom: 8 },
     spotlightCard: {
       width: '100%',
       borderRadius: 20,
       overflow: 'hidden',
-      marginBottom: 14,
+      marginBottom: 6,
     },
     spotlightImageBg: {
       width: '100%',
@@ -456,8 +468,11 @@ function createStyles({ BG, CARD, TEXT, MUTED, BORDER }) {
       borderColor: BORDER,
       borderRadius: 20,
     },
-    spotlightBody: { padding: 18, gap: 5 },
-    spotlightBodyOnImage: { paddingTop: 44 },
+    spotlightBody: { padding: 12, gap: 3 },
+    spotlightTextRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 10 },
+    spotlightDetailsPill: { backgroundColor: AMBER, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 999, marginBottom: 2 },
+    spotlightDetailsText: { fontSize: 12, fontWeight: '800', color: '#1A1A2E' },
+    spotlightBodyOnImage: { paddingTop: 28 },
     spotlightBadgeRow: {
       flexDirection: 'row',
       alignItems: 'center',
