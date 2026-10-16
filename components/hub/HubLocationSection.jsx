@@ -51,7 +51,7 @@ export default function HubLocationSection({ section, navigation, colors }) {
 }
 
 const styles = StyleSheet.create({
-  wrap: { paddingHorizontal: 20, paddingTop: 16 },
+  wrap: { paddingHorizontal: 20, paddingTop: 8 },
   heading: { fontSize: 14, fontWeight: '800', marginBottom: 8 },
   row: {
     flexDirection: 'row', alignItems: 'center', borderWidth: 1,

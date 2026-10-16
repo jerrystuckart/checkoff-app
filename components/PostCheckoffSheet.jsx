@@ -5,6 +5,7 @@ import {
 } from 'react-native'
 import * as Location from 'expo-location'
 import { supabase } from '../lib/supabase'
+import { candidateNeighborhoodIds } from '../lib/postCheckoffPool'
 import { useLeaderboard } from '../lib/useLeaderboard'
 import { haversineMeters } from '../lib/distance'
 import { formatDistanceLabel } from '../lib/proximity'
@@ -317,9 +318,11 @@ export default function PostCheckoffSheet({ data, onDismiss, navigation }) {
         const { data: myHood } = await supabase.from('neighborhoods').select('metro_id, metro_areas(timezone)').eq('id', neighborhoodId).maybeSingle()
         const metroId = myHood?.metro_id
 
-        if (metroId) {
-          const { data: metroHoods } = await supabase.from('neighborhoods').select('id').eq('metro_id', metroId)
-          const hoodIds = (metroHoods ?? []).map(h => h.id)
+        // Destination Hub neighborhoods (Willcox) have no metro: fall back to the item's own neighborhood instead of skipping the suggestions.
+        const metroHoods = metroId ? (await supabase.from('neighborhoods').select('id').eq('metro_id', metroId)).data : null
+        const hoodIds = candidateNeighborhoodIds({ metroId, metroNeighborhoodIds: (metroHoods ?? []).map(h => h.id), neighborhoodId })
+
+        if (hoodIds.length) {
 
           const { data: candidates } = await supabase
             .from('items')
