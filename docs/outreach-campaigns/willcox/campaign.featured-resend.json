@@ -1,0 +1,36 @@
+{
+  "key": "willcox-launch-featured-v1-resend",
+  "name": "Willcox launch: featured businesses (resend to corrected address)",
+  "metroSlug": "willcox",
+  "metroLabel": "Willcox",
+  "subjectTemplate": "CheckOff launches in Willcox today!",
+  "firstTouchBody": "Hi {{contact_name}},\n\nCheckOff is launching in Willcox today! We're excited to partner with the Willcox Chamber of Commerce to help locals and visitors discover more of what makes this community special.\n\nYour business, {{business_name}}, is featured in CheckOff. {{experience_intro}}\n\n{{experiences_block}}\n\n{{find_in_app}}\n\n{{private_link_instruction}}\n\nI'm Jerry, the founder of CheckOff, and I'm here in Willcox through Sunday for the Wine Festival. I'll be stopping into local businesses throughout the weekend and would love to meet you!\n\nI'm also carrying CheckOff window clings and printed materials you can display to help visitors discover your business. If we don't cross paths today, look for me at the Wine Festival.\n\nYou can find the Willcox promotional kit, including download information and materials, here:\n{{kit_url}}\n\nLooking forward to meeting you and helping more people discover Willcox!\n\nJerry Stuckart\nFounder, CheckOff\nhttps://getcheckoff.com",
+  "followUp1Body": "Hi {{business_name}} team,\n\n{{followup1_opening}}\n\nWe're helping people discover great local places in {{metro}}, and we'd love to make sure we've represented your business accurately.\n\n{{review_line}}\n\n{{items_block}}\n\nIf everything looks good, a quick confirmation is all we need. If something needs changing, just reply and let me know.\n\nThanks!\n\nJerry\nFounder, CheckOff\njerry@getcheckoff.com",
+  "followUp2Body": "Hi {{business_name}} team,\n\nOne last note about {{business_name}} on CheckOff.\n\nWe're building a local discovery app that encourages people to get out and experience places worth visiting in {{metro}}.\n\n{{followup2_ask}}\n\n{{confirm_links}}\n\nThere's no cost to confirm your information, and you're welcome to reply with corrections.\n\nI'll leave it here after this message. Thanks for everything you do for the {{metro}} community!\n\nJerry\nFounder, CheckOff\njerry@getcheckoff.com",
+  "cadence": {
+    "followUp1AfterBusinessDays": 30,
+    "followUp2AfterBusinessDays": 30,
+    "closeAfterBusinessDays": 30
+  },
+  "dailyCap": 100,
+  "firstTouchDailyLimit": 100,
+  "providerLimit": 100,
+  "reserve": 10,
+  "kitUrl": "https://getcheckoff.com/willcox/kit",
+  "faqEnabled": false,
+  "allowPriorOutreach": true,
+  "approvals": {
+    "firstTouchTemplate": true,
+    "followUpTemplates": true
+  },
+  "eligibilityPolicy": {
+    "requireEmailEvidenceUrl": true,
+    "requireLocalBusinessConfirmation": true,
+    "requireSendApproval": true,
+    "blockedCategories": []
+  },
+  "firstTouchContract": "experience-v2",
+  "expiresAt": "2027-01-15T07:00:00.000Z",
+  "from": "jerry@getcheckoff.com",
+  "destinationCampaign": true
+}

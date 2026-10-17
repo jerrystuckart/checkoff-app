@@ -90,7 +90,7 @@ export const CAMPAIGN_DEFAULTS = Object.freeze({
  * Campaigns whose follow-up (and close) steps are HELD until Jerry separately approves the follow-up wording. The first touch, replies,
  * bounces and opt-outs are unaffected. Release a campaign by removing its key here (a reviewed commit) after the wording is approved.
  */
-export const FOLLOW_UPS_HELD_CAMPAIGNS: ReadonlySet<string> = new Set(['willcox-launch-featured-v1', 'willcox-launch-invitation-v1'])
+export const FOLLOW_UPS_HELD_CAMPAIGNS: ReadonlySet<string> = new Set(['willcox-launch-featured-v1', 'willcox-launch-invitation-v1', 'willcox-launch-featured-v1-resend'])
 
 /** Instantiates the shared sequence engine's definition from a stored campaign. Per-recipient fields are filled by the caller. */
 export function campaignToDef(c: CampaignRuntime): BizDevSequenceDef {
